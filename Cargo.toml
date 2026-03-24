@@ -1,0 +1,29 @@
+[package]
+name = "minecraft_style_voxel_prototype"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+env_logger = "0.11"
+glam = "0.32.0"
+pollster = "0.4.0"
+wgpu = "27.0.1"
+egui = "0.33.3"
+egui-winit = "0.33.3"
+egui-wgpu = "0.33.3"
+winit = "0.30.13"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.dev]
+opt-level = 1
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
