@@ -607,24 +607,32 @@ fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind:i32, f
         let cold=1.0-smoothstep(0.08,0.37,heat);
         let drift_noise=surface_noise(q.xz/48.0+vec2<f32>(19.3,-27.1))*0.62
                        +surface_noise(q.xz/13.5+vec2<f32>(-41.2,13.7))*0.38;
+        let rot_chute = mat2x2<f32>(0.80, -0.60, 0.60, 0.80);
+        let chute_val = surface_noise((rot_chute * q.xz) / 22.0 + vec2<f32>(31.4, -19.8));
+        // Concave couloir gullies trap drifted snow lower down the mountain flank,
+        // while convex rock ribs and steep headwalls shed snow and expose bare crags.
+        let couloir_pocket = (1.0 - abs(chute_val * 2.0 - 1.0)) * smoothstep(68.0, 125.0, q.y);
         let windward_drift=clamp(dot(normal.xz,vec2<f32>(-0.65,0.76)),-1.0,1.0)*0.08;
-        let slope_hold=smoothstep(0.32,0.78,normal.y+(drift_noise-0.5)*0.22+windward_drift);
-        let snow_field=cold*select(0.55,0.16,cam.scene_seed.y>=9u)
-                      +smoothstep(86.0,156.0,q.y+(drift_noise-0.5)*28.0)*0.62
+        let slope_hold=smoothstep(0.36,0.78,normal.y+(drift_noise-0.5)*0.20+windward_drift+couloir_pocket*0.14);
+        let snow_field=cold*select(0.55,0.18,cam.scene_seed.y>=9u)
+                      +smoothstep(94.0,154.0,q.y+(drift_noise-0.5)*24.0+couloir_pocket*16.0)*0.64
                       +drift_noise*0.24;
-        let snow=smoothstep(0.46,0.78,snow_field)*slope_hold;
-        color=mix(color,vec3<f32>(0.79,0.85,0.90),snow);
-        // Weathered rock outcrops and dry/wet turf share the same climate
-        // evaluation, including the backdrop (kind zero).
+        let snow=smoothstep(0.46,0.76,snow_field)*slope_hold;
+        color=mix(color,vec3<f32>(0.80,0.86,0.91),snow);
+        // Weathered rock outcrops, tilted geological strata, and talus scree chutes
+        // share the same climate evaluation, including the backdrop (kind zero).
         let scree_noise=surface_noise(q.xz/26.0+vec2<f32>(-14.7,31.9))*0.60
                        +surface_noise(q.xz/7.8+vec2<f32>(23.4,-18.6))*0.40;
-        let exposure=1.0-smoothstep(0.48,0.85,normal.y+(scree_noise-0.5)*0.20);
-        let strata=surface_noise(vec2<f32>(q.x*0.045+q.z*0.032,q.y*0.14+drift_noise*1.4))*0.65
-                  +surface_noise(vec2<f32>(q.x*0.13-q.z*0.09,q.y*0.32+mottle*0.8))*0.35;
-        let mineral=mix(vec3<f32>(0.18,0.20,0.22),vec3<f32>(0.26,0.21,0.15),heat)*(0.80+strata*0.40);
-        let alpine_rock=smoothstep(48.0,108.0,q.y+(scree_noise-0.5)*22.0)*smoothstep(0.12,0.52,1.0-normal.y+(scree_noise-0.5)*0.16);
-        let exposed=clamp(max(exposure*0.42,alpine_rock*0.55),0.0,1.0);
-        color=mix(color,mineral*(0.86+mottle*0.28),exposed*(1.0-snow*0.75));
+        let exposure=1.0-smoothstep(0.46,0.84,normal.y+(scree_noise-0.5)*0.20);
+        let dip_coord = q.x * 0.038 + q.z * 0.029 + (drift_noise - 0.5) * 2.2;
+        let strata=surface_noise(vec2<f32>(dip_coord, q.y*0.16 + sin(dip_coord * 1.4) * 0.8))*0.65
+                  +surface_noise(vec2<f32>(q.x*0.13-q.z*0.09,q.y*0.34+mottle*0.8))*0.35;
+        let limestone_band = smoothstep(0.68, 0.86, sin(q.y * 0.24 + dip_coord * 3.2) * 0.5 + 0.5);
+        let rock_base = mix(vec3<f32>(0.16,0.18,0.20),vec3<f32>(0.25,0.20,0.15),heat);
+        let mineral = mix(rock_base, vec3<f32>(0.28, 0.27, 0.24), limestone_band * 0.45) * (0.78 + strata * 0.44);
+        let alpine_rock=smoothstep(52.0,108.0,q.y+(scree_noise-0.5)*20.0)*smoothstep(0.10,0.48,1.0-normal.y+(scree_noise-0.5)*0.16);
+        let exposed=clamp(max(exposure*0.48,alpine_rock*0.68),0.0,1.0);
+        color=mix(color,mineral*(0.86+mottle*0.28),exposed*(1.0-snow*0.78));
         let heath=smoothstep(0.53,0.76,mottle)*(1.0-forest)*0.30;
         color=mix(color,vec3<f32>(0.21,0.16,0.075),heath*up*(1.0-snow));
         color=mix(color,soil,smoothstep(0.16,0.40,clumps)*0.24*up*(1.0-snow));
@@ -876,23 +884,29 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // Evaluate material zones using the unperturbed macro normal so snow
         // and scree boundaries never chatter with high-frequency normal noise.
         albedo = natural_surface(albedo, in.voxel_pos, n, 0, footprint);
-        // Apply multi-scale geological relief and ridge crevice shading after
-        // surface coloration so distant mountains have rich craggy 3D structure.
-        let crag_weight = clamp((1.0 - geometric_normal.y) * 1.5 + smoothstep(38.0, 105.0, q_far.y) * 0.50, 0.0, 1.0);
-        let filter_macro = exp(-0.5 * pow(fp_far * 0.025, 2.0));
-        let filter_meso  = exp(-0.5 * pow(fp_far * 0.085, 2.0));
-        let filter_micro = exp(-0.5 * pow(fp_far * 0.24, 2.0));
+        // Apply multi-scale geological relief and ridged arête facet shading after
+        // surface coloration so distant mountains have crisp pyramidal crags & couloirs.
+        let crag_weight = clamp((1.0 - geometric_normal.y) * 1.65 + smoothstep(42.0, 115.0, q_far.y) * 0.58, 0.0, 1.0);
+        let filter_macro = exp(-0.5 * pow(fp_far * 0.022, 2.0));
+        let filter_meso  = exp(-0.5 * pow(fp_far * 0.078, 2.0));
+        let filter_micro = exp(-0.5 * pow(fp_far * 0.22, 2.0));
         let rot_far = mat2x2<f32>(0.80, -0.60, 0.60, 0.80);
         let g_macro = surface_noise_grad(q_far.xz * 0.018 + vec2<f32>(13.7, -29.4));
         let g_meso  = surface_noise_grad((rot_far * q_far.xz) * 0.058 + vec2<f32>(-41.2, 17.8));
         let g_micro = surface_noise_grad(q_far.xz * 0.165 + vec2<f32>(27.1, 53.6));
-        let ridge_grad = g_macro.yz * (0.14 * filter_macro)
-                       + (rot_far * g_meso.yz) * (0.11 * filter_meso * (0.35 + 0.65 * crag_weight))
-                       + g_micro.yz * (0.07 * filter_micro * crag_weight);
+        // Ridged derivative: d/dx (1 - |2n - 1|) flips sign across arête crests,
+        // producing sharp angular mountain facets rather than round pillowy bumps.
+        let arete_macro = -tanh((g_macro.x - 0.5) * 6.0) * g_macro.yz;
+        let arete_meso  = -tanh((g_meso.x - 0.5) * 6.0) * (rot_far * g_meso.yz);
+        let ridge_grad = mix(g_macro.yz, arete_macro, crag_weight * 0.65) * (0.16 * filter_macro)
+                       + mix(rot_far * g_meso.yz, arete_meso, crag_weight * 0.72) * (0.12 * filter_meso * (0.35 + 0.65 * crag_weight))
+                       + g_micro.yz * (0.075 * filter_micro * crag_weight);
         n = normalize(n + vec3<f32>(ridge_grad.x, 0.0, ridge_grad.y));
-        // Subtle geological gully/crevice darkening gives distant ranges depth.
-        let gully_ao = mix(0.84, 1.08, g_macro.x * 0.55 + g_meso.x * 0.45);
-        albedo *= mix(1.0, gully_ao, (0.45 + 0.55 * crag_weight) * filter_macro);
+        // Couloir crevice occlusion and sunlit arête crest highlight.
+        let ridge_crest = 1.0 - abs(g_macro.x * 2.0 - 1.0);
+        let couloir_groove = 1.0 - abs(g_meso.x * 2.0 - 1.0);
+        let gully_ao = mix(0.80, 1.10, clamp(ridge_crest * 0.62 + (1.0 - couloir_groove) * 0.38, 0.0, 1.0));
+        albedo *= mix(1.0, gully_ao, (0.42 + 0.58 * crag_weight) * filter_macro);
     }
     var water_depth = 10.0;
     var water_foam = 0.0;

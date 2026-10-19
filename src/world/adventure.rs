@@ -649,7 +649,7 @@ pub struct Effect {
     pub life: f32,
     pub total: f32,
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct EnemyFocus {
     pub kind: u32,
     pub name: &'static str,
