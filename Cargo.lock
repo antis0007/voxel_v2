@@ -1344,6 +1344,7 @@ name = "minecraft_style_voxel_prototype"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bytemuck",
  "egui",
  "egui-wgpu",
@@ -1351,8 +1352,10 @@ dependencies = [
  "env_logger",
  "glam",
  "image",
+ "naga",
  "pollster",
  "wgpu",
+ "windows",
  "winit",
 ]
 

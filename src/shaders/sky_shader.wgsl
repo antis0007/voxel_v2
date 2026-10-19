@@ -15,7 +15,7 @@
 // ============================================================
 
 struct VsOut {
-    @builtin(position) pos: vec4<f32>,
+    @builtin(position) @invariant pos: vec4<f32>,
     @location(0)       ndc: vec2<f32>,
 };
 
@@ -35,10 +35,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 
 // Reconstruct world-space ray direction from NDC.
 fn sky_dir(ndc: vec2<f32>) -> vec3<f32> {
-    let clip     = vec4<f32>(ndc, 1.0, 1.0);
-    let world    = cam.inv_view_proj * clip;
-    let world_pos = world.xyz / max(world.w, 1e-5);
-    return normalize(world_pos - cam.camera_pos.xyz);
+    return camera_ray(ndc);
 }
 
 // ---- Tonemapping & grading ----
@@ -111,7 +108,7 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
     let d = length(local - jitter * 0.58);
 
     // Star disk (anti-aliased point).
-    let shape = smoothstep(0.058, 0.0, d);
+    let shape = 1.0 - smoothstep(0.0, 0.058, d);
 
     // Colour temperature: mix cool blue-white (O/B type) with warm yellow-white (K/G).
     let hue  = hash12(cell + vec2<f32>(23.7, -11.2));
@@ -177,6 +174,9 @@ fn moon_disk(dir: vec3<f32>, moon_dir: vec3<f32>,
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    if cam.camera_pos.w > 0.5 {
+        return vec4<f32>(vec3<f32>(0.018, 0.095, 0.13) * mix(0.18, 1.0, light.sun_color_daylight.w), 1.0);
+    }
     let dir = sky_dir(in.ndc);
 
     let daylight   = saturate1(light.sun_color_daylight.w);
@@ -192,7 +192,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let cloud_cover_stars = cloud_cover;
 
     // --- Base sky from the shared atmosphere path (analytic fallback or runtime LUT mode) ---
-    var sky = atmosphere_color(dir);
+    let background = atmosphere_color(dir);
+    var sky = background;
 
     // --- Sun disk (with limb darkening) ---
     sky += sun_disk(
@@ -211,11 +212,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // --- Star field ---
     sky += star_field(dir, night, cloud_cover_stars);
 
-    // --- Tonemap & grade ---
-    let tonemapped = aces_tonemap(max(sky, vec3<f32>(0.0)) * exposure);
-    let graded     = saturate_color(
-        tonemapped,
-        saturation * mix(0.72, 1.0, daylight + twilight * 0.12),
-    );
-    return vec4<f32>(graded, 1.0);
+    // Celestial disks cannot shine through the planet. The horizon dips with
+    // altitude; use a smooth angular coverage to avoid a crawling hard line.
+    let altitude = max(cam.camera_pos.y, 1.0);
+    let radius = 6360000.0;
+    let horizon_y = -sqrt(altitude * (2.0 * radius + altitude)) / (radius + altitude);
+    let sky_visibility = smoothstep(horizon_y - 0.001, horizon_y + 0.001, dir.y);
+    sky = mix(background, sky, sky_visibility);
+    let mist = local_mist(dir, MIST_RANGE_M + MIST_NEAR_CLEARANCE_M, 1.0, background);
+    sky = sky*mist.a+mist.rgb;
+
+    return vec4<f32>(max(sky, vec3<f32>(0.0)), 1.0);
 }

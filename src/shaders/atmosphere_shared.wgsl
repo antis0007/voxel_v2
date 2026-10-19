@@ -156,6 +156,70 @@ fn sky_transmittance_to_sun_at_altitude(
 fn sky_transmittance_to_sun(sun_height: f32) -> vec3<f32> {
     return sky_transmittance_to_sun_at_altitude(sun_height, 0.0);
 }
+
+// Photograph-guided radiance response. Keep extinction/transmittance physical;
+// art direction belongs to illumination, never opacity or a full-screen tint.
+fn photographic_twilight(sun_height: f32) -> f32 {
+    return smoothstep(-0.16, -0.055, sun_height)
+        * (1.0 - smoothstep(0.08, 0.32, sun_height));
+}
+
+fn radiance_chroma(color: vec3<f32>) -> vec3<f32> {
+    return color / max(dot(color, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.00001);
+}
+
+fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
+    let sun = normalize(light.sun_dir_intensity.xyz);
+    let twilight = photographic_twilight(sun.y);
+    let day = smoothstep(0.12, 0.38, sun.y);
+    let sun_az = safe_normalize2(sun.xz, vec2<f32>(1.0, 0.0));
+    let view_az = safe_normalize2(dir.xz, sun_az);
+    let toward_sun = pow(saturate1(dot(sun_az, view_az) * 0.5 + 0.5), 3.0);
+    let elevation = max(dir.y, 0.0);
+    let dusk = 1.0 - smoothstep(-0.065, 0.095, sun.y);
+    let horizon = exp(-abs(elevation - 0.025) * 11.0);
+    // Blue upper air, a cyan transition, and a localized warm/rose horizon.
+    // The antisolar rose belt and the golden solar horizon have different hues.
+    let upper = mix(vec3<f32>(0.16, 0.39, 0.67), vec3<f32>(0.13, 0.20, 0.35),
+        smoothstep(0.04, 0.65, elevation));
+    let gold = mix(vec3<f32>(1.0, 0.53, 0.17), vec3<f32>(1.0, 0.20, 0.24), dusk);
+    let rose = vec3<f32>(0.64, 0.19, 0.37);
+    let horizon_color = mix(rose, gold, toward_sun);
+    var twilight_color = mix(upper, horizon_color, horizon * mix(0.70, 0.94, toward_sun));
+    let rose_belt = exp(-pow((elevation - 0.16) / 0.13, 2.0)) * (1.0 - toward_sun);
+    twilight_color = mix(twilight_color, rose, rose_belt * (0.35 + dusk * 0.35));
+    let day_color = mix(vec3<f32>(0.29, 0.58, 0.88), vec3<f32>(0.045, 0.24, 0.85),
+        smoothstep(0.0, 0.75, elevation));
+    let luminance = max(dot(physical, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0);
+    var result = mix(physical, radiance_chroma(day_color) * luminance, day * 0.34);
+    result = mix(result, radiance_chroma(twilight_color) * luminance, twilight * 0.85);
+    return max(result, vec3<f32>(0.0));
+}
+
+fn photographic_cloud_sun(sun_height: f32, altitude_m: f32) -> vec3<f32> {
+    let physical = sky_transmittance_to_sun_at_altitude(sun_height, altitude_m);
+    let twilight = photographic_twilight(sun_height);
+    // High turrets see a shorter atmospheric path; lower, later-lit cloud
+    // faces move from amber through peach to rose as the sun descends.
+    let local_sun = sun_height + sqrt(2.0 * max(altitude_m, 0.0) / 6360000.0);
+    let amber = 1.0 - smoothstep(0.035, 0.22, local_sun);
+    let coral = 1.0 - smoothstep(-0.015, 0.055, local_sun);
+    let rose = 1.0 - smoothstep(-0.060, 0.005, local_sun);
+    var hue = mix(vec3<f32>(1.0, 0.68, 0.25), vec3<f32>(1.0, 0.27, 0.055), amber);
+    hue = mix(hue, vec3<f32>(1.0, 0.095, 0.16), coral);
+    hue = mix(hue, vec3<f32>(0.88, 0.10, 0.36), rose);
+    let luminance = dot(physical, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return mix(physical, radiance_chroma(hue) * luminance, twilight * 0.86)
+        * (1.0 + twilight * 0.25);
+}
+
+fn cloud_shadow_chroma(sun_height: f32, height_fraction: f32) -> vec3<f32> {
+    let evening = 1.0 - smoothstep(-0.01, 0.16, sun_height);
+    let afterglow = 1.0 - smoothstep(-0.10, -0.015, sun_height);
+    var hue = mix(vec3<f32>(0.15, 0.38, 0.62), vec3<f32>(0.19, 0.20, 0.46), evening);
+    hue = mix(hue, vec3<f32>(0.26, 0.12, 0.37), afterglow);
+    return radiance_chroma(mix(hue, vec3<f32>(0.13, 0.29, 0.52), height_fraction * 0.35));
+}
 // Atmospheric density factor at camera altitude.
 // Models exponential atmosphere falloff: less air above = darker, more saturated sky.
 // Scale height ~3000m (compressed from real 8500m for more visible effect in-game).
@@ -202,16 +266,8 @@ fn aerial_perspective(
         return vec4<f32>(max(in_scatter, vec3<f32>(0.0)), avg_trans);
     }
 
-    let azimuth = atan2(view_dir.x, view_dir.z);
-    let elevation = asin(clamp(view_dir.y, -1.0, 1.0));
-    let u = azimuth / 6.2831853 + 0.5;
-    let v = (elevation / 1.5707963 + 1.0) * 0.5;
-    
-    let max_dist = max(cam.world_params.w * 0.82, 1.0);
-    let z_frac = sqrt(clamp(dist / max_dist, 0.0, 1.0));
-    let uvw = vec3<f32>(u, v, z_frac);
-    
-    return textureSampleLevel(atmosphere_aerial_perspective, atmosphere_sampler, uvw, 0.0);
+    let physical = sample_atmosphere_aerial_perspective(view_dir, dist, cam.world_params.w * 0.82);
+    return vec4<f32>(photographic_sky_radiance(physical.rgb, view_dir), physical.a);
 }
 
 // Runtime sky-view mode. Sky-view and multiscatter now come from explicit
@@ -228,12 +284,24 @@ fn runtime_sky_view_atmosphere_color(
     let alt_factor = altitude_atmosphere_factor();
     let cos_theta = dot(dir, sun_dir);
 
-    let base_sky = sample_atmosphere_sky_view_lut(dir, sun_dir);
-    let multiscatter = sample_atmosphere_multiscatter_lut(cos_theta, altitude_m);
+    var base_sky = sample_atmosphere_sky_view_lut(dir, sun_dir);
+    // The planet-ground branch of the LUT is not the game's local terrain.
+    // Continue tangent atmospheric radiance beneath the visible horizon, then
+    // blend into the lower hemisphere gradually. Sky and terrain fog use this
+    // same function, so their shared endpoint cannot form a dark horizontal rim.
+    if dir.y < 0.04 {
+        let safe_y = max(dir.y, 0.015);
+        let tangent = normalize(vec3<f32>(dir.x, safe_y, dir.z));
+        let horizon_sky = sample_atmosphere_sky_view_lut(tangent, sun_dir);
+        let ground_darken = mix(0.68, 1.0, smoothstep(-0.35, -0.01, dir.y));
+        let replace_t = 1.0 - smoothstep(-0.005, 0.035, dir.y);
+        base_sky = mix(base_sky, horizon_sky * ground_darken, replace_t);
+    }
     let sun_trans = sky_transmittance_to_sun_at_altitude(sun_dir.y, altitude_m);
 
     var sky = base_sky;
-    sky += multiscatter * mix(0.45, 0.92, horizon_w);
+    // Multiple scattering is integrated along the sky ray, not pasted onto
+    // the final color using the camera/sun angle as a solar elevation.
     sky *= mix(0.88, 1.02, alt_factor);
     sky += light.sky_horizon_reserved.rgb * horizon_w * daylight * 0.03;
     sky += light.sky_top_saturation.rgb * up * 0.02;
@@ -245,7 +313,7 @@ fn runtime_sky_view_atmosphere_color(
         * daylight
         * (0.28 + 0.72 * (1.0 - up));
 
-    return max(sky, vec3<f32>(0.0));
+    return photographic_sky_radiance(max(sky, vec3<f32>(0.0)), dir);
 }
 // ============================================================
 // atmosphere_color(dir) — full sky radiance for view direction `dir`.

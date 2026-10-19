@@ -15,6 +15,9 @@ struct Lighting {
     held_torch_pos_radius : vec4<f32>,
     held_torch_color_strength : vec4<f32>,
     torch_meta : vec4<f32>,
-    torch_positions : array<vec4<f32>, 16>,
-    torch_colors : array<vec4<f32>, 16>,
+    torch_positions : array<vec4<f32>, 64>,
+    torch_colors : array<vec4<f32>, 64>,
+    material_tints: array<vec4<f32>,256>,
+    material_properties: array<vec4<f32>,256>,
+    surface_weather: vec4<f32>,
 };

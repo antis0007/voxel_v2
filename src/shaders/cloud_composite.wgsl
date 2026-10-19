@@ -5,6 +5,7 @@
 @group(3) @binding(0) var weather_primary_tex : texture_2d_array<f32>;
 @group(3) @binding(1) var weather_secondary_tex : texture_2d_array<f32>;
 @group(3) @binding(2) var weather_sampler : sampler;
+@group(3) @binding(6) var scene_depth_tex : texture_depth_2d;
 @group(3) @binding(7) var cloud_shadow_tex : texture_2d_array<f32>;
 
 fn weather_clip_region(level: i32) -> vec4<f32> {
@@ -34,7 +35,7 @@ fn sample_weather_bilinear(tex: texture_2d_array<f32>, uv: vec2<f32>, level: i32
     let dims_u = textureDimensions(tex);
     let dims = vec2<f32>(f32(dims_u.x), f32(dims_u.y));
     let max_xy = vec2<i32>(i32(dims_u.x) - 1, i32(dims_u.y) - 1);
-    let p = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * dims - vec2<f32>(0.5);
+    let p = clamp(uv * dims - vec2<f32>(0.5), vec2<f32>(0.0), dims - vec2<f32>(1.0));
     let base = clamp(vec2<i32>(floor(p)), vec2<i32>(0), max_xy);
     let next = min(base + vec2<i32>(1, 1), max_xy);
     let frac = fract(p);
@@ -104,22 +105,110 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
-fn aces_tonemap(color: vec3<f32>) -> vec3<f32> {
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    return clamp(
-        (color * (a * color + vec3<f32>(b))) / (color * (c * color + vec3<f32>(d)) + vec3<f32>(e)),
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
+// Match the conservative 2x2 depth footprint used by the half-resolution march.
+fn cloud_sample_depth(uv: vec2<f32>) -> f32 {
+    let dims = vec2<i32>(textureDimensions(scene_depth_tex));
+    let base = vec2<i32>(floor(uv * vec2<f32>(dims) - vec2<f32>(0.5)));
+    let a = clamp(base, vec2<i32>(0), dims - 1);
+    let b = clamp(base + 1, vec2<i32>(0), dims - 1);
+    return min(min(textureLoad(scene_depth_tex, a, 0),
+        textureLoad(scene_depth_tex, vec2<i32>(b.x, a.y), 0)),
+        min(textureLoad(scene_depth_tex, vec2<i32>(a.x, b.y), 0), textureLoad(scene_depth_tex, b, 0)));
 }
 
-fn saturate_color(color: vec3<f32>, amount: f32) -> vec3<f32> {
-    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return mix(vec3<f32>(luma), color, amount);
+fn depth_match(a: f32, b: f32) -> f32 {
+    if (a >= 0.9999999) != (b >= 0.9999999) { return 0.0; }
+    return exp(-abs(a - b) * 24.0 / max(1.0 - a, 1e-7));
+}
+
+fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<f32>(textureDimensions(cloud_tex));
+    let p = uv * dims - vec2<f32>(0.5);
+    let base = floor(p);
+    let f = fract(p);
+    var colors: array<vec4<f32>, 4>;
+    for (var i = 0; i < 4; i += 1) {
+        let corner = vec2<f32>(f32(i % 2), f32(i / 2));
+        colors[i] = textureSampleLevel(cloud_tex, cloud_sampler,
+            (base + corner + vec2<f32>(0.5)) / dims, 0.0);
+    }
+    let empty_footprint=max(max(colors[0].a,colors[1].a),max(colors[2].a,colors[3].a))<=0.00001;
+    let pixel = clamp(vec2<i32>(uv * vec2<f32>(textureDimensions(scene_depth_tex))),
+        vec2<i32>(0), vec2<i32>(textureDimensions(scene_depth_tex)) - 1);
+    let depth = textureLoad(scene_depth_tex, pixel, 0);
+    var total = vec4<f32>(0.0);
+    var weight = 0.0;
+    var all_sky = depth >= 0.9999999;
+    for (var i = 0; i < 4; i += 1) {
+        let corner = vec2<f32>(f32(i % 2), f32(i / 2));
+        let tap_uv = (base + corner + vec2<f32>(0.5)) / dims;
+        let tap_depth = cloud_sample_depth(tap_uv);
+        all_sky = all_sky && tap_depth >= 0.9999999;
+        let bilinear = mix(1.0 - f, f, corner);
+        let w = bilinear.x * bilinear.y * depth_match(depth, tap_depth);
+        total += colors[i] * w;
+        weight += w;
+    }
+    // An empty conservative footprint may straddle geometry: recover sky gaps
+    // before taking the transparent fast path, otherwise storm edges glow white.
+    if empty_footprint && all_sky {return vec4<f32>(0.0);}
+    if !all_sky {
+        if weight > 1e-5 { return total / weight; }
+        // Thin sky gaps can lose all four conservative march samples. Recover
+        // from the closest matching neighbour rather than leave a dark fringe.
+        var best = 0.0;
+        var fallback = vec4<f32>(0.0);
+        for (var y = -1; y <= 2; y += 1) {
+            for (var x = -1; x <= 2; x += 1) {
+                let q = vec2<f32>(f32(x), f32(y));
+                let tap_uv = (base + q + vec2<f32>(0.5)) / dims;
+                let w = depth_match(depth, cloud_sample_depth(tap_uv)) / (1.0 + dot(q - f, q - f));
+                if w > best {
+                    best = w;
+                    fallback = textureSampleLevel(cloud_tex, cloud_sampler, tap_uv, 0.0);
+                }
+            }
+        }
+        return fallback;
+    }
+    // Dense storm decks need reconstruction of the stratified integration
+    // noise, not a sharpening cubic filter. Keep positive weights and reject
+    // geometry neighbours so this cannot bleed clouds across a roof silhouette.
+    if light.cloud_authoring[1].z > 0.08 && min(min(colors[0].a,colors[1].a),min(colors[2].a,colors[3].a)) > 0.55 {
+        let center=total/max(weight,1e-5);
+        var filtered=vec4<f32>(0.0);
+        var filtered_weight=0.0;
+        for(var y=-1;y<=1;y+=1) {for(var x=-1;x<=1;x+=1) {
+            let offset=vec2<f32>(f32(x),f32(y));
+            let tap_uv=uv+offset/dims;
+            if cloud_sample_depth(tap_uv)<0.9999999 {continue;}
+            let tap=textureSampleLevel(cloud_tex,cloud_sampler,tap_uv,0.0);
+            let w=exp(-dot(offset,offset)*0.65-abs(tap.a-center.a)*16.0);
+            filtered+=tap*w;filtered_weight+=w;
+        }}
+        return filtered/max(filtered_weight,1e-5);
+    }
+    // Separable Catmull-Rom, combining its two positive middle weights into
+    // one bilinear tap: nine fetches retain detail without another ray march.
+    let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    let w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    let w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    let w3 = f * f * (-0.5 + 0.5 * f);
+    let middle = w1 + w2;
+    let positions = array<vec2<f32>, 3>(base - 0.5,
+        base + 0.5 + w2 / middle, base + 2.5);
+    let weights = array<vec2<f32>, 3>(w0, middle, w3);
+    var cubic = vec4<f32>(0.0);
+    for (var y = 0; y < 3; y += 1) {
+        for (var x = 0; x < 3; x += 1) {
+            cubic += textureSampleLevel(cloud_tex, cloud_sampler,
+                vec2<f32>(positions[x].x, positions[y].y) / dims, 0.0)
+                * weights[x].x * weights[y].y;
+        }
+    }
+    // Negative cubic lobes must not invent bright rims or negative opacity.
+    return clamp(cubic, min(min(colors[0], colors[1]), min(colors[2], colors[3])),
+        max(max(colors[0], colors[1]), max(colors[2], colors[3])));
 }
 
 @fragment
@@ -128,7 +217,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // rendered at half resolution. Use surface UVs here so the upsampled sample
     // footprint is stable regardless of the cloud texture dimensions.
     let surface_uv = surface_uv_from_frag_coord(in.pos.xy);
-    let cloud = textureSample(cloud_tex, cloud_sampler, surface_uv);
+    let cloud = reconstruct_cloud(surface_uv);
     let alpha = clamp(cloud.a, 0.0, 0.998);
     let debug_mode = render_debug_view();
 
@@ -168,10 +257,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let exposure = max(light.ambient_exposure.w, 0.01);
-    let saturation = clamp(light.sky_top_saturation.w, 0.45, 1.05);
-    let linear = max(cloud.rgb / max(alpha, 1e-4), vec3<f32>(0.0));
-    let tonemapped = aces_tonemap(linear * exposure);
-    let graded = saturate_color(tonemapped, saturation);
-    return vec4<f32>(graded * alpha, alpha);
+    // Premultiplied linear radiance. Blending tone-mapped cloud RGB over a
+    // separately tone-mapped sky made edges dark and sunset colours disagree.
+    return vec4<f32>(max(cloud.rgb, vec3<f32>(0.0)), alpha);
 }

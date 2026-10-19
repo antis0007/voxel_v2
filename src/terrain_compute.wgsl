@@ -658,12 +658,12 @@ fn structure_block(x: i32, y: i32, z: i32, column: ColumnSample) -> u32 {
     return block_air();
 }
 
-fn sample_block(x: i32, y: i32, z: i32) -> u32 {
+fn sample_block_in_column(x: i32, y: i32, z: i32, column: ColumnSample) -> u32 {
     if y < min_world_y() || y >= max_world_y() {
         return block_air();
     }
 
-    let column = sample_column(x, z);
+
     if y > column.height {
         let structure = structure_block(x, y, z, column);
         if structure != block_air() {
@@ -712,14 +712,23 @@ fn linear_index(x: i32, y: i32, z: i32) -> u32 {
     return u32((y * CHUNK_GEN_W + z) * CHUNK_GEN_W + x);
 }
 
-@compute @workgroup_size(4, 4, 4)
-fn cs_main(@builtin(global_invocation_id) id : vec3<u32>) {
-    if i32(id.x) >= CHUNK_GEN_W || i32(id.y) >= CHUNK_GEN_W || i32(id.z) >= CHUNK_GEN_W {
+// One invocation owns a complete vertical column. Terrain/climate sampling is
+// shared by all 34 Y voxels without cross-workgroup synchronization.
+@compute @workgroup_size(8, 1, 8)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if i32(id.x) >= CHUNK_GEN_W || i32(id.z) >= CHUNK_GEN_W { return; }
+    let wx = cfg.chunk_coord.x * CHUNK_SIZE + i32(id.x) - PAD;
+    let wz = cfg.chunk_coord.z * CHUNK_SIZE + i32(id.z) - PAD;
+    let base_y = cfg.chunk_coord.y * CHUNK_SIZE - PAD;
+    if base_y + CHUNK_GEN_W <= min_world_y() || base_y >= max_world_y() {
+        for (var y = 0; y < CHUNK_GEN_W; y = y + 1) {
+            out_blocks[linear_index(i32(id.x), y, i32(id.z))] = block_air();
+        }
         return;
     }
-
-    let wx = cfg.chunk_coord.x * CHUNK_SIZE + i32(id.x) - PAD;
-    let wy = cfg.chunk_coord.y * CHUNK_SIZE + i32(id.y) - PAD;
-    let wz = cfg.chunk_coord.z * CHUNK_SIZE + i32(id.z) - PAD;
-    out_blocks[linear_index(i32(id.x), i32(id.y), i32(id.z))] = sample_block(wx, wy, wz);
+    let column = sample_column(wx, wz);
+    for (var y = 0; y < CHUNK_GEN_W; y = y + 1) {
+        let wy = base_y + y;
+        out_blocks[linear_index(i32(id.x), y, i32(id.z))] = sample_block_in_column(wx, wy, wz, column);
+    }
 }

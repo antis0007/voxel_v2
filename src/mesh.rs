@@ -1,3 +1,9 @@
+mod boundary;
+pub mod models;
+mod memory;
+pub use memory::{MeshPlan, PLANNING_BYTES};
+mod solid;
+mod ground_detail;
 use glam::{IVec3, Vec3};
 
 use crate::world::{BlockId, CHUNK_SIZE};
@@ -33,11 +39,9 @@ pub struct ChunkMesh {
 
 pub const CHUNK_PAD: i32 = 1;
 pub const PADDED_CHUNK_SIZE: i32 = CHUNK_SIZE + 2; // 34
-
-pub const LOD_SEAM_WEST: u8 = 1 << 0;
-pub const LOD_SEAM_EAST: u8 = 1 << 1;
-pub const LOD_SEAM_NORTH: u8 = 1 << 2;
-pub const LOD_SEAM_SOUTH: u8 = 1 << 3;
+/// Vertical inset (in voxel units) keeping free water surfaces recessed below
+/// the top edge of surrounding bank and shoreline blocks.
+pub const WATER_SURFACE_INSET: f32 = 0.135;
 
 impl ChunkMesh {
     pub fn empty() -> Self {
@@ -48,190 +52,191 @@ impl ChunkMesh {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ColumnTop {
-    height: i16,
-    block: BlockId,
-}
-
-impl ColumnTop {
-    const EMPTY: Self = Self {
-        height: i16::MIN,
-        block: BlockId::Stone,
-    };
-
-    fn into_pair(self) -> (i32, BlockId) {
-        (self.height as i32, self.block)
-    }
-}
-
-/// Cubic 32x32x32 chunk with 1-block padding on all sides (34x34x34 total).
-/// `chunk` is the chunk coordinate in all 3 axes (each axis uses CHUNK_SIZE=32).
+/// Cubic chunk plus an exact one-voxel halo shared by every mesh LOD.
 #[derive(Clone)]
 pub struct GeneratedChunk {
+    pub voxel_meters: f32,
+    pub water_levels: std::collections::HashMap<IVec3, u8>,
     pub chunk: IVec3,
-    pub water_level: i32,
     pub blocks: Vec<BlockId>,
-    top_cache: Box<[ColumnTop]>,
+    /// Highest opaque cell per padded column; generated terrain supplies roofs
+    /// above this chunk too. Lighting metadata, never collision geometry.
+    pub sky_ceiling: Vec<i32>,
 }
 
 impl GeneratedChunk {
-    pub fn new(chunk: IVec3, water_level: i32, blocks: Vec<BlockId>) -> Self {
-        let mut out = Self {
-            chunk,
-            water_level,
-            blocks,
-            top_cache: vec![ColumnTop::EMPTY; (CHUNK_SIZE * CHUNK_SIZE) as usize]
-                .into_boxed_slice(),
-        };
-        out.rebuild_top_cache();
-        out
+    /// Conservative allocation estimate including hash buckets and control bytes.
+    pub fn allocation_bytes(&self) -> usize {
+        self.blocks.capacity() * std::mem::size_of::<BlockId>()
+            + self.sky_ceiling.capacity() * std::mem::size_of::<i32>()
+            + self.water_levels.capacity() * (std::mem::size_of::<(IVec3, u8)>() + 1) * 2
     }
 
-    /// World-space origin of the padded block at local (0,0,0).
+    pub fn new(chunk: IVec3, blocks: Vec<BlockId>) -> Self {
+        Self {
+            voxel_meters: 1.0,
+            chunk,
+            blocks,
+            sky_ceiling: Vec::new(),
+            water_levels: Default::default(),
+        }
+    }
+
     pub fn origin(&self) -> IVec3 {
-        IVec3::new(
-            self.chunk.x * CHUNK_SIZE - CHUNK_PAD,
-            self.chunk.y * CHUNK_SIZE - CHUNK_PAD,
-            self.chunk.z * CHUNK_SIZE - CHUNK_PAD,
-        )
+        self.chunk * CHUNK_SIZE - IVec3::splat(CHUNK_PAD)
     }
 
     fn local_index(x: i32, y: i32, z: i32) -> usize {
         ((y * PADDED_CHUNK_SIZE + z) * PADDED_CHUNK_SIZE + x) as usize
     }
 
-    /// Returns a column-top cache index for XZ relative to the chunk interior.
-    fn column_top_index(x: i32, z: i32) -> Option<usize> {
-        if (0..CHUNK_SIZE).contains(&x) && (0..CHUNK_SIZE).contains(&z) {
-            Some((z * CHUNK_SIZE + x) as usize)
-        } else {
-            None
-        }
-    }
-
-    fn contains_world(&self, p: IVec3) -> bool {
-        let origin = self.origin();
-        p.x >= origin.x
-            && p.x < origin.x + PADDED_CHUNK_SIZE
-            && p.y >= origin.y
-            && p.y < origin.y + PADDED_CHUNK_SIZE
-            && p.z >= origin.z
-            && p.z < origin.z + PADDED_CHUNK_SIZE
-    }
-
-    fn scan_top_solid_block(&self, x: i32, z: i32) -> ColumnTop {
-        let wx = self.chunk.x * CHUNK_SIZE + x;
-        let wz = self.chunk.z * CHUNK_SIZE + z;
-        let y_start = self.chunk.y * CHUNK_SIZE + CHUNK_SIZE - 1;
-        let y_end = self.chunk.y * CHUNK_SIZE;
-        for y in (y_end..=y_start).rev() {
-            let block = self.get_world(IVec3::new(wx, y, wz));
-            if block.contributes_to_heightmap() {
-                return ColumnTop {
-                    height: y as i16,
-                    block,
-                };
-            }
-        }
-        ColumnTop::EMPTY
-    }
-
-    fn rebuild_top_cache(&mut self) {
-        for z in 0..CHUNK_SIZE {
-            for x in 0..CHUNK_SIZE {
-                self.recompute_column_top(x, z);
-            }
-        }
-    }
-
-    fn recompute_column_top(&mut self, x: i32, z: i32) {
-        let Some(index) = Self::column_top_index(x, z) else {
-            return;
-        };
-        self.top_cache[index] = self.scan_top_solid_block(x, z);
-    }
-
     pub fn get_world(&self, p: IVec3) -> BlockId {
-        if !self.contains_world(p) {
+        let local = p - self.origin();
+        if local.min_element() < 0 || local.max_element() >= PADDED_CHUNK_SIZE {
             return BlockId::Air;
         }
-        let origin = self.origin();
-        let lx = p.x - origin.x;
-        let ly = p.y - origin.y;
-        let lz = p.z - origin.z;
-        self.blocks[Self::local_index(lx, ly, lz)]
+        self.blocks[Self::local_index(local.x, local.y, local.z)]
     }
 
     pub fn set_world(&mut self, p: IVec3, block: BlockId) {
-        if !self.contains_world(p) {
-            return;
+        let local = p - self.origin();
+        if local.min_element() >= 0 && local.max_element() < PADDED_CHUNK_SIZE {
+            self.blocks[Self::local_index(local.x, local.y, local.z)] = block;
+            if !self.sky_ceiling.is_empty() {
+                let column = (local.z * PADDED_CHUNK_SIZE + local.x) as usize;
+                if Self::sky_occluder(block) { self.sky_ceiling[column] = self.sky_ceiling[column].max(p.y); }
+                else if self.sky_ceiling[column] == p.y {
+                    self.sky_ceiling[column] = self.local_roof(local.x, local.z);
+                }
+            }
         }
-        let origin = self.origin();
-        let lx = p.x - origin.x;
-        let ly = p.y - origin.y;
-        let lz = p.z - origin.z;
-        let index = Self::local_index(lx, ly, lz);
-        self.blocks[index] = block;
-
-        let local_x = p.x - self.chunk.x * CHUNK_SIZE;
-        let local_z = p.z - self.chunk.z * CHUNK_SIZE;
-        self.recompute_column_top(local_x, local_z);
     }
 
-    fn top_solid_block(&self, x: i32, z: i32) -> (i32, BlockId) {
-        if let Some(index) = Self::column_top_index(x, z) {
-            self.top_cache[index].into_pair()
+    pub fn local_roof(&self, x: i32, z: i32) -> i32 {
+        (0..PADDED_CHUNK_SIZE).rev()
+            .find(|&y| Self::sky_occluder(self.blocks[Self::local_index(x,y,z)]))
+            .map_or(self.origin().y - 1, |y| self.origin().y + y)
+    }
+
+    fn sky_occluder(block: BlockId) -> bool {
+        block.is_opaque() && !matches!(block, BlockId::Leaves | BlockId::PineLeaves | BlockId::Bush)
+    }
+
+    pub fn sky_visibility(&self, pos: Vec3, normal: Vec3) -> f32 {
+        if self.sky_ceiling.is_empty() { return 1.0; }
+        let air = pos + normal * 0.55;
+        let p = (air.floor().as_ivec3() - self.origin())
+            .clamp(IVec3::ZERO, IVec3::splat(PADDED_CHUNK_SIZE-1));
+        let roof = self.sky_ceiling[(p.z * PADDED_CHUNK_SIZE + p.x) as usize] as f32;
+        let cover_m = ((roof + 0.5 - air.y) * self.voxel_meters).max(0.0);
+        // Approximate diffuse light penetration, independent of voxel scale.
+        (-(cover_m * 0.48)).exp().max(0.006)
+    }
+
+    pub fn water_optics(&self, pos: Vec3, normal: Vec3) -> (f32, [f32; 3]) {
+        let inside = pos - normal * 0.01;
+        let mut depth = 0.0;
+        let mut water_samples = 0;
+        let mut solid_shore_samples = 0;
+        let mut bed_color = Vec3::ZERO;
+        // Sample all 4 cells around a shared vertex corner. Including adjacent
+        // solid beach cells as shallow shore margins lets shoreline vertices
+        // smoothly approach 0.15m depth right at the water's edge.
+        for dx in [-0.125, 0.125] {
+            for dz in [-0.125, 0.125] {
+                let mut p = (inside + Vec3::new(dx, 0.0, dz)).floor().as_ivec3();
+                let top_block = self.get_world(p);
+                if top_block != BlockId::Water {
+                    if top_block.is_opaque() {
+                        solid_shore_samples += 1;
+                        bed_color += Vec3::from_array(top_block.color(p));
+                    }
+                    continue;
+                }
+                let mut cells = self.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0;
+                p.y -= 1;
+                while p.y >= self.origin().y && self.get_world(p) == BlockId::Water {
+                    cells += 1.0;
+                    p.y -= 1;
+                }
+                let meters = cells * self.voxel_meters;
+                let bed = self.get_world(p);
+                // Reuse the existing depth walk. Unknown beds beneath this
+                // source halo are deep enough that their tint is attenuated.
+                let bed = if bed.is_opaque() { bed } else { BlockId::Sand };
+                bed_color += Vec3::from_array(bed.color(p));
+                depth += if p.y < self.origin().y {
+                    meters.max(10.0)
+                } else {
+                    meters
+                };
+                water_samples += 1;
+            }
+        }
+        if water_samples == 0 {
+            (10.0, BlockId::Sand.color(inside.floor().as_ivec3()))
         } else {
-            self.scan_top_solid_block(x, z).into_pair()
+            let total = (water_samples + solid_shore_samples) as f32;
+            let mut avg_depth =
+                (depth + solid_shore_samples as f32 * (0.08 * self.voxel_meters)) / total;
+            if solid_shore_samples > 0 {
+                let shore_cap = (0.12 + 0.11 * water_samples as f32) * self.voxel_meters;
+                avg_depth = avg_depth.min(shore_cap);
+            } else if water_samples < 4 {
+                avg_depth = avg_depth.min(0.18 * self.voxel_meters);
+            }
+            (avg_depth, (bed_color / total).to_array())
         }
     }
 }
-
-fn lod_cell_top(
-    chunk_data: &GeneratedChunk,
-    lx: i32,
-    lz: i32,
-    step: i32,
-) -> Option<(i32, BlockId)> {
-    let end_x = if lx >= CHUNK_SIZE {
-        lx + 1
-    } else {
-        (lx + step).min(CHUNK_SIZE)
-    };
-    let end_z = if lz >= CHUNK_SIZE {
-        lz + 1
-    } else {
-        (lz + step).min(CHUNK_SIZE)
-    };
-    let mut best: Option<(i32, BlockId)> = None;
-    for z in lz..end_z {
-        for x in lx..end_x {
-            let sample = chunk_data.top_solid_block(x, z);
-            // top_solid_block returns i16::MIN as height when no solid block exists
-            if sample.0 == i16::MIN as i32 {
-                continue;
-            }
-            if best.map_or(true, |(bh, _)| sample.0 > bh) {
-                best = Some(sample);
-            }
-        }
-    }
-    best
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct FaceMaterial {
     block: BlockId,
     color_bits: [u32; 3],
+    water_depth_bucket: u8,
 }
 
 impl FaceMaterial {
     fn from_block(block: BlockId, world_pos: IVec3) -> Self {
-        let color = block.color(world_pos);
+        Self::from_block_with_water_bucket(block, world_pos, 0)
+    }
+
+    fn from_block_with_water_bucket(
+        block: BlockId,
+        world_pos: IVec3,
+        water_depth_bucket: u8,
+    ) -> Self {
+        // Keep base albedo identical across LODs. Period-two voxel tint used to
+        // split every near face and then disappear abruptly in distant meshes.
+        // World-space shader detail supplies the fine surface variation.
+        static COLORS: std::sync::OnceLock<Vec<[f32; 3]>> = std::sync::OnceLock::new();
+        let color = if block.is_opaque() || block.is_liquid() {
+            COLORS.get_or_init(|| {
+                crate::material::ALL_BLOCK_IDS
+                    .iter()
+                    .map(|&id| {
+                        let mut mean = [0.0; 3];
+                        for y in 0..2 {
+                            for z in 0..2 {
+                                for x in 0..2 {
+                                    let sample = id.color(IVec3::new(x, y, z));
+                                    for c in 0..3 {
+                                        mean[c] += sample[c] * 0.125;
+                                    }
+                                }
+                            }
+                        }
+                        mean
+                    })
+                    .collect()
+            })[block.as_u32() as usize]
+        } else {
+            block.color(world_pos)
+        };
         Self {
             block,
             color_bits: [color[0].to_bits(), color[1].to_bits(), color[2].to_bits()],
+            water_depth_bucket,
         }
     }
 
@@ -245,7 +250,7 @@ impl FaceMaterial {
 }
 
 fn face_visible(block: BlockId, neighbor: BlockId) -> bool {
-    if block.is_empty() {
+    if block.is_empty() || block.is_model() {
         return false;
     }
 
@@ -320,13 +325,69 @@ fn emit_greedy_face(
     let mut dv = [0; 3];
     dv[v_axis] = height;
 
-    let a = mesh_vertex(chunk_data, base);
-    let b = mesh_vertex(chunk_data, add_axes(base, du));
-    let c = mesh_vertex(chunk_data, add_axes(add_axes(base, du), dv));
-    let d = mesh_vertex(chunk_data, add_axes(base, dv));
+    let mut a = mesh_vertex(chunk_data, base);
+    let mut b = mesh_vertex(chunk_data, add_axes(base, du));
+    let mut c = mesh_vertex(chunk_data, add_axes(add_axes(base, du), dv));
+    let mut d = mesh_vertex(chunk_data, add_axes(base, dv));
+
+    if material.block == BlockId::Water {
+        if axis == 1 && positive {
+            for p in [&mut a, &mut b, &mut c, &mut d] {
+                p[1] -= WATER_SURFACE_INSET;
+            }
+        } else if axis != 1 {
+            let mut top_cell = base;
+            top_cell[axis] = if positive { plane - 1 } else { plane };
+            top_cell[1] += if u_axis == 1 { width - 1 } else { height - 1 };
+            let mut above = top_cell;
+            above[1] += 1;
+            if mesh_block_at(chunk_data, above) != BlockId::Water {
+                if u_axis == 1 {
+                    b[1] -= WATER_SURFACE_INSET;
+                    c[1] -= WATER_SURFACE_INSET;
+                } else {
+                    c[1] -= WATER_SURFACE_INSET;
+                    d[1] -= WATER_SURFACE_INSET;
+                }
+            }
+        }
+    }
 
     let quad = if positive { [a, b, c, d] } else { [d, c, b, a] };
     let corner_ao = face_corner_ao(chunk_data, axis, positive, plane, u0, v0, width, height);
+
+    let border = |coordinate: i32| coordinate == 0 || coordinate == CHUNK_SIZE;
+    let steps = [
+        if border(v0) { width } else { 1 },
+        if border(u0 + width) { height } else { 1 },
+        if border(v0 + height) { width } else { 1 },
+        if border(u0) { height } else { 1 },
+    ];
+    let locals = [
+        base,
+        add_axes(base, du),
+        add_axes(add_axes(base, du), dv),
+        add_axes(base, dv),
+    ];
+    let (locals, steps) = if positive {
+        (locals, steps)
+    } else {
+        (
+            [locals[3], locals[2], locals[1], locals[0]],
+            [steps[2], steps[1], steps[0], steps[3]],
+        )
+    };
+    if boundary::emit_conforming_face(
+        mesh,
+        chunk_data,
+        locals,
+        steps,
+        material,
+        face_normal_from_axis(axis, positive),
+        corner_ao,
+    ) {
+        return;
+    }
 
     push_face(
         &mut mesh.vertices,
@@ -351,7 +412,9 @@ fn face_corner_ao(
 ) -> [f32; 4] {
     let u_axis = (axis + 1) % 3;
     let v_axis = (axis + 2) % 3;
-    let inside_axis = if positive { plane - 1 } else { plane };
+    // Occluders sit on the air side of the face. Sampling the solid layer
+    // underneath a flat surface falsely occludes it and exposes greedy seams.
+    let outside_axis = if positive { plane } else { plane - 1 };
 
     let sample = |u_positive: bool, v_positive: bool| {
         let inside_u = if u_positive { u0 + width - 1 } else { u0 };
@@ -360,17 +423,17 @@ fn face_corner_ao(
         let outside_v = if v_positive { v0 + height } else { v0 - 1 };
 
         let mut side_u = [0; 3];
-        side_u[axis] = inside_axis;
+        side_u[axis] = outside_axis;
         side_u[u_axis] = outside_u;
         side_u[v_axis] = inside_v;
 
         let mut side_v = [0; 3];
-        side_v[axis] = inside_axis;
+        side_v[axis] = outside_axis;
         side_v[u_axis] = inside_u;
         side_v[v_axis] = outside_v;
 
         let mut corner = [0; 3];
-        corner[axis] = inside_axis;
+        corner[axis] = outside_axis;
         corner[u_axis] = outside_u;
         corner[v_axis] = outside_v;
 
@@ -418,53 +481,13 @@ fn push_face(
             surface: [
                 surface.roughness,
                 surface.specular,
-                surface.detail_scale,
+                surface.shader_key(),
                 surface.detail_strength,
             ],
             ao_strength: ao,
         });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-}
-
-fn push_height_quad(
-    vertices: &mut Vec<Vertex3>,
-    indices: &mut Vec<u32>,
-    x0: f32,
-    x1: f32,
-    z0: f32,
-    z1: f32,
-    y: f32,
-    color: [f32; 3],
-    surface: BlockId,
-) {
-    push_face(
-        vertices,
-        indices,
-        [[x0, y, z0], [x0, y, z1], [x1, y, z1], [x1, y, z0]],
-        color,
-        [0.0, 1.0, 0.0],
-        surface.surface(),
-        [1.0; 4],
-    );
-}
-
-fn push_wall(
-    vertices: &mut Vec<Vertex3>,
-    indices: &mut Vec<u32>,
-    quad: [[f32; 3]; 4],
-    color: [f32; 3],
-    surface: BlockId,
-) {
-    push_face(
-        vertices,
-        indices,
-        quad,
-        color,
-        normal_from_quad(quad),
-        surface.surface(),
-        [0.94; 4],
-    );
 }
 
 fn push_double_sided_face(
@@ -492,21 +515,6 @@ fn push_double_sided_face(
         surface,
         [1.0; 4],
     );
-}
-
-fn push_wall_lod(
-    vertices: &mut Vec<Vertex3>,
-    indices: &mut Vec<u32>,
-    quad: [[f32; 3]; 4],
-    color: [f32; 3],
-    surface: BlockId,
-    double_sided: bool,
-) {
-    if double_sided {
-        push_double_sided_face(vertices, indices, quad, color, surface.surface());
-    } else {
-        push_wall(vertices, indices, quad, color, surface);
-    }
 }
 
 fn emit_oriented_box(
@@ -590,7 +598,7 @@ fn emit_oriented_box(
     }
 }
 
-fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk) {
+fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8, compact: bool) {
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
             for ly in 0..CHUNK_SIZE {
@@ -602,7 +610,10 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk) {
 
                 let world = world_pos_from_mesh_local(chunk_data, local);
                 let base = world.as_vec3();
-                let surface = block.surface();
+                let first_vertex = mesh.vertices.len();
+                let mut surface = block.surface();
+                // Keep the handle non-emissive; only the fuel and flames glow.
+                surface.detail_strength = 0.0;
                 let wood_color = block.color(world);
                 let ember_color = [1.00, 0.44, 0.16];
                 let flame_color = [1.00, 0.64, 0.26];
@@ -636,783 +647,191 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk) {
                     _ => continue,
                 };
 
-                emit_oriented_box(mesh, shaft_start, shaft_end, 0.055, wood_color, surface);
+                emit_oriented_box(mesh, shaft_start, shaft_end, 0.045, wood_color, surface);
+                // Dense player builds must fit the minimum worker allowance.
+                // Retain every handle and light position, replacing collar/ring
+                // detail with a bounded emissive volume above 1024 lights/chunk.
+                if compact {
+                    let mut flame = surface;
+                    flame.detail_strength = -2.0;
+                    emit_oriented_box(mesh, flame_center-Vec3::Y*0.05,
+                        flame_center+Vec3::Y*0.20, 0.065, flame_color, flame);
+                    scale_torch_vertices(mesh, first_vertex, base, block, chunk_data.voxel_meters);
+                    continue;
+                }
+                let axis = (shaft_end - shaft_start).normalize_or_zero();
+                let mut metal = surface;
+                metal.roughness = 0.38;
+                metal.specular = 0.65;
+                if lod < 2 {
+                    // A bound leather grip reads clearly even on the angled mounts.
+                    for distance in [0.29, 0.35, 0.41] {
+                        let grip = shaft_end - axis * distance;
+                        emit_oriented_box(mesh, grip - axis * 0.022, grip + axis * 0.022,
+                            0.051, [0.24, 0.13, 0.075], surface);
+                    }
+                    if block != BlockId::Torch {
+                        let wall = block.torch_support_offset().unwrap().as_vec3();
+                        let plate = base + Vec3::new(0.5, 0.38, 0.5) + wall * 0.475;
+                        emit_oriented_box(mesh, plate - wall * 0.015, plate + wall * 0.015,
+                            0.105, [0.18, 0.16, 0.14], metal);
+                        emit_oriented_box(mesh, plate - wall * 0.02, shaft_start + axis * 0.10,
+                            0.028, [0.28, 0.23, 0.17], metal);
+                    }
+                }
+                for distance in [0.07, 0.19] {
+                    if lod >= 2 { continue; }
+                    let collar = shaft_end - axis * distance;
+                    emit_oriented_box(mesh, collar - axis * 0.018, collar + axis * 0.018,
+                        0.061, [0.21, 0.18, 0.14], metal);
+                }
+                let mut ember = surface;
+                ember.detail_strength = -1.0;
                 emit_oriented_box(
                     mesh,
                     shaft_end - (shaft_end - shaft_start).normalize_or_zero() * 0.05,
                     shaft_end + Vec3::new(0.0, 0.08, 0.0),
                     0.065,
                     ember_color,
-                    surface,
+                    ember,
                 );
 
-                let half_w = 0.09;
-                let half_h = 0.15;
-                for quad in [
-                    [
-                        (flame_center + Vec3::new(-half_w, -half_h, 0.0)).to_array(),
-                        (flame_center + Vec3::new(half_w, -half_h, 0.0)).to_array(),
-                        (flame_center + Vec3::new(half_w, half_h, 0.0)).to_array(),
-                        (flame_center + Vec3::new(-half_w, half_h, 0.0)).to_array(),
-                    ],
-                    [
-                        (flame_center + Vec3::new(0.0, -half_h, -half_w)).to_array(),
-                        (flame_center + Vec3::new(0.0, -half_h, half_w)).to_array(),
-                        (flame_center + Vec3::new(0.0, half_h, half_w)).to_array(),
-                        (flame_center + Vec3::new(0.0, half_h, -half_w)).to_array(),
-                    ],
-                ] {
-                    push_double_sided_face(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        quad,
-                        flame_color,
-                        surface,
-                    );
-                }
-            }
-        }
-    }
-}
-
-pub fn build_chunk_mesh_lod_with_seams(
-    chunk_data: &GeneratedChunk,
-    lod: u8,
-    seams: u8,
-) -> ChunkMesh {
-    match lod {
-        0 => build_chunk_mesh_greedy(chunk_data),
-        1 => build_chunk_mesh_lod_step(chunk_data, seams, 2, true),
-        2 => build_chunk_mesh_lod_step(chunk_data, seams, 4, false),
-        _ => build_chunk_mesh_lod_step(chunk_data, seams, 8, false),
-    }
-}
-
-pub fn build_chunk_mesh_lod(chunk_data: &GeneratedChunk, lod: u8) -> ChunkMesh {
-    build_chunk_mesh_lod_with_seams(chunk_data, lod, 0)
-}
-
-pub fn build_chunk_mesh_greedy(chunk_data: &GeneratedChunk) -> ChunkMesh {
-    const DIMS: [i32; 3] = [CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE];
-
-    let mut mesh = ChunkMesh::empty();
-    // Maximum mask size is CHUNK_SIZE * CHUNK_SIZE for any face plane
-    let mut mask = vec![None; (CHUNK_SIZE * CHUNK_SIZE) as usize];
-
-    for axis in 0..3 {
-        let u_axis = (axis + 1) % 3;
-        let v_axis = (axis + 2) % 3;
-        let row_len = DIMS[u_axis] as usize;
-        let plane_len = (DIMS[u_axis] * DIMS[v_axis]) as usize;
-
-        for positive in [false, true] {
-            // Only emit faces for blocks INSIDE the chunk (0..CHUNK_SIZE).
-            // `current[axis]` = plane-1 when positive, plane when negative.
-            // Padding neighbours are used for visibility tests, but the face
-            // itself must belong to an interior block — otherwise both adjacent
-            // chunks emit the same boundary face, causing Z-fighting / doubled
-            // geometry.
-            let plane_start = if positive { 1 } else { 0 };
-            let plane_end = if positive { DIMS[axis] } else { DIMS[axis] - 1 };
-            for plane in plane_start..=plane_end {
-                for v in 0..DIMS[v_axis] {
-                    for u in 0..DIMS[u_axis] {
-                        let mut current = [0; 3];
-                        current[axis] = if positive { plane - 1 } else { plane };
-                        current[u_axis] = u;
-                        current[v_axis] = v;
-
-                        let mut neighbor = current;
-                        neighbor[axis] = if positive { plane } else { plane - 1 };
-
-                        let block = mesh_block_at(chunk_data, current);
-                        let neighbor_block = mesh_block_at(chunk_data, neighbor);
-                        let index = (v as usize * row_len) + u as usize;
-                        mask[index] = if block.is_torch() {
-                            None
-                        } else if face_visible(block, neighbor_block) {
-                            Some(FaceMaterial::from_block(
-                                block,
-                                world_pos_from_mesh_local(chunk_data, current),
-                            ))
-                        } else {
-                            None
+                // Six-sided tapered volume: a bright belly and an asymmetric tip.
+                // Explicit materials keep wall-mounted flames aligned with their mesh.
+                let rings = [(-0.08, 0.045, 0.0), (0.01, 0.10, 0.0),
+                    (0.13, 0.055, 0.018), (0.27, 0.003, 0.045)];
+                // Keep the emissive silhouette stable across chunk LOD swaps.
+                // Small non-emissive fittings still disappear in the far mesh.
+                let sides = 6;
+                for band in 0..3 {
+                    let mut flame = surface;
+                    flame.detail_strength = -2.0;
+                    for side in 0..sides {
+                        let point = |ring: usize, side: usize| {
+                            let (height, radius, bend) = rings[ring];
+                            let angle = side as f32 * std::f32::consts::TAU / sides as f32;
+                            (flame_center + Vec3::new(angle.cos() * radius + bend,
+                                height, angle.sin() * radius)).to_array()
                         };
+                        let quad = [point(band, side), point(band + 1, side),
+                            point(band + 1, side + 1), point(band, side + 1)];
+                        let color = if band == 0 { [1.0, 0.88, 0.47] }
+                            else if band == 1 { flame_color } else { [1.0, 0.29, 0.055] };
+                        push_face(&mut mesh.vertices, &mut mesh.indices, quad, color,
+                            normal_from_quad(quad), flame, [1.0; 4]);
                     }
                 }
-
-                let mut index = 0usize;
-                while index < plane_len {
-                    let Some(material) = mask[index] else {
-                        index += 1;
-                        continue;
-                    };
-
-                    let u0 = (index % row_len) as i32;
-                    let v0 = (index / row_len) as i32;
-
-                    let mut width = 1i32;
-                    while u0 + width < DIMS[u_axis]
-                        && mask[index + width as usize] == Some(material)
-                    {
-                        width += 1;
-                    }
-
-                    let mut height = 1i32;
-                    'grow: while v0 + height < DIMS[v_axis] {
-                        let row_start = (v0 + height) as usize * row_len + u0 as usize;
-                        for offset in 0..width as usize {
-                            if mask[row_start + offset] != Some(material) {
-                                break 'grow;
-                            }
-                        }
-                        height += 1;
-                    }
-
-                    emit_greedy_face(
-                        &mut mesh, chunk_data, axis, positive, plane, u0, v0, width, height,
-                        material,
-                    );
-
-                    for clear_v in v0..(v0 + height) {
-                        let row_start = clear_v as usize * row_len + u0 as usize;
-                        for clear_u in 0..width as usize {
-                            mask[row_start + clear_u] = None;
+                {
+                    // A smaller tongue breaks the single-cone silhouette.
+                    let mut flame = surface;
+                    flame.detail_strength = -2.0;
+                    let foot = flame_center + Vec3::new(-0.065, 0.025, 0.0);
+                    let belly = flame_center + Vec3::new(-0.105, 0.12, 0.0);
+                    let tip = flame_center + Vec3::new(-0.08, 0.225, 0.015);
+                    for side in 0..4 {
+                        let a = side as f32 * std::f32::consts::FRAC_PI_2;
+                        let b = a + std::f32::consts::FRAC_PI_2;
+                        let va = Vec3::new(a.cos(), 0.0, a.sin());
+                        let vb = Vec3::new(b.cos(), 0.0, b.sin());
+                        for quad in [
+                            [foot + va * 0.025, belly + va * 0.035, belly + vb * 0.035, foot + vb * 0.025],
+                            [belly + va * 0.035, tip + va * 0.002, tip + vb * 0.002, belly + vb * 0.035],
+                        ] {
+                            let quad = quad.map(|v| v.to_array());
+                            push_face(&mut mesh.vertices, &mut mesh.indices, quad,
+                                [1.0, 0.42, 0.09], normal_from_quad(quad), flame, [1.0; 4]);
                         }
                     }
-
-                    index += width as usize;
                 }
+                scale_torch_vertices(mesh, first_vertex, base, block, chunk_data.voxel_meters);
             }
         }
     }
-
-    append_torch_mesh(&mut mesh, chunk_data);
-    mesh
 }
 
-pub fn build_chunk_mesh_lod1(chunk_data: &GeneratedChunk, seams: u8) -> ChunkMesh {
-    build_chunk_mesh_lod_step(chunk_data, seams, 2, true)
+fn scale_torch_vertices(mesh: &mut ChunkMesh, first: usize, cell: Vec3, block: BlockId, scale: f32) {
+    for vertex in &mut mesh.vertices[first..] {
+        let local = Vec3::from_array(vertex.pos) - cell;
+        vertex.pos = (block.torch_point_meters(cell, local, scale) / scale).to_array();
+    }
 }
 
-fn build_chunk_mesh_lod_step(
-    chunk_data: &GeneratedChunk,
-    seams: u8,
-    step: i32,
-    include_decor: bool,
-) -> ChunkMesh {
-    let mut mesh = build_chunk_shell(chunk_data, step.max(1), true, seams);
-    append_torch_mesh(&mut mesh, chunk_data);
-    if include_decor {
-        append_foliage_mesh(&mut mesh, chunk_data);
-    }
-    mesh
-}
-
-fn build_chunk_shell(
-    chunk_data: &GeneratedChunk,
-    step: i32,
-    include_walls: bool,
-    seams: u8,
-) -> ChunkMesh {
-    let mut mesh = ChunkMesh::empty();
-    let ox = chunk_data.chunk.x * CHUNK_SIZE;
-    let oz = chunk_data.chunk.z * CHUNK_SIZE;
-
-    let seam_west = seams & LOD_SEAM_WEST != 0;
-    let seam_east = seams & LOD_SEAM_EAST != 0;
-    let seam_north = seams & LOD_SEAM_NORTH != 0;
-    let seam_south = seams & LOD_SEAM_SOUTH != 0;
-
-    let chunk_floor_y = (chunk_data.chunk.y * CHUNK_SIZE) as f32;
-    let double_sided_walls = true;
-
-    for lz in (0..CHUNK_SIZE).step_by(step as usize) {
-        for lx in (0..CHUNK_SIZE).step_by(step as usize) {
-            let cell = lod_cell_top(chunk_data, lx, lz, step);
-
-            let x0 = (ox + lx) as f32;
-            let z0 = (oz + lz) as f32;
-            let x1 = (ox + lx + step).min(ox + CHUNK_SIZE) as f32;
-            let z1 = (oz + lz + step).min(oz + CHUNK_SIZE) as f32;
-
-            if let Some((h, surface)) = cell {
-                let color = surface.color(IVec3::new(ox + lx, h, oz + lz));
-                let y = h as f32 + 1.0;
-
-                push_height_quad(
-                    &mut mesh.vertices,
-                    &mut mesh.indices,
-                    x0,
-                    x1,
-                    z0,
-                    z1,
-                    y,
-                    color,
-                    surface,
-                );
-
-                if include_walls {
-                    let east_cell = lod_cell_top(chunk_data, (lx + step).min(CHUNK_SIZE), lz, step);
-                    let south_cell =
-                        lod_cell_top(chunk_data, lx, (lz + step).min(CHUNK_SIZE), step);
-                    let chunk_floor = chunk_data.chunk.y * CHUNK_SIZE;
-
-                    match east_cell {
-                        Some((east_h, east_surface)) if east_h != h => {
-                            let min_h = east_h.min(h) as f32 + 1.0;
-                            let max_h = east_h.max(h) as f32 + 1.0;
-                            let east_color = if h >= east_h {
-                                color
-                            } else {
-                                east_surface.color(IVec3::new(ox + lx + step, east_h, oz + lz))
-                            };
-                            let east_quad = if h >= east_h {
-                                [
-                                    [x1, min_h, z0],
-                                    [x1, max_h, z0],
-                                    [x1, max_h, z1],
-                                    [x1, min_h, z1],
-                                ]
-                            } else {
-                                [
-                                    [x1, min_h, z1],
-                                    [x1, max_h, z1],
-                                    [x1, max_h, z0],
-                                    [x1, min_h, z0],
-                                ]
-                            };
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                east_quad,
-                                east_color,
-                                if h >= east_h { surface } else { east_surface },
-                                double_sided_walls,
-                            );
-                        }
-                        None => {
-                            // East neighbor cell is empty — emit east-facing wall on this cell.
-                            let min_h = ((h - CHUNK_SIZE).max(chunk_floor)) as f32;
-                            let max_h = h as f32 + 1.0;
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                [
-                                    [x1, min_h, z0],
-                                    [x1, max_h, z0],
-                                    [x1, max_h, z1],
-                                    [x1, min_h, z1],
-                                ],
-                                color,
-                                surface,
-                                double_sided_walls,
-                            );
-                        }
-                        _ => {}
-                    }
-
-                    match south_cell {
-                        Some((south_h, south_surface)) if south_h != h => {
-                            let min_h = south_h.min(h) as f32 + 1.0;
-                            let max_h = south_h.max(h) as f32 + 1.0;
-                            let south_color = if h >= south_h {
-                                color
-                            } else {
-                                south_surface.color(IVec3::new(ox + lx, south_h, oz + lz + step))
-                            };
-                            let south_quad = if h >= south_h {
-                                [
-                                    [x0, min_h, z1],
-                                    [x1, min_h, z1],
-                                    [x1, max_h, z1],
-                                    [x0, max_h, z1],
-                                ]
-                            } else {
-                                [
-                                    [x0, min_h, z1],
-                                    [x0, max_h, z1],
-                                    [x1, max_h, z1],
-                                    [x1, min_h, z1],
-                                ]
-                            };
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                south_quad,
-                                south_color,
-                                if h >= south_h { surface } else { south_surface },
-                                double_sided_walls,
-                            );
-                        }
-                        None => {
-                            // South neighbor cell is empty — emit south-facing wall on this cell.
-                            let min_h = ((h - CHUNK_SIZE).max(chunk_floor)) as f32;
-                            let max_h = h as f32 + 1.0;
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                [
-                                    [x0, min_h, z1],
-                                    [x1, min_h, z1],
-                                    [x1, max_h, z1],
-                                    [x0, max_h, z1],
-                                ],
-                                color,
-                                surface,
-                                double_sided_walls,
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-
-                if h < chunk_data.water_level {
-                    push_height_quad(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        x0,
-                        x1,
-                        z0,
-                        z1,
-                        chunk_data.water_level as f32 + 1.0,
-                        BlockId::Water.color(IVec3::new(ox + lx, chunk_data.water_level, oz + lz)),
-                        BlockId::Water,
-                    );
-                }
-            } else {
-                // Cell has no solid blocks. Still emit water surface if submerged,
-                // and emit walls toward neighbors that have solid blocks above us.
-                if chunk_data.water_level > chunk_data.chunk.y * CHUNK_SIZE {
-                    push_height_quad(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        x0,
-                        x1,
-                        z0,
-                        z1,
-                        chunk_data.water_level as f32 + 1.0,
-                        BlockId::Water.color(IVec3::new(ox + lx, chunk_data.water_level, oz + lz)),
-                        BlockId::Water,
-                    );
-                }
-
-                if include_walls {
-                    // Emit walls for neighbors that overhang this empty cell.
-                    let chunk_floor = chunk_data.chunk.y * CHUNK_SIZE;
-                    let east_cell = lod_cell_top(chunk_data, (lx + step).min(CHUNK_SIZE), lz, step);
-                    let south_cell =
-                        lod_cell_top(chunk_data, lx, (lz + step).min(CHUNK_SIZE), step);
-
-                    if let Some((east_h, east_surface)) = east_cell {
-                        let min_h = ((east_h - CHUNK_SIZE).max(chunk_floor)) as f32;
-                        let max_h = east_h as f32 + 1.0;
-                        let east_color =
-                            east_surface.color(IVec3::new(ox + lx + step, east_h, oz + lz));
-                        // East cell is higher; wall faces west (-X) into our empty cell.
-                        push_wall_lod(
-                            &mut mesh.vertices,
-                            &mut mesh.indices,
-                            [
-                                [x1, min_h, z1],
-                                [x1, max_h, z1],
-                                [x1, max_h, z0],
-                                [x1, min_h, z0],
-                            ],
-                            east_color,
-                            east_surface,
-                            double_sided_walls,
-                        );
-                    }
-
-                    if let Some((south_h, south_surface)) = south_cell {
-                        let min_h = ((south_h - CHUNK_SIZE).max(chunk_floor)) as f32;
-                        let max_h = south_h as f32 + 1.0;
-                        let south_color =
-                            south_surface.color(IVec3::new(ox + lx, south_h, oz + lz + step));
-                        // South cell is higher; wall faces north (-Z) into our empty cell.
-                        push_wall_lod(
-                            &mut mesh.vertices,
-                            &mut mesh.indices,
-                            [
-                                [x0, min_h, z1],
-                                [x0, max_h, z1],
-                                [x1, max_h, z1],
-                                [x1, min_h, z1],
-                            ],
-                            south_color,
-                            south_surface,
-                            double_sided_walls,
-                        );
-                    }
-                }
-            }
+fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
+    let volume = |p: IVec3| -> f32 {
+        if chunk.get_world(p) != BlockId::Water {
+            return 0.0;
         }
-    }
-
-    // West/north boundary walls: the main loop only emits east/south walls per cell,
-    // relying on the western/northern neighbor to emit the matching east/south wall.
-    // When no seam skirt is active (same-LOD neighbor), emit these explicitly using
-    // the 1-block padding zone for height comparison.
-    if include_walls {
-        // West boundary (lx = 0 edge): compare interior cell vs padding column at x = -1
-        if !seam_west {
-            let chunk_floor = chunk_data.chunk.y * CHUNK_SIZE;
-            for lz in (0..CHUNK_SIZE).step_by(step as usize) {
-                let z0 = (oz + lz) as f32;
-                let z1 = (oz + lz + step).min(oz + CHUNK_SIZE) as f32;
-                let cell = lod_cell_top(chunk_data, 0, lz, step);
-                // Sample a padding column at the center of the cell to represent the western neighbor height
-                let pad_sample =
-                    chunk_data.top_solid_block(-1, (lz + (step >> 1)).min(CHUNK_SIZE - 1));
-                match cell {
-                    Some((h, surface)) => {
-                        if pad_sample.0 != i16::MIN as i32 && pad_sample.0 != h {
-                            let min_h = pad_sample.0.min(h) as f32 + 1.0;
-                            let max_h = pad_sample.0.max(h) as f32 + 1.0;
-                            let color = if h < pad_sample.0 {
-                                pad_sample
-                                    .1
-                                    .color(IVec3::new(ox - 1, pad_sample.0, oz + lz))
-                            } else {
-                                surface.color(IVec3::new(ox, h, oz + lz))
-                            };
-                            let surf = if h < pad_sample.0 {
-                                pad_sample.1
-                            } else {
-                                surface
-                            };
-                            let quad = if pad_sample.0 > h {
-                                [
-                                    [ox as f32, min_h, z0],
-                                    [ox as f32, max_h, z0],
-                                    [ox as f32, max_h, z1],
-                                    [ox as f32, min_h, z1],
-                                ]
-                            } else {
-                                [
-                                    [ox as f32, min_h, z0],
-                                    [ox as f32, max_h, z0],
-                                    [ox as f32, max_h, z1],
-                                    [ox as f32, min_h, z1],
-                                ]
-                            };
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                quad,
-                                color,
-                                surf,
-                                double_sided_walls,
-                            );
-                        } else if pad_sample.0 == i16::MIN as i32 {
-                            // Western neighbor has no solid blocks — emit west-facing wall on this cell.
-                            let min_h = ((h - CHUNK_SIZE).max(chunk_floor)) as f32;
-                            let max_h = h as f32 + 1.0;
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                [
-                                    [ox as f32, min_h, z0],
-                                    [ox as f32, max_h, z0],
-                                    [ox as f32, max_h, z1],
-                                    [ox as f32, min_h, z1],
-                                ],
-                                surface.color(IVec3::new(ox, h, oz + lz)),
-                                surface,
-                                double_sided_walls,
-                            );
-                        }
-                    }
-                    None => {
-                        if pad_sample.0 != i16::MIN as i32 {
-                            // Interior is empty but western neighbor is solid — emit west-facing wall.
-                            let min_h = ((pad_sample.0 - CHUNK_SIZE).max(chunk_floor)) as f32;
-                            let max_h = pad_sample.0 as f32 + 1.0;
-                            let color =
-                                pad_sample
-                                    .1
-                                    .color(IVec3::new(ox - 1, pad_sample.0, oz + lz));
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                [
-                                    [ox as f32, min_h, z0],
-                                    [ox as f32, max_h, z0],
-                                    [ox as f32, max_h, z1],
-                                    [ox as f32, min_h, z1],
-                                ],
-                                color,
-                                pad_sample.1,
-                                double_sided_walls,
-                            );
-                        }
-                    }
-                }
-            }
+        if chunk.get_world(p + IVec3::Y) == BlockId::Water {
+            return 1.0;
         }
-
-        // North boundary (lz = 0 edge): compare interior cell vs padding row at z = -1
-        if !seam_north {
-            let chunk_floor = chunk_data.chunk.y * CHUNK_SIZE;
-            for lx in (0..CHUNK_SIZE).step_by(step as usize) {
-                let x0 = (ox + lx) as f32;
-                let x1 = (ox + lx + step).min(ox + CHUNK_SIZE) as f32;
-                let cell = lod_cell_top(chunk_data, lx, 0, step);
-                let pad_sample =
-                    chunk_data.top_solid_block((lx + (step >> 1)).min(CHUNK_SIZE - 1), -1);
-                match cell {
-                    Some((h, surface)) => {
-                        if pad_sample.0 != i16::MIN as i32 && pad_sample.0 != h {
-                            let min_h = pad_sample.0.min(h) as f32 + 1.0;
-                            let max_h = pad_sample.0.max(h) as f32 + 1.0;
-                            let color = if h < pad_sample.0 {
-                                pad_sample
-                                    .1
-                                    .color(IVec3::new(ox + lx, pad_sample.0, oz - 1))
-                            } else {
-                                surface.color(IVec3::new(ox + lx, h, oz))
-                            };
-                            let surf = if h < pad_sample.0 {
-                                pad_sample.1
-                            } else {
-                                surface
-                            };
-                            let quad = if pad_sample.0 > h {
-                                [
-                                    [x0, min_h, oz as f32],
-                                    [x0, max_h, oz as f32],
-                                    [x1, max_h, oz as f32],
-                                    [x1, min_h, oz as f32],
-                                ]
-                            } else {
-                                [
-                                    [x0, min_h, oz as f32],
-                                    [x0, max_h, oz as f32],
-                                    [x1, max_h, oz as f32],
-                                    [x1, min_h, oz as f32],
-                                ]
-                            };
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                quad,
-                                color,
-                                surf,
-                                double_sided_walls,
-                            );
-                        } else if pad_sample.0 == i16::MIN as i32 {
-                            // Northern neighbor has no solid blocks — emit north-facing wall on this cell.
-                            let min_h = ((h - CHUNK_SIZE).max(chunk_floor)) as f32;
-                            let max_h = h as f32 + 1.0;
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                [
-                                    [x0, min_h, oz as f32],
-                                    [x0, max_h, oz as f32],
-                                    [x1, max_h, oz as f32],
-                                    [x1, min_h, oz as f32],
-                                ],
-                                surface.color(IVec3::new(ox + lx, h, oz)),
-                                surface,
-                                double_sided_walls,
-                            );
-                        }
-                    }
-                    None => {
-                        if pad_sample.0 != i16::MIN as i32 {
-                            // Interior is empty but northern neighbor is solid — emit north-facing wall.
-                            let min_h = ((pad_sample.0 - CHUNK_SIZE).max(chunk_floor)) as f32;
-                            let max_h = pad_sample.0 as f32 + 1.0;
-                            let color =
-                                pad_sample
-                                    .1
-                                    .color(IVec3::new(ox + lx, pad_sample.0, oz - 1));
-                            push_wall_lod(
-                                &mut mesh.vertices,
-                                &mut mesh.indices,
-                                [
-                                    [x0, min_h, oz as f32],
-                                    [x0, max_h, oz as f32],
-                                    [x1, max_h, oz as f32],
-                                    [x1, min_h, oz as f32],
-                                ],
-                                color,
-                                pad_sample.1,
-                                double_sided_walls,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Seam skirts: vertical quads that drop from the LOD shell edge downward to
-    // cover the crack between this coarser LOD chunk and the finer-LOD neighbor.
-    // Only emitted when the seam flag is set (neighbor is higher-detail than us).
-    if include_walls {
-        let skirt_depth = (step * 4) as f32;
-
-        // West skirt (lx = 0 edge, facing -X)
-        if seam_west {
-            for lz in (0..CHUNK_SIZE).step_by(step as usize) {
-                let z0 = (oz + lz) as f32;
-                let z1 = (oz + lz + step).min(oz + CHUNK_SIZE) as f32;
-                if let Some((h, surface)) = lod_cell_top(chunk_data, 0, lz, step) {
-                    let top_y = h as f32 + 1.0;
-                    let bot_y = (top_y - skirt_depth).max(chunk_floor_y);
-                    let color = surface.color(IVec3::new(ox, h, oz + lz));
-                    push_wall_lod(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        [
-                            [ox as f32, bot_y, z0],
-                            [ox as f32, top_y, z0],
-                            [ox as f32, top_y, z1],
-                            [ox as f32, bot_y, z1],
-                        ],
-                        color,
-                        surface,
-                        double_sided_walls,
-                    );
-                }
-            }
-        }
-
-        // East skirt (lx = CHUNK_SIZE edge, facing +X)
-        if seam_east {
-            let x_edge = (ox + CHUNK_SIZE) as f32;
-            for lz in (0..CHUNK_SIZE).step_by(step as usize) {
-                let z0 = (oz + lz) as f32;
-                let z1 = (oz + lz + step).min(oz + CHUNK_SIZE) as f32;
-                let lx_last = CHUNK_SIZE - step;
-                if let Some((h, surface)) = lod_cell_top(chunk_data, lx_last.max(0), lz, step) {
-                    let top_y = h as f32 + 1.0;
-                    let bot_y = (top_y - skirt_depth).max(chunk_floor_y);
-                    let color = surface.color(IVec3::new(ox + CHUNK_SIZE, h, oz + lz));
-                    push_wall_lod(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        [
-                            [x_edge, bot_y, z0],
-                            [x_edge, top_y, z0],
-                            [x_edge, top_y, z1],
-                            [x_edge, bot_y, z1],
-                        ],
-                        color,
-                        surface,
-                        double_sided_walls,
-                    );
-                }
-            }
-        }
-
-        // North skirt (lz = 0 edge, facing -Z)
-        if seam_north {
-            for lx in (0..CHUNK_SIZE).step_by(step as usize) {
-                let x0 = (ox + lx) as f32;
-                let x1 = (ox + lx + step).min(ox + CHUNK_SIZE) as f32;
-                if let Some((h, surface)) = lod_cell_top(chunk_data, lx, 0, step) {
-                    let top_y = h as f32 + 1.0;
-                    let bot_y = (top_y - skirt_depth).max(chunk_floor_y);
-                    let color = surface.color(IVec3::new(ox + lx, h, oz));
-                    push_wall_lod(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        [
-                            [x0, bot_y, oz as f32],
-                            [x0, top_y, oz as f32],
-                            [x1, top_y, oz as f32],
-                            [x1, bot_y, oz as f32],
-                        ],
-                        color,
-                        surface,
-                        double_sided_walls,
-                    );
-                }
-            }
-        }
-
-        // South skirt (lz = CHUNK_SIZE edge, facing +Z)
-        if seam_south {
-            let z_edge = (oz + CHUNK_SIZE) as f32;
-            for lx in (0..CHUNK_SIZE).step_by(step as usize) {
-                let x0 = (ox + lx) as f32;
-                let x1 = (ox + lx + step).min(ox + CHUNK_SIZE) as f32;
-                let lz_last = CHUNK_SIZE - step;
-                if let Some((h, surface)) = lod_cell_top(chunk_data, lx, lz_last.max(0), step) {
-                    let top_y = h as f32 + 1.0;
-                    let bot_y = (top_y - skirt_depth).max(chunk_floor_y);
-                    let color = surface.color(IVec3::new(ox + lx, h, oz + CHUNK_SIZE));
-                    push_wall_lod(
-                        &mut mesh.vertices,
-                        &mut mesh.indices,
-                        [
-                            [x1, bot_y, z_edge],
-                            [x1, top_y, z_edge],
-                            [x0, top_y, z_edge],
-                            [x0, bot_y, z_edge],
-                        ],
-                        color,
-                        surface,
-                        double_sided_walls,
-                    );
-                }
-            }
-        }
-    }
-
-    mesh
-}
-
-fn append_foliage_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk) {
-    for lz in 0..CHUNK_SIZE {
-        for lx in 0..CHUNK_SIZE {
-            for ly in 0..CHUNK_SIZE {
-                let local = [lx, ly, lz];
-                let block = mesh_block_at(chunk_data, local);
-                if !block.render_in_lod_decor() {
+        (chunk.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0)
+            * (1.0 - WATER_SURFACE_INSET)
+    };
+    for y in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            for x in 0..CHUNK_SIZE {
+                let p = chunk.chunk * CHUNK_SIZE + IVec3::new(x, y, z);
+                if chunk.get_world(p) != BlockId::Water {
                     continue;
                 }
-
-                let material =
-                    FaceMaterial::from_block(block, world_pos_from_mesh_local(chunk_data, local));
-
-                for (axis, positive, offset) in [
-                    (0usize, false, [-1, 0, 0]),
-                    (0usize, true, [1, 0, 0]),
-                    (1usize, false, [0, -1, 0]),
-                    (1usize, true, [0, 1, 0]),
-                    (2usize, false, [0, 0, -1]),
-                    (2usize, true, [0, 0, 1]),
-                ] {
-                    let neighbor = mesh_block_at(chunk_data, add_axes(local, offset));
-                    if !face_visible(block, neighbor) {
-                        continue;
+                let h = volume(p);
+                let base = p.as_vec3();
+                for axis in 0..3 {
+                    for positive in [false, true] {
+                        let mut offset = IVec3::ZERO;
+                        offset[axis] = if positive { 1 } else { -1 };
+                        let neighbor = chunk.get_world(p + offset);
+                        let mut low = 0.0;
+                        if axis == 1 {
+                            if positive && h >= 1.0 && neighbor == BlockId::Water {
+                                continue;
+                            }
+                            if !positive && !neighbor.is_empty() {
+                                continue;
+                            }
+                            if positive && neighbor.is_opaque() && h >= 1.0 {
+                                continue;
+                            }
+                        } else {
+                            if neighbor.is_opaque() {
+                                continue;
+                            }
+                            low = volume(p + offset);
+                            if low >= h {
+                                continue;
+                            }
+                        }
+                        let u = (axis + 1) % 3;
+                        let v = (axis + 2) % 3;
+                        let mut a = Vec3::ZERO;
+                        a[axis] = if positive {
+                            if axis == 1 { h } else { 1.0 }
+                        } else {
+                            0.0
+                        };
+                        if axis != 1 {
+                            a.y = low;
+                        }
+                        let mut du = Vec3::ZERO;
+                        du[u] = if u == 1 { h - low } else { 1.0 };
+                        let mut dv = Vec3::ZERO;
+                        dv[v] = if v == 1 { h - low } else { 1.0 };
+                        let corners = [base + a, base + a + du, base + a + du + dv, base + a + dv];
+                        let quad = if positive {
+                            corners
+                        } else {
+                            [corners[3], corners[2], corners[1], corners[0]]
+                        };
+                        push_face(
+                            &mut mesh.vertices,
+                            &mut mesh.indices,
+                            quad.map(|p| p.to_array()),
+                            BlockId::Water.color(p),
+                            face_normal_from_axis(axis, positive),
+                            BlockId::Water.surface(),
+                            [1.0; 4],
+                        );
                     }
-
-                    let plane = local[axis] + if positive { 1 } else { 0 };
-                    let u_axis = (axis + 1) % 3;
-                    let v_axis = (axis + 2) % 3;
-                    let mut base = [0; 3];
-                    base[axis] = plane;
-                    base[u_axis] = local[u_axis];
-                    base[v_axis] = local[v_axis];
-
-                    emit_greedy_face(
-                        mesh,
-                        chunk_data,
-                        axis,
-                        positive,
-                        plane,
-                        base[u_axis],
-                        base[v_axis],
-                        1,
-                        1,
-                        material,
-                    );
                 }
             }
         }

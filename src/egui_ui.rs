@@ -1,4 +1,15 @@
 use egui::{Align2, Color32, RichText};
+mod presentation;
+mod front_end;
+mod world_browser;
+mod factory;
+mod inventory;
+mod adventure;
+mod relics;
+mod wands;
+mod icons;
+mod settings;
+mod tool_hud;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use glam::Vec3Swizzles;
 use glam::{IVec3, Mat4, Quat, Vec3};
@@ -23,7 +34,11 @@ pub enum UiMode {
 
 pub enum UiAction {
     None,
+    Factory(crate::world::factory::Action),
+    DropInventory(usize),
     StartWorld {
+        name: String,
+        reference: bool,
         world_type: WorldType,
         voxel_scale: VoxelScalePreset,
         seed: u32,
@@ -32,6 +47,11 @@ pub enum UiAction {
     RandomizeWeather,
     Resume,
     BackToWorldSelect,
+    SaveWorld,
+    OpenWorld(String),
+    RefreshWorlds,
+    RenameWorld { id: String, name: String },
+    FavoriteWorld { id: String, favorite: bool },
     Quit,
 }
 
@@ -65,6 +85,8 @@ pub struct PhysicsUiState {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderUiState {
+    pub fxaa_enabled: bool,
+    pub vsync: bool,
     pub settings: RenderDistanceSettings,
     pub debug_view: RenderDebugView,
     pub atmosphere_mode: AtmosphereMode,
@@ -129,7 +151,7 @@ fn cloud_controls_ui(ui: &mut egui::Ui, time_state: &mut TimeUiState, action: &m
 
     ui.separator();
 
-    ui.strong("Low Clouds  (0 – 2000 m)");
+    ui.strong("Low Clouds  (70 – 250 m)");
     ui.label(
         egui::RichText::new("Stratus: flat grey sheets, no vertical development")
             .small()
@@ -158,22 +180,22 @@ fn cloud_controls_ui(ui: &mut egui::Ui, time_state: &mut TimeUiState, action: &m
     ui.add(
         egui::Slider::new(&mut time_state.cloud_controls.storm_thickness, 0.18..=1.0)
             .text("  Storm Tower Height")
-            .custom_formatter(|v, _| format_span_m(v as f32, 900.0, 6000.0)),
+            .custom_formatter(|v, _| format_span_m(v as f32, 90.0, 280.0)),
     );
     ui.add(
         egui::Slider::new(&mut time_state.cloud_controls.base_height, 0.05..=0.72)
             .text("  Low-layer Base")
-            .custom_formatter(|v, _| format_height_m(v as f32, 350.0, 2200.0)),
+            .custom_formatter(|v, _| format_height_m(v as f32, 70.0, 220.0)),
     );
     ui.add(
         egui::Slider::new(&mut time_state.cloud_controls.layer_thickness, 0.12..=1.0)
             .text("  Low-layer Depth")
-            .custom_formatter(|v, _| format_span_m(v as f32, 250.0, 1800.0)),
+            .custom_formatter(|v, _| format_span_m(v as f32, 40.0, 180.0)),
     );
 
     ui.separator();
 
-    ui.strong("Mid Clouds  (2000 – 7000 m)");
+    ui.strong("Mid Clouds  (180 – 340 m)");
     ui.label(
         egui::RichText::new("Altocumulus: grey/white cellular patches, mackerel sky")
             .small()
@@ -195,12 +217,12 @@ fn cloud_controls_ui(ui: &mut egui::Ui, time_state: &mut TimeUiState, action: &m
     ui.add(
         egui::Slider::new(&mut time_state.cloud_controls.mid_layer_height, 0.20..=0.65)
             .text("  Mid-layer Base")
-            .custom_formatter(|v, _| format_height_m(v as f32, 2500.0, 7500.0)),
+            .custom_formatter(|v, _| format_height_m(v as f32, 180.0, 320.0)),
     );
 
     ui.separator();
 
-    ui.strong("High Clouds  (>6000 m)");
+    ui.strong("High Clouds  (300 – 480 m)");
     ui.label(
         egui::RichText::new("Cirrus: thin ice-crystal wisps, 22° halo around sun")
             .small()
@@ -210,7 +232,7 @@ fn cloud_controls_ui(ui: &mut egui::Ui, time_state: &mut TimeUiState, action: &m
     ui.add(
         egui::Slider::new(&mut time_state.cloud_controls.layer_separation, 0.08..=0.72)
             .text("  High-layer Base")
-            .custom_formatter(|v, _| format_height_m(v as f32, 6500.0, 12500.0)),
+            .custom_formatter(|v, _| format_height_m(v as f32, 300.0, 460.0)),
     );
 
     ui.separator();
@@ -285,7 +307,7 @@ fn creative_tools_ui(
             hotbar_key_label(creative_state.selected_slot)
         ));
         ui.separator();
-        ui.label("Tab palette");
+        ui.label("E inventory");
         ui.separator();
         ui.label("Q quick select");
     });
@@ -326,7 +348,7 @@ fn creative_tools_ui(
             1.0,
             tool_accent_color(creative_state.tool).linear_multiply(0.55),
         ))
-        .corner_radius(egui::CornerRadius::same(8))
+        .corner_radius(egui::CornerRadius::same(0))
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.label(
@@ -373,18 +395,15 @@ fn creative_tools_ui(
             FlyMode::Noclip.label(),
         );
     });
-    ui.checkbox(
-        &mut creative_state.shift_lock,
-        "Shift lock (use Alt to descend)",
-    );
+    ui.small("Shift: sneak / descend. Alt: placement preview.");
 
     ui.separator();
     ui.label(RichText::new("Controls").strong());
     ui.label(
-        "LMB breaks, RMB places. Ctrl + Scroll changes tool size. Shift + Scroll changes reach.",
+        "LMB breaks or detonates, RMB places. Alt + Scroll changes tool size. Ctrl + Scroll changes reach.",
     );
     ui.label("Scroll cycles hotbar slots. 1-9 selects slots. Drag hotbar slots to reorder them.");
-    ui.label("B toggles this toolkit, Tab toggles the palette, Q toggles the tool switcher.");
+    ui.label("B toggles this toolkit, E toggles inventory, Q toggles the tool switcher.");
 }
 
 fn creative_tools_ui_plain(
@@ -394,97 +413,26 @@ fn creative_tools_ui_plain(
     player: &mut Player,
     tool_textures: &ToolTextures,
 ) {
-    ui.label("Creative tools");
-    ui.separator();
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!(
-            "Selected material: {}",
-            creative_state.selected_block().display_name()
-        ));
-        ui.separator();
-        ui.label(format!(
-            "Hotbar slot: {}",
-            hotbar_key_label(creative_state.selected_slot)
-        ));
-        ui.separator();
-        ui.label("Tab palette");
-        ui.separator();
-        ui.label("Q quick select");
-    });
-    ui.horizontal(|ui| {
-        let palette_label = if creative_state.show_palette {
-            "Hide Palette"
-        } else {
-            "Show Palette"
-        };
-        if ui.button(palette_label).clicked() {
-            creative_state.show_palette = !creative_state.show_palette;
-        }
-        ui.label("Q toggles the quick menu.");
-    });
-    ui.separator();
-    ui.label("Tools");
     ui.horizontal_wrapped(|ui| {
         for tool in ToolKind::ALL {
-            let texture = tool_textures.for_tool(tool);
-            let button = egui::Button::image_and_text(
-                egui::Image::new((texture.texture.id(), egui::vec2(24.0, 24.0)))
-                    .texture_options(egui::TextureOptions::NEAREST),
-                tool.label(),
-            )
-            .selected(creative_state.tool == tool)
-            .min_size(egui::vec2(120.0, 40.0));
-            if ui.add(button).clicked() {
+            if ui.selectable_label(creative_state.tool == tool,
+                format!("{} {}", tool_shortcut_label(tool), tool.label())).clicked() {
                 creative_state.tool = tool;
             }
         }
     });
     ui.separator();
-    ui.label(format!("Selected tool: {}", creative_state.tool.label()));
-    let mut hovered_brush_shape = None;
-    let mut hovered_area_shape = None;
-    tool_settings_ui(
-        ui,
-        creative_state,
-        &mut hovered_brush_shape,
-        &mut hovered_area_shape,
-    );
+    let mut brush = None;
+    let mut area = None;
+    tool_settings_ui(ui, creative_state, &mut brush, &mut area);
     ui.separator();
-    ui.label(RichText::new("Player").strong());
-    ui.add(
-        egui::Slider::new(&mut player.scale, 0.25..=3.0)
-            .text("Player scale")
-            .step_by(0.05),
-    );
-    ui.label(format!(
-        "Effective height: {:.2} m ({:.2} voxels)",
-        PLAYER_HEIGHT * player.scale,
-        (PLAYER_HEIGHT * player.scale) / physics_state.voxel_scale.meters().max(1e-6),
-    ));
-    ui.horizontal(|ui| {
-        ui.label("Fly mode");
-        ui.selectable_value(
-            &mut player.fly_mode,
-            FlyMode::Creative,
-            FlyMode::Creative.label(),
-        );
-        ui.selectable_value(
-            &mut player.fly_mode,
-            FlyMode::Noclip,
-            FlyMode::Noclip.label(),
-        );
+    ui.small("LMB remove · RMB place · B close");
+    ui.collapsing("Player settings", |ui| {
+        ui.add(egui::Slider::new(&mut player.scale, 0.25..=3.0).text("Player scale"));
+        ui.selectable_value(&mut player.fly_mode, FlyMode::Creative, "Flight");
+        ui.selectable_value(&mut player.fly_mode, FlyMode::Noclip, "Noclip");
     });
-    ui.checkbox(
-        &mut creative_state.shift_lock,
-        "Shift lock (use Alt to descend)",
-    );
-    ui.separator();
-    ui.label(RichText::new("Controls").strong());
-    ui.label(
-        "LMB breaks, RMB places. Ctrl + Scroll changes tool size. Shift + Scroll changes reach.",
-    );
-    ui.label("Scroll cycles hotbar slots. 1-9 selects slots. Drag hotbar slots to reorder them.");
-    ui.label("B toggles this toolkit, Tab toggles the palette, Q toggles the tool switcher.");
+    let _ = (physics_state, tool_textures);
 }
 
 #[derive(Clone)]
@@ -500,6 +448,7 @@ struct ToolTextures {
     builders_wand: ToolTexture,
     destructor_wand: ToolTexture,
     area_tool: ToolTexture,
+    explosive_wand: ToolTexture,
 }
 
 impl ToolTextures {
@@ -511,6 +460,7 @@ impl ToolTextures {
             builders_wand: load_tool_texture(ctx, dir, "builders_wand", [130, 225, 120, 255]),
             destructor_wand: load_tool_texture(ctx, dir, "destructor_wand", [255, 140, 120, 255]),
             area_tool: load_tool_texture(ctx, dir, "area_tool", [255, 220, 120, 255]),
+            explosive_wand: load_tool_texture(ctx, dir, "explosive_wand", [255, 110, 35, 255]),
         }
     }
 
@@ -521,6 +471,7 @@ impl ToolTextures {
             ToolKind::BuildersWand => &self.builders_wand,
             ToolKind::DestructorWand => &self.destructor_wand,
             ToolKind::AreaTool => &self.area_tool,
+            ToolKind::ExplosiveWand => &self.explosive_wand,
         }
     }
 }
@@ -530,31 +481,39 @@ struct HeldToolPoseState {
     action_phase: f32,
     equip_phase: f32,
     bob_time: f32,
+    bob_weight: f32,
     last_tool: Option<ToolKind>,
     last_action: Option<ToolUseAction>,
     action_kind: Option<ToolUseAction>,
 }
 
 impl HeldToolPoseState {
-    fn update(&mut self, tool: ToolKind, action: Option<ToolUseAction>, move_speed: f32, dt: f32) {
+    fn update(&mut self, tool: ToolKind, action: Option<ToolUseAction>, move_speed_mps: f32, dt: f32) {
         if self.last_tool != Some(tool) {
             self.last_tool = Some(tool);
             self.equip_phase = 1.0;
             self.action_phase = self.action_phase.min(0.28);
         }
-        if action.is_some() && self.last_action.is_none() {
+        if action.is_some() && self.action_phase <= 0.0 {
             self.action_phase = 1.0;
             self.action_kind = action;
         }
         self.last_action = action;
-        self.action_phase = (self.action_phase - dt * 4.8).max(0.0);
+        let duration = if self.action_kind == Some(ToolUseAction::Place) { 0.26 } else { 0.34 };
+        self.action_phase = (self.action_phase - dt / duration).max(0.0);
         if self.action_phase <= 0.0 {
             self.action_kind = None;
         }
         self.equip_phase = (self.equip_phase - dt * 4.8).max(0.0);
 
-        // Relaxed bobbing logic to match Minecraft footprint frequency better
-        self.bob_time += dt * 0.6 + (move_speed * dt) * 0.5;
+        // Advance the gait by distance, not voxel-block speed, so its cadence
+        // stays stable when the world uses 0.5m or 0.25m cells.
+        let speed = move_speed_mps.clamp(0.0, 8.0);
+        let stride_m = 3.8 + speed * 0.12;
+        self.bob_time += dt * std::f32::consts::TAU * speed / stride_m.max(1.0);
+        let gait_t = ((speed - 0.15) / 0.60).clamp(0.0, 1.0);
+        let gait_t = gait_t * gait_t * (3.0 - 2.0 * gait_t);
+        self.bob_weight += (gait_t - self.bob_weight) * (1.0 - (-dt * 12.0).exp());
     }
 }
 
@@ -625,9 +584,10 @@ fn draw_held_tool_overlay(
     pose: &HeldToolPoseState,
     texture: &ToolTexture,
     tool: ToolKind,
+    time_of_day: f32,
 ) {
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Background,
         egui::Id::new("held_tool_overlay"),
     ));
     let rect = ctx.content_rect();
@@ -647,10 +607,10 @@ fn draw_held_tool_overlay(
     let proj = Mat4::perspective_rh(70.0_f32.to_radians(), aspect, 0.01, 10.0);
 
     // 2. Base camera bobbing
-    let bob_x = (walk_t * 1.0).sin() * 0.006;
-    let bob_y = (walk_t * 2.0).cos().abs() * 0.012;
-    let bob_pitch = (walk_t * 2.0).sin() * 0.005;
-    let bob_roll = (walk_t * 1.0).cos() * 0.005;
+    let bob_x = (walk_t * 1.0).sin() * 0.006 * pose.bob_weight;
+    let bob_y = walk_t.cos() * 0.004 * pose.bob_weight;
+    let bob_pitch = walk_t.sin() * 0.002 * pose.bob_weight;
+    let bob_roll = walk_t.cos() * 0.002 * pose.bob_weight;
 
     let base_mat = Mat4::from_translation(Vec3::new(bob_x, bob_y, 0.0))
         * Mat4::from_quat(Quat::from_euler(
@@ -661,144 +621,90 @@ fn draw_held_tool_overlay(
         ));
 
     let mut faces = Vec::new();
-    let pi = std::f32::consts::PI;
 
-    // Minecraft uses sin(sqrt(t) * pi) for the snappy strike
-    let swing_g = (swing_t.sqrt() * pi).sin();
-    let swing_f = (swing_t * pi).sin();
+
+    // Smooth anticipation, a short committed stroke, then a slower recovery.
+    // No full-axis spins: the wrist stays attached to the forearm.
+    let smooth = |t: f32| { let t = t.clamp(0.0, 1.0); t*t*(3.0-2.0*t) };
+    let stroke = if swing_t < 0.28 { -0.18 * smooth(swing_t / 0.28) }
+        else if swing_t < 0.48 { -0.18 + 1.18 * smooth((swing_t - 0.28) / 0.20) }
+        else { 1.0 - smooth((swing_t - 0.48) / 0.52) };
+    let placing = pose.action_kind == Some(ToolUseAction::Place);
+    let swing_g = stroke;
+    let swing_f = stroke;
     let equip_y = -equip * 0.6;
 
     if tool == ToolKind::Hand {
-        // Empty Hand - 1:1 Minecraft 1.15+ Transform Math
-        let f = 1.0_f32; // 1.0 for right hand
-
-        let x_swing_pos = -0.3 * swing_g;
-        let y_swing_pos = 0.4 * (swing_t.sqrt() * pi * 2.0).sin();
-        let z_swing_pos = -0.4 * swing_f;
-
-        let mut mat = base_mat
-            * Mat4::from_translation(Vec3::new(
-                f * (x_swing_pos + 0.64),
-                y_swing_pos - 0.6 + equip_y,
-                z_swing_pos - 0.72,
-            ));
-
-        // 2. Base yaw
-        mat *= Mat4::from_quat(Quat::from_rotation_y((f * 45.0_f32).to_radians()));
-
-        // 3. Swing animations (rotations)
-        let z_swing_rot = (swing_t * swing_t * pi).sin();
-        let y_swing_rot = swing_g;
-        mat *= Mat4::from_quat(Quat::from_rotation_y((f * y_swing_rot * 70.0).to_radians()));
-        mat *= Mat4::from_quat(Quat::from_rotation_z(
-            (f * z_swing_rot * -20.0).to_radians(),
-        ));
-
-        // 4. Complex arm setup rotations (MC legacy/FPS view specific)
-        mat *= Mat4::from_translation(Vec3::new(f * -1.0, 3.6, 3.5));
-        mat *= Mat4::from_quat(Quat::from_rotation_z((f * 120.0).to_radians()));
-        mat *= Mat4::from_quat(Quat::from_rotation_x(200.0_f32.to_radians()));
-        mat *= Mat4::from_quat(Quat::from_rotation_y((f * -135.0).to_radians()));
-        mat *= Mat4::from_translation(Vec3::new(f * 5.6, 0.0, 0.0));
-
-        // 5. ModelPart pivot offset (divided by 16 for meter scale)
-        mat *= Mat4::from_translation(Vec3::new(-5.0 / 16.0, 2.0 / 16.0, 0.0));
-
-        let skin_color = Color32::from_rgb(212, 163, 125);
-        let sleeve_color = Color32::from_rgb(52, 101, 164); // Classic steve blue shirt
-
-        // Box definitions (divided by 16 for meter scale)
-        // MC right arm bounding box: -3.0, -2.0, -2.0 to 1.0, 10.0, 2.0
-        // Size = 4, 12, 4. Center = -1, 4, 0
-        let arm_size = Vec3::new(4.0 / 16.0, 12.0 / 16.0, 4.0 / 16.0);
-        let arm_center = Vec3::new(-1.0 / 16.0, 4.0 / 16.0, 0.0);
-
-        // MC sleeve covers top half
-        let sleeve_size = Vec3::new(4.5 / 16.0, 6.0 / 16.0, 4.5 / 16.0);
-        let sleeve_center = Vec3::new(-1.0 / 16.0, 1.0 / 16.0, 0.0);
-
-        add_3d_box(
-            &mut faces, mat, proj, rect, arm_center, arm_size, skin_color,
-        );
-        add_3d_box(
-            &mut faces,
-            mat,
-            proj,
-            rect,
-            sleeve_center,
-            sleeve_size,
-            sleeve_color,
-        );
+        // Compact expedition glove: articulated knuckles, stitched leather cuff
+        // and a mineral-teal sleeve. Keep its silhouette below the sight line.
+        let mat = base_mat
+            * Mat4::from_translation(Vec3::new(0.82 - swing_g * if placing { 0.025 } else { 0.09 },
+                -0.69 + swing_f * if placing { 0.035 } else { -0.035 } + equip_y,
+                -1.26 - swing_f * if placing { 0.19 } else { 0.12 }))
+            * Mat4::from_rotation_z((-10.0 - swing_g * if placing { 3.0 } else { 9.0 }).to_radians())
+            * Mat4::from_rotation_x((-24.0 + swing_f * if placing { -6.0 } else { 10.0 }).to_radians())
+            * Mat4::from_rotation_y(-22.0_f32.to_radians())
+            * Mat4::from_scale(Vec3::splat(0.85));
+        let sun_height = ((time_of_day - 0.25) * std::f32::consts::TAU).sin().max(0.0);
+        let illumination = 0.30 + 0.70 * sun_height.sqrt();
+        let leather = shade_color(Color32::from_rgb(111, 83, 57), illumination);
+        let seam = shade_color(Color32::from_rgb(155, 125, 82), illumination);
+        let cloth = shade_color(Color32::from_rgb(49, 73, 66), illumination);
+        let dark = shade_color(Color32::from_rgb(65, 52, 41), illumination);
+        let copper = shade_color(Color32::from_rgb(162, 113, 62), illumination);
+        for (center, size, color) in [
+            (Vec3::new(0.0,-0.34,0.0), Vec3::new(0.22,0.53,0.22), cloth),
+            (Vec3::new(0.0,-0.12,0.0), Vec3::new(0.23,0.14,0.23), dark),
+            (Vec3::new(0.0,-0.05,0.0), Vec3::new(0.235,0.025,0.235), seam),
+            (Vec3::new(0.0,0.095,0.0), Vec3::new(0.185,0.25,0.19), leather),
+            (Vec3::new(0.018,0.08,0.099), Vec3::new(0.10,0.13,0.012), dark),
+            (Vec3::new(0.018,0.09,0.108), Vec3::new(0.08,0.10,0.010), leather),
+            (Vec3::new(-0.108,0.055,0.015), Vec3::new(0.065,0.13,0.12), leather),
+            (Vec3::new(0.0,-0.12,0.123), Vec3::new(0.065,0.065,0.018), copper),
+            (Vec3::new(0.0,-0.12,0.135), Vec3::new(0.035,0.035,0.01), dark),
+        ] {
+            add_3d_box(&mut faces, mat, proj, rect, center, size, color);
+        }
+        for finger in 0..4 {
+            let x = -0.069 + finger as f32 * 0.046;
+            let lift = if finger == 1 || finger == 2 { 0.012 } else { 0.0 };
+            let open = if placing { stroke.max(0.0) } else { 0.0 };
+            add_3d_box(&mut faces, mat, proj, rect, Vec3::new(x,0.23+lift+open*0.025,-open*0.035),
+                Vec3::new(0.039,0.065+open*0.035,0.15), leather);
+            add_3d_box(&mut faces, mat, proj, rect, Vec3::new(x,0.16,0.099),
+                Vec3::new(0.024,0.045,0.012), seam);
+        }
+        for stitch in 0..5 {
+            add_3d_box(&mut faces, mat, proj, rect,
+                Vec3::new(-0.078 + stitch as f32 * 0.039,-0.025,0.104),
+                Vec3::new(0.012,0.018,0.012), seam);
+        }
     } else {
-        // Held Tool - 1:1 Minecraft Transform Math
-        let f = 1.0_f32; // 1.0 for right hand
-
-        // Base transform (from shoulder to camera)
-        let pivot_pos = Vec3::new(f * 0.56, -0.52 + equip_y, -0.72);
-        let mut mat = base_mat * Mat4::from_translation(pivot_pos);
-
-        // Strike translation: move the tool forward, down, and left
-        let y_swing_rot = (swing_t * swing_t * pi).sin();
-        let x_swing = -0.4 * swing_g;
-        let y_swing = 0.2 * (swing_t.sqrt() * pi * 2.0).sin();
-        let z_swing = -0.2 * swing_f;
-        mat *= Mat4::from_translation(Vec3::new(f * x_swing, y_swing, z_swing));
-
-        // Strike rotation
-        mat *= Mat4::from_quat(Quat::from_rotation_y(
-            (f * (45.0 - y_swing_rot * 20.0)).to_radians(),
-        ));
-        mat *= Mat4::from_quat(Quat::from_rotation_z((f * swing_g * -20.0).to_radians()));
-        mat *= Mat4::from_quat(Quat::from_rotation_x((swing_g * -80.0).to_radians()));
-        mat *= Mat4::from_quat(Quat::from_rotation_y((f * -45.0).to_radians()));
-
-        // Exact Minecraft `firstperson_righthand` JSON display transform
-        let item_rot = Quat::from_rotation_x(0.0_f32.to_radians())
-            * Quat::from_rotation_y(-90.0_f32.to_radians())
-            * Quat::from_rotation_z(25.0_f32.to_radians());
-
-        let item_scale = Vec3::splat(0.38);
-        let item_trans = Vec3::new(1.13 / 16.0, 3.2 / 16.0, 1.13 / 16.0);
-        let item_center = Vec3::new(0.5, 0.5, 0.5);
-
-        let local_mat = Mat4::from_translation(item_trans)
-            * Mat4::from_quat(item_rot)
-            * Mat4::from_scale(item_scale)
-            * Mat4::from_translation(-item_center);
-
-        let final_mat = mat * local_mat;
-
-        // Standard item quad (0..1), face at Z = 0.5
-        let tw = 1.0;
-        let th = 1.0;
-        let v_local = [
-            Vec3::new(0.0, 0.0, 0.5), // bottom left
-            Vec3::new(tw, 0.0, 0.5),  // bottom right
-            Vec3::new(tw, th, 0.5),   // top right
-            Vec3::new(0.0, th, 0.5),  // top left
-        ];
-
-        // Map UVs to the standard texture coordinates
-        let uvs = [
-            egui::pos2(0.0, 1.0), // bottom left
-            egui::pos2(1.0, 1.0), // bottom right
-            egui::pos2(1.0, 0.0), // top right
-            egui::pos2(0.0, 0.0), // top left
-        ];
-
-        // Draw single highly-subdivided quad to prevent affine warping without Z-fighting
-        add_3d_quad(
-            &mut faces,
-            final_mat,
-            proj,
-            rect,
-            v_local,
-            uvs,
-            texture.texture.id(),
-            Color32::WHITE,
-        );
+        // Solid, camera-relative wand with a quiet wrist pivot instead of a spinning sprite.
+        let accent = match tool {
+            ToolKind::BuildersWand => Color32::from_rgb(99, 204, 196),
+            ToolKind::DestructorWand => Color32::from_rgb(225, 132, 99),
+            ToolKind::ExplosiveWand => Color32::from_rgb(236, 176, 76),
+            _ => Color32::from_rgb(161, 164, 216),
+        };
+        let mat = base_mat * Mat4::from_translation(Vec3::new(
+            0.65 - stroke * 0.045, -0.48 + equip_y - stroke * 0.025, -1.3 - stroke * 0.14))
+            * Mat4::from_rotation_z((-12.0 - stroke * 7.0).to_radians())
+            * Mat4::from_rotation_x((-14.0 + stroke * 10.0).to_radians());
+        let wood = Color32::from_rgb(89, 65, 48);
+        let metal = Color32::from_rgb(159, 129, 80);
+        for (center, size, color) in [
+            (Vec3::new(0.0,-0.21,0.0), Vec3::new(0.055,0.58,0.055),wood),
+            (Vec3::new(0.0,-0.09,0.0), Vec3::new(0.075,0.14,0.075),Color32::from_rgb(61,47,42)),
+            (Vec3::new(0.0,0.06,0.0), Vec3::new(0.09,0.045,0.09),metal),
+            (Vec3::new(0.0,0.15,0.0), Vec3::new(0.085,0.13,0.085),accent),
+            (Vec3::new(0.0,0.23,0.0), Vec3::new(0.045,0.04,0.045),accent),
+            (Vec3::new(-0.05,0.13,0.0), Vec3::new(0.018,0.13,0.06),metal),
+            (Vec3::new(0.05,0.13,0.0), Vec3::new(0.018,0.13,0.06),metal),
+            (Vec3::new(0.035,-0.13,0.045), Vec3::new(0.13,0.15,0.12),Color32::from_rgb(111,83,57)),
+            (Vec3::new(0.06,-0.35,0.055), Vec3::new(0.15,0.29,0.15),Color32::from_rgb(49,73,66)),
+        ] { add_3d_box(&mut faces, mat, proj, rect, center, size, color); }
     }
-
     // True Depth sorting (Painter's Algorithm) guarantees perfect face overlapping
     faces.sort_by(|a, b| {
         b.depth
@@ -819,13 +725,27 @@ fn draw_held_tool_overlay(
             mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
             painter.add(egui::Shape::mesh(mesh));
         } else {
-            painter.add(egui::Shape::convex_polygon(
-                face.vertices.to_vec(),
-                face.color,
-                egui::Stroke::new(1.0, face.color),
-            ));
+            // Solid triangles avoid enormous stroke miters on edge-on seams.
+            let mut mesh = egui::Mesh::default();
+            for pos in face.vertices {
+                mesh.colored_vertex(pos, face.color);
+            }
+            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+            painter.add(egui::Shape::mesh(mesh));
         }
     }
+}
+
+fn draw_held_weapon_overlay(ctx: &egui::Context, tier: u32, pose: &HeldToolPoseState) {
+    if tier == 0 { return; }
+    let screen=ctx.content_rect();
+    let attack=if pose.action_phase>0.0 { (1.0-pose.action_phase).clamp(0.0,1.0) } else { 0.0 };
+    let swing=(attack*std::f32::consts::PI).sin();
+    let size=egui::vec2(84.0,84.0);
+    let origin=screen.right_bottom()-egui::vec2(size.x+18.0, size.y+88.0)+egui::vec2(-swing*26.0,swing*18.0);
+    let rect=egui::Rect::from_min_size(origin,size);
+    let painter=ctx.layer_painter(egui::LayerId::new(egui::Order::Background,egui::Id::new("held_pixel_sword")));
+    icons::paint(&painter,rect,icons::Icon::Sword(tier));
 }
 
 fn add_3d_box(
@@ -1017,7 +937,7 @@ fn status_chip(ui: &mut egui::Ui, text: impl Into<String>, accent: Color32) {
     egui::Frame::new()
         .fill(accent.linear_multiply(0.18))
         .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.72)))
-        .corner_radius(egui::CornerRadius::same(255))
+        .corner_radius(egui::CornerRadius::same(0))
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.label(RichText::new(text).color(Color32::WHITE));
@@ -1066,7 +986,7 @@ fn perf_metric_card(
     egui::Frame::new()
         .fill(Color32::from_rgba_premultiplied(18, 22, 30, 236))
         .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.82)))
-        .corner_radius(egui::CornerRadius::same(10))
+        .corner_radius(egui::CornerRadius::same(0))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_size(egui::vec2(170.0, 74.0));
@@ -1142,7 +1062,7 @@ fn draw_perf_graph(
             1.0,
             Color32::from_rgba_premultiplied(255, 255, 255, 28),
         ))
-        .corner_radius(egui::CornerRadius::same(10))
+        .corner_radius(egui::CornerRadius::same(0))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1169,7 +1089,7 @@ fn draw_perf_graph(
             let desired = egui::vec2(ui.available_width().max(120.0), 156.0);
             let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
             let painter = ui.painter_at(rect);
-            let rounding = egui::CornerRadius::same(8);
+            let rounding = egui::CornerRadius::same(0);
             painter.rect_filled(
                 rect,
                 rounding,
@@ -1294,6 +1214,7 @@ fn tool_accent_color(tool: ToolKind) -> Color32 {
         ToolKind::BuildersWand => Color32::from_rgb(130, 225, 120),
         ToolKind::DestructorWand => Color32::from_rgb(255, 140, 120),
         ToolKind::AreaTool => Color32::from_rgb(255, 220, 120),
+        ToolKind::ExplosiveWand => Color32::from_rgb(255, 110, 35),
     }
 }
 
@@ -1304,22 +1225,24 @@ fn tool_shortcut_label(tool: ToolKind) -> &'static str {
         ToolKind::BuildersWand => "C",
         ToolKind::DestructorWand => "V",
         ToolKind::AreaTool => "G",
+        ToolKind::ExplosiveWand => "H",
     }
 }
 
 fn tool_description(tool: ToolKind) -> &'static str {
     match tool {
-        ToolKind::Hand => "Single-voxel editing at the cursor target.",
+        ToolKind::Hand => "Snap-aligned building and mining, with a single-voxel detail mode.",
         ToolKind::Brush => "Radius-based sculpting for fast terrain painting and erasing.",
         ToolKind::BuildersWand => "Flood-style placement that grows from the target surface.",
         ToolKind::DestructorWand => "Flood-style removal for stripping large connected regions.",
         ToolKind::AreaTool => "Footprint-based bulk edits for discs, pads, and layered cuts.",
+        ToolKind::ExplosiveWand => "Detonate the highlighted sphere, clearing blocks and shifting nearby terrain.",
     }
 }
 
 fn tool_detail_summary(creative_state: &CreativeState, tool: ToolKind) -> String {
     match tool {
-        ToolKind::Hand => format!("Range {:.1}m", creative_state.placement_distance),
+        ToolKind::Hand => format!("{:.2}m width · {:.1}m reach",if creative_state.size_in_metres {creative_state.hand_size_m} else {creative_state.active_voxel_m},creative_state.placement_distance),
         ToolKind::Brush => format!(
             "{} radius {} @ {:.1}m",
             creative_state.brush_shape.label(),
@@ -1341,9 +1264,22 @@ fn tool_detail_summary(creative_state: &CreativeState, tool: ToolKind) -> String
             creative_state.area_tool.thickness,
             creative_state.placement_distance
         ),
+        ToolKind::ExplosiveWand => format!(
+            "Radius {} blocks @ {:.1}m reach",
+            creative_state.explosion_radius, creative_state.placement_distance
+        ),
     }
 }
 
+fn tool_scale_ui(ui:&mut egui::Ui,c:&mut CreativeState) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Tool sizes");
+        ui.selectable_value(&mut c.size_in_metres,true,"World metres");
+        ui.selectable_value(&mut c.size_in_metres,false,"Voxel units");
+    });
+    ui.small(format!("Voxel size: {:.2} m. Reach stays in metres.",c.active_voxel_m));
+    if c.pending_cells()>0 {ui.label(format!("Working: {} voxels remaining",c.pending_cells()));}
+}
 fn tool_settings_ui(
     ui: &mut egui::Ui,
     creative_state: &mut CreativeState,
@@ -1353,13 +1289,29 @@ fn tool_settings_ui(
     *hovered_brush_shape = None;
     *hovered_area_shape = None;
 
+    ui.label(RichText::new("Reach").strong());
+    ui.add(egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
+        .step_by(0.5).suffix(" m").text("Maximum distance"));
+    ui.horizontal(|ui| {
+        for metres in [3.0, 5.0, 10.0, 16.0, 24.0] {
+            if ui.selectable_label((creative_state.placement_distance - metres).abs() < 0.01,
+                format!("{metres:.0} m")).clicked() {
+                creative_state.placement_distance = metres;
+            }
+        }
+    });
+    ui.small("While aiming: Ctrl + wheel or [ / ]. Alt + wheel changes size.");
+    ui.separator();
+    tool_scale_ui(ui,creative_state);
+    let radius_limit=creative_state.radius_limit();
+    let units=creative_state.size_unit();
     match creative_state.tool {
         ToolKind::Hand => {
-            ui.label("Direct voxel edit");
-            ui.add(
-                egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
-                    .text("Reach (m)"),
-            );
+            ui.label("Snap-aligned mining and building");
+            let max_width = creative_state.hand_width_limit();
+            ui.add_enabled(creative_state.size_in_metres,
+                egui::Slider::new(&mut creative_state.hand_size_m, creative_state.active_voxel_m..=max_width)
+                    .step_by(creative_state.active_voxel_m as f64).text("Width (m)"));
         }
         ToolKind::Brush => {
             ui.label("Brush shape");
@@ -1375,14 +1327,8 @@ fn tool_settings_ui(
                     }
                 }
             });
-            ui.add(egui::Slider::new(&mut creative_state.brush_radius, 0..=8).text("Radius"));
-            ui.add(
-                egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
-                    .text("Reach (m)"),
-            );
-            ui.add(
-                egui::Slider::new(&mut creative_state.preview_cap, 64..=4096).text("Preview cap"),
-            );
+            ui.add(egui::Slider::new(&mut creative_state.brush_radius, 0..=radius_limit).text(format!("Radius ({units})")));
+
         }
         ToolKind::BuildersWand | ToolKind::DestructorWand => {
             let cap_label = if matches!(creative_state.tool, ToolKind::BuildersWand) {
@@ -1390,14 +1336,17 @@ fn tool_settings_ui(
             } else {
                 "Removal cap"
             };
-            ui.add(egui::Slider::new(&mut creative_state.wand_max_blocks, 8..=512).text(cap_label));
-            ui.add(
-                egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
-                    .text("Reach (m)"),
-            );
-            ui.add(
-                egui::Slider::new(&mut creative_state.preview_cap, 64..=4096).text("Preview cap"),
-            );
+            ui.small("Follows connected matching material on the aimed face.");
+            ui.add(egui::Slider::new(&mut creative_state.wand_max_blocks, 1..=512)
+                .text(format!("{cap_label} ({})", if creative_state.size_in_metres { "m²" } else { "faces" })));
+            ui.horizontal(|ui| {
+                for cap in [1, 4, 8, 16, 64, 256] {
+                    if ui.selectable_label(creative_state.wand_max_blocks == cap, cap.to_string()).clicked() {
+                        creative_state.wand_max_blocks = cap;
+                    }
+                }
+            });
+
         }
         ToolKind::AreaTool => {
             ui.label("Footprint");
@@ -1413,22 +1362,77 @@ fn tool_settings_ui(
                     }
                 }
             });
-            ui.add(egui::Slider::new(&mut creative_state.area_tool.radius, 0..=12).text("Radius"));
+            ui.add(egui::Slider::new(&mut creative_state.area_tool.radius, 0..=radius_limit).text(format!("Radius ({units})")));
             ui.add(
-                egui::Slider::new(&mut creative_state.area_tool.thickness, 1..=8).text("Thickness"),
+                egui::Slider::new(&mut creative_state.area_tool.thickness, 1..=8).text(format!("Depth ({units})")),
             );
-            ui.add(
-                egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
-                    .text("Reach (m)"),
-            );
-            ui.add(
-                egui::Slider::new(&mut creative_state.preview_cap, 64..=4096).text("Preview cap"),
-            );
+
+        }
+        ToolKind::ExplosiveWand => {
+            ui.label("Blast size");
+            ui.add(egui::Slider::new(&mut creative_state.explosion_radius, 1..=radius_limit).text(format!("Blast radius ({units})")));
+            ui.small("Left click detonates. Nearby sand and gravel fall; water flows into the opening.");
+        }
+    }
+}
+
+fn draw_block_icon_face(
+    painter: &egui::Painter,
+    face: &[egui::Pos2],
+    block: BlockId,
+    color: Color32,
+    top: bool,
+) {
+    let point = |u: f32, v: f32| face[0] + (face[1] - face[0]) * u + (face[3] - face[0]) * v;
+    for y in 0..8 {
+        for x in 0..8 {
+            let hash = ((x * 13 + y * 7 + block.as_u32() * 3) % 11) as f32;
+            let mut tint = shade_color(color, 0.96 + hash * 0.008);
+            match block {
+                BlockId::Grass | BlockId::SnowGrass if !top && y > 1 + (x%3==0) as u32 => {
+                    tint = shade_color(material_color32(BlockId::Dirt), 0.78 + hash * 0.012);
+                }
+                BlockId::Log if top => {
+                    tint = shade_color(
+                        material_color32(BlockId::Planks),
+                        if ((x as f32-3.5).hypot(y as f32-3.5) as u32)%2==0 { 1.02 } else { 0.85 },
+                    );
+                }
+                BlockId::Log => tint = shade_color(color, if (x+y/4)%4==0 {0.69}else{0.99}),
+                BlockId::Planks if y % 3 == 2 => tint = shade_color(color, 0.66),
+                BlockId::StoneBricks | BlockId::WeatheredBricks if y % 4 == 3 || (x + y / 4 * 4) % 8 == 0 => {
+                    tint = shade_color(color, 0.58)
+                }
+                BlockId::Leaves | BlockId::PineLeaves | BlockId::Bush => {
+                    tint = shade_color(color, match (x%3,y%3) {(0,0)=>1.18,(2,2)=>0.76,_=>0.96});
+                }
+                BlockId::Sand | BlockId::Sandstone => tint = shade_color(color,0.96+(y%3) as f32*0.025),
+                BlockId::CoalOre if (x/2+y/3)%3==1 && hash<7.0 => tint = Color32::from_rgb(47, 54, 56),
+                BlockId::IronOre if (x/2+y/3)%3==1 && hash<7.0 => tint = Color32::from_rgb(164, 112, 77),
+                BlockId::CopperOre if (x/2+y/3)%3==1 && hash<7.0 => tint = Color32::from_rgb(178, 128, 78),
+                BlockId::Stone | BlockId::Basalt | BlockId::Limestone => {
+                    tint = shade_color(color, 0.89+((x/3+y/2)%3) as f32*0.065);
+                }
+                _ => {}
+            }
+            let u = x as f32 / 8.0;
+            let v = y as f32 / 8.0;
+            let mut mesh=egui::Mesh::default();
+            for p in [point(u,v),point(u+0.125,v),point(u+0.125,v+0.125),point(u,v+0.125)] {mesh.colored_vertex(p,tint);}
+            mesh.add_triangle(0,1,2);mesh.add_triangle(0,2,3);
+            painter.add(egui::Shape::mesh(mesh));
         }
     }
 }
 
 fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
+    if block.is_torch() {
+        icons::paint(painter, rect, icons::Icon::Torch);
+        return;
+    }
+    if let Some(kind)=crate::world::factory::Kind::from_block(block) {
+        icons::paint(painter,rect,icons::Icon::Machine(kind)); return;
+    }
     let base = material_color32(block);
     let top = shade_color(base, 1.18);
     let left = shade_color(base, 0.92);
@@ -1481,26 +1485,15 @@ fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
         egui::pos2(center.x + half_w, center.y + depth),
     ];
 
-    painter.add(egui::Shape::convex_polygon(
-        left_pts,
-        left,
-        egui::Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 80)),
-    ));
-    painter.add(egui::Shape::convex_polygon(
-        right_pts,
-        right,
-        egui::Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 100)),
-    ));
-    painter.add(egui::Shape::convex_polygon(
-        top_pts,
-        top,
-        egui::Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 28)),
-    ));
+    draw_block_icon_face(painter, &left_pts, block, left, false);
+    draw_block_icon_face(painter, &right_pts, block, right, false);
+    draw_block_icon_face(painter, &top_pts, block, top, true);
 }
 
 fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId) -> egui::Response {
     let desired = egui::vec2(size[0], size[1]);
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,ui.is_enabled(),block.display_name()));
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -1510,12 +1503,16 @@ fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId)
     painter.rect_filled(
         rect,
         rounding,
-        Color32::from_rgba_premultiplied(18, 22, 30, 238),
+        if response.hovered() || response.has_focus() {
+            Color32::from_rgb(78, 62, 46)
+        } else { Color32::from_rgb(42, 35, 33) },
     );
     painter.rect_stroke(
         rect,
         rounding,
-        egui::Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 28)),
+        egui::Stroke::new(1.0, if response.hovered() || response.has_focus() {
+            presentation::AMBER
+        } else { presentation::EDGE }),
         egui::StrokeKind::Outside,
     );
 
@@ -1525,170 +1522,145 @@ fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId)
     );
     draw_voxel_icon(painter, icon_rect, block);
 
-    painter.text(
-        egui::pos2(rect.center().x, rect.max.y - 16.0),
-        Align2::CENTER_CENTER,
-        block.display_name(),
-        egui::FontId::proportional(11.0),
-        Color32::WHITE,
-    );
+    let name = painter.layout(block.display_name().to_owned(),
+        egui::FontId::proportional(12.0), presentation::PAPER, rect.width()-8.0);
+    painter.with_clip_rect(rect.shrink(3.0)).galley(
+        egui::pos2(rect.center().x-name.size().x*0.5, rect.bottom()-25.0), name, Color32::WHITE);
     response.on_hover_text(block.display_name())
 }
 
 fn draw_hotbar_slot_button(
     ui: &mut egui::Ui,
     block: BlockId,
+    survival_stack: Option<crate::world::inventory::ItemStack>,
+    use_survival: bool,
     slot: usize,
     selected: bool,
     drag_targeted: bool,
 ) -> egui::Response {
-    let size = 70.0;
+    let viewport = ui.ctx().content_rect();
+    let size = ((viewport.width()-32.0)/9.0-2.0).clamp(10.0,38.0)
+        .min((viewport.height()*0.10).clamp(20.0,38.0));
+    let remaining = 9 - slot;
+    let size = size.min(((ui.available_width() - ui.spacing().item_spacing.x * (remaining-1) as f32)
+        / remaining as f32).max(10.0));
     let desired = egui::vec2(size, size);
+    let hover_label = if use_survival {
+        survival_stack.map_or_else(
+            || format!("Slot {}: Empty", slot + 1),
+            |s| format!("{} × {}", s.item.name(), s.count),
+        )
+    } else {
+        format!("Slot {}: {}", slot + 1, block.display_name())
+    };
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,ui.is_enabled(),&hover_label));
     if !ui.is_rect_visible(rect) {
         return response;
     }
 
     let painter = ui.painter();
-    let rounding = egui::CornerRadius::same(4);
+    let rounding = egui::CornerRadius::same(0);
 
-    // Background
-    painter.rect_filled(
-        rect,
-        rounding,
-        Color32::from_rgba_premultiplied(30, 30, 30, 160),
-    );
-
-    // Border
-    let stroke_color = if drag_targeted {
-        Color32::from_rgb(255, 214, 96)
-    } else if selected {
-        Color32::from_rgb(255, 255, 255)
-    } else {
-        Color32::from_rgba_premultiplied(120, 120, 120, 100)
-    };
-
-    let stroke_width = if selected || drag_targeted { 5.0 } else { 3.0 };
-    painter.rect_stroke(
-        rect,
-        rounding,
-        egui::Stroke::new(stroke_width, stroke_color),
-        egui::StrokeKind::Inside,
-    );
+    icons::frame(painter,rect,selected);
+    if drag_targeted { painter.rect_stroke(rect,rounding,egui::Stroke::new(2.0,presentation::AMBER),egui::StrokeKind::Inside); }
 
     // Number indicator
     painter.text(
-        rect.min + egui::vec2(8.0, 6.0),
+        rect.min + egui::vec2(4.0, 2.0),
         Align2::LEFT_TOP,
         hotbar_key_label(slot),
-        egui::FontId::proportional(22.0),
+        egui::FontId::monospace(11.5),
         if selected {
-            Color32::WHITE
+            presentation::PAPER
         } else {
-            Color32::from_rgba_unmultiplied(200, 200, 200, 180)
+            presentation::MUTED
         },
     );
 
-    // Block icon
-    if block != BlockId::Air {
+    if use_survival {
+        if let Some(stack) = survival_stack {
+            let icon_rect = egui::Rect::from_center_size(
+                rect.center() + egui::vec2(0.0, 1.5),
+                egui::vec2(size * 0.66, size * 0.66),
+            );
+            inventory::draw_item_icon(painter, icon_rect, stack.item);
+            if stack.count > 1 {
+                let count_str = format!("{}", stack.count);
+                let font = egui::FontId::monospace((size * 0.30).clamp(9.5, 11.5));
+                let pos = rect.right_bottom() - egui::vec2(2.5, 1.5);
+                painter.text(
+                    pos + egui::vec2(1.0, 1.0),
+                    Align2::RIGHT_BOTTOM,
+                    &count_str,
+                    font.clone(),
+                    presentation::INK,
+                );
+                painter.text(pos, Align2::RIGHT_BOTTOM, count_str, font, presentation::PAPER);
+            }
+        }
+    } else if block != BlockId::Air {
         let icon_rect = egui::Rect::from_center_size(
             rect.center() + egui::vec2(0.0, 2.0),
-            egui::vec2(48.0, 48.0),
+            egui::vec2(size * 0.66, size * 0.66),
         );
         draw_voxel_icon(painter, icon_rect, block);
     }
 
-    response.on_hover_text(block.display_name())
+    response.on_hover_text(hover_label)
 }
 
 fn draw_hotbar_row(
     ui: &mut egui::Ui,
     creative_state: &mut CreativeState,
     player: &mut Player,
+    survival_inv: Option<&crate::world::inventory::SurvivalInventory>,
     drag_source: &mut Option<DragSource>,
     drag_target_slot: &mut Option<usize>,
 ) {
     *drag_target_slot = None;
+    let use_survival = survival_inv.is_some()
+        && creative_state.tool == ToolKind::Hand
+        && !player.flying
+        && !creative_state.show_panel;
     let hotbar = *creative_state.hotbar();
     for (slot, block) in hotbar.into_iter().enumerate() {
+        let survival_stack = survival_inv.and_then(|inv| inv.hotbar[slot]);
         let response = draw_hotbar_slot_button(
             ui,
             block,
+            survival_stack,
+            use_survival,
             slot,
             slot == creative_state.selected_slot,
             *drag_target_slot == Some(slot),
         );
         if response.clicked() {
             creative_state.select_slot(slot);
-            player.selected_block = creative_state.selected_block();
+            if creative_state.show_palette { creative_state.tool = ToolKind::Hand; }
+            if use_survival {
+                if let Some(crate::world::inventory::ItemStack {
+                    item: crate::world::inventory::Item::Block(b),
+                    ..
+                }) = survival_stack
+                {
+                    player.selected_block = b;
+                }
+            } else {
+                player.selected_block = creative_state.selected_block();
+            }
         }
         if response.drag_started() {
             *drag_source = Some(DragSource::Hotbar(slot));
         }
-        if drag_source.is_some() && response.hovered() {
+        if crate::torch_review::mode() == "drag" {
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("review_hotbar", slot)), response.rect));
+        }
+        if drag_source.is_some() && response.contains_pointer() {
             *drag_target_slot = Some(slot);
+            ui.painter().rect_stroke(response.rect, 0, egui::Stroke::new(2.0, presentation::AMBER), egui::StrokeKind::Inside);
         }
     }
-}
-
-fn material_palette_ui(
-    ctx: &egui::Context,
-    creative_state: &mut CreativeState,
-    player: &mut Player,
-    drag_source: &mut Option<DragSource>,
-    hovered_palette_block: &mut Option<BlockId>,
-) {
-    egui::Window::new("Material Palette")
-        .anchor(Align2::CENTER_CENTER, [0.0, 20.0])
-        .default_width(920.0)
-        .min_width(760.0)
-        .max_width(1040.0)
-        .max_height(480.0)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            *hovered_palette_block = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Pick a material, or drag one onto a hotbar slot.");
-                ui.separator();
-                ui.label("Press 1-9 to select a destination slot.");
-            });
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for def in material_defs().iter().filter(|def| def.tags.selectable) {
-                            let response = draw_palette_material_card(ui, [112.0, 116.0], def.id);
-                            if response.clicked() {
-                                creative_state
-                                    .assign_hotbar_slot(creative_state.selected_slot, def.id);
-                                player.selected_block = creative_state.selected_block();
-                            }
-                            if response.hovered() {
-                                *hovered_palette_block = Some(def.id);
-                            }
-                            if response.drag_started() {
-                                *drag_source = Some(DragSource::Palette(def.id));
-                            }
-                        }
-                    });
-                });
-
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "Selected slot {}: {}",
-                    hotbar_key_label(creative_state.selected_slot),
-                    creative_state.selected_block().display_name()
-                ));
-                if let Some(block) = hovered_palette_block.as_ref() {
-                    ui.separator();
-                    ui.colored_label(material_color32(*block), block.display_name());
-                }
-            });
-        });
 }
 
 fn quick_tool_ui(
@@ -1743,7 +1715,7 @@ fn quick_tool_ui(
                                         Color32::from_rgba_premultiplied(255, 255, 255, 22)
                                     },
                                 ))
-                                .corner_radius(egui::CornerRadius::same(8))
+                                .corner_radius(egui::CornerRadius::same(0))
                                 .inner_margin(egui::Margin::same(10))
                                 .show(ui, |ui| {
                                     let response = ui.add_sized(
@@ -1792,7 +1764,7 @@ fn quick_tool_ui(
                             1.0,
                             tool_accent_color(creative_state.tool).linear_multiply(0.55),
                         ))
-                        .corner_radius(egui::CornerRadius::same(8))
+                        .corner_radius(egui::CornerRadius::same(0))
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
                             ui.set_width(390.0);
@@ -1841,12 +1813,12 @@ fn quick_tool_ui(
                             ui.horizontal_wrapped(|ui| {
                                 status_chip(
                                     ui,
-                                    "Ctrl + Scroll size",
+                                    "Alt + Scroll size",
                                     Color32::from_rgb(102, 150, 240),
                                 );
                                 status_chip(
                                     ui,
-                                    "Shift + Scroll reach",
+                                    "Ctrl + Scroll reach",
                                     Color32::from_rgb(120, 186, 134),
                                 );
                                 status_chip(ui, "1-9 hotbar slot", Color32::from_rgb(225, 176, 92));
@@ -1868,101 +1840,54 @@ fn quick_tool_ui_plain(
     *hovered_tool = None;
     *hovered_brush_shape = None;
     *hovered_area_shape = None;
-    let preview_tool = creative_state.tool;
-    egui::Window::new("Quick Select")
+    egui::Window::new("Choose tool")
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .collapsible(false)
-        .resizable(false)
+        .collapsible(false).resizable(false)
         .show(ctx, |ui| {
-            ui.set_min_width(540.0);
-            ui.label("Q closes this menu. Click to switch tools.");
-            ui.separator();
+            ui.set_width(320.0);
             ui.horizontal_wrapped(|ui| {
                 for tool in ToolKind::ALL {
-                    let texture = tool_textures.for_tool(tool);
-                    let button = egui::Button::image_and_text(
-                        egui::Image::new((texture.texture.id(), egui::vec2(28.0, 28.0)))
-                            .texture_options(egui::TextureOptions::NEAREST),
-                        tool.label(),
-                    )
-                    .selected(preview_tool == tool)
-                    .min_size(egui::vec2(150.0, 52.0));
-                    let response = ui.add(button);
-                    if response.hovered() {
-                        *hovered_tool = Some(tool);
-                    }
-                    if response.clicked() {
-                        creative_state.tool = tool;
-                    }
+                    let response = ui.add(egui::Button::new(format!("{}  {}",tool_shortcut_label(tool),tool.label()))
+                        .selected(creative_state.tool == tool).min_size(egui::vec2(150.0,32.0)));
+                    if response.hovered() { *hovered_tool = Some(tool); }
+                    if response.clicked() { creative_state.tool=tool; creative_state.show_quick_select=false; }
                 }
             });
-            ui.separator();
-            match preview_tool {
-                ToolKind::Hand => {
-                    ui.label("Hand");
-                    ui.label("Default single-block interaction.");
-                }
-                ToolKind::Brush => {
-                    ui.label("Brush shape");
-                    ui.horizontal_wrapped(|ui| {
-                        for shape in BrushShape::ALL {
-                            let selected = creative_state.brush_shape == shape;
-                            let response = ui.selectable_label(selected, shape.label());
-                            if response.hovered() {
-                                *hovered_brush_shape = Some(shape);
-                            }
-                            if response.clicked() {
-                                creative_state.brush_shape = shape;
-                                *hovered_brush_shape = Some(shape);
-                            }
-                        }
-                    });
-                    ui.add(
-                        egui::Slider::new(&mut creative_state.brush_radius, 0..=8)
-                            .text("Brush radius"),
-                    );
-                }
-                ToolKind::AreaTool => {
-                    ui.label("Area footprint");
-                    ui.horizontal_wrapped(|ui| {
-                        for shape in AreaFootprintShape::ALL {
-                            let selected = creative_state.area_tool.shape == shape;
-                            let response = ui.selectable_label(selected, shape.label());
-                            if response.hovered() {
-                                *hovered_area_shape = Some(shape);
-                            }
-                            if response.clicked() {
-                                creative_state.area_tool.shape = shape;
-                                *hovered_area_shape = Some(shape);
-                            }
-                        }
-                    });
-                    ui.add(
-                        egui::Slider::new(&mut creative_state.area_tool.radius, 0..=12)
-                            .text("Area radius"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut creative_state.area_tool.thickness, 1..=4)
-                            .text("Thickness"),
-                    );
-                }
-                ToolKind::BuildersWand | ToolKind::DestructorWand => {
-                    ui.add(
-                        egui::Slider::new(&mut creative_state.wand_max_blocks, 8..=512)
-                            .text("Connected block cap"),
-                    );
-                }
-            }
-            ui.separator();
-            ui.label("Z Hand, X Brush, C Builder, V Destructor, G Area.");
+            ui.small("B adjusts reach and size. Q closes.");
         });
+    let _ = tool_textures;
 }
 
 pub struct EguiUi {
+    pub library_entries: std::sync::Arc<Vec<crate::world::storage::WorldEntry>>,
+    pub library_busy: bool,
+    pub library_loading: bool,
+    pub library_status: Option<String>,
+    pub library_revision: u64,
+    pub preferences_status: Option<String>,
+    pub new_world_name: String,
+    home_page: front_end::HomePage,
+    browser: world_browser::BrowserState,
+    pub expedition: Option<crate::world::expedition::Expedition>,
+    pub factory: crate::world::factory::View,
+    pub adventure: crate::world::adventure::View,
+    pub survival: crate::world::inventory::SurvivalInventory,
+    pub survival_eat_timer:f32,
+    pub survival_armor_points:u32,
+    pub biome_label: &'static str,
+    pub elevation_m: f32,
+    pub show_hud: bool,
+    pub target_block: Option<BlockId>,
+    pub tool_feedback: tool_hud::Feedback,
+    pub fov_degrees: f32,
+    pub mouse_sensitivity: f32,
+    pub invert_mouse: bool,
+    pub persistence_status: Option<String>,
+    pub region_status: Option<String>,
+    pub region_error: Option<String>,
     pub ctx: egui::Context,
     state: egui_winit::State,
     renderer: Renderer,
-    pixels_per_point: f32,
     shapes: Vec<egui::ClippedPrimitive>,
     textures_delta: egui::TexturesDelta,
     tool_textures: ToolTextures,
@@ -1974,6 +1899,7 @@ pub struct EguiUi {
     hovered_quick_brush_shape: Option<BrushShape>,
     hovered_quick_area_shape: Option<AreaFootprintShape>,
     show_debug_performance_panel: bool,
+    pause_page: front_end::PausePage,
 }
 
 impl EguiUi {
@@ -1983,6 +1909,7 @@ impl EguiUi {
         surface_format: wgpu::TextureFormat,
     ) -> Self {
         let ctx = egui::Context::default();
+        presentation::apply_theme(&ctx);
 
         let state = egui_winit::State::new(
             ctx.clone(),
@@ -1993,14 +1920,38 @@ impl EguiUi {
             None,
         );
 
-        let renderer = Renderer::new(device, surface_format, RendererOptions::default());
+        let renderer = Renderer::new(device, surface_format.remove_srgb_suffix(), RendererOptions::default());
         let tool_textures = ToolTextures::load(&ctx, "assets");
 
         Self {
+            library_entries: std::sync::Arc::default(),
+            library_busy: false,
+            library_loading: false,
+            library_status: None,
+            library_revision: 0,
+            preferences_status: None,
+            new_world_name: "New world".into(),
+            home_page: front_end::HomePage::default(),
+            browser: world_browser::BrowserState::default(),
+            show_hud: true,
+            expedition: None,
+            factory: Default::default(),
+            adventure: Default::default(),
+            survival: Default::default(),
+            survival_eat_timer:0.0,survival_armor_points:0,
+            biome_label: "Wilderness",
+            elevation_m: 0.0,
+            target_block: None,
+            tool_feedback: Default::default(),
+            fov_degrees: 70.0,
+            mouse_sensitivity: 0.0025,
+            invert_mouse: false,
+            persistence_status: None,
+            region_status: None,
+            region_error: None,
             ctx,
             state,
             renderer,
-            pixels_per_point: window.scale_factor() as f32,
             shapes: Vec::new(),
             textures_delta: egui::TexturesDelta::default(),
             tool_textures,
@@ -2012,6 +1963,7 @@ impl EguiUi {
             hovered_quick_brush_shape: None,
             hovered_quick_area_shape: None,
             show_debug_performance_panel: false,
+            pause_page: front_end::PausePage::default(),
         }
     }
 
@@ -2023,52 +1975,24 @@ impl EguiUi {
         self.ctx.wants_pointer_input() || self.ctx.wants_keyboard_input()
     }
 
+    pub fn toggle_debug(&mut self) {
+        self.show_debug_performance_panel = !self.show_debug_performance_panel;
+    }
+
     pub fn begin_frame(&mut self, window: &Window) {
-        self.pixels_per_point = window.scale_factor() as f32;
-        let raw_input = self.state.take_egui_input(window);
+        // Whole physical-pixel UI scaling avoids different blur at 125/150% DPI.
+        let native=window.scale_factor() as f32;
+        self.ctx.set_zoom_factor(native.round().max(1.0)/native);
+        let mut raw_input = self.state.take_egui_input(window);
+        if crate::torch_review::mode() == "drag" {
+            crate::torch_review::drag_input(&self.ctx, &mut raw_input);
+        }
+        crate::material_studio::review_input(&self.ctx,&mut raw_input);
         self.ctx.begin_pass(raw_input);
     }
 
     pub fn build_loading_ui(&mut self, loading: &LoadingUiState) {
-        egui::CentralPanel::default().show(&self.ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space((ui.available_height() * 0.18).max(40.0));
-
-                ui.heading(RichText::new(&loading.title).size(28.0).strong());
-                ui.add_space(10.0);
-
-                ui.label(
-                    RichText::new(&loading.detail)
-                        .size(15.0)
-                        .color(Color32::from_rgb(200, 205, 215)),
-                );
-
-                ui.add_space(18.0);
-
-                let progress = loading.progress_01.clamp(0.0, 1.0);
-                ui.add_sized(
-                    [420.0, 18.0],
-                    egui::ProgressBar::new(progress)
-                        .show_percentage()
-                        .animate(true),
-                );
-
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!("{:.0}%", progress * 100.0))
-                        .color(Color32::from_rgb(140, 180, 255)),
-                );
-
-                ui.add_space(18.0);
-                ui.label(
-                    RichText::new(
-                        "The window stays responsive while renderer resources are prepared.",
-                    )
-                    .small()
-                    .weak(),
-                );
-            });
-        });
+        front_end::loading(&self.ctx,loading);
     }
 
     fn build_performance_ui(ui: &mut egui::Ui, perf: &PerfSnapshot) {
@@ -2585,6 +2509,64 @@ impl EguiUi {
                                 "Pending Schedule",
                                 format_compact_count(perf.chunk_latest.pending_schedule),
                             );
+                            perf_value_row(
+                                ui,
+                                "LOD Reuses",
+                                format_compact_count(perf.chunk_latest.lod_cache_hits),
+                            );
+                            perf_value_row(
+                                ui,
+                                "CPU Voxel Cache",
+                                format!(
+                                    "{} / {}",
+                                    format_compact_bytes(perf.chunk_latest.cpu_resident_bytes),
+                                    format_compact_bytes(perf.chunk_latest.cpu_budget_bytes)
+                                ),
+                            );
+                            perf_value_row(
+                                ui,
+                                "GPU Terrain Residency",
+                                format!(
+                                    "{} / {}",
+                                    format_compact_bytes(perf.chunk_latest.gpu_resident_bytes),
+                                    format_compact_bytes(perf.chunk_latest.gpu_budget_bytes)
+                                ),
+                            );
+                            perf_value_row(
+                                ui,
+                                "Budget Deferred",
+                                format_compact_count(perf.chunk_latest.budget_deferred),
+                            );
+                            perf_value_row(
+                                ui,
+                                "CPU / GPU Evictions",
+                                format!(
+                                    "{} / {}",
+                                    perf.chunk_latest.cpu_evictions,
+                                    perf.chunk_latest.gpu_evictions
+                                ),
+                            );
+                            perf_value_row(
+                                ui,
+                                "Inactive LOD Cache",
+                                format_compact_bytes(perf.chunk_latest.lod_cache_bytes),
+                            );
+                            perf_value_row(
+                                ui,
+                                "Generation Buffers",
+                                format_compact_bytes(perf.chunk_latest.terrain_buffer_bytes),
+                            );
+                            perf_value_row(
+                                ui,
+                                "Mesh Workers + Results",
+                                format!(
+                                    "{} / {}",
+                                    format_compact_bytes(perf.chunk_latest.queued_mesh_bytes),
+                                    format_compact_bytes(
+                                        crate::render::mesh_budget_mib() * 1024 * 1024
+                                    )
+                                ),
+                            );
                         });
                 });
             });
@@ -2661,7 +2643,7 @@ impl EguiUi {
                             Color32::from_rgba_premultiplied(255, 255, 255, 28)
                         },
                     ))
-                    .corner_radius(egui::CornerRadius::same(255))
+                    .corner_radius(egui::CornerRadius::same(0))
                     .inner_margin(egui::Margin::symmetric(10, 6))
                     .show(ui, |ui| {
                         let button = ui.selectable_label(
@@ -2715,166 +2697,226 @@ impl EguiUi {
         using_tool: Option<ToolUseAction>,
     ) -> UiAction {
         let mut action = UiAction::None;
+        if !creative_state.any_ui_open() || self.ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) {
+            self.drag_source = None;
+            self.drag_target_slot = None;
+        }
+        if matches!(mode,UiMode::Playing) {
+            if let Some(error)=&self.region_error {front_end::storage_notice(&self.ctx,error);}
+        }
         let time_label = format_clock(time_state.time_of_day);
-        let move_speed = player.vel.xz().length();
+        let move_speed_mps = player.vel.xz().length() * selected_voxel_scale.meters();
         player.selected_block = creative_state.selected_block();
         self.held_tool_pose
-            .update(creative_state.tool, using_tool, move_speed, frame_dt);
+            .update(creative_state.tool, using_tool, move_speed_mps, frame_dt);
 
         if matches!(mode, UiMode::Loading) {
             return UiAction::None;
         }
 
-        if matches!(mode, UiMode::Paused) {
-            egui::TopBottomPanel::top("top_bar").show(&self.ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("FPS: {}", fps)).strong());
-                    ui.separator();
-                    ui.label(format!(
-                        "Pos: {:.1}, {:.1}, {:.1}",
-                        player.pos.x, player.pos.y, player.pos.z
-                    ));
-                    ui.separator();
-                    ui.label(format!(
-                        "Mode: {}",
-                        if player.flying { "Flying" } else { "Walking" }
-                    ));
-                    ui.separator();
-                    ui.label(format!(
-                        "Block: {}",
-                        creative_state.selected_block().display_name()
-                    ));
-                    ui.separator();
-                    let tool_texture = self.tool_textures.for_tool(creative_state.tool);
-                    ui.add(
-                        egui::Image::new((tool_texture.texture.id(), egui::vec2(18.0, 18.0)))
-                            .texture_options(egui::TextureOptions::NEAREST),
-                    );
-                    ui.label(format!("Tool: {}", creative_state.tool.label()));
-                    ui.separator();
-                    ui.label(creative_state.cursor_summary());
-                    ui.separator();
-                    ui.label("B tools");
-                    ui.separator();
-                    ui.label("Tab palette");
-                    ui.separator();
-                    ui.label("Q quick");
-                    ui.separator();
-                    ui.label(RichText::new(format!("Time: {time_label}")).strong());
-                    ui.separator();
-                    let physics_text = if physics_state.enabled {
-                        RichText::new("Physics: RUNNING").color(Color32::LIGHT_GREEN)
-                    } else {
-                        RichText::new("Physics: PAUSED").color(Color32::LIGHT_RED)
-                    };
-                    ui.label(physics_text);
-                    ui.separator();
-                    ui.label(format!("Voxel: {}", physics_state.voxel_scale.label()));
-                    ui.separator();
-                    ui.label(format!(
-                        "Frame {:.2} ms avg / {:.2} ms p99",
-                        perf.frame_ms_avg, perf.frame_ms_p99
-                    ));
-                    ui.separator();
-                    ui.label("Render");
-                    ui.add_sized(
-                        [110.0, 18.0],
-                        egui::Slider::new(&mut render_state.settings.view_distance_chunks, 12..=96)
-                            .text("Chunks"),
-                    );
-                    ui.add_sized(
-                        [120.0, 18.0],
-                        egui::Slider::new(&mut render_state.settings.lod_start_chunks, 4..=96)
-                            .text("LOD Start"),
-                    );
-                    ui.add_sized(
-                        [95.0, 18.0],
-                        egui::Slider::new(&mut render_state.settings.lod_levels, 1..=3)
-                            .text("LOD Lvls"),
-                    );
-                    egui::ComboBox::from_label("Debug View")
-                        .selected_text(render_state.debug_view.label())
-                        .show_ui(ui, |ui| {
-                            for view in RenderDebugView::all() {
-                                ui.selectable_value(
-                                    &mut render_state.debug_view,
-                                    view,
-                                    view.label(),
-                                );
-                            }
-                        });
-                    egui::ComboBox::from_label("Atmosphere")
-                        .selected_text(render_state.atmosphere_mode.label())
-                        .show_ui(ui, |ui| {
-                            for mode in AtmosphereMode::all() {
-                                ui.selectable_value(
-                                    &mut render_state.atmosphere_mode,
-                                    mode,
-                                    mode.label(),
-                                );
-                            }
-                        });
-                });
-            });
-
-            egui::TopBottomPanel::bottom("bottom_bar").show(&self.ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    draw_hotbar_row(
-                        ui,
-                        creative_state,
-                        player,
-                        &mut self.drag_source,
-                        &mut self.drag_target_slot,
-                    );
-                });
-            });
-        } else if matches!(mode, UiMode::Playing) {
-            egui::Area::new("play_status".into())
-                .anchor(Align2::LEFT_TOP, [14.0, 14.0])
-                .interactable(false)
-                .show(&self.ctx, |ui| {
-                    ui.group(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(format!("{} FPS", fps)).strong());
-                            ui.separator();
-                            ui.label(format!("Time {time_label}"));
-                            ui.separator();
-                            ui.label(format!("Voxel {}", physics_state.voxel_scale.label()));
-                            ui.separator();
-                            ui.label(creative_state.cursor_summary());
-                        });
-                    });
-                });
-
-            egui::Area::new("hotbar_overlay".into())
-                .anchor(Align2::CENTER_BOTTOM, [0.0, -24.0])
-                .interactable(creative_state.show_panel || creative_state.show_palette)
-                .show(&self.ctx, |ui| {
-                    egui::Frame::NONE.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            draw_hotbar_row(
-                                ui,
-                                creative_state,
-                                player,
-                                &mut self.drag_source,
-                                &mut self.drag_target_slot,
-                            );
-                        });
-                    });
-                });
+        if matches!(mode,UiMode::WorldSelect) {
+            return front_end::home(self,selected_world,selected_voxel_scale,selected_seed,render_state);
         }
+        if matches!(mode,UiMode::Paused) {
+            let action=front_end::pause(self,time_state,physics_state,render_state);
+            if self.show_debug_performance_panel {self.build_debug_performance_panel(mode,perf);}
+            return action;
+        }
+        if matches!(mode, UiMode::Playing) {
+            if self.show_hud {
+                let mut status_rect = None;
+                if self.show_debug_performance_panel {
+                let status = egui::Area::new("play_status".into())
+                    .anchor(Align2::LEFT_TOP, [16.0, 16.0])
+                    .interactable(false)
+                    .show(&self.ctx, |ui| {
+                        presentation::hud_frame().show(ui, |ui| {
+                            if self.show_debug_performance_panel {
+                                ui.label(RichText::new(self.biome_label).size(14.0).color(Color32::from_rgb(230,235,216)));
+                                ui.small(format!("{time_label}  ·  {:.0} m",self.elevation_m));
+                            }
+                            ui.small(creative_state.cursor_summary());
+                            if creative_state.pending_cells()>0 {ui.small(format!("{} cells queued",creative_state.pending_cells()));}
+                        });
+                    });
+                status_rect = Some(status.response.rect);
+                }
+                front_end::journey_hud(&self.ctx,self.expedition.as_ref(),status_rect);
+                if !creative_state.any_ui_open() && !self.show_debug_performance_panel {
+                    tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback);
+                }
+                if let Some(block) = self.target_block.filter(|block| !creative_state.any_ui_open() && *block != BlockId::Air) {
+                    egui::Area::new("target_name".into())
+                        .anchor(Align2::CENTER_TOP, [0.0, 10.0])
+                        .interactable(false)
+                        .show(&self.ctx, |ui| {
+                            presentation::hud_frame().show(ui, |ui| {
+                                ui.set_max_width(240.0);
+                                ui.horizontal(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                                    draw_voxel_icon(ui.painter(), r, block);
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                        ui.label(RichText::new(block.display_name()).size(12.5).strong().color(presentation::PAPER));
+                                        let sub = if let Some(expedition) = &self.expedition {
+                                            let h = crate::world::expedition::hint(block, expedition.tool_tier);
+                                            if !h.is_empty() { h } else { crate::world::inventory::Item::Block(block).category() }
+                                        } else {
+                                            crate::world::inventory::Item::Block(block).category()
+                                        };
+                                        ui.label(RichText::new(sub).size(10.5).color(presentation::MUTED));
+                                    });
+                                });
+                            });
+                        });
+                }
+                if self.show_debug_performance_panel {
+                    egui::Area::new("debug_readout".into())
+                        .anchor(Align2::RIGHT_TOP, [-16.0, 16.0])
+                        .interactable(false)
+                        .show(&self.ctx, |ui| {
+                            presentation::hud_frame().show(ui, |ui| {
+                                ui.monospace(format!("{fps} FPS  |  {:.1} ms", perf.frame_ms_avg));
+                                ui.monospace(format!(
+                                    "XYZ  {:.1}  {:.1}  {:.1}",
+                                    player.pos.x, player.pos.y, player.pos.z
+                                ));
+                                ui.small(format!(
+                                    "{time_label}  |  {}  |  F3 to hide",
+                                    physics_state.voxel_scale.label()
+                                ));
+                            });
+                        });
+                }
+            }
+            if !creative_state.show_palette && (self.show_hud || creative_state.any_ui_open()) {
+                let hotbar = egui::Area::new("hotbar_overlay".into())
+                    .anchor(Align2::CENTER_BOTTOM, [0.0, -10.0])
+                    .interactable(creative_state.show_panel || creative_state.show_palette)
+                    .show(&self.ctx, |ui| {
+                        egui::Frame::NONE.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                draw_hotbar_row(
+                                    ui,
+                                    creative_state,
+                                    player,
+                                    Some(&self.survival),
+                                    &mut self.drag_source,
+                                    &mut self.drag_target_slot,
+                                );
+                            });
+                        });
+                    });
+                if self.show_hud && !creative_state.any_ui_open() {
+                    let vitals = adventure::hud(
+                        &self.ctx,
+                        &self.adventure,
+                        hotbar.response.rect,
+                        player.yaw,
+                        self.survival.eat_timer,
+                        self.survival.armor_points(),
+                    );
+                    let use_survival = creative_state.tool == ToolKind::Hand
+                        && !player.flying
+                        && !creative_state.show_panel;
+                    // Item identity appears on selection, then clears the view.
+                    let label: String = if use_survival {
+                        self.survival.hotbar[creative_state.selected_slot]
+                            .map_or_else(String::new, |s| s.item.name().to_owned())
+                    } else if creative_state.tool == ToolKind::Hand {
+                        creative_state.selected_block().display_name().to_owned()
+                    } else {
+                        creative_state.tool.label().to_owned()
+                    };
+                    let id = egui::Id::new("selected_item_notice");
+                    let now = self.ctx.input(|i| i.time);
+                    let mut notice = self
+                        .ctx
+                        .data_mut(|d| d.get_temp::<(String, f64)>(id))
+                        .unwrap_or_else(|| (label.clone(), now));
+                    if notice.0 != label {
+                        notice = (label.clone(), now);
+                    }
+                    self.ctx.data_mut(|d| d.insert_temp(id, notice.clone()));
+                    if !label.is_empty() && now - notice.1 < 1.5 {
+                        let p = self
+                            .ctx
+                            .layer_painter(egui::LayerId::new(egui::Order::Foreground, id));
+                        let pos =
+                            egui::pos2(self.ctx.content_rect().center().x, vitals.top() - 6.0);
+                        p.text(
+                            pos + egui::vec2(1.0, 1.0),
+                            Align2::CENTER_BOTTOM,
+                            &label,
+                            egui::FontId::proportional(15.0),
+                            presentation::INK,
+                        );
+                        p.text(
+                            pos,
+                            Align2::CENTER_BOTTOM,
+                            &label,
+                            egui::FontId::proportional(15.0),
+                            presentation::PAPER,
+                        );
+                    }
 
+                    // Minimal pickup / overflow badge right beside the hotbar
+                    if let Some(pickup) = &self.survival.pickup_notice {
+                        egui::Area::new("survival_pickup_toast".into())
+                            .anchor(
+                                Align2::LEFT_BOTTOM,
+                                [
+                                    (hotbar.response.rect.right() + 10.0)
+                                        .min(self.ctx.content_rect().right() - 150.0),
+                                    -12.0,
+                                ],
+                            )
+                            .interactable(false)
+                            .show(&self.ctx, |ui| {
+                                presentation::hud_frame().show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let (r, _) = ui.allocate_exact_size(
+                                            egui::vec2(18.0, 18.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        inventory::draw_item_icon(ui.painter(), r, pickup.item);
+                                        if pickup.overflow {
+                                            ui.label(
+                                                RichText::new("PACK FULL")
+                                                    .size(11.5)
+                                                    .strong()
+                                                    .color(presentation::AMBER),
+                                            );
+                                        } else {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "+{} {}",
+                                                    pickup.count,
+                                                    pickup.item.name()
+                                                ))
+                                                .size(11.5)
+                                                .color(presentation::JADE),
+                                            );
+                                        }
+                                    });
+                                });
+                            });
+                    }
+                }
+            }
+        }
         match mode {
             UiMode::Playing => {
                 if creative_state.show_panel {
-                    egui::Window::new("Creative Tools")
-                        .default_pos([18.0, 104.0])
-                        .default_size([344.0, 420.0])
+                    egui::Window::new("Tool settings").id(egui::Id::new("compact_tools_v2"))
+                        .default_pos([18.0, 18.0])
+                        .default_size([350.0, 320.0])
                         .min_size([280.0, 260.0])
                         .resizable(true)
                         .movable(true)
+                        .vscroll(true)
+                        .max_height((self.ctx.content_rect().height() - 48.0).max(180.0))
                         .show(&self.ctx, |ui| {
                             creative_tools_ui_plain(
                                 ui,
@@ -2886,13 +2928,20 @@ impl EguiUi {
                         });
                 }
 
+                if creative_state.show_material_editor { crate::material_studio::draw(&self.ctx, &mut creative_state.show_material_editor, time_state, &mut action); }
                 if creative_state.show_palette {
-                    material_palette_ui(
+                    inventory::draw(
                         &self.ctx,
                         creative_state,
                         player,
+                        &mut self.survival,
                         &mut self.drag_source,
+                        &mut self.drag_target_slot,
                         &mut self.hovered_palette_block,
+                        self.expedition.as_ref(),
+                        &self.factory,
+                        &self.adventure,
+                        &mut action,
                     );
                 } else {
                     self.hovered_palette_block = None;
@@ -2916,26 +2965,28 @@ impl EguiUi {
                     self.hovered_quick_area_shape = None;
                 }
 
-                if !creative_state.any_ui_open() {
+                if self.show_hud && !creative_state.any_ui_open()
+                    && self.ctx.content_rect().width() >= 1040.0 {
                     egui::Area::new("play_hint".into())
                         .anchor(Align2::LEFT_BOTTOM, [14.0, -18.0])
                         .interactable(false)
                         .show(&self.ctx, |ui| {
                             ui.label(
-                                RichText::new("B tools  Tab palette  Q quick")
+                                RichText::new("B tools  E inventory  Q quick")
                                     .small()
                                     .color(Color32::from_rgba_premultiplied(235, 238, 242, 180)),
                             );
                         });
                 }
 
-                if self.drag_source.is_some() && self.ctx.input(|i| i.pointer.any_released()) {
+                if self.drag_source.is_some() && self.ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
                     if let (Some(source), Some(target)) =
                         (self.drag_source.take(), self.drag_target_slot)
                     {
                         match source {
                             DragSource::Palette(block) => {
                                 creative_state.assign_hotbar_slot(target, block);
+                                creative_state.tool = ToolKind::Hand;
                             }
                             DragSource::Hotbar(from) => {
                                 creative_state.swap_hotbar_slots(from, target);
@@ -2946,238 +2997,68 @@ impl EguiUi {
                     self.drag_target_slot = None;
                 }
 
-                egui::Area::new("crosshair_area".into())
-                    .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                    .interactable(false)
-                    .show(&self.ctx, |ui| {
-                        let (rect, _resp) =
-                            ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-                        let center = rect.center();
-                        let painter = ui.painter();
-
-                        let shadow =
-                            egui::Stroke::new(3.0, Color32::from_rgba_premultiplied(0, 0, 0, 120));
-                        painter.line_segment(
-                            [center - egui::vec2(8.0, 0.0), center + egui::vec2(8.0, 0.0)],
-                            shadow,
-                        );
-                        painter.line_segment(
-                            [center - egui::vec2(0.0, 8.0), center + egui::vec2(0.0, 8.0)],
-                            shadow,
-                        );
-
-                        let stroke = egui::Stroke::new(
-                            1.5,
-                            Color32::from_rgba_premultiplied(240, 240, 240, 255),
-                        );
-                        painter.line_segment(
-                            [center - egui::vec2(7.0, 0.0), center + egui::vec2(7.0, 0.0)],
-                            stroke,
-                        );
-                        painter.line_segment(
-                            [center - egui::vec2(0.0, 7.0), center + egui::vec2(0.0, 7.0)],
-                            stroke,
-                        );
-                    });
-                draw_held_tool_overlay(
-                    &self.ctx,
-                    &self.held_tool_pose,
-                    self.tool_textures.for_tool(creative_state.tool),
-                    creative_state.tool,
-                );
-            }
-            UiMode::Paused => {
-                egui::Window::new("Creative Lighting")
-                    .default_pos([12.0, 92.0])
-                    .default_size([368.0, 520.0])
-                    .min_size([300.0, 280.0])
-                    .resizable(true)
-                    .movable(true)
-                    .vscroll(true)
-                    .show(&self.ctx, |ui| {
-                        ui.label("Day/Night Controls");
-                        ui.separator();
-
-                        ui.label(format!("Clock: {}", format_clock(time_state.time_of_day)));
-                        ui.add(
-                            egui::Slider::new(&mut time_state.time_of_day, 0.0..=1.0)
-                                .text("Time of day")
-                                .show_value(false),
-                        );
-                        if ui.button("Dawn").clicked() {
-                            time_state.time_of_day = 0.21;
-                        }
-                        if ui.button("Noon").clicked() {
-                            time_state.time_of_day = 0.50;
-                        }
-                        if ui.button("Dusk").clicked() {
-                            time_state.time_of_day = 0.79;
-                        }
-                        if ui.button("Midnight").clicked() {
-                            time_state.time_of_day = 0.00;
-                        }
-
-                        ui.separator();
-                        ui.checkbox(&mut time_state.freeze_time, "Freeze time");
-                        ui.add(
-                            egui::Slider::new(&mut time_state.day_length_seconds, 20.0..=1800.0)
-                                .logarithmic(true)
-                                .text("Day length (s)"),
-                        );
-                        ui.separator();
-                        cloud_controls_ui(ui, time_state, &mut action);
-                        ui.separator();
-                        ui.checkbox(&mut physics_state.enabled, "Fluid physics (P)");
-                    });
-
-                if creative_state.show_panel {
-                    egui::Window::new("Creative Tools")
-                        .default_pos([12.0, 420.0])
-                        .default_size([344.0, 420.0])
-                        .min_size([280.0, 260.0])
-                        .resizable(true)
-                        .movable(true)
+                if self.show_hud && !creative_state.any_ui_open() {
+                    egui::Area::new("crosshair_area".into())
+                        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                        .interactable(false)
                         .show(&self.ctx, |ui| {
-                            creative_tools_ui_plain(
-                                ui,
-                                creative_state,
-                                physics_state,
-                                player,
-                                &self.tool_textures,
+                            let (rect, _resp) = ui
+                                .allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                            let center = rect.center();
+                            let painter = ui.painter();
+
+                            let shadow = egui::Stroke::new(
+                                3.0,
+                                Color32::from_rgba_premultiplied(0, 0, 0, 120),
+                            );
+                            painter.line_segment(
+                                [center - egui::vec2(8.0, 0.0), center + egui::vec2(8.0, 0.0)],
+                                shadow,
+                            );
+                            painter.line_segment(
+                                [center - egui::vec2(0.0, 8.0), center + egui::vec2(0.0, 8.0)],
+                                shadow,
+                            );
+
+                            let stroke = egui::Stroke::new(
+                                1.5,
+                                self.tool_feedback.color(),
+                            );
+                            painter.line_segment(
+                                [center - egui::vec2(7.0, 0.0), center + egui::vec2(7.0, 0.0)],
+                                stroke,
+                            );
+                            painter.line_segment(
+                                [center - egui::vec2(0.0, 7.0), center + egui::vec2(0.0, 7.0)],
+                                stroke,
                             );
                         });
-                }
-
-                if creative_state.show_palette {
-                    material_palette_ui(
+                    draw_held_tool_overlay(
                         &self.ctx,
-                        creative_state,
-                        player,
-                        &mut self.drag_source,
-                        &mut self.hovered_palette_block,
+                        &self.held_tool_pose,
+                        self.tool_textures.for_tool(creative_state.tool),
+                        creative_state.tool,
+                        time_state.time_of_day,
                     );
-                } else {
-                    self.hovered_palette_block = None;
-                    if matches!(self.drag_source, Some(DragSource::Palette(_))) {
-                        self.drag_source = None;
+                    if creative_state.tool == ToolKind::Hand && self.survival.hotbar[creative_state.selected_slot].is_some_and(|s| matches!(s.item, crate::world::inventory::Item::Weapon(_))) {
+                        draw_held_weapon_overlay(&self.ctx, self.adventure.weapon, &self.held_tool_pose);
                     }
                 }
-
-                if creative_state.show_quick_select {
-                    quick_tool_ui_plain(
-                        &self.ctx,
-                        creative_state,
-                        &self.tool_textures,
-                        &mut self.hovered_quick_tool,
-                        &mut self.hovered_quick_brush_shape,
-                        &mut self.hovered_quick_area_shape,
-                    );
-                } else {
-                    self.hovered_quick_tool = None;
-                    self.hovered_quick_brush_shape = None;
-                    self.hovered_quick_area_shape = None;
-                }
-
-                if self.drag_source.is_some() && self.ctx.input(|i| i.pointer.any_released()) {
-                    if let (Some(source), Some(target)) =
-                        (self.drag_source.take(), self.drag_target_slot)
-                    {
-                        match source {
-                            DragSource::Palette(block) => {
-                                creative_state.assign_hotbar_slot(target, block);
-                            }
-                            DragSource::Hotbar(from) => {
-                                creative_state.swap_hotbar_slots(from, target);
-                            }
-                        }
-                        player.selected_block = creative_state.selected_block();
-                    }
-                    self.drag_target_slot = None;
-                }
-
-                egui::Window::new("Paused")
-                    .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                    .collapsible(false)
-                    .resizable(false)
-                    .show(&self.ctx, |ui| {
-                        ui.label("Double-tap jump to toggle flying.");
-                        ui.separator();
-
-                        if ui.button("Resume").clicked() {
-                            action = UiAction::Resume;
-                        }
-                        if ui.button("Back to World Select").clicked() {
-                            action = UiAction::BackToWorldSelect;
-                        }
-                        if ui.button("Quit").clicked() {
-                            action = UiAction::Quit;
-                        }
-                    });
             }
-            UiMode::WorldSelect => {
-                egui::Window::new("Create World")
-                    .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                    .collapsible(false)
-                    .resizable(false)
-                    .show(&self.ctx, |ui| {
-                        ui.heading("Select world type");
-                        ui.separator();
-
-                        ui.radio_value(selected_world, WorldType::Superflat, "Superflat");
-                        ui.radio_value(selected_world, WorldType::Hills, "Hills");
-                        ui.radio_value(selected_world, WorldType::Ridged, "Ridged");
-
-                        ui.separator();
-                        ui.heading("Voxel Scale");
-                        for preset in VoxelScalePreset::ALL {
-                            ui.radio_value(selected_voxel_scale, preset, preset.label());
-                        }
-                        ui.label(
-                            RichText::new(
-                                "Terrain and foliage are sampled in meter-space; smaller voxels increase fidelity without changing biome layout.",
-                            )
-                            .color(Color32::LIGHT_BLUE),
-                        );
-
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label("Seed");
-                            ui.add(
-                                egui::DragValue::new(selected_seed)
-                                    .speed(1.0)
-                                    .range(0..=u32::MAX),
-                            );
-                            if ui.button("Randomize").clicked() {
-                                *selected_seed = next_seed(*selected_seed);
-                            }
-                        });
-                        ui.label(
-                            RichText::new(format!("Hex: 0x{selected_seed:08X}"))
-                                .color(Color32::LIGHT_BLUE),
-                        );
-
-                        ui.separator();
-                        ui.label(RichText::new("Biomes are active.").color(Color32::LIGHT_GREEN));
-                        ui.label("Double-tap jump toggles flying in-game.");
-
-                        ui.separator();
-                        if ui.button("Start World").clicked() {
-                            action = UiAction::StartWorld {
-                                world_type: *selected_world,
-                                voxel_scale: *selected_voxel_scale,
-                                seed: *selected_seed,
-                            };
-                        }
-                    });
-            }
-            UiMode::Loading => {}
+            UiMode::Paused | UiMode::WorldSelect | UiMode::Loading => {}
         }
 
-        if matches!(mode, UiMode::Paused | UiMode::Playing) {
+        if self.show_debug_performance_panel {
             self.build_debug_performance_panel(mode, perf);
         }
 
-        if let Some(DragSource::Palette(block)) = self.drag_source {
+        if crate::torch_review::mode() == "drag" {
+            crate::torch_review::check_drag(creative_state, self.drag_source.is_some());
+        }
+        if let Some(block) = self.drag_source.map(|source| match source {
+            DragSource::Palette(block) => block,
+            DragSource::Hotbar(slot) => creative_state.hotbar()[slot],
+        }) {
             if let Some(pointer_pos) = self.ctx.input(|i| i.pointer.interact_pos()) {
                 let painter = self.ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Tooltip,
@@ -3185,15 +3066,9 @@ impl EguiUi {
                 ));
                 let rect = egui::Rect::from_center_size(
                     pointer_pos + egui::vec2(14.0, 14.0),
-                    egui::vec2(18.0, 18.0),
+                    egui::vec2(32.0, 32.0),
                 );
-                painter.rect_filled(rect, egui::CornerRadius::same(3), material_color32(block));
-                painter.rect_stroke(
-                    rect,
-                    egui::CornerRadius::same(3),
-                    egui::Stroke::new(1.0, Color32::BLACK),
-                    egui::StrokeKind::Outside,
-                );
+                draw_voxel_icon(&painter, rect, block);
             }
         }
 
@@ -3215,13 +3090,16 @@ impl EguiUi {
             .handle_platform_output(window, full_output.platform_output);
 
         self.textures_delta = full_output.textures_delta;
+        for (id,delta) in &mut self.textures_delta.set {
+            if *id == egui::TextureId::Managed(0) { delta.options=egui::TextureOptions::NEAREST; }
+        }
         self.shapes = self
             .ctx
             .tessellate(full_output.shapes, self.ctx.pixels_per_point());
 
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [width, height],
-            pixels_per_point: self.pixels_per_point,
+            pixels_per_point: self.ctx.pixels_per_point(),
         };
 
         for (id, image_delta) in &self.textures_delta.set {

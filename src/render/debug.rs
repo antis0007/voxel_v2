@@ -18,6 +18,8 @@ pub enum RenderDebugView {
     CloudShadowDensity,
     CloudWeatherDecode,
     CloudTemporalWeight,
+    ShadowCascadeIndex,
+    ShadowTexelDensity,
 }
 
 impl RenderDebugView {
@@ -39,6 +41,8 @@ impl RenderDebugView {
             Self::CloudShadowDensity => 13,
             Self::CloudWeatherDecode => 14,
             Self::CloudTemporalWeight => 15,
+            Self::ShadowCascadeIndex => 16,
+            Self::ShadowTexelDensity => 17,
         }
     }
 
@@ -60,10 +64,12 @@ impl RenderDebugView {
             Self::CloudShadowDensity => "Cloud Shadow Density",
             Self::CloudWeatherDecode => "Cloud Weather Decode",
             Self::CloudTemporalWeight => "Cloud Temporal Weight",
+            Self::ShadowCascadeIndex => "Shadow Cascade Index",
+            Self::ShadowTexelDensity => "Shadow Texel Density",
         }
     }
 
-    pub fn all() -> [Self; 16] {
+    pub fn all() -> [Self; 18] {
         [
             Self::None,
             Self::WeatherClipmapNear,
@@ -81,6 +87,8 @@ impl RenderDebugView {
             Self::CloudShadowDensity,
             Self::CloudWeatherDecode,
             Self::CloudTemporalWeight,
+            Self::ShadowCascadeIndex,
+            Self::ShadowTexelDensity,
         ]
     }
 }

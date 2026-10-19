@@ -1,5 +1,76 @@
 # Atmosphere + Cloud Rewrite Status
 
+## Palette revision after user review
+
+The user rejected the V9 color response as too boring and consistent compared with the supplied photographs. V9's palette is not accepted visual quality. The new candidate keeps the physical extinction/transport tables but applies photograph-guided radiance art direction: deep daytime blue, cyan-to-indigo upper twilight, a localized golden solar horizon and rose antisolar belt, altitude-dependent peach/rose cloud sunlight, and cooler diffuse cloud fill. Direct sunset light no longer inherits an inappropriate top-down height-darkening mask. Terrain and cloud aerial perspective use the same radiance response. This is explicitly an artistic illumination response, not a claim that the modified radiance is a purely physical simulation.
+
+`--benchmark-review-time=<0..1>` can override the review clock without changing production time/weather controls. The palette review script records the actual time argument in each case's metadata, since the existing capture filenames retain the broader noon/sunset phase names.
+
+### Palette live review and second refinement
+
+Launched the actual renderer for six cases in `target/photo-review/palette-v1`: daytime, golden hour (0.7425), sunset (0.7475), rose afterglow (0.7525), storm noon and storm afterglow. The 24 captures showed improved separation but overly violet upper air and pale cloud sunlight. The second refinement uses quieter slate-blue upper twilight, richer gold/coral incident sunlight and a 1.65x twilight gain only on directly exposed faces and thin rims. It does not increase every warm scattering order, which would wash the cool interiors out again.
+
+The final palette source was built with `cargo build --offline --target-dir target`, including the existing composed WGSL validation, then reviewed in five more cases (20 captures): golden hour, sunset, overcast golden hour, storm sunset and storm afterglow. Representative captures at 1600x900 are in `target/photo-review/palette-v2`, with per-case arguments, capture timestamps, logs and executable hashes. Frozen reviewed development executable: `target/photo-review/sky-review-palette-v2.exe`, SHA256 `9D2BC9A7EDD9926BBC8C1CA2A5C8D76B7BD79353B50C06ACAA140DE6D030B0B3`. This checkpoint also includes the coordinated rendering owner's corrected camera-relative cloud fade range and cubic reconstruction.
+
+Visual result: brighter peach/gold lit edges against cooler interiors, a localized amber solar horizon, rose-colored afterglow and darker slate storm ceilings. This is an inspected improvement over the rejected V9 palette, not user acceptance or photographic/AAA parity. Fully overcast golden skies still have a uniform blanket; fine distant cloud bands, repeated morphology and incomplete terrain horizons remain. GPU timing is not an isolated comparison because another game instance was already running. Review cameras left the mouse released and did not autosave. No test suite or hosted CI was run. The pre-existing release session was preserved; it does not acquire newly compiled shaders without restart.
+
+### Final conservative overcast refinement
+
+The overcast density field saturated across most of the sheet. A trial changing sheet geometry (palette-v3) revealed angular cutouts in the noon capture and was rejected. The final palette-v4 restores the original sheet geometry and condensation floor, varying only stratiform water content from the existing bank and shape fields. Convective geometry is unchanged. Both noon and golden-hour overcast captures were inspected at full size before freezing this checkpoint: the blanket remains largely closed, with modest cool pockets and warmer translucent folds. This does not eliminate every distant seam or band.
+
+Final focused-review executable: `target/photo-review/sky-review-palette-v4.exe`, SHA256 `CDCEA6DF488AE96FD78551E0528F57B3F2C6A8EB07AFCBA1CE46B9F789970590`. Eight captures and per-case metadata are under `target/photo-review/palette-v4`. This is an optimized development build; the coordinated rendering chat owns the separate final release/all-preset review. Palette-v2 lighting is unchanged. Rejected palette-v3 imagery is diagnostic evidence, not the delivered morphology.
+
+The coordinated final release review completed all 40 captures (five presets, noon/sunset, two views and adjacent frames) at 1600x900 in `target/cloud-quality-review/quality-v4`. Release executable SHA256: `64EA3742EDA20E196D0ADF4A0A9155D8FE4C5CF5D9B0AC43FBD67EB6A2D28E95`. The final contact sheets and WinterSky follow-up were also inspected here. Shader snapshot hashes match the final palette source. Fine horizon banding and regular cloud distribution are still visible; these are not claimed fixed.
+
+The Day/Night settings now expose Golden hour (0.7425), Sunset (0.7475) and Afterglow (0.7525); the previous Dusk button jumped to 0.79 and missed these lighting conditions. This UI-only change compiled successfully after the release visual review. `target/photo-review/sky-review-palette-final.exe` includes it; `palette-final.json` records its hash and confirms the reviewed shader hashes are unchanged. The new buttons have compile/source verification, not an interactive click-through claim.
+
+## Organized weather and atmospheric transport — 2026-10-18
+
+The next implementation builds on the photograph-guided V5 below:
+
+- `cloud_morphology.wgsl` groups local updrafts into continuous kilometer-scale banks with clear corridors. A nonperiodic, smooth hashed field controls coverage, storm floor relief, and wind-sheared anvils. Fine cloud erosion remains independently filtered.
+- `weather_volume.wgsl` integrates precipitation below storm banks: 40 bounded, quadratically spaced ray segments; wind-deflected source coordinates; elongated, mip-filtered filaments; humidity-dependent evaporation; Beer extinction and sky/solar scattering. Scene depth clips the medium against terrain. Dry presets skip the pass. This is distant rain volume, not nearby droplet particles or surface wetness.
+- Clouds and precipitation compose as four radiance/transmittance volumes ordered by opacity-weighted distance. This remains an approximation when volumes overlap in depth; it is not per-sample interleaved transport.
+- Atmospheric multiple scattering now uses 32 equal-solid-angle directions and 20 integration segments per direction. It accumulates incident sunlight, ozone absorption, ground bounce, and the response to an isotropic field; higher orders use `L / (1 - F)`. This is a finite-quadrature isotropic transport approximation, not a full spectral or fluid simulation.
+- The transport table spans solar elevation and altitude, with nonlinear coordinates concentrating resolution near the horizon and ground. It is computed once after solar transmittance. Sky-view and aerial-perspective integrators sample it locally; the old final-color addition indexed by view/sun angle was removed. Separate read/write layouts avoid a storage/sampled-texture alias.
+- Cloud diffuse illumination uses a shorter hemispheric occlusion path than direct sunlight, retaining cool fill in sunset shadows without disabling self-shadowing.
+
+The visual target remains the supplied photographs and the quality of Horizon/RDR2. This implementation does not claim parity with their production weather systems. Missing pieces include fluid-authored weather volumes, interleaved cloud/rain/fog transport, robust temporal reconstruction, nearby precipitation particles, surface wetness, and terrain extending to the atmospheric horizon.
+
+### Live review evidence for this increment
+
+Built locally with `cargo build --offline --target-dir target`, including the existing Naga shader compilation. V6/V7 live comparisons guided the bank/rain/transport work. V8 then captured all five presets at noon and sunset over Hills, 16 km from the origin, at 1600x900: 40 fresh frames in `target/photo-review/v8-full`. Representative captures from every preset/time were inspected. Rain curtains now occupy the gap beneath the storm deck; daytime updrafts retain bright edges and cooler undersides. The new transport produces a stronger golden sunset horizon. Overcast remains comparatively smooth, and sunset cloud shadows still need more photographic color nuance. Fine horizontal sampling bands remain visible near some distant cloud horizons.
+
+The diffuse-light revision made storm cores too bright. V9 restores a longer ambient occlusion path as storm intensity increases; eight additional Stormy noon/sunset captures were inspected in `target/photo-review/v9-hills`. Final copied executable: `target/photo-review/sky-review-v9.exe`, SHA256 `41BD3D76BCD285E866FDAF416D41404468B63D0CEFCCFAD7C244FCEC9845A218`. `verification.json` records frame dimensions and source hashes. V8 all-preset average: 112.77 FPS, cloud pass 7.053 ms. V9 storm samples: 105.29/104.92 FPS, cloud pass 7.694/7.826 ms on RTX 4090/Vulkan. These are development-build local samples, not performance guarantees for other machines. The final V9 refinement has storm-specific follow-up captures, not a second all-preset run.
+
+All 48 final-review images are 1600x900. Review cameras left the mouse released and skipped autosave. No renderer errors were logged; existing Vulkan validation-layer and egui framebuffer warnings remain. No test suite or hosted CI was run. The other rendering chat's separately frozen V5 release review remains intact under `target/graphics-review`.
+
+## Photograph-guided rendering update — 2026-10-18
+
+The current shaders now use the seven supplied sky photographs as visual targets:
+
+- June daytime cumulus: fuller updraft cores, nested cellular silhouettes, flatter bases, and fine edge erosion.
+- August evening layers: shape erosion before density scaling preserves small mid-level patches; illumination retains the sky's cool color and samples sunlight at both layer heights.
+- July dawn and October storm skies: integrated light-path extinction, two approximate higher scattering orders, spherical atmosphere transmittance, and ozone absorption replace flat density shadows and the clamped solar air-mass approximation.
+- Each cloud layer applies aerial perspective at its opacity-weighted visible distance. The atmosphere volume reaches at least 16 km, independently of terrain visibility, and starts at zero optical depth.
+- Removed the extra white camera-inside-cloud overlay and duplicate direct-light extinction. Fixed the maximum storm-type interpolation endpoint and cirrus fibers stretching across rather than along the wind.
+
+Existing weather controls and presets drive these changes; no generated backdrop or photographic texture is used. Sun transmittance now uses nonlinear horizon/altitude coordinates covering 60 km, shared by generation and all runtime consumers.
+
+### Live photograph comparison and refinement
+
+Launched the actual Vulkan renderer and compared daytime, sunset and storm captures against the supplied photographs. The initial captures were blurry, nearly flat cloud patches; the first shape revision was too regularly rounded. The final `cloud_morphology.wgsl` combines unequal overlapping turrets, rotated footprints, deeper updrafts, fine erosion and broad condensation-floor relief. Compact support keeps the neighborhood continuous. Pixel footprint filtering is separate from ray-step length so shallow viewing angles retain detail.
+
+Sunset illumination now uses a nearly white incident solar source, allowing atmospheric extinction to provide its color once. Diffuse illumination retains the cool upper sky, and interior ambient occlusion has a bounded path instead of scaling indefinitely with storm depth. Fixed-count shadow integration and removal of the depth-8 early exit avoid discontinuities in higher scattering orders. The distant macro fallback skips local shadow work only after its contribution reaches zero.
+
+A visible storm underside plane persisted with self-shadowing disabled and with raw low-layer output. A constant-footprint diagnostic removed it. Moving condensation-floor relief to broad noise substantially improved that sampled region without disabling distance filtering. This is bounded visual evidence, not a guarantee against every artifact.
+
+Validation: `cargo build --offline --target-dir target` succeeded, including the existing composed-WGSL parser/validator. Final V5 review captured 16 frames over Hills at 16 km, 1280x720, with the mouse released: daytime PartlyCloudy, sunset PartlyCloudy, sunset Stormy, and daytime Stormy. Images and logs are in `target/photo-review/v5-hills`; executable is `target/photo-review/sky-review-v5.exe` (SHA256 `F80230A80393BA6CD723BE3BEFF388791879C983D7EDE606C9B20D468C4D65EA`). Cloud GPU pass averages were 5.109, 5.687, 4.994 and 5.025 ms respectively on RTX 4090/Vulkan. These are short development-build samples with concurrent desktop activity, not general hardware performance guarantees. No test suite or hosted CI was run.
+
+Photographic parity remains a target. The reference photographs have larger organized weather structures, precipitation shafts and a wider range of twilight illumination than this implementation reproduces. Layer ordering still approximates intersecting volumes using one representative depth per layer; temporal reconstruction remains disabled in the reviewed build. The coordinated rendering chat owns the separate final release/all-preset Hills review.
+
+The older implementation notes below describe earlier checkpoints and may be superseded by this update.
+
 This document is the authoritative implementation notebook for the current rewrite of the atmosphere, weather, cloud, and composition stack.
 
 It serves four purposes:

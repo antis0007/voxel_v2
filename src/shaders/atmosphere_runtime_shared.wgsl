@@ -67,13 +67,16 @@ fn atmosphere_normalize_xz_or(dir: vec3<f32>, fallback: vec2<f32>) -> vec2<f32> 
 }
 
 fn atmosphere_transmittance_uv(sun_height: f32, altitude_m: f32) -> vec2<f32> {
-    let sun_u = clamp(sun_height * 0.5 + 0.5, 0.0, 1.0);
-    let altitude_v = clamp(
+    let mu = clamp(sun_height, -1.0, 1.0);
+    let sun_u = 0.5 + 0.5 * sign(mu) * sqrt(abs(mu));
+    let altitude_v = sqrt(clamp(
         max(altitude_m, 0.0) * atmosphere_runtime.transmittance_params.y,
         0.0,
         1.0,
-    );
-    return vec2<f32>(sun_u, altitude_v);
+    ));
+    // Generation includes both endpoints. Address their texel centers.
+    let dims = vec2<f32>(textureDimensions(atmosphere_transmittance_lut));
+    return (vec2<f32>(sun_u, altitude_v) * (dims - vec2<f32>(1.0)) + 0.5) / dims;
 }
 
 fn sample_atmosphere_texture_bilinear(
@@ -83,7 +86,7 @@ fn sample_atmosphere_texture_bilinear(
     let dims_u = textureDimensions(tex);
     let dims = vec2<f32>(f32(dims_u.x), f32(dims_u.y));
     let max_xy = vec2<i32>(i32(dims_u.x) - 1, i32(dims_u.y) - 1);
-    let p = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * dims - vec2<f32>(0.5);
+    let p = clamp(uv * dims - vec2<f32>(0.5), vec2<f32>(0.0), dims - vec2<f32>(1.0));
     let base = clamp(vec2<i32>(floor(p)), vec2<i32>(0), max_xy);
     let next = min(base + vec2<i32>(1, 1), max_xy);
     let frac = fract(p);
@@ -119,42 +122,56 @@ fn atmosphere_sky_view_uv(view_dir: vec3<f32>, sun_dir: vec3<f32>) -> vec2<f32> 
     let view_angle = atan2(view_az.y, view_az.x);
     let relative_azimuth = view_angle - sun_angle;
     let azimuth_u = fract(relative_azimuth / ATMOSPHERE_TAU + 0.5 + 1.0);
-    let elevation_v = clamp(view_dir.y * 0.5 + 0.5, 0.0, 1.0);
+    // Quadratic elevation allocates most texels to the horizon, where radiance
+    // changes fastest. Must match generate_sky_view_lut's inverse mapping.
+    let elevation_v = 0.5 + 0.5 * sign(view_dir.y) * sqrt(abs(view_dir.y));
     return vec2<f32>(azimuth_u, elevation_v);
 }
 
 fn sample_atmosphere_sky_view_lut(view_dir: vec3<f32>, sun_dir: vec3<f32>) -> vec3<f32> {
-    return sample_atmosphere_sky_view_lut_at_uv(atmosphere_sky_view_uv(view_dir, sun_dir));
+    let uv = atmosphere_sky_view_uv(view_dir, sun_dir);
+    let dims = vec2<i32>(textureDimensions(atmosphere_sky_view_lut));
+    let p = uv * vec2<f32>(dims) - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(p));
+    let x0 = (base.x + dims.x) % dims.x;
+    let x1 = (x0 + 1) % dims.x;
+    let y0 = clamp(base.y, 0, dims.y - 1);
+    let y1 = clamp(base.y + 1, 0, dims.y - 1);
+    let f = fract(p);
+    return mix(mix(textureLoad(atmosphere_sky_view_lut, vec2<i32>(x0, y0), 0).rgb,
+                   textureLoad(atmosphere_sky_view_lut, vec2<i32>(x1, y0), 0).rgb, f.x),
+               mix(textureLoad(atmosphere_sky_view_lut, vec2<i32>(x0, y1), 0).rgb,
+                   textureLoad(atmosphere_sky_view_lut, vec2<i32>(x1, y1), 0).rgb, f.x), f.y);
 }
 
-fn atmosphere_multiscatter_uv(anisotropy: f32, altitude_m: f32) -> vec2<f32> {
-    return vec2<f32>(
-        clamp(anisotropy * 0.5 + 0.5, 0.0, 1.0),
-        clamp(
-            max(altitude_m, 0.0) * atmosphere_runtime.transmittance_params.y,
-            0.0,
-            1.0,
-        ),
-    );
+fn atmosphere_multiscatter_uv(sun_height: f32, altitude_m: f32) -> vec2<f32> {
+    let mu = clamp(sun_height, -1.0, 1.0);
+    let uv = vec2<f32>(0.5 + 0.5 * sign(mu) * sqrt(abs(mu)),
+        sqrt(clamp(max(altitude_m, 0.0) * atmosphere_runtime.transmittance_params.y, 0.0, 1.0)));
+    let dims = vec2<f32>(textureDimensions(atmosphere_multiscatter_lut));
+    return (uv * (dims - vec2<f32>(1.0)) + 0.5) / dims;
 }
 
 fn sample_atmosphere_multiscatter_lut_at_uv(uv: vec2<f32>) -> vec3<f32> {
     return sample_atmosphere_texture_bilinear(atmosphere_multiscatter_lut, uv).rgb;
 }
 
-fn sample_atmosphere_multiscatter_lut(anisotropy: f32, altitude_m: f32) -> vec3<f32> {
+fn sample_atmosphere_multiscatter_lut(sun_height: f32, altitude_m: f32) -> vec3<f32> {
     return sample_atmosphere_multiscatter_lut_at_uv(
-        atmosphere_multiscatter_uv(anisotropy, altitude_m)
+        atmosphere_multiscatter_uv(sun_height, altitude_m)
     );
 }
 
 fn sample_atmosphere_aerial_perspective(view_dir: vec3<f32>, distance_m: f32, max_dist_m: f32) -> vec4<f32> {
     let azimuth = atan2(view_dir.x, view_dir.z);
-    let elevation = asin(clamp(view_dir.y, -1.0, 1.0));
     
     let u = fract(azimuth / ATMOSPHERE_TAU + 0.5 + 1.0);
-    let v = elevation / 1.5707963 * 0.5 + 0.5;
-    let w = sqrt(clamp(distance_m / max(max_dist_m, 1.0), 0.0, 1.0));
+    let v = view_dir.y * 0.5 + 0.5;
+    // Clouds extend beyond the terrain draw distance. Keep this domain in sync
+    // with generate_aerial_perspective; the first depth slice is exactly zero.
+    let depth = sqrt(clamp(distance_m / max(max_dist_m, 16000.0), 0.0, 1.0));
+    let slices = f32(textureDimensions(atmosphere_aerial_perspective).z);
+    let w = (depth * (slices - 1.0) + 0.5) / slices;
     
     return textureSampleLevel(atmosphere_aerial_perspective, atmosphere_sampler, vec3<f32>(u, v, w), 0.0);
 }

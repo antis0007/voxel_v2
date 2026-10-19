@@ -245,6 +245,7 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
             acc.gpu_pass_total_ms += sample.render.gpu_pass_total_ms;
             acc.gpu_shadow_ms += sample.render.gpu_shadow_ms;
             acc.gpu_terrain_ms += sample.render.gpu_terrain_ms;
+            acc.gpu_indirect_ms += sample.render.gpu_indirect_ms;
             acc.gpu_cloud_raymarch_ms += sample.render.gpu_cloud_raymarch_ms;
             acc.gpu_cloud_temporal_ms += sample.render.gpu_cloud_temporal_ms;
             acc.gpu_sky_ms += sample.render.gpu_sky_ms;
@@ -286,6 +287,7 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
         gpu_pass_total_ms: sum.gpu_pass_total_ms / denom,
         gpu_shadow_ms: sum.gpu_shadow_ms / denom,
         gpu_terrain_ms: sum.gpu_terrain_ms / denom,
+        gpu_indirect_ms: sum.gpu_indirect_ms / denom,
         gpu_cloud_raymarch_ms: sum.gpu_cloud_raymarch_ms / denom,
         gpu_cloud_temporal_ms: sum.gpu_cloud_temporal_ms / denom,
         gpu_sky_ms: sum.gpu_sky_ms / denom,

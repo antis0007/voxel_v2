@@ -200,12 +200,18 @@ Must be true before closing the checkpoint:
 - Jumping to virtual shadow maps before a real clipmapped/page-cached architecture exists.
 - Using temporal history to hide unstable shadow or atmosphere ownership.
 
-## Follow-On Work After A/B/C
+## Gate D: Sparse Voxel Cloud Storage / Bricks
+
+Must be true before closing the checkpoint:
+- `render::clouds` handles clipmap rings and brick streaming.
+- Cloud shadows are generated via SDF acceleration and resident world-space bricks rather than analytical density queries.
+- Temporal history buffers are functional, handling motion vectors and reprojection without smearing fast-moving weather.
+- Clouds are rendered using true volumetric raymarching inside candidate bricks with empty-space skipping.
+
+## Follow-On Work After A/B/C/D
 
 These are intentionally deferred until the current plan lands:
 
-- resident cloud storage / cloud brick clipmaps
-- unified cloud-shadow products from resident clouds instead of weather optical-depth proxies
 - unified volumetrics for fog, precipitation haze, and shafts
 - optional short-range sun contact shadows
 - directional clipmapped or virtual shadow architectures

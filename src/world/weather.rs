@@ -4,8 +4,10 @@ use super::CloudControls;
 
 pub const WEATHER_TEXTURE_RESOLUTION: u32 = 128;
 pub const WEATHER_CLIPMAP_LEVEL_COUNT: usize = 3;
+// Clipmap spans scaled for a 512m-tall voxel world where clouds are at 80-550m.
+// Level 0: high detail near player. Level 2: coverage to the visible horizon.
 pub const WEATHER_CLIPMAP_SPANS_METERS: [f32; WEATHER_CLIPMAP_LEVEL_COUNT] =
-    [32_000.0, 96_000.0, 288_000.0];
+    [1_024.0, 4_096.0, 65_536.0];
 const WEATHER_TEXTURE_TEXEL_BYTES: u32 = std::mem::size_of::<[f32; 4]>() as u32;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -63,6 +65,7 @@ impl WeatherUploadRect {
 #[derive(Clone, Debug, Default)]
 pub struct WeatherClipmapUploadBatch {
     pub clipmap_level: usize,
+    pub invalidate_history: bool,
     dirty_rects: Vec<WeatherUploadRect>,
 }
 
@@ -100,8 +103,10 @@ pub struct WeatherClipmapLevel {
     secondary_rgba: Vec<[f32; 4]>,
     shadow_rgba: Vec<[f32; 4]>,
     pending_gpu_uploads: Vec<WeatherUploadRect>,
+    pending_history_reset: bool,
     last_controls: CloudControls,
     last_seed: u32,
+    last_time_s: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -128,7 +133,6 @@ pub struct CloudWeatherField {
 }
 
 pub struct WeatherRuntimeState {
-    pub accumulator_s: f32,
     pub simulation_time_s: f32,
     pub field: CloudWeatherField,
 }
@@ -136,14 +140,12 @@ pub struct WeatherRuntimeState {
 impl WeatherRuntimeState {
     pub fn new(seed: u32) -> Self {
         Self {
-            accumulator_s: 0.0,
             simulation_time_s: 0.0,
             field: CloudWeatherField::new(seed),
         }
     }
 
     pub fn reset(&mut self, seed: u32) {
-        self.accumulator_s = 0.0;
         self.simulation_time_s = 0.0;
         self.field.reset(seed);
     }
@@ -154,24 +156,18 @@ impl WeatherRuntimeState {
         center_world_xz_m: Vec2,
         authoring: &CloudControls,
         weather_seed: u32,
+        sky_time_s: f32,
     ) -> Option<CloudWeatherUploadManifest> {
-        let dt = dt_real_s.max(0.0);
-        self.accumulator_s += dt;
+        // Accumulate real time for future slow weather evolution (storm buildup etc).
+        // The 0.5 s fixed-step gate was removed: time no longer rebuilds the texture
+        // (advection was decoupled to the shader), so gating was just adding latency.
+        self.simulation_time_s += dt_real_s.max(0.0);
 
-        const WEATHER_DT_S: f32 = 0.5;
-        const MAX_STEPS_PER_FRAME: usize = 4;
-        let mut steps = 0usize;
-        while self.accumulator_s >= WEATHER_DT_S && steps < MAX_STEPS_PER_FRAME {
-            self.accumulator_s -= WEATHER_DT_S;
-            self.simulation_time_s += WEATHER_DT_S;
-            steps += 1;
-        }
-        if steps == MAX_STEPS_PER_FRAME {
-            self.accumulator_s = self.accumulator_s.min(WEATHER_DT_S);
-        }
-
+        let wind_angle = authoring.wind_dir_angle.to_radians();
+        let wind = Vec2::new(wind_angle.cos(), wind_angle.sin());
+        let advection = wind * sky_time_s * authoring.advection * authoring.wind_speed * 8.0;
         self.field.update(
-            center_world_xz_m,
+            center_world_xz_m + advection,
             self.simulation_time_s,
             *authoring,
             weather_seed,
@@ -199,8 +195,10 @@ impl WeatherClipmapLevel {
             secondary_rgba: vec![[0.0; 4]; texel_count],
             shadow_rgba: vec![[0.0; 4]; texel_count],
             pending_gpu_uploads: Vec::new(),
+            pending_history_reset: true,
             last_controls: CloudControls::default(),
             last_seed: seed,
+            last_time_s: -1.0,
         };
         level.update(Vec2::ZERO, 0.0, CloudControls::default(), seed);
         level
@@ -233,38 +231,48 @@ impl WeatherClipmapLevel {
     fn update(
         &mut self,
         center_world_xz_m: Vec2,
-        _time_s: f32,
+        time_s: f32,
         controls: CloudControls,
         weather_seed: u32,
     ) {
         let texel_size_m = self.texel_size_m();
-        let snap_m = texel_size_m * 8.0;
+
+        // Keep clipmaps snapped, but much less coarsely than before so the field
+        // stays world-anchored without feeling like large rectangular slabs.
+        let snap_m = texel_size_m;
         let min_corner = center_world_xz_m - Vec2::splat(self.region.span_m * 0.5);
         let snapped_origin = Vec2::new(
             (min_corner.x / snap_m).floor() * snap_m,
             (min_corner.y / snap_m).floor() * snap_m,
         );
+
         let origin_changed = self.region.origin_m != snapped_origin;
-        let controls_changed = self.last_controls != controls;
         let seed_changed = self.last_seed != weather_seed;
-        let full_refresh_due = controls_changed || seed_changed;
-        if !origin_changed && !full_refresh_due {
+        let controls_changed = self.last_controls != controls;
+        self.pending_history_reset |= seed_changed || controls_changed;
+        // Time no longer drives weather values (advection removed from evaluate_sample),
+        // so time changes do not require a texture rebuild.
+
+        if !(origin_changed || seed_changed || controls_changed) {
             return;
         }
 
-        if full_refresh_due {
-            self.full_refresh(snapped_origin, controls, weather_seed);
-        } else if origin_changed {
-            let origin_delta_m = snapped_origin - self.region.origin_m;
+        if origin_changed && !seed_changed && !controls_changed {
+            // Reuse CPU samples, but upload the shifted interior too: the GPU
+            // texture has no toroidal addressing or copy of the old interior.
             let texel_offset = IVec2::new(
-                (origin_delta_m.x / texel_size_m).round() as i32,
-                (origin_delta_m.y / texel_size_m).round() as i32,
+                ((snapped_origin.x - self.region.origin_m.x) / texel_size_m).round() as i32,
+                ((snapped_origin.y - self.region.origin_m.y) / texel_size_m).round() as i32,
             );
-            self.scroll_to_origin(snapped_origin, texel_offset, controls, weather_seed);
+            self.scroll_to_origin(snapped_origin, time_s, texel_offset, controls, weather_seed);
+        } else {
+            // Seed or controls changed — full rebuild required.
+            self.full_refresh(snapped_origin, time_s, controls, weather_seed);
         }
 
         self.last_controls = controls;
         self.last_seed = weather_seed;
+        self.last_time_s = time_s;
     }
 
     fn texel_size_m(&self) -> f32 {
@@ -283,106 +291,174 @@ impl WeatherClipmapLevel {
     fn evaluate_sample(
         &self,
         world_xz_m: Vec2,
+        _time_s: f32, // reserved for future slow weather evolution; advection is in-shader
         controls: CloudControls,
         weather_seed: u32,
     ) -> WeatherSample {
         let wind_angle = controls.wind_dir_angle.to_radians();
-        let wind_dir = Vec2::new(wind_angle.cos(), wind_angle.sin());
+        let wind_dir = Vec2::new(wind_angle.cos(), wind_angle.sin()).normalize_or_zero();
         let side_dir = Vec2::new(-wind_dir.y, wind_dir.x);
-        let macro_freq = 0.000016;
-        let humidity_freq = 0.000024;
-        let front_freq = 0.000008;
-        let mesoscale_freq = 0.000042;
-        let temperature_freq = 0.000012;
-        let advected = world_xz_m;
-        let sheared = advected + side_dir * (6_000.0 * (controls.wind_shear - 0.5));
 
-        let macro_mass = fbm2(sheared * macro_freq, weather_seed ^ 0x1357_2468, 4);
+        // Tuned for a 512m-tall voxel world.  Cloud features should be
+        // 60-300m across so they're visible and varied from the ground.
+        let cloud_size_m = 60.0 + controls.noise_scale * 240.0;
+
+        let macro_freq = 1.0 / (cloud_size_m * 8.0);
+        let humidity_freq = 1.0 / (cloud_size_m * 5.5);
+        let front_freq = 1.0 / (cloud_size_m * 18.0);
+        let mesoscale_freq = 1.0 / (cloud_size_m * 2.5);
+        let temperature_freq = 1.0 / (cloud_size_m * 12.0);
+
+        // Weather texture is a static spatial field — NO time-based advection here.
+        // Cloud movement is handled entirely by the shader's wx_offset_march term
+        // (p.xz + wind * sky_time * wind_speed * layer_mult). Baking advection into
+        // the CPU texture caused two problems:
+        //   1. The CPU advection rate differed from the shader rate → coverage pattern
+        //      drifted relative to cloud shapes → visible misalignment seams.
+        //   2. Discrete 2Hz texture rebuilds made clouds jump every 0.5 s.
+        // Now the texture encodes stable world-space weather structure (fronts, humid
+        // regions). The shader scrolls through it continuously with sky_time.
+
+        let shear_offset = side_dir * ((controls.wind_shear - 0.5) * 80.0);
+        let base_domain = world_xz_m + shear_offset;
+
+        // Domain warp: break up regularity with large-scale displacement.
+        // Scale inversely with cloud_size_m so warp features match weather scale.
+        let warp_freq = 1.0 / (cloud_size_m * 6.0);
+        let warp_amplitude = cloud_size_m * 0.6;
+        let macro_warp = Vec2::new(
+            (fbm2(
+                base_domain * warp_freq + Vec2::new(13.1, 7.3),
+                weather_seed ^ 0x1357_2468,
+                4,
+            ) - 0.5)
+                * warp_amplitude,
+            (fbm2(
+                base_domain * warp_freq + Vec2::new(-9.4, 21.7),
+                weather_seed ^ 0x2468_1357,
+                4,
+            ) - 0.5)
+                * warp_amplitude,
+        );
+
+        let system_domain = base_domain + macro_warp;
+        let front_domain = system_domain + side_dir * 200.0;
+        let detail_domain = world_xz_m + macro_warp * 0.45;
+
+        let macro_mass = fbm2(system_domain * macro_freq, weather_seed ^ 0x9E37_79B9, 5);
         let humidity_noise = fbm2(
-            advected * humidity_freq + Vec2::new(17.3, 5.1),
-            weather_seed ^ 0x2468_1357,
+            system_domain * humidity_freq + Vec2::new(17.3, 5.1),
+            weather_seed ^ 0xDEAD_BEEF,
             4,
         );
         let frontal = ridge(fbm2(
-            (world_xz_m + side_dir * 18_000.0) * front_freq,
-            weather_seed ^ 0x9E37_79B9,
-            3,
+            front_domain * front_freq + Vec2::new(41.0, -18.0),
+            weather_seed ^ 0xCAFE_BABE,
+            4,
         ));
         let mesoscale = fbm2(
-            (world_xz_m + wind_dir * 11_000.0) * mesoscale_freq + Vec2::new(3.7, 11.5),
-            weather_seed ^ 0xDEAD_BEEF,
+            detail_domain * mesoscale_freq + Vec2::new(3.7, 11.5),
+            weather_seed ^ 0xBADC_0FFE,
+            4,
+        );
+        let breakup = fbm2(
+            (detail_domain + Vec2::new(91.0, -47.0)) * (mesoscale_freq * 1.85),
+            weather_seed ^ 0x3141_5926,
             3,
         );
         let temperature_proxy = fbm2(
-            (world_xz_m - wind_dir * 9_000.0) * temperature_freq + Vec2::new(31.0, 7.0),
-            weather_seed ^ 0xCAFE_BABE,
-            3,
+            (system_domain - wind_dir * 1_400.0) * temperature_freq + Vec2::new(31.0, 7.0),
+            weather_seed ^ 0x0D15_EA5E,
+            4,
         );
 
         let humidity = saturate(
-            0.28 + macro_mass * 0.32
-                + humidity_noise * 0.28
-                + frontal * 0.18
+            0.22
+                + macro_mass * 0.34
+                + humidity_noise * 0.30
+                + frontal * 0.14
                 + controls.stratus * 0.08,
         );
+
         let instability = saturate(
-            (temperature_proxy - 0.42) * 1.3
-                + mesoscale * 0.35
+            (temperature_proxy - 0.40) * 1.25
+                + mesoscale * 0.34
                 + controls.cumulus * 0.22
-                + controls.cumulonimbus * 0.35
+                + controls.cumulonimbus * 0.40
                 - controls.stratus * 0.18,
         );
+
         let convection = saturate(
-            instability * (0.48 + humidity * 0.52) + frontal * 0.12 + controls.wind_shear * 0.10,
+            instability * (0.46 + humidity * 0.54)
+                + frontal * 0.10
+                + controls.wind_shear * 0.10,
         );
+
+        // The storm preset must actually build storm cells. The previous
+        // subtractive threshold cancelled most authored storms before upload.
         let storm = saturate(
-            (humidity * convection * (0.55 + frontal * 0.45) - 0.26)
-                * (0.75 + controls.cumulonimbus * 0.95),
+            controls.cumulonimbus
+                * (0.35 + humidity * 0.35 + convection * 0.30)
+                * smoothstep(0.12, 0.55, humidity * convection + frontal * 0.15),
         );
 
         let coverage = saturate(
-            controls.coverage * (0.22 + macro_mass * 1.02)
-                + frontal * 0.14
-                + humidity * 0.06
-                - 0.08,
+            controls.coverage * (0.18 + macro_mass * 1.08)
+                + humidity * 0.12
+                + frontal * 0.18
+                - 0.16,
         );
-        let cloud_type = saturate(
-            controls.stratus * 0.24 + controls.cumulus * 0.46 + convection * 0.18 + storm * 0.26
-                - controls.cirrus * 0.08,
-        );
+
+        let type_weight = controls.stratus + controls.cumulus + controls.cumulonimbus;
+        let type_accum =
+            controls.stratus * 0.0 + controls.cumulus * 0.66 + controls.cumulonimbus * 1.0;
+        let base_type = if type_weight > 0.0 {
+            type_accum / type_weight
+        } else {
+            0.33 + convection * 0.33
+        };
+        let cloud_type = saturate(base_type + (mesoscale - 0.5) * 0.18);
+
+        let low_mask = smoothstep(0.28, 0.72, breakup * 0.55 + mesoscale * 0.45);
 
         let low_amount = saturate(
             coverage
-                * (0.26 + controls.stratus * 0.34 + controls.cumulus * 0.42)
-                * (0.60 + humidity * 0.40),
+                * (0.55 + low_mask * 0.45)
+                * (0.45
+                    + controls.stratus * 0.25
+                    + controls.cumulus * 0.35
+                    + controls.cumulonimbus * 0.35)
+                * (0.75 + humidity * 0.25),
         );
+
         let mid_amount = saturate(
-            (controls.altocumulus * 0.56 + controls.altostratus * 0.92)
-                * (0.32 + humidity * 0.42 + frontal * 0.30 + controls.density * 0.18),
+            (controls.altocumulus * 0.52 + controls.altostratus * 0.88)
+                * (0.26 + humidity * 0.38 + frontal * 0.26 + controls.density * 0.16),
         );
+
         let high_amount = saturate(
             controls.cirrus
-                * (0.50
-                    + (1.0 - humidity) * 0.24
-                    + frontal * 0.38
-                    + controls.density * 0.10),
+                * (0.44 + (1.0 - humidity) * 0.22 + frontal * 0.36 + controls.density * 0.08),
         );
-        let precipitation = saturate(storm * humidity * (0.58 + controls.cumulonimbus * 0.42));
-        let density_gain = 0.35 + controls.density * 1.35;
-        let low_optical_depth = (coverage
-            * low_amount
-            * humidity
+
+        let precipitation = saturate(storm * humidity * (0.54 + controls.cumulonimbus * 0.46));
+        let density_gain = 0.25 + controls.density * 1.05;
+
+        let low_optical_depth = (low_amount
             * density_gain
-            * (0.42 + convection * 0.44 + storm * 0.58))
+            * controls.layer_thickness
+            * (1.0 + controls.stratus * 0.80 + storm * 2.0) * 2.8)
             .clamp(0.0, 4.0);
+
         let mid_optical_depth = (coverage
             * mid_amount
             * density_gain
-            * (0.24 + humidity * 0.34 + controls.altostratus * 0.38 + frontal * 0.18))
-            .clamp(0.0, 3.0);
+            * (0.16 + humidity * 0.24 + controls.altostratus * 0.26 + frontal * 0.12))
+            .clamp(0.0, 1.6);
+
         let high_optical_depth = (high_amount
-            * (0.10 + controls.cirrus * 0.24 + frontal * 0.16 + (1.0 - humidity) * 0.12))
-            .clamp(0.0, 1.5);
+            * (0.06 + controls.cirrus * 0.16 + frontal * 0.12 + (1.0 - humidity) * 0.08))
+            .clamp(0.0, 0.75);
 
         WeatherSample {
             primary: [coverage, cloud_type, humidity, convection],
@@ -474,6 +550,7 @@ impl WeatherClipmapLevel {
         }
         Some(WeatherClipmapUploadBatch {
             clipmap_level: self.descriptor.level,
+            invalidate_history: std::mem::take(&mut self.pending_history_reset),
             dirty_rects: std::mem::take(&mut self.pending_gpu_uploads),
         })
     }
@@ -523,6 +600,7 @@ impl WeatherClipmapLevel {
     fn full_refresh(
         &mut self,
         origin_m: Vec2,
+        time_s: f32,
         controls: CloudControls,
         weather_seed: u32,
     ) {
@@ -532,7 +610,7 @@ impl WeatherClipmapLevel {
             for x in 0..resolution {
                 let index = self.texel_index(x, y);
                 let world_xz_m = self.texel_world_position(origin_m, x, y);
-                let sample = self.evaluate_sample(world_xz_m, controls, weather_seed);
+                let sample = self.evaluate_sample(world_xz_m, time_s, controls, weather_seed);
                 self.write_sample(index, sample);
             }
         }
@@ -543,13 +621,14 @@ impl WeatherClipmapLevel {
     fn scroll_to_origin(
         &mut self,
         origin_m: Vec2,
+        time_s: f32,
         texel_offset: IVec2,
         controls: CloudControls,
         weather_seed: u32,
     ) {
         let resolution = self.region.resolution as i32;
         if texel_offset.x.abs() >= resolution || texel_offset.y.abs() >= resolution {
-            self.full_refresh(origin_m, controls, weather_seed);
+            self.full_refresh(origin_m, time_s, controls, weather_seed);
             return;
         }
 
@@ -571,13 +650,13 @@ impl WeatherClipmapLevel {
                     self.shadow_rgba[index] = previous_shadow[source_index];
                 } else {
                     let world_xz_m = self.texel_world_position(origin_m, x as usize, y as usize);
-                    let sample = self.evaluate_sample(world_xz_m, controls, weather_seed);
+                    let sample = self.evaluate_sample(world_xz_m, time_s, controls, weather_seed);
                     self.write_sample(index, sample);
                 }
             }
         }
 
-        self.mark_scroll_dirty_uploads(texel_offset);
+        self.mark_full_level_dirty();
         self.rebuild_summary();
     }
 
@@ -702,6 +781,11 @@ fn ridge(x: f32) -> f32 {
     1.0 - (x * 2.0 - 1.0).abs()
 }
 
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 fn fbm2(p: Vec2, seed: u32, octaves: usize) -> f32 {
     let mut value = 0.0;
     let mut amp = 0.55;
@@ -719,7 +803,9 @@ fn fbm2(p: Vec2, seed: u32, octaves: usize) -> f32 {
 
 fn value_noise2(p: Vec2, seed: u32) -> f32 {
     let cell = p.floor();
-    let frac = p.fract();
+    // Rust/glam fract() subtracts trunc(), so it is negative below zero.
+    // Lattice interpolation requires a [0, 1) fraction on both sides of origin.
+    let frac = p - cell;
     let u = frac * frac * (Vec2::splat(3.0) - 2.0 * frac);
 
     let c00 = hash2(cell.x as i32, cell.y as i32, seed);

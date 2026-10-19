@@ -1,43 +1,51 @@
-//! Rendering, chunk streaming, terrain generation, and atmospheric shading.
-//! This file is still large, but the shader sources have been externalized and the
-//! authoritative target architecture is documented in docs/ENGINE_REFACTOR_PLAN.md.
+//! Rendering and atmospheric shading.
+//! Chunk residency and terrain work are owned by render/streaming.rs.
+
+mod capture;
+mod horizon;
+pub use horizon::FAR_PLANE as HORIZON_FAR_PLANE;
+mod streaming;
+pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, build_draw_list};
+pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
+pub use streaming::{
+    mesh_budget_mib, set_mesh_budget_mib, set_world_residency_budgets_mib,
+    world_residency_budgets_mib,
+    gpu_residency_limit_mib, gpu_residency_status, MAX_GPU_MIB,
+};
 
 mod atmosphere;
+pub mod atmosphere_params;
 pub mod clouds;
 mod debug;
+mod postprocess;
+mod indirect;
+pub use indirect::{enabled as indirect_lighting_enabled, set_enabled as set_indirect_lighting_enabled};
 pub mod shadow;
 
 use anyhow::{Context, Result};
-use glam::{IVec3, Mat4, Vec3, Vec4};
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use glam::{Mat4, Vec3, Vec4};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
 use winit::{dpi::PhysicalSize, window::Window};
 
-use crate::material::terrain_generation_ids;
-use crate::mesh::{
-    ChunkMesh, GeneratedChunk, LOD_SEAM_EAST, LOD_SEAM_NORTH, LOD_SEAM_SOUTH, LOD_SEAM_WEST,
-    LineVertex, PADDED_CHUNK_SIZE, UiVertex, Vertex3, build_chunk_mesh_lod_with_seams,
-};
+use crate::mesh::{LineVertex, UiVertex, Vertex3};
 use crate::world::{
-    BlockId, CHUNK_SIZE, CloudControls, CloudWeatherField, CloudWeatherUploadManifest,
-    LightingState, WEATHER_CLIPMAP_LEVEL_COUNT, WEATHER_TEXTURE_RESOLUTION, WorldSampleConfig,
-    WorldSnapshot, terrain_height,
+    CHUNK_SIZE, CloudControls, CloudWeatherField, CloudWeatherUploadManifest, LightingState,
+    WEATHER_CLIPMAP_LEVEL_COUNT, WEATHER_TEXTURE_RESOLUTION,
 };
 
-pub use atmosphere::AtmosphereMode;
 use atmosphere::{
-    AtmosphereRuntime, AtmosphereRuntimeState, cloud_composite_shader_source, cloud_shader_source,
+    AtmosphereRuntime, AtmosphereRuntimeState, cloud_composite_shader_source, cloud_shader_source_for_filtering,
     cloud_temporal_shader_source, sky_shader_source, world_shader_source,
 };
+pub use atmosphere_params::AtmosphereMode;
 pub use debug::RenderDebugView;
 
-const DEFAULT_VIEW_DISTANCE_CHUNKS: i32 = 12;
-const DEFAULT_LOD_START_CHUNKS: i32 = 4;
+const DEFAULT_VIEW_DISTANCE_CHUNKS: i32 = 16;
+const DEFAULT_LOD_START_CHUNKS: i32 = 3;
 const DEFAULT_LOD_LEVELS: u32 = 3;
 
 static VIEW_DISTANCE_CHUNKS_ATOMIC: AtomicI32 = AtomicI32::new(DEFAULT_VIEW_DISTANCE_CHUNKS);
@@ -51,13 +59,24 @@ pub struct RenderDistanceSettings {
     pub lod_levels: u8,
 }
 
+impl RenderDistanceSettings {
+    pub fn rescale_blocks(self, old_meters: f32, new_meters: f32) -> Self {
+        let ratio = old_meters / new_meters.max(0.01);
+        sanitize_render_distance_settings(Self {
+            view_distance_chunks: (self.view_distance_chunks as f32 * ratio).round() as i32,
+            lod_start_chunks: (self.lod_start_chunks as f32 * ratio).round() as i32,
+            lod_levels: self.lod_levels,
+        })
+    }
+}
+
 fn sanitize_render_distance_settings(
     mut settings: RenderDistanceSettings,
 ) -> RenderDistanceSettings {
-    settings.view_distance_chunks = settings.view_distance_chunks.clamp(12, 96);
+    settings.view_distance_chunks = settings.view_distance_chunks.clamp(4, 64);
     settings.lod_start_chunks = settings
         .lod_start_chunks
-        .clamp(4, settings.view_distance_chunks.saturating_sub(1).max(4));
+        .clamp(2, settings.view_distance_chunks - 1);
     settings.lod_levels = settings.lod_levels.clamp(1, 4);
     settings
 }
@@ -77,18 +96,21 @@ pub fn set_render_distance_settings(settings: RenderDistanceSettings) {
     LOD_LEVELS_ATOMIC.store(settings.lod_levels as u32, Ordering::Relaxed);
 }
 
-// Budgets for chunk loading pipeline. Higher budgets improve world streaming during fast flight
-// at the cost of slightly more GPU/CPU work per frame. These values are tuned so that
-// fast-flight chunk crosses don't leave visible holes in the terrain.
-const CHUNK_SCHEDULE_BUDGET: usize = 64;
-const CHUNK_MESH_DISPATCH_BUDGET: usize = 32;
-const CHUNK_GENERATION_COLLECT_BUDGET: usize = CHUNK_SCHEDULE_BUDGET;
-const CHUNK_UPLOAD_VERTEX_BUDGET: usize = 350_000;
-const CHUNK_UPLOAD_INDEX_BUDGET: usize = 1_200_000;
-pub const MAX_TORCH_LIGHTS: usize = 16;
+pub const MAX_TORCH_LIGHTS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChunkStreamerStats {
+    pub cpu_budget_bytes: usize,
+    pub gpu_budget_bytes: usize,
+    pub budget_deferred: usize,
+    pub cpu_evictions: usize,
+    pub gpu_evictions: usize,
+    pub lod_cache_hits: usize,
+    pub lod_cache_bytes: usize,
+    pub cpu_resident_bytes: usize,
+    pub gpu_resident_bytes: usize,
+    pub terrain_buffer_bytes: usize,
+    pub queued_mesh_bytes: usize,
     pub terrain_generated: usize,
     pub terrain_scheduled: usize,
     pub mesh_dispatched: usize,
@@ -134,6 +156,7 @@ pub struct RenderFrameStats {
     pub gpu_pass_total_ms: f32,
     pub gpu_shadow_ms: f32,
     pub gpu_terrain_ms: f32,
+    pub gpu_indirect_ms: f32,
     pub gpu_cloud_raymarch_ms: f32,
     pub gpu_cloud_temporal_ms: f32,
     pub gpu_sky_ms: f32,
@@ -153,6 +176,7 @@ struct GpuPassTimings {
     total_ms: f32,
     shadow_ms: f32,
     terrain_ms: f32,
+    indirect_ms: f32,
     cloud_raymarch_ms: f32,
     cloud_temporal_ms: f32,
     sky_ms: f32,
@@ -179,20 +203,21 @@ enum CloudHistoryInvalidationReason {
 }
 
 const GPU_TIMESTAMP_BUFFERED_FRAMES: usize = 8;
-const GPU_TIMESTAMP_PASS_COUNT: u32 = 10;
+const GPU_TIMESTAMP_PASS_COUNT: u32 = 12;
 const GPU_TIMESTAMP_QUERY_COUNT: u32 = GPU_TIMESTAMP_PASS_COUNT * 2;
 const GPU_TIMESTAMP_RESULT_BYTES: u64 = GPU_TIMESTAMP_QUERY_COUNT as u64 * wgpu::QUERY_SIZE as u64;
 const GPU_TIMESTAMP_RESOLVE_BYTES: u64 = GPU_TIMESTAMP_RESULT_BYTES
     .div_ceil(wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT)
     * wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
-const GPU_TIMESTAMP_SHADOW_PASS_COUNT: u32 = 3;
-const GPU_TIMESTAMP_PASS_TERRAIN: u32 = 3;
-const GPU_TIMESTAMP_PASS_CLOUD_RAYMARCH: u32 = 4;
-const GPU_TIMESTAMP_PASS_CLOUD_TEMPORAL: u32 = 5;
-const GPU_TIMESTAMP_PASS_SKY: u32 = 6;
-const GPU_TIMESTAMP_PASS_CLOUD_COMPOSITE: u32 = 7;
-const GPU_TIMESTAMP_PASS_OUTLINE: u32 = 8;
-const GPU_TIMESTAMP_PASS_UI: u32 = 9;
+const GPU_TIMESTAMP_SHADOW_PASS_COUNT: u32 = shadow::CASCADE_COUNT as u32;
+const GPU_TIMESTAMP_PASS_TERRAIN: u32 = 4;
+const GPU_TIMESTAMP_PASS_CLOUD_RAYMARCH: u32 = 5;
+const GPU_TIMESTAMP_PASS_CLOUD_TEMPORAL: u32 = 6;
+const GPU_TIMESTAMP_PASS_SKY: u32 = 7;
+const GPU_TIMESTAMP_PASS_CLOUD_COMPOSITE: u32 = 8;
+const GPU_TIMESTAMP_PASS_OUTLINE: u32 = 9;
+const GPU_TIMESTAMP_PASS_UI: u32 = 10;
+const GPU_TIMESTAMP_PASS_INDIRECT: u32 = 11;
 
 fn allocate_pass_timestamp_writes<'a>(
     query_set: Option<&'a wgpu::QuerySet>,
@@ -237,6 +262,8 @@ struct GpuProfiler {
     done_tx: mpsc::Sender<GpuTimestampReadback>,
     done_rx: mpsc::Receiver<GpuTimestampReadback>,
     last_timings: GpuPassTimings,
+    device_lost: Arc<AtomicBool>,
+    failed: bool,
 }
 
 impl GpuProfiler {
@@ -245,6 +272,16 @@ impl GpuProfiler {
             return None;
         }
 
+        let device_lost = Arc::new(AtomicBool::new(false));
+        let lost_signal = device_lost.clone();
+        device.set_device_lost_callback(move |_, _| {
+            lost_signal.store(true, Ordering::Release);
+        });
+        // Optional diagnostic allocations must not become invalid resources
+        // silently published into the next render encoder.
+        device.push_error_scope(wgpu::ErrorFilter::Internal);
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let (done_tx, done_rx) = mpsc::channel();
         let slots = (0..GPU_TIMESTAMP_BUFFERED_FRAMES)
             .map(|slot_index| {
@@ -278,6 +315,16 @@ impl GpuProfiler {
             })
             .collect();
 
+        // These scopes cover resource creation only. Resolve them at startup,
+        // never by waiting on a submitted frame in the rendering loop.
+        let memory = device.pop_error_scope();
+        let validation = device.pop_error_scope();
+        let internal = device.pop_error_scope();
+        let errors = pollster::block_on(async { [memory.await, validation.await, internal.await] });
+        if device_lost.load(Ordering::Acquire) || errors.iter().any(Option::is_some) {
+            eprintln!("GPU profiling unavailable: diagnostic resource allocation failed");
+            return None;
+        }
         Some(Self {
             slots,
             next_slot: 0,
@@ -286,10 +333,23 @@ impl GpuProfiler {
             done_tx,
             done_rx,
             last_timings: GpuPassTimings::default(),
+            device_lost,
+            failed: false,
         })
     }
 
+    fn healthy(&self) -> bool {
+        !self.failed && !self.device_lost.load(Ordering::Acquire)
+    }
+
+    fn disable(&mut self, reason: &str) {
+        if !self.failed { eprintln!("GPU profiling disabled: {reason}"); }
+        self.failed = true;
+        self.last_timings = GpuPassTimings::default();
+    }
+
     fn acquire_slot(&mut self) -> Option<usize> {
+        if !self.healthy() { return None; }
         for _ in 0..self.slots.len() {
             let slot_index = self.next_slot;
             self.next_slot = (self.next_slot + 1) % self.slots.len();
@@ -312,7 +372,7 @@ impl GpuProfiler {
         slot_index: usize,
         query_count: u32,
     ) {
-        if query_count == 0 {
+        if query_count == 0 || !self.healthy() {
             return;
         }
         let slot = &self.slots[slot_index];
@@ -332,7 +392,7 @@ impl GpuProfiler {
         query_count: u32,
         pass_queries: [Option<(u32, u32)>; GPU_TIMESTAMP_PASS_COUNT as usize],
     ) {
-        if query_count == 0 {
+        if query_count == 0 || !self.healthy() {
             return;
         }
 
@@ -344,46 +404,60 @@ impl GpuProfiler {
         slot.submission_id = submission_id;
         slot.query_count = query_count;
         slot.pass_queries = pass_queries;
-        slot.readback_buffer
-            .slice(..GPU_TIMESTAMP_RESULT_BYTES)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(GpuTimestampReadback {
-                    slot_index,
-                    submission_id,
-                    ok: result.is_ok(),
+        let requested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            slot.readback_buffer.slice(..GPU_TIMESTAMP_RESULT_BYTES)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = tx.send(GpuTimestampReadback {
+                        slot_index, submission_id, ok: result.is_ok(),
+                    });
                 });
-            });
+        }));
+        if requested.is_err() { self.disable("timing map request became invalid"); }
     }
-
-    fn collect_finished(&mut self, device: &wgpu::Device) {
-        let _ = device.poll(wgpu::PollType::Poll);
-
-        while let Ok(done) = self.done_rx.try_recv() {
-            let Some(slot) = self.slots.get_mut(done.slot_index) else {
-                continue;
-            };
-            if !slot.pending || slot.submission_id != done.submission_id {
-                continue;
-            }
-
-            slot.pending = false;
-            if !done.ok {
-                slot.readback_buffer.unmap();
-                continue;
-            }
-
-            let mapped = slot
-                .readback_buffer
-                .slice(..GPU_TIMESTAMP_RESULT_BYTES)
-                .get_mapped_range();
-            let raw: &[u64] = bytemuck::cast_slice(&mapped);
-            self.last_timings =
-                Self::decode_timings(raw, &slot.pass_queries, self.timestamp_period_ns);
-            drop(mapped);
-            slot.readback_buffer.unmap();
+    fn collect_finished(&mut self, device: &wgpu::Device) -> bool {
+        if !self.healthy() {
+            self.disable("device lost or profiling unavailable");
+            return false;
         }
+        if device.poll(wgpu::PollType::Poll).is_err() || !self.healthy() {
+            self.disable("device polling failed or device lost");
+            return false;
+        }
+        while let Ok(done) = self.done_rx.try_recv() {
+            let Some(slot) = self.slots.get_mut(done.slot_index) else { continue; };
+            if !slot.pending || slot.submission_id != done.submission_id { continue; }
+            slot.pending = false;
+            if !done.ok || self.device_lost.load(Ordering::Acquire) {
+                // A failed/destroyed mapping is not safe to unmap or recycle.
+                self.disable("timing map failed or device lost");
+                return false;
+            }
+            let period = self.timestamp_period_ns;
+            // wgpu 27's getter is infallible at the API boundary: the backend
+            // panics if loss destroys a buffer AFTER a successful map callback.
+            // Contain that race here and retire the entire optional profiler.
+            // Never retry/unmap a buffer whose mapping state is now uncertain.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mapped = slot.readback_buffer.slice(..GPU_TIMESTAMP_RESULT_BYTES).get_mapped_range();
+                let mut raw = [0u64; GPU_TIMESTAMP_QUERY_COUNT as usize];
+                if mapped.len() != GPU_TIMESTAMP_RESULT_BYTES as usize { return None; }
+                for (value, bytes) in raw.iter_mut().zip(mapped.chunks_exact(8)) {
+                    *value = u64::from_le_bytes(bytes.try_into().unwrap());
+                }
+                drop(mapped);
+                slot.readback_buffer.unmap();
+                Some(Self::decode_timings(&raw, &slot.pass_queries, period))
+            }));
+            match result {
+                Ok(Some(timings)) if self.healthy() => self.last_timings = timings,
+                _ => {
+                    self.disable("timing readback invalidated; timing resources retired");
+                    return false;
+                }
+            }
+        }
+        true
     }
-
     fn last_timings(&self) -> GpuPassTimings {
         self.last_timings
     }
@@ -404,6 +478,7 @@ impl GpuProfiler {
             GPU_TIMESTAMP_PASS_TERRAIN,
             timestamp_period_ns,
         );
+        let indirect_ms = Self::pass_duration_ms(raw, pass_queries, GPU_TIMESTAMP_PASS_INDIRECT, timestamp_period_ns);
         let cloud_raymarch_ms = Self::pass_duration_ms(
             raw,
             pass_queries,
@@ -443,7 +518,7 @@ impl GpuProfiler {
 
         GpuPassTimings {
             total_ms: shadow_ms
-                + terrain_ms
+                + terrain_ms + indirect_ms
                 + cloud_raymarch_ms
                 + cloud_temporal_ms
                 + sky_ms
@@ -452,6 +527,7 @@ impl GpuProfiler {
                 + ui_ms,
             shadow_ms,
             terrain_ms,
+            indirect_ms,
             cloud_raymarch_ms,
             cloud_temporal_ms,
             sky_ms,
@@ -480,58 +556,16 @@ impl GpuProfiler {
     }
 }
 
-// CLOUD_RENDER_SCALE = 2: renders clouds at half resolution (1/4 pixel count).
-// Combined with per-frame blue-noise golden-ratio rotation and the temporal
-// accumulation pass, effective quality exceeds full-res single-frame rendering
-// while cutting the cloud pass GPU cost by ~4× AND enabling temporal anti-flicker.
-// Set to 1 to disable temporal and render full-resolution (no temporal smoothing).
-//
-// IMPORTANT: With recent architecture fixes (per-cell AABB interpolation),
-// full-resolution rendering without temporal causes severe performance issues
-// and flickering. Always use CLOUD_RENDER_SCALE = 2 for stable performance.
-const CLOUD_RENDER_SCALE: u32 = 2;
-const CLOUD_TEMPORAL_ENABLED: bool = CLOUD_RENDER_SCALE > 1;
+// Deterministic spatial integration. Temporal reprojection remains
+// available for diagnostics, but an estimated volume depth can drag unrelated
+// cloud samples together during translation. The default uses the current frame.
+static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(3);
+/// Requested divisor: 2 = High, 3 = Balanced, 4 = Fast.
+pub fn cloud_render_scale() -> u32 { CLOUD_RENDER_SCALE.load(Ordering::Relaxed) }
+pub fn set_cloud_render_scale(scale: u32) { CLOUD_RENDER_SCALE.store(scale.clamp(2,4),Ordering::Relaxed); }
+const CLOUD_TEMPORAL_ENABLED: bool = false;
 
-const LINE_SHADER: &str = r#"
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    world_params: vec4<f32>,
-    prev_view_proj: mat4x4<f32>,
-    camera_forward: vec4<f32>,
-}
-@group(0) @binding(0) var<uniform> camera: CameraUniform;
-
-struct VertexInput {
-    @location(0) pos: vec3<f32>,
-    @location(1) color: vec4<f32>,
-}
-
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) color: vec4<f32>,
-}
-
-@vertex
-fn vs_main(model: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    out.clip_pos = camera.view_proj * vec4<f32>(model.pos, 1.0);
-    out.color = model.color;
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
-}
-"#;
-
-const SHADOW_SHADER: &str = include_str!("shaders/shadow_shader.wgsl");
-
-const UI_SHADER: &str = include_str!("shaders/ui_shader.wgsl");
-
-const TERRAIN_COMPUTE_SHADER: &str = include_str!("terrain_compute.wgsl");
+use crate::shader_sources::{LINE_SHADER, SHADOW_SHADER, UI_SHADER};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -542,6 +576,10 @@ struct CameraUniform {
     world_params: [f32; 4],
     prev_view_proj: [[f32; 4]; 4],
     camera_forward: [f32; 4],
+    ray_right: [f32; 4],
+    ray_up: [f32; 4],
+    previous_camera_pos: [f32; 4],
+    scene_seed: [u32; 4],
 }
 
 #[repr(C)]
@@ -565,6 +603,9 @@ struct LightingUniform {
     torch_meta: [f32; 4],
     torch_positions: [[f32; 4]; MAX_TORCH_LIGHTS],
     torch_colors: [[f32; 4]; MAX_TORCH_LIGHTS],
+    material_tints: [[f32;4];256],
+    material_properties: [[f32;4];256],
+    surface_weather: [f32;4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -658,8 +699,6 @@ fn lighting_uniform_from_state(
     let visible_world = render_settings.view_distance_chunks as f32 * CHUNK_SIZE as f32;
     let distance_scale = (visible_world / 576.0).clamp(0.45, 3.0);
 
-    // Start fog earlier and force it to saturate almost at the terrain cutoff.
-    // This avoids the visible “flat wall” following the camera.
     let fog_start = (state.fog_start * distance_scale).min(visible_world * 0.36);
     let fog_end_target = (state.fog_end * distance_scale).max(visible_world * 0.82);
     let fog_end = fog_end_target
@@ -713,12 +752,12 @@ fn lighting_uniform_from_state(
             state.fog_color[0],
             state.fog_color[1],
             state.fog_color[2],
-            0.65, // Base falloff density
+            0.65,
         ],
         fog_params: [fog_start, fog_end, state.fog_height, state.fog_falloff],
         weather_globals: [
             [
-                sky_time,
+                sky_time * cloud_controls.advection,
                 cloud_controls.wind_speed,
                 cloud_controls.wind_dir_angle.to_radians().cos(),
                 cloud_controls.wind_dir_angle.to_radians().sin(),
@@ -749,7 +788,12 @@ fn lighting_uniform_from_state(
                 cloud_controls.altostratus,
                 cloud_controls.storm_thickness,
             ],
-            [cloud_controls.anvil_spread, 0.0, 0.0, 0.0],
+            [
+                cloud_controls.anvil_spread,
+                cloud_controls.coverage,
+                cloud_controls.cumulonimbus,
+                cloud_controls.advection,
+            ],
         ],
         weather_clip_regions: weather_state.regions,
         weather_clip_summaries: weather_state.summaries,
@@ -763,27 +807,10 @@ fn lighting_uniform_from_state(
         ],
         torch_positions,
         torch_colors,
+        material_tints: crate::material_studio::snapshot().tints,
+        material_properties: crate::material_studio::snapshot().properties,
+        surface_weather: crate::material_studio::weather_surface(cloud_controls.cumulonimbus),
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GenerationUniform {
-    chunk_coord: [i32; 4], // x, y, z, pad
-    seed: u32,
-    world_type: u32,
-    _padding: [u32; 2],
-    generation_params: [f32; 4],
-    block_ids0: [u32; 4],
-    block_ids1: [u32; 4],
-    block_ids2: [u32; 4],
-}
-
-pub struct ChunkGpuMesh {
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
-    pub index_count: u32,
-    pub lod: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -794,1670 +821,6 @@ pub struct TorchLight {
     pub strength: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ChunkKey {
-    pub coord: IVec3,
-    pub lod: u8,
-}
-
-pub struct ChunkCache {
-    pub visible: Vec<ChunkKey>,
-    pub visible_keys: HashSet<ChunkKey>,
-    pub visible_coords: HashSet<IVec3>,
-    pub gpu_meshes: HashMap<IVec3, ChunkGpuMesh>,
-    /// Increments whenever the GPU mesh set changes so render passes can cache
-    /// derived work, such as shadow maps, without guessing.
-    pub gpu_mesh_revision: u64,
-    pub cpu_chunks: HashMap<IVec3, Arc<GeneratedChunk>>,
-    pub center_chunk: IVec3,
-    /// Cached column Y-ranges to avoid repeated terrain sampling.
-    /// Keyed by (cx, cz). Invalidated when world config changes.
-    column_y_cache: HashMap<(i32, i32), (i32, i32)>,
-    /// How far we've expanded the visible set from center (in chunks).
-    /// Starts at 0 on reset, grows each frame until it reaches view distance.
-    expansion_radius: i32,
-    /// Whether expansion is complete (reached view distance).
-    pub fully_expanded: bool,
-}
-
-impl ChunkCache {
-    pub fn new(center_chunk: IVec3) -> Self {
-        let visible = desired_chunk_keys(center_chunk);
-        let visible_keys = visible.iter().copied().collect();
-        let visible_coords = visible.iter().map(|key| key.coord).collect();
-
-        Self {
-            visible,
-            visible_keys,
-            visible_coords,
-            gpu_meshes: HashMap::new(),
-            gpu_mesh_revision: 0,
-            cpu_chunks: HashMap::new(),
-            center_chunk,
-            column_y_cache: HashMap::new(),
-            expansion_radius: 0,
-            fully_expanded: false,
-        }
-    }
-
-    pub fn new_with_snapshot(center_chunk: IVec3, snapshot: &WorldSnapshot) -> Self {
-        // Start with small local set — expand incrementally each frame.
-        let mut cache = Self {
-            visible: Vec::new(),
-            visible_keys: HashSet::new(),
-            visible_coords: HashSet::new(),
-            gpu_meshes: HashMap::new(),
-            gpu_mesh_revision: 0,
-            cpu_chunks: HashMap::new(),
-            center_chunk,
-            column_y_cache: HashMap::new(),
-            expansion_radius: 2,
-            fully_expanded: false,
-        };
-        cache.visible = desired_chunk_keys_with_snapshot_cached(
-            center_chunk,
-            snapshot,
-            &mut cache.column_y_cache,
-            cache.expansion_radius,
-        );
-        cache.rebuild_visible_sets();
-        cache
-    }
-
-    fn rebuild_visible_sets(&mut self) {
-        self.visible_keys = self.visible.iter().copied().collect();
-        self.visible_coords = self.visible.iter().map(|key| key.coord).collect();
-    }
-
-    pub fn rebuild_visible(&mut self) {
-        self.visible = desired_chunk_keys(self.center_chunk);
-        self.rebuild_visible_sets();
-    }
-
-    pub fn rebuild_visible_with_snapshot(&mut self, snapshot: &WorldSnapshot) {
-        let target = render_distance_settings().view_distance_chunks;
-        self.expansion_radius = self.expansion_radius.clamp(0, target);
-        self.fully_expanded = self.expansion_radius >= target;
-        self.visible = desired_chunk_keys_with_snapshot_cached(
-            self.center_chunk,
-            snapshot,
-            &mut self.column_y_cache,
-            self.expansion_radius,
-        );
-        self.rebuild_visible_sets();
-    }
-
-    pub fn sync_visible_to_render_settings(&mut self) {
-        self.expansion_radius = render_distance_settings().view_distance_chunks;
-        self.fully_expanded = true;
-        self.rebuild_visible();
-    }
-
-    pub fn sync_visible_to_render_settings_with_snapshot(&mut self, snapshot: &WorldSnapshot) {
-        self.expansion_radius = render_distance_settings().view_distance_chunks;
-        self.fully_expanded = true;
-        self.visible = desired_chunk_keys_with_snapshot_cached(
-            self.center_chunk,
-            snapshot,
-            &mut self.column_y_cache,
-            self.expansion_radius,
-        );
-        self.rebuild_visible_sets();
-    }
-
-    pub fn reset(&mut self, center_chunk: IVec3) {
-        self.center_chunk = center_chunk;
-        self.visible = desired_chunk_keys(center_chunk);
-        self.rebuild_visible_sets();
-        if !self.gpu_meshes.is_empty() {
-            self.gpu_meshes.clear();
-            self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
-        }
-        self.cpu_chunks.clear();
-        self.column_y_cache.clear();
-        self.expansion_radius = 0;
-        self.fully_expanded = false;
-    }
-
-    pub fn reset_with_snapshot(&mut self, center_chunk: IVec3, snapshot: &WorldSnapshot) {
-        self.center_chunk = center_chunk;
-        self.column_y_cache.clear();
-        self.expansion_radius = 2;
-        self.fully_expanded = false;
-        self.visible = desired_chunk_keys_with_snapshot_cached(
-            center_chunk,
-            snapshot,
-            &mut self.column_y_cache,
-            self.expansion_radius,
-        );
-        self.rebuild_visible_sets();
-        if !self.gpu_meshes.is_empty() {
-            self.gpu_meshes.clear();
-            self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
-        }
-        self.cpu_chunks.clear();
-    }
-
-    pub fn update_center_chunk(&mut self, center_chunk: IVec3) -> bool {
-        if self.center_chunk == center_chunk {
-            return false;
-        }
-
-        let old_center = self.center_chunk;
-        self.center_chunk = center_chunk;
-        self.visible = desired_chunk_keys(center_chunk);
-        self.rebuild_visible_sets();
-        // Shrink expansion radius by movement distance, keep at least 4 rings.
-        let move_dist = (center_chunk.x - old_center.x)
-            .abs()
-            .max((center_chunk.y - old_center.y).abs())
-            .max((center_chunk.z - old_center.z).abs());
-        self.expansion_radius = (self.expansion_radius - move_dist).max(4);
-        self.fully_expanded = false;
-        true
-    }
-
-    pub fn update_center_chunk_with_snapshot(
-        &mut self,
-        center_chunk: IVec3,
-        snapshot: &WorldSnapshot,
-    ) -> bool {
-        if self.center_chunk == center_chunk {
-            return false;
-        }
-
-        let old_center = self.center_chunk;
-        self.center_chunk = center_chunk;
-
-        // When the player moves, shrink the expansion radius by the movement distance
-        // rather than resetting to 2. This preserves most of the loaded world and only
-        // needs to fill in the new direction-of-travel edge, dramatically reducing
-        // chunk loading pressure during fast flight.
-        let move_dist = (center_chunk.x - old_center.x)
-            .abs()
-            .max((center_chunk.y - old_center.y).abs())
-            .max((center_chunk.z - old_center.z).abs());
-
-        let settings = render_distance_settings();
-        let target = settings.view_distance_chunks;
-        // Subtract movement from expansion radius but keep at least 4 rings loaded.
-        // For single-chunk moves (walking), this barely shrinks the radius.
-        // For multi-chunk jumps (fast flight), it contracts proportionally.
-        let rebuild_radius = (self.expansion_radius - move_dist).max(4).min(target);
-
-        self.visible = desired_chunk_keys_with_snapshot_cached(
-            center_chunk,
-            snapshot,
-            &mut self.column_y_cache,
-            rebuild_radius,
-        );
-        self.rebuild_visible_sets();
-        self.expansion_radius = rebuild_radius;
-        self.fully_expanded = rebuild_radius >= target;
-        true
-    }
-
-    /// Incrementally expand the visible set by a few chunk-rings per frame.
-    /// Returns newly added keys so the caller can enqueue them for scheduling
-    /// (avoids a full O(visible) scan in enqueue_missing each frame).
-    pub fn expand_visible(
-        &mut self,
-        snapshot: &WorldSnapshot,
-        queue_pressure: usize,
-    ) -> Vec<ChunkKey> {
-        if self.fully_expanded {
-            return Vec::new();
-        }
-        let settings = render_distance_settings();
-        let target = settings.view_distance_chunks;
-        if self.expansion_radius >= target {
-            self.fully_expanded = true;
-            return Vec::new();
-        }
-
-        let old_radius = self.expansion_radius;
-        // Aggressive expansion: 3-5 rings per frame when far from target.
-        // Ring d contains ~8d chunks, so 4 rings at radius 20 = ~640 chunks.
-        // With CHUNK_SCHEDULE_BUDGET=96, many will queue for later frames,
-        // but the visible set is populated immediately so chunks that already
-        // have CPU data can be meshed and uploaded without waiting for expansion.
-        // This dramatically improves fast-flight world loading.
-        let remaining = target - old_radius;
-        let base_expansion = if remaining >= 20 {
-            5 // Very far: aggressive expansion to populate visible set fast
-        } else if remaining >= 10 {
-            4 // Far out: expand 4 rings per frame
-        } else if remaining >= 5 {
-            3 // Mid distance: 3 rings
-        } else {
-            2 // Close to target: 2 rings minimum
-        };
-        let pressure_limited_expansion = if queue_pressure >= 384 {
-            1
-        } else if queue_pressure >= 256 {
-            2
-        } else if queue_pressure >= 128 {
-            3
-        } else {
-            base_expansion
-        };
-        let expansion_per_frame = base_expansion.min(pressure_limited_expansion).max(1);
-        let new_radius = (old_radius + expansion_per_frame).min(target);
-        self.expansion_radius = new_radius;
-
-        // Only generate keys for the NEW ring (old_radius..new_radius) and append
-        // them to the existing visible list.  This avoids rebuilding the entire
-        // O(radius²) set every frame during expansion.
-        let new_keys = desired_chunk_keys_ring(
-            self.center_chunk,
-            snapshot,
-            &mut self.column_y_cache,
-            old_radius,
-            new_radius,
-        );
-        let mut added = Vec::with_capacity(new_keys.len());
-        for key in new_keys {
-            if self.visible_keys.insert(key) {
-                self.visible_coords.insert(key.coord);
-                self.visible.push(key);
-                added.push(key);
-            }
-        }
-
-        if new_radius >= target {
-            self.fully_expanded = true;
-        }
-        added
-    }
-
-    pub fn retain_visible(&mut self) {
-        // Evict chunks that are genuinely too far away rather than anything
-        // outside the current (possibly mid-expansion) visible_coords.  Using a
-        // hard distance cap prevents "blank world" flicker when the player crosses
-        // a chunk boundary and visible_coords briefly collapses to the small
-        // 5×5×3 seed set before expand_visible() has had a chance to grow it.
-        let settings = render_distance_settings();
-        let hard_limit = settings.view_distance_chunks + 2; // 2-chunk grace buffer
-        let center = self.center_chunk;
-        let is_in_range = |coord: &IVec3| {
-            let dx = (coord.x - center.x).abs();
-            let dy = (coord.y - center.y).abs();
-            let dz = (coord.z - center.z).abs();
-            dx.max(dy).max(dz) <= hard_limit
-        };
-        let mesh_count_before = self.gpu_meshes.len();
-        self.gpu_meshes.retain(|coord, _| is_in_range(coord));
-        if self.gpu_meshes.len() != mesh_count_before {
-            self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
-        }
-        self.cpu_chunks.retain(|coord, _| is_in_range(coord));
-    }
-}
-pub struct CpuChunkMesh {
-    pub key: ChunkKey,
-    pub revision: u64,
-    pub job_id: u64,
-    pub mesh: ChunkMesh,
-}
-
-struct GpuReadback {
-    job_id: u64,
-    revision: u64,
-    buffer: wgpu::Buffer,
-}
-
-struct GpuCallback {
-    key: ChunkKey,
-    job_id: u64,
-    ok: bool,
-}
-
-struct PendingTerrainReadback {
-    key: ChunkKey,
-    job_id: u64,
-    revision: u64,
-    buffer: wgpu::Buffer,
-}
-
-struct TerrainGenerator {
-    bind_group_layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
-    next_job_id: u64,
-    inflight: HashMap<ChunkKey, GpuReadback>,
-    done_tx: mpsc::Sender<GpuCallback>,
-    done_rx: mpsc::Receiver<GpuCallback>,
-}
-
-impl TerrainGenerator {
-    fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("terrain compute layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("terrain compute shader"),
-            source: wgpu::ShaderSource::Wgsl(TERRAIN_COMPUTE_SHADER.into()),
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("terrain compute pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("terrain compute pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("cs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        let (done_tx, done_rx) = mpsc::channel();
-
-        Self {
-            bind_group_layout,
-            pipeline,
-            next_job_id: 0,
-            inflight: HashMap::new(),
-            done_tx,
-            done_rx,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.inflight.clear();
-        while self.done_rx.try_recv().is_ok() {}
-    }
-
-    fn retain_visible(&mut self, visible: &HashSet<ChunkKey>) {
-        self.inflight.retain(|key, _| visible.contains(key));
-    }
-
-    fn invalidate_coords(&mut self, dirty_coords: &HashSet<IVec3>) {
-        self.inflight
-            .retain(|key, _| !dirty_coords.contains(&key.coord));
-    }
-
-    fn schedule_many<I>(&mut self, gpu: &Gpu, keys: I, cfg: WorldSampleConfig, revision: u64)
-    where
-        I: IntoIterator<Item = ChunkKey>,
-    {
-        let keys: Vec<_> = keys.into_iter().collect();
-        if keys.is_empty() {
-            return;
-        }
-
-        let ids = terrain_generation_ids();
-        let voxel_count = (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as u64;
-        let buffer_size = voxel_count * std::mem::size_of::<u32>() as u64;
-        let workgroup_count = div_ceil_i32(PADDED_CHUNK_SIZE, 4) as u32;
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("terrain generation encoder"),
-            });
-        let mut pending_readbacks = Vec::with_capacity(keys.len());
-
-        for key in keys {
-            let job_id = self.next_job_id;
-            self.next_job_id = self.next_job_id.wrapping_add(1);
-
-            let uniform = GenerationUniform {
-                chunk_coord: [key.coord.x, key.coord.y, key.coord.z, 0],
-                seed: cfg.seed,
-                world_type: cfg.world_type as u32,
-                _padding: [0; 2],
-                generation_params: [cfg.voxel_scale.meters(), 0.0, 0.0, 0.0],
-                block_ids0: ids.block_ids0,
-                block_ids1: ids.block_ids1,
-                block_ids2: ids.block_ids2,
-            };
-            let uniform_buffer = gpu
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("terrain generation uniform"),
-                    contents: bytemuck::bytes_of(&uniform),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-
-            let storage = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("terrain generation storage"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("terrain generation readback"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-
-            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("terrain generation bind group"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: storage.as_entire_binding(),
-                    },
-                ],
-            });
-
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("terrain generation pass"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
-            }
-            encoder.copy_buffer_to_buffer(&storage, 0, &readback, 0, buffer_size);
-            pending_readbacks.push(PendingTerrainReadback {
-                key,
-                job_id,
-                revision,
-                buffer: readback,
-            });
-        }
-
-        gpu.queue.submit(Some(encoder.finish()));
-
-        for pending in pending_readbacks {
-            let tx = self.done_tx.clone();
-            let key = pending.key;
-            let job_id = pending.job_id;
-            pending
-                .buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    let _ = tx.send(GpuCallback {
-                        key,
-                        job_id,
-                        ok: result.is_ok(),
-                    });
-                });
-
-            self.inflight.insert(
-                pending.key,
-                GpuReadback {
-                    job_id: pending.job_id,
-                    revision: pending.revision,
-                    buffer: pending.buffer,
-                },
-            );
-        }
-    }
-
-    fn collect_finished(
-        &mut self,
-        device: &wgpu::Device,
-        snapshot: &WorldSnapshot,
-    ) -> Vec<(ChunkKey, u64, GeneratedChunk)> {
-        let _ = device.poll(wgpu::PollType::Poll);
-        let mut out = Vec::new();
-        // CRITICAL: Must match or exceed CHUNK_SCHEDULE_BUDGET to prevent queue buildup.
-        // If schedule > collect, terrain generation queue grows unbounded → stalls and FPS drops.
-        // With CHUNK_SCHEDULE_BUDGET=32, we must collect at least 32 to maintain balance.
-        // This is the PRIMARY BOTTLENECK - was capped at 8, causing 24/frame backlog.
-        let max_collect = CHUNK_GENERATION_COLLECT_BUDGET;
-        let mut collected = 0usize;
-
-        while collected < max_collect {
-            let Ok(done) = self.done_rx.try_recv() else {
-                break;
-            };
-            let Some(readback) = self.inflight.get(&done.key) else {
-                continue;
-            };
-            if readback.job_id != done.job_id {
-                continue;
-            }
-            let Some(readback) = self.inflight.remove(&done.key) else {
-                continue;
-            };
-
-            if !done.ok {
-                readback.buffer.unmap();
-                continue;
-            }
-
-            let data = readback.buffer.slice(..).get_mapped_range();
-            let blocks = data
-                .chunks_exact(4)
-                .map(|chunk| {
-                    BlockId::from_u32(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                })
-                .collect::<Vec<_>>();
-            drop(data);
-            readback.buffer.unmap();
-
-            let mut chunk_data =
-                GeneratedChunk::new(done.key.coord, snapshot.cfg.water_level(), blocks);
-            apply_snapshot_edits_cubic(&mut chunk_data, snapshot);
-            out.push((done.key, readback.revision, chunk_data));
-            collected += 1;
-        }
-
-        out
-    }
-}
-
-fn div_ceil_i32(value: i32, divisor: i32) -> i32 {
-    (value + divisor - 1) / divisor
-}
-
-#[derive(Clone, Copy)]
-struct ChunkJob {
-    key: ChunkKey,
-    revision: u64,
-}
-
-struct MeshJob {
-    key: ChunkKey,
-    revision: u64,
-    job_id: u64,
-    chunk: Arc<GeneratedChunk>,
-    lod_seams: u8,
-}
-
-fn lod_seams_for_chunk(cache: &ChunkCache, key: ChunkKey) -> u8 {
-    if key.lod == 0 {
-        return 0;
-    }
-
-    let mut seams = 0u8;
-    let neighbors = [
-        (IVec3::new(-1, 0, 0), LOD_SEAM_WEST),
-        (IVec3::new(1, 0, 0), LOD_SEAM_EAST),
-        (IVec3::new(0, 0, -1), LOD_SEAM_NORTH),
-        (IVec3::new(0, 0, 1), LOD_SEAM_SOUTH),
-    ];
-
-    for (offset, flag) in neighbors {
-        let coord = key.coord + offset;
-        if !cache.visible_coords.contains(&coord) {
-            seams |= flag;
-            continue;
-        }
-
-        let neighbor_lod = lod_for_chunk(cache.center_chunk, coord);
-        if neighbor_lod < key.lod {
-            seams |= flag;
-        }
-    }
-
-    seams
-}
-
-fn spawn_mesh_workers(
-    worker_count: usize,
-) -> (mpsc::Sender<MeshJob>, mpsc::Receiver<CpuChunkMesh>) {
-    let (job_tx, job_rx) = mpsc::channel::<MeshJob>();
-    let (result_tx, result_rx) = mpsc::channel::<CpuChunkMesh>();
-    let shared_rx = Arc::new(Mutex::new(job_rx));
-
-    for worker_index in 0..worker_count.max(1) {
-        let shared_rx = Arc::clone(&shared_rx);
-        let result_tx = result_tx.clone();
-        thread::Builder::new()
-            .name(format!("chunk-mesh-{worker_index}"))
-            .spawn(move || {
-                loop {
-                    let job = match shared_rx.lock().expect("mesh worker queue poisoned").recv() {
-                        Ok(job) => job,
-                        Err(_) => break,
-                    };
-
-                    let mesh = build_chunk_mesh_lod_with_seams(
-                        job.chunk.as_ref(),
-                        job.key.lod,
-                        job.lod_seams,
-                    );
-                    if result_tx
-                        .send(CpuChunkMesh {
-                            key: job.key,
-                            revision: job.revision,
-                            job_id: job.job_id,
-                            mesh,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-            .expect("failed to spawn mesh worker");
-    }
-
-    drop(result_tx);
-    (job_tx, result_rx)
-}
-
-pub struct ChunkStreamer {
-    requested: HashSet<ChunkKey>,
-    /// Coord-only set for O(1) "is any job in-flight for this coord?" checks.
-    /// Kept in sync with `requested` and `meshing`.
-    requested_coords: HashSet<IVec3>,
-    generating: HashSet<ChunkKey>,
-    meshing: HashMap<ChunkKey, u64>,
-    ready_chunks: VecDeque<ChunkJob>,
-    ready_meshes: VecDeque<CpuChunkMesh>,
-    mesh_job_tx: mpsc::Sender<MeshJob>,
-    mesh_result_rx: mpsc::Receiver<CpuChunkMesh>,
-    next_mesh_job_id: u64,
-    terrain_generator: TerrainGenerator,
-    /// Chunks that need to be scheduled but haven't been yet.
-    /// Populated when new keys are added to the visible set, avoiding an
-    /// O(visible) scan inside enqueue_missing every frame.
-    /// Stored as a min-heap keyed by radial XZ distance so near chunks are
-    /// scheduled before distant ones.
-    pending_schedule: BinaryHeap<Reverse<(i32, i32, i32, i32, i32, i32, i32, u8)>>,
-    pending_keys: HashSet<ChunkKey>,
-    pending_schedule_center: IVec3,
-    last_stats: ChunkStreamerStats,
-}
-
-impl ChunkStreamer {
-    pub fn new(device: &wgpu::Device, worker_count: usize) -> Self {
-        let (mesh_job_tx, mesh_result_rx) = spawn_mesh_workers(worker_count);
-
-        Self {
-            requested: HashSet::new(),
-            requested_coords: HashSet::new(),
-            generating: HashSet::new(),
-            meshing: HashMap::new(),
-            ready_chunks: VecDeque::new(),
-            ready_meshes: VecDeque::new(),
-            mesh_job_tx,
-            mesh_result_rx,
-            next_mesh_job_id: 0,
-            terrain_generator: TerrainGenerator::new(device),
-            pending_schedule: BinaryHeap::new(),
-            pending_keys: HashSet::new(),
-            pending_schedule_center: IVec3::ZERO,
-            last_stats: ChunkStreamerStats::default(),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.requested.clear();
-        self.requested_coords.clear();
-        self.generating.clear();
-        self.meshing.clear();
-        self.ready_chunks.clear();
-        self.ready_meshes.clear();
-        self.pending_schedule.clear();
-        self.pending_keys.clear();
-        while self.mesh_result_rx.try_recv().is_ok() {}
-        self.terrain_generator.reset();
-        self.last_stats = ChunkStreamerStats::default();
-    }
-
-    pub fn begin_frame_stats(&mut self) {
-        self.last_stats = ChunkStreamerStats::default();
-    }
-
-    pub fn last_stats(&self) -> ChunkStreamerStats {
-        self.last_stats
-    }
-
-    fn rebuild_pending_schedule(&mut self, center: IVec3) {
-        self.pending_schedule_center = center;
-        let pending_keys: Vec<_> = self.pending_keys.iter().copied().collect();
-        self.pending_schedule.clear();
-        for key in pending_keys {
-            self.pending_schedule.push(pending_priority(center, key));
-        }
-    }
-
-    fn push_pending_key(&mut self, key: ChunkKey) {
-        if self.pending_keys.insert(key) {
-            self.pending_schedule
-                .push(pending_priority(self.pending_schedule_center, key));
-        }
-    }
-
-    fn dynamic_schedule_budget(&self) -> usize {
-        let queue_pressure = self.generating.len()
-            + self.meshing.len()
-            + self.ready_chunks.len()
-            + self.ready_meshes.len();
-        if queue_pressure >= 384 {
-            16
-        } else if queue_pressure >= 224 {
-            32
-        } else {
-            CHUNK_SCHEDULE_BUDGET
-        }
-    }
-
-    fn ready_chunk_priority(cache: &ChunkCache, key: ChunkKey) -> (u8, u8, i32, i32, i32, i32) {
-        let mesh_state = match cache.gpu_meshes.get(&key.coord) {
-            None => 0u8,
-            Some(mesh) if mesh.lod > key.lod => 1u8,
-            _ => 2u8,
-        };
-        let base = chunk_sort_key(cache.center_chunk, key);
-        (mesh_state, base.0, base.1, base.2, base.3, base.4)
-    }
-
-    fn reprioritize_ready_chunks(&mut self, cache: &ChunkCache) {
-        if self.ready_chunks.len() <= 1 {
-            return;
-        }
-        let mut jobs: Vec<_> = self.ready_chunks.drain(..).collect();
-        jobs.sort_by_key(|job| Self::ready_chunk_priority(cache, job.key));
-        self.ready_chunks = jobs.into_iter().collect();
-    }
-
-    fn reprioritize_ready_meshes(&mut self, cache: &ChunkCache) {
-        if self.ready_meshes.len() <= 1 {
-            return;
-        }
-        let mut meshes: Vec<_> = self.ready_meshes.drain(..).collect();
-        meshes.sort_by_key(|mesh| Self::ready_chunk_priority(cache, mesh.key));
-        self.ready_meshes = meshes.into_iter().collect();
-    }
-
-    pub fn queue_needed_visible(&mut self, cache: &ChunkCache, center: IVec3) {
-        if self.pending_schedule_center != center {
-            self.rebuild_pending_schedule(center);
-        }
-        for key in &cache.visible {
-            if cache
-                .gpu_meshes
-                .get(&key.coord)
-                .is_some_and(|mesh| mesh.lod == key.lod)
-            {
-                continue;
-            }
-            self.push_pending_key(*key);
-        }
-    }
-
-    pub fn retain_visible(&mut self, visible: &HashSet<ChunkKey>) {
-        self.requested.retain(|key| visible.contains(key));
-        self.generating.retain(|key| visible.contains(key));
-        self.meshing.retain(|key, _| visible.contains(key));
-        self.ready_chunks.retain(|job| visible.contains(&job.key));
-        self.ready_meshes.retain(|mesh| visible.contains(&mesh.key));
-        self.pending_keys.retain(|key| visible.contains(key));
-        self.rebuild_pending_schedule(self.pending_schedule_center);
-        self.terrain_generator.retain_visible(visible);
-        self.requested_coords = self.requested.iter().map(|k| k.coord).collect();
-    }
-
-    /// Looser eviction used after a player chunk-crossing: cancel work only for
-    /// chunks beyond the hard distance limit, so in-flight jobs for still-valid
-    /// chunks aren't thrown away and immediately re-requested.
-    pub fn retain_within_range(&mut self, center: IVec3) {
-        let settings = render_distance_settings();
-        let hard_limit = settings.view_distance_chunks + 2;
-        let in_range = |coord: &IVec3| -> bool {
-            let dx = (coord.x - center.x).abs();
-            let dy = (coord.y - center.y).abs();
-            let dz = (coord.z - center.z).abs();
-            dx.max(dy).max(dz) <= hard_limit
-        };
-        self.requested.retain(|key| in_range(&key.coord));
-        self.generating.retain(|key| in_range(&key.coord));
-        self.meshing.retain(|key, _| in_range(&key.coord));
-        self.ready_chunks.retain(|job| in_range(&job.key.coord));
-        self.ready_meshes.retain(|mesh| in_range(&mesh.key.coord));
-        self.pending_keys.retain(|key| in_range(&key.coord));
-        self.rebuild_pending_schedule(center);
-        let terrain_keys: HashSet<ChunkKey> = self
-            .requested
-            .iter()
-            .chain(self.generating.iter())
-            .copied()
-            .collect();
-        self.terrain_generator.retain_visible(&terrain_keys);
-        self.requested_coords = self.requested.iter().map(|k| k.coord).collect();
-    }
-
-    fn cancel_coords(&mut self, dirty_coords: &HashSet<IVec3>) {
-        if dirty_coords.is_empty() {
-            return;
-        }
-
-        self.requested
-            .retain(|key| !dirty_coords.contains(&key.coord));
-        self.generating
-            .retain(|key| !dirty_coords.contains(&key.coord));
-        self.meshing
-            .retain(|key, _| !dirty_coords.contains(&key.coord));
-        self.ready_chunks
-            .retain(|job| !dirty_coords.contains(&job.key.coord));
-        self.ready_meshes
-            .retain(|mesh| !dirty_coords.contains(&mesh.key.coord));
-        self.pending_keys
-            .retain(|key| !dirty_coords.contains(&key.coord));
-        self.rebuild_pending_schedule(self.pending_schedule_center);
-        self.terrain_generator.invalidate_coords(dirty_coords);
-        self.requested_coords
-            .retain(|coord| !dirty_coords.contains(coord));
-    }
-
-    fn collect_finished_meshes(&mut self) {
-        let mut collected = 0usize;
-        while collected < 64 {
-            let Ok(cpu_mesh) = self.mesh_result_rx.try_recv() else {
-                break;
-            };
-            if self.meshing.get(&cpu_mesh.key).copied() != Some(cpu_mesh.job_id) {
-                continue;
-            }
-            self.meshing.remove(&cpu_mesh.key);
-            self.ready_meshes.push_back(cpu_mesh);
-            collected += 1;
-        }
-    }
-
-    fn dispatch_ready_chunks(&mut self, cache: &ChunkCache, current_revision: u64) -> usize {
-        let mut dispatched = 0usize;
-        self.reprioritize_ready_chunks(cache);
-
-        while dispatched < CHUNK_MESH_DISPATCH_BUDGET {
-            let Some(job) = self.ready_chunks.pop_front() else {
-                break;
-            };
-
-            // Only skip if the chunk is no longer in the visible set.
-            // A stale revision means a world edit happened; rebuild_dirty() will
-            // re-queue affected chunks so we don't need to drop work here.
-            if !cache.visible_coords.contains(&job.key.coord) {
-                self.requested.remove(&job.key);
-                self.requested_coords.remove(&job.key.coord);
-                continue;
-            }
-            let _ = current_revision;
-
-            if self.meshing.contains_key(&job.key) {
-                continue;
-            }
-
-            let Some(chunk) = cache.cpu_chunks.get(&job.key.coord).cloned() else {
-                self.requested.remove(&job.key);
-                self.requested_coords.remove(&job.key.coord);
-                continue;
-            };
-
-            let job_id = self.next_mesh_job_id;
-            self.next_mesh_job_id = self.next_mesh_job_id.wrapping_add(1);
-
-            match self.mesh_job_tx.send(MeshJob {
-                key: job.key,
-                revision: job.revision,
-                job_id,
-                chunk,
-                lod_seams: lod_seams_for_chunk(cache, job.key),
-            }) {
-                Ok(()) => {
-                    self.meshing.insert(job.key, job_id);
-                    dispatched += 1;
-                }
-                Err(err) => {
-                    self.ready_meshes.push_back(CpuChunkMesh {
-                        key: err.0.key,
-                        revision: err.0.revision,
-                        job_id,
-                        mesh: build_chunk_mesh_lod_with_seams(
-                            err.0.chunk.as_ref(),
-                            err.0.key.lod,
-                            err.0.lod_seams,
-                        ),
-                    });
-                    dispatched += 1;
-                }
-            }
-        }
-        dispatched
-    }
-
-    pub fn rebuild_dirty(
-        &mut self,
-        snapshot: &WorldSnapshot,
-        cache: &mut ChunkCache,
-        dirty_blocks: &HashSet<IVec3>,
-        dirty_coords: &HashSet<IVec3>,
-        revision: u64,
-    ) {
-        if dirty_coords.is_empty() {
-            return;
-        }
-
-        self.cancel_coords(dirty_coords);
-
-        for &coord in dirty_coords {
-            if !cache.visible_coords.contains(&coord) {
-                continue;
-            }
-
-            let lod = lod_for_chunk(cache.center_chunk, coord);
-            let Some(chunk_data) = cache.cpu_chunks.get_mut(&coord) else {
-                continue;
-            };
-
-            let chunk_data = Arc::make_mut(chunk_data);
-            for &block in dirty_blocks {
-                chunk_data.set_world(block, snapshot.get(block));
-            }
-
-            let key = ChunkKey { coord, lod };
-            self.requested.insert(key);
-            self.requested_coords.insert(key.coord);
-            self.ready_chunks.push_front(ChunkJob { key, revision });
-        }
-    }
-
-    /// Re-queue LOD1+ chunks whose seam flags have changed due to a player chunk crossing.
-    /// This ensures that seam skirts are updated when a neighbor transitions LOD levels.
-    /// Only chunks that already have CPU data are re-queued (no terrain regeneration).
-    pub fn remesh_changed_seams(
-        &mut self,
-        cache: &ChunkCache,
-        seam_cache: &mut HashMap<IVec3, u8>,
-        revision: u64,
-    ) {
-        for key in &cache.visible {
-            if key.lod == 0 {
-                continue;
-            }
-            if !cache.cpu_chunks.contains_key(&key.coord) {
-                continue;
-            }
-            let new_seams = lod_seams_for_chunk(cache, *key);
-            let old_seams = seam_cache.get(&key.coord).copied().unwrap_or(u8::MAX);
-            if new_seams != old_seams {
-                seam_cache.insert(key.coord, new_seams);
-                // Only re-queue if not already in-flight
-                if !self.requested_coords.contains(&key.coord) {
-                    self.requested.insert(*key);
-                    self.requested_coords.insert(key.coord);
-                    self.ready_chunks.push_back(ChunkJob {
-                        key: *key,
-                        revision,
-                    });
-                }
-            }
-        }
-    }
-
-    /// Push newly visible keys into the pending schedule queue.
-    /// Called from the outside when new chunks enter the visible set so that
-    /// enqueue_missing doesn't have to scan all visible chunks every frame.
-    /// Keys are stored with radial XZ distance so near chunks are scheduled first.
-    pub fn push_pending(&mut self, keys: Vec<ChunkKey>, center: IVec3) {
-        if self.pending_schedule_center != center {
-            self.rebuild_pending_schedule(center);
-        }
-        for key in keys {
-            self.push_pending_key(key);
-        }
-    }
-
-    pub fn enqueue_missing(
-        &mut self,
-        gpu: &Gpu,
-        snapshot: &WorldSnapshot,
-        revision: u64,
-        cache: &mut ChunkCache,
-    ) {
-        self.collect_finished_meshes();
-        let mut terrain_to_schedule = Vec::new();
-        let mut terrain_generated = 0usize;
-
-        for (key, _job_revision, chunk_data) in self
-            .terrain_generator
-            .collect_finished(&gpu.device, snapshot)
-        {
-            self.generating.remove(&key);
-            // Accept terrain data as long as the chunk is still in the visible
-            // range — don't discard on revision mismatch.  A world edit (which
-            // bumps revision) will re-queue via rebuild_dirty anyway.
-            if !cache.visible_coords.contains(&key.coord) {
-                self.requested.remove(&key);
-                self.requested_coords.remove(&key.coord);
-                continue;
-            }
-            cache.cpu_chunks.insert(key.coord, Arc::new(chunk_data));
-            self.ready_chunks.push_back(ChunkJob {
-                key,
-                revision, // use current revision so downstream checks pass
-            });
-            terrain_generated += 1;
-        }
-
-        let mesh_dispatched = self.dispatch_ready_chunks(cache, revision);
-
-        // Drain the pending queue rather than scanning all visible chunks each frame.
-        // pending_schedule is populated by push_pending() when expand_visible() adds
-        // new rings, so on steady-state frames it's empty and this loop is O(0).
-        let schedule_budget = self.dynamic_schedule_budget();
-        let mut scheduled = 0usize;
-        // Limit how many entries we scan from the pending queue per frame so we
-        // don't stall when a large ring arrives at once.
-        let scan_limit = self.pending_schedule.len().min(schedule_budget * 4);
-        let mut scanned = 0usize;
-        while scheduled < schedule_budget && scanned < scan_limit {
-            let Some(Reverse((_, _, _, _, kx, ky, kz, klod))) = self.pending_schedule.pop() else {
-                break;
-            };
-            let key = ChunkKey {
-                coord: IVec3::new(kx, ky, kz),
-                lod: klod,
-            };
-            self.pending_keys.remove(&key);
-            scanned += 1;
-
-            // Skip if no longer visible.
-            if !cache.visible_coords.contains(&key.coord) {
-                continue;
-            }
-            // Already have the correct LOD mesh — nothing to do.
-            if cache
-                .gpu_meshes
-                .get(&key.coord)
-                .is_some_and(|mesh| mesh.lod == key.lod)
-            {
-                continue;
-            }
-            // Already have a job in-flight for this coord — re-queue for later.
-            if self.requested_coords.contains(&key.coord) {
-                self.push_pending_key(key);
-                continue;
-            }
-
-            if cache.cpu_chunks.contains_key(&key.coord) {
-                self.requested.insert(key);
-                self.requested_coords.insert(key.coord);
-                self.ready_chunks.push_back(ChunkJob { key, revision });
-                scheduled += 1;
-                continue;
-            }
-            // Pipeline capacity caps: sized for fast-flight streaming.
-            // cpu_chunk_cap is the total cache size — large enough to hold all chunks
-            // within view distance without thrashing.
-            let visible_target = cache.visible_coords.len().max(1);
-            let cpu_chunk_cap = (visible_target.saturating_mul(2)).clamp(4096usize, 32768usize);
-            let ready_chunk_cap = (visible_target / 2).clamp(256usize, 4096usize);
-            let ready_mesh_cap = (visible_target / 3).clamp(128usize, 2048usize);
-            let inflight_cap = (visible_target / 2).clamp(128usize, 1024usize);
-
-            if cache.cpu_chunks.len() >= cpu_chunk_cap
-                || self.ready_chunks.len() >= ready_chunk_cap
-                || self.ready_meshes.len() >= ready_mesh_cap
-                || self.generating.len() >= inflight_cap
-                || self.meshing.len() >= inflight_cap
-            {
-                self.push_pending_key(key);
-                break;
-            }
-
-            self.requested.insert(key);
-            self.requested_coords.insert(key.coord);
-            self.generating.insert(key);
-            terrain_to_schedule.push(key);
-            scheduled += 1;
-        }
-
-        // Fallback: if the pending queue is empty but some visible chunks still
-        // lack meshes (e.g. after a world reset or retain_visible call), do a
-        // bounded scan of the visible list to catch them.
-        // Skip entirely when there is no in-flight work and the world is fully
-        // expanded — steady-state frames cost O(1) instead of O(visible).
-        let has_inflight = !self.generating.is_empty()
-            || !self.meshing.is_empty()
-            || !self.ready_chunks.is_empty()
-            || !self.ready_meshes.is_empty();
-        let should_scan = self.pending_schedule.is_empty()
-            && scheduled < schedule_budget
-            && (has_inflight || !cache.fully_expanded);
-        if should_scan {
-            for key in &cache.visible {
-                if scheduled >= schedule_budget {
-                    break;
-                }
-                if cache
-                    .gpu_meshes
-                    .get(&key.coord)
-                    .is_some_and(|mesh| mesh.lod == key.lod)
-                {
-                    continue;
-                }
-                if self.requested_coords.contains(&key.coord) {
-                    continue;
-                }
-                if cache.cpu_chunks.contains_key(&key.coord) {
-                    self.requested.insert(*key);
-                    self.requested_coords.insert(key.coord);
-                    self.ready_chunks.push_back(ChunkJob {
-                        key: *key,
-                        revision,
-                    });
-                    scheduled += 1;
-                    continue;
-                }
-                self.requested.insert(*key);
-                self.requested_coords.insert(key.coord);
-                self.generating.insert(*key);
-                terrain_to_schedule.push(*key);
-                scheduled += 1;
-            }
-        }
-
-        let terrain_scheduled = terrain_to_schedule.len();
-        self.terrain_generator
-            .schedule_many(gpu, terrain_to_schedule, snapshot.cfg, revision);
-        self.last_stats.terrain_generated = terrain_generated;
-        self.last_stats.terrain_scheduled = terrain_scheduled;
-        self.last_stats.mesh_dispatched = mesh_dispatched;
-        self.last_stats.requested = self.requested.len();
-        self.last_stats.generating = self.generating.len();
-        self.last_stats.meshing = self.meshing.len();
-        self.last_stats.ready_chunks = self.ready_chunks.len();
-        self.last_stats.ready_meshes = self.ready_meshes.len();
-        self.last_stats.pending_schedule = self.pending_schedule.len();
-    }
-
-    pub fn upload_finished(
-        &mut self,
-        gpu: &Gpu,
-        cache: &mut ChunkCache,
-        current_revision: u64,
-        max_uploads: usize,
-    ) {
-        let mut uploaded = 0usize;
-        let mut uploaded_vertices = 0usize;
-        let mut uploaded_indices = 0usize;
-        self.collect_finished_meshes();
-        self.reprioritize_ready_meshes(cache);
-
-        while uploaded < max_uploads {
-            let Some(cpu_mesh) = self.ready_meshes.pop_front() else {
-                break;
-            };
-            let mesh_vertices = cpu_mesh.mesh.vertices.len();
-            let mesh_indices = cpu_mesh.mesh.indices.len();
-            let would_exceed_budget = uploaded > 0
-                && (uploaded_vertices + mesh_vertices > CHUNK_UPLOAD_VERTEX_BUDGET
-                    || uploaded_indices + mesh_indices > CHUNK_UPLOAD_INDEX_BUDGET);
-            if would_exceed_budget {
-                self.ready_meshes.push_front(cpu_mesh);
-                break;
-            }
-
-            self.requested.remove(&cpu_mesh.key);
-            // requested_coords tracks any in-flight key for this coord.
-            // Since we enforce at most one key per coord in requested, removing
-            // unconditionally here is correct and O(1) instead of O(N).
-            self.requested_coords.remove(&cpu_mesh.key.coord);
-
-            // Only discard if the chunk is no longer visible.  Stale revision just
-            // means the world was edited while this mesh was in-flight; we still
-            // upload it — a subsequent rebuild_dirty() will re-mesh the affected
-            // chunks with the latest data.  Discarding here was the main cause of
-            // wasted work and blank-chunk flicker on every player chunk crossing.
-            if !cache.visible_coords.contains(&cpu_mesh.key.coord) {
-                continue;
-            }
-            // If the world was edited after this mesh started, the chunk will be
-            // re-queued by rebuild_dirty.  Upload what we have now so there's no gap.
-            let _ = current_revision;
-
-            let gpu_mesh = upload_chunk_mesh(&gpu.device, &cpu_mesh.mesh, cpu_mesh.key.lod);
-            cache.gpu_meshes.insert(cpu_mesh.key.coord, gpu_mesh);
-            cache.gpu_mesh_revision = cache.gpu_mesh_revision.wrapping_add(1);
-            uploaded += 1;
-            uploaded_vertices += mesh_vertices;
-            uploaded_indices += mesh_indices;
-        }
-
-        self.last_stats.meshes_uploaded = uploaded;
-        self.last_stats.uploaded_vertices = uploaded_vertices;
-        self.last_stats.uploaded_indices = uploaded_indices;
-        self.last_stats.requested = self.requested.len();
-        self.last_stats.generating = self.generating.len();
-        self.last_stats.meshing = self.meshing.len();
-        self.last_stats.ready_chunks = self.ready_chunks.len();
-        self.last_stats.ready_meshes = self.ready_meshes.len();
-        self.last_stats.pending_schedule = self.pending_schedule.len();
-    }
-
-    pub fn queued_jobs(&self) -> usize {
-        self.generating.len()
-            + self.meshing.len()
-            + self.ready_chunks.len()
-            + self.ready_meshes.len()
-    }
-}
-
-fn apply_snapshot_edits_cubic(chunk_data: &mut GeneratedChunk, snapshot: &WorldSnapshot) {
-    for dy in -1..=1 {
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let coord = chunk_data.chunk + IVec3::new(dx, dy, dz);
-                let Some(chunk) = snapshot.chunks.get(&coord) else {
-                    continue;
-                };
-                let ox = coord.x * CHUNK_SIZE;
-                let oy = coord.y * CHUNK_SIZE;
-                let oz = coord.z * CHUNK_SIZE;
-                for z in 0..CHUNK_SIZE {
-                    for y in 0..CHUNK_SIZE {
-                        for x in 0..CHUNK_SIZE {
-                            let idx = crate::world::ChunkData::local_index(x, y, z);
-                            let block = chunk.blocks[idx];
-                            let pos = IVec3::new(ox + x, oy + y, oz + z);
-                            chunk_data.set_world(pos, block);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-pub fn lod_for_chunk(center: IVec3, chunk: IVec3) -> u8 {
-    let dx = (chunk.x - center.x).abs();
-    let dy = (chunk.y - center.y).abs();
-    let dz = (chunk.z - center.z).abs();
-    let d = dx.max(dy).max(dz);
-    let settings = render_distance_settings();
-
-    if settings.lod_levels <= 1 || d <= settings.lod_start_chunks {
-        0
-    } else if settings.lod_levels == 2 {
-        1
-    } else if settings.lod_levels == 3 {
-        let far_band = (settings.view_distance_chunks - settings.lod_start_chunks).max(2);
-        let lod2_start = settings.lod_start_chunks + (far_band / 2).max(1);
-        if d <= lod2_start { 1 } else { 2 }
-    } else {
-        // lod_levels >= 4: three LOD bands beyond lod_start_chunks
-        let far_band = (settings.view_distance_chunks - settings.lod_start_chunks).max(3);
-        let third = (far_band / 3).max(1);
-        let lod2_start = settings.lod_start_chunks + third;
-        let lod3_start = settings.lod_start_chunks + third * 2;
-        if d <= lod2_start {
-            1
-        } else if d <= lod3_start {
-            2
-        } else {
-            3
-        }
-    }
-}
-
-/// Compute the terrain-driven Y-chunk range that should be loaded for an XZ column.
-/// Returns (min_cy, max_cy) inclusive chunk Y coords.
-fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) -> (i32, i32) {
-    // Sample a 5x5 grid of terrain heights within this column to find the Y extent.
-    let ox = cx * CHUNK_SIZE;
-    let oz = cz * CHUNK_SIZE;
-    let mut min_h = i32::MAX;
-    let mut max_h = i32::MIN;
-    for dz in [0, 8, 16, 24, 31] {
-        for dx in [0, 8, 16, 24, 31] {
-            let h = terrain_height(cfg, ox + dx, oz + dz);
-            min_h = min_h.min(h);
-            max_h = max_h.max(h);
-        }
-    }
-    if min_h == i32::MAX {
-        min_h = cfg.min_world_y();
-        max_h = cfg.max_world_y();
-    }
-
-    // Add margin for caves below and structures (trees) above.
-    // This is terrain-driven only: do not force the player's Y chunk into every
-    // XZ column, or flying high will generate a giant ring of empty air chunks.
-    let cave_margin = CHUNK_SIZE * 2;
-    let tree_margin = CHUNK_SIZE;
-    let water_level = cfg.water_level();
-    let effective_min = (min_h - cave_margin).min(water_level - CHUNK_SIZE);
-    let effective_max = max_h + tree_margin;
-
-    let min_cy =
-        floor_div_i32(effective_min, CHUNK_SIZE).max(floor_div_i32(cfg.min_world_y(), CHUNK_SIZE));
-    let max_cy = floor_div_i32(effective_max, CHUNK_SIZE)
-        .min(floor_div_i32(cfg.max_world_y() - 1, CHUNK_SIZE));
-    (min_cy, max_cy)
-}
-
-/// Compute a Y-range that excludes underground chunks for distant columns.
-/// At close range (within `underground_radius` chunks) we load caves normally.
-/// Beyond that, only load the surface layer and above so we don't generate
-/// thousands of unseen underground chunks far away.
-fn column_y_chunk_range_distance_cull(
-    cx: i32,
-    cz: i32,
-    cfg: &WorldSampleConfig,
-    _center: IVec3,
-    chebyshev_dist: i32,
-) -> (i32, i32) {
-    let (min_cy, max_cy) = column_y_chunk_range(cx, cz, cfg);
-    // Underground chunks are only useful when the player is close enough to
-    // actually see into caves.  Beyond this threshold, skip sub-surface chunks.
-    const UNDERGROUND_LOAD_RADIUS: i32 = 6;
-    if chebyshev_dist > UNDERGROUND_LOAD_RADIUS {
-        // Clamp min_cy to the surface chunk — no caves at distance.
-        // Use the actual surface height from the 5×5 grid already sampled in column_y_chunk_range.
-        // The previous single-point sample missed peaks, creating holes.
-        // Load surface chunk plus 2 chunks below for LOD transitions and visual consistency.
-        let surface_cy = max_cy;
-        let culled_min = (surface_cy - 2).max(min_cy);
-        return (culled_min, max_cy);
-    }
-    (min_cy, max_cy)
-}
-
-fn floor_div_i32(a: i32, b: i32) -> i32 {
-    let d = a / b;
-    if (a ^ b) < 0 && d * b != a { d - 1 } else { d }
-}
-
-fn chunk_radial_distance_sq(center: IVec3, chunk: IVec3) -> i32 {
-    let dx = (chunk.x - center.x).abs();
-    let dz = (chunk.z - center.z).abs();
-    dx * dx + dz * dz
-}
-
-fn chunk_sort_key(center: IVec3, key: ChunkKey) -> (u8, i32, i32, i32, i32) {
-    let dx = (key.coord.x - center.x).abs();
-    let dy = (key.coord.y - center.y).abs();
-    let dz = (key.coord.z - center.z).abs();
-    (
-        key.lod,
-        chunk_radial_distance_sq(center, key.coord),
-        dy,
-        dx.max(dy).max(dz),
-        dx + dy + dz,
-    )
-}
-
-fn pending_priority(
-    center: IVec3,
-    key: ChunkKey,
-) -> Reverse<(i32, i32, i32, i32, i32, i32, i32, u8)> {
-    let dx = (key.coord.x - center.x).abs();
-    let dy = (key.coord.y - center.y).abs();
-    let dz = (key.coord.z - center.z).abs();
-    Reverse((
-        chunk_radial_distance_sq(center, key.coord),
-        dy,
-        key.lod as i32,
-        dx.max(dy).max(dz),
-        key.coord.x,
-        key.coord.y,
-        key.coord.z,
-        key.lod,
-    ))
-}
-
-pub fn desired_chunk_keys(center: IVec3) -> Vec<ChunkKey> {
-    let mut out = Vec::new();
-
-    // Snapshot-free fallback only.
-    // Do NOT try to populate the whole distant horizon vertically from this path,
-    // because without terrain sampling that recreates the high-altitude empty-air ring.
-    //
-    // This path should only provide a small local support volume until the snapshot-
-    // aware path takes over.
-    let local_air_radius = 2;
-    let local_air_y_pad = 1;
-
-    for dz in -local_air_radius..=local_air_radius {
-        for dx in -local_air_radius..=local_air_radius {
-            let cx = center.x + dx;
-            let cz = center.z + dz;
-            for cy in (center.y - local_air_y_pad)..=(center.y + local_air_y_pad) {
-                let coord = IVec3::new(cx, cy, cz);
-                let lod = lod_for_chunk(center, coord);
-                out.push(ChunkKey { coord, lod });
-            }
-        }
-    }
-
-    out.sort_by_key(|key| chunk_sort_key(center, *key));
-    out.dedup();
-    out
-}
-/// Build visible chunk keys using a cached column Y-range lookup.
-/// `radius` limits how far from center we scan (for incremental expansion).
-fn desired_chunk_keys_with_snapshot_cached(
-    center: IVec3,
-    snapshot: &WorldSnapshot,
-    y_cache: &mut HashMap<(i32, i32), (i32, i32)>,
-    radius: i32,
-) -> Vec<ChunkKey> {
-    let mut out = Vec::with_capacity((radius as usize * 2 + 1).pow(2) * 4);
-    let mut seen = HashSet::new();
-    let radius_sq = radius * radius;
-
-    let local_air_radius = 2;
-    let local_air_y_pad = 1;
-
-    for dz in -radius..=radius {
-        for dx in -radius..=radius {
-            if dx * dx + dz * dz > radius_sq {
-                continue;
-            }
-            let cx = center.x + dx;
-            let cz = center.z + dz;
-            let chebyshev = dx.abs().max(dz.abs());
-            let &mut (terrain_min_cy, terrain_max_cy) =
-                y_cache.entry((cx, cz)).or_insert_with(|| {
-                    column_y_chunk_range_distance_cull(cx, cz, &snapshot.cfg, center, chebyshev)
-                });
-            for cy in terrain_min_cy..=terrain_max_cy {
-                let coord = IVec3::new(cx, cy, cz);
-                if seen.insert(coord) {
-                    let lod = lod_for_chunk(center, coord);
-                    out.push(ChunkKey { coord, lod });
-                }
-            }
-
-            if dx.abs() <= local_air_radius && dz.abs() <= local_air_radius {
-                for cy in (center.y - local_air_y_pad)..=(center.y + local_air_y_pad) {
-                    let coord = IVec3::new(cx, cy, cz);
-                    if seen.insert(coord) {
-                        let lod = lod_for_chunk(center, coord);
-                        out.push(ChunkKey { coord, lod });
-                    }
-                }
-            }
-        }
-    }
-
-    out.sort_by_key(|key| chunk_sort_key(center, *key));
-    out
-}
-
-/// Build chunk keys only for the annular ring between `min_radius` and
-/// `max_radius` (inclusive, circular XZ distance from center). Used by
-/// `expand_visible` to append only the newly uncovered ring each frame
-/// instead of rebuilding the entire visible list from scratch.
-fn desired_chunk_keys_ring(
-    center: IVec3,
-    snapshot: &WorldSnapshot,
-    y_cache: &mut HashMap<(i32, i32), (i32, i32)>,
-    min_radius: i32,
-    max_radius: i32,
-) -> Vec<ChunkKey> {
-    let mut out = Vec::new();
-    let min_radius_sq = min_radius * min_radius;
-    let max_radius_sq = max_radius * max_radius;
-
-    for dz in -max_radius..=max_radius {
-        for dx in -max_radius..=max_radius {
-            let dist_sq = dx * dx + dz * dz;
-            if dist_sq > max_radius_sq || dist_sq <= min_radius_sq {
-                continue;
-            }
-
-            let cx = center.x + dx;
-            let cz = center.z + dz;
-            let chebyshev = dx.abs().max(dz.abs());
-            let &mut (terrain_min_cy, terrain_max_cy) =
-                y_cache.entry((cx, cz)).or_insert_with(|| {
-                    column_y_chunk_range_distance_cull(cx, cz, &snapshot.cfg, center, chebyshev)
-                });
-            for cy in terrain_min_cy..=terrain_max_cy {
-                let coord = IVec3::new(cx, cy, cz);
-                let lod = lod_for_chunk(center, coord);
-                out.push(ChunkKey { coord, lod });
-            }
-        }
-    }
-
-    out.sort_by_key(|key| chunk_sort_key(center, *key));
-    out
-}
-
-pub fn chunk_bounds_sphere(chunk: IVec3) -> (Vec3, f32) {
-    let half = CHUNK_SIZE as f32 * 0.5;
-    let center = Vec3::new(
-        chunk.x as f32 * CHUNK_SIZE as f32 + half,
-        chunk.y as f32 * CHUNK_SIZE as f32 + half,
-        chunk.z as f32 * CHUNK_SIZE as f32 + half,
-    );
-    // Circumradius of a cube: half * sqrt(3)
-    let radius = half * 3.0_f32.sqrt();
-    (center, radius)
-}
-
-pub fn extract_planes(view_proj: Mat4) -> [Vec4; 6] {
-    let m = view_proj.to_cols_array_2d();
-    let row0 = Vec4::new(m[0][0], m[1][0], m[2][0], m[3][0]);
-    let row1 = Vec4::new(m[0][1], m[1][1], m[2][1], m[3][1]);
-    let row2 = Vec4::new(m[0][2], m[1][2], m[2][2], m[3][2]);
-    let row3 = Vec4::new(m[0][3], m[1][3], m[2][3], m[3][3]);
-
-    let mut planes = [
-        row3 + row0,
-        row3 - row0,
-        row3 + row1,
-        row3 - row1,
-        row3 + row2,
-        row3 - row2,
-    ];
-
-    for plane in &mut planes {
-        let normal = plane.truncate();
-        let len = normal.length();
-        if len > 0.0 {
-            *plane /= len;
-        }
-    }
-
-    planes
-}
-
-pub fn is_chunk_visible_frustum(chunk: IVec3, view_proj: Mat4) -> bool {
-    let planes = extract_planes(view_proj);
-    let (center, radius) = chunk_bounds_sphere(chunk);
-    planes
-        .iter()
-        .all(|plane| plane.truncate().dot(center) + plane.w >= -radius)
-}
-
-pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
-    let planes = extract_planes(view_proj);
-    let mut out = Vec::new();
-
-    for key in &cache.visible {
-        let Some(mesh) = cache.gpu_meshes.get(&key.coord) else {
-            continue;
-        };
-        if mesh.index_count == 0 {
-            continue;
-        }
-
-        let (center, radius) = chunk_bounds_sphere(key.coord);
-        let outside = planes
-            .iter()
-            .any(|plane| plane.truncate().dot(center) + plane.w < -radius);
-        if outside {
-            continue;
-        }
-
-        out.push(*key);
-    }
-
-    out
-}
-
-fn upload_chunk_mesh(device: &wgpu::Device, mesh: &ChunkMesh, lod: u8) -> ChunkGpuMesh {
-    let empty_vertex = [0.0f32; 12];
-    let empty_index = [0u32; 1];
-
-    let vertex_buffer = if mesh.vertices.is_empty() {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chunk vb dummy"),
-            contents: bytemuck::cast_slice(&empty_vertex),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    } else {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chunk vb"),
-            contents: bytemuck::cast_slice(&mesh.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    };
-
-    let index_buffer = if mesh.indices.is_empty() {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chunk ib dummy"),
-            contents: bytemuck::cast_slice(&empty_index),
-            usage: wgpu::BufferUsages::INDEX,
-        })
-    } else {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chunk ib"),
-            contents: bytemuck::cast_slice(&mesh.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        })
-    };
-
-    ChunkGpuMesh {
-        vertex_buffer,
-        index_buffer,
-        index_count: mesh.indices.len() as u32,
-        lod,
-    }
-}
 fn unproject_clip(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
     let clip = Vec4::new(ndc.x, ndc.y, ndc.z, 1.0);
     let world = inv_view_proj * clip;
@@ -2522,6 +885,10 @@ impl DynamicVertexBuffer {
 }
 
 pub struct Gpu {
+    pub underwater: bool,
+    postprocess: postprocess::PostProcess,
+    indirect: indirect::IndirectLighting,
+    pub fxaa_enabled: bool,
     surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -2569,6 +936,9 @@ pub struct Gpu {
     cloud_composite_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     world_pipeline: wgpu::RenderPipeline,
+    horizon: horizon::Horizon,
+    scene_stream: Option<DynamicVertexBuffer>,
+    scene_vertices: usize,
     line_pipeline: wgpu::RenderPipeline,
     line_invert_pipeline: wgpu::RenderPipeline,
     ui_pipeline: wgpu::RenderPipeline,
@@ -2578,13 +948,21 @@ pub struct Gpu {
     depth: wgpu::TextureView,
     clear_color: [f32; 3],
     current_lighting: LightingState,
+    current_debug_view: RenderDebugView,
     last_camera_pos: Vec3,
+    last_camera_residual: Vec3,
     last_inv_view_proj: Mat4,
+    last_rotation_view_proj: Mat4,
+    last_camera_forward: Vec3,
     last_world_scale: f32,
     cloud_history_valid: bool,
+    cloud_render_scale: u32,
+    frame_index: u32,
     cloud_history_frame_stats: CloudHistoryFrameStats,
     last_weather_upload_stats: WeatherUploadStats,
     last_render_stats: RenderFrameStats,
+    capture_path: Option<std::path::PathBuf>,
+    pending_captures: Vec<capture::PendingCapture>,
     gpu_profiler: Option<GpuProfiler>,
 }
 
@@ -2733,8 +1111,10 @@ fn gen_shape_noise_data() -> Vec<u8> {
                 let w_fbm = w_fbm.clamp(0.0, 1.0);
 
                 let perlin_norm = perlin_fbm.clamp(0.0, 1.0);
-                let lo = (1.0 - w_fbm).clamp(0.0, 0.999_f32);
-                let pw = ((perlin_norm - lo) / (1.0 - lo)).clamp(0.0, 1.0);
+                // Keep broad condensate masses. Subtractive Worley remapping
+                // here and again in the shader erased most of the shape field.
+                let perlin_body = ((perlin_norm - 0.5) * 1.8 + 0.5).clamp(0.0, 1.0);
+                let pw = (perlin_body * 0.80 + w_fbm * 0.20).clamp(0.0, 1.0);
 
                 let w1 = (worley_tileable(px, py, pz, 8, 0xBBBB) * 0.625
                     + worley_tileable(px, py, pz, 16, 0xBCCC) * 0.25
@@ -2998,15 +1378,13 @@ impl GpuBootstrap {
             .await
             .context("No suitable GPU adapter found")?;
         let adapter_info = adapter.get_info();
+        streaming::configure_gpu_residency(&adapter);
         let adapter_summary = format!(
             "{} / {:?} / {:?}",
             adapter_info.name, adapter_info.backend, adapter_info.device_type
         );
-        let requested_features = if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            wgpu::Features::TIMESTAMP_QUERY
-        } else {
-            wgpu::Features::empty()
-        };
+        let requested_features = adapter.features() &
+            (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -3028,14 +1406,15 @@ impl GpuBootstrap {
             .unwrap_or(caps.formats[0]);
 
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | (caps.usages & wgpu::TextureUsages::COPY_SRC),
             format,
             width: size.width.max(1),
             height: size.height.max(1),
             desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::AutoNoVsync,
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
+            view_formats: if format.is_srgb() { vec![format.remove_srgb_suffix()] } else { vec![] },
         };
         surface.configure(&device, &config);
 
@@ -3137,11 +1516,16 @@ impl GpuBootstrap {
             });
         }
 
+        // Blend egui gamma-space premultiplied colors after the scene resolve.
+        let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format.remove_srgb_suffix()),
+            ..Default::default()
+        });
         overlay(
             &self.device,
             &self.queue,
             &mut encoder,
-            &view,
+            &ui_view,
             self.config.width,
             self.config.height,
         );
@@ -3294,6 +1678,22 @@ impl GpuPendingInit {
     }
 
     pub fn step(&mut self) -> Result<Option<Gpu>> {
+        let stage = self.stage;
+        let device = self
+            .bootstrap
+            .as_ref()
+            .context("renderer bootstrap missing")?
+            .device
+            .clone();
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let result = self.step_inner();
+        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
+            anyhow::bail!("Renderer initialization failed at {stage:?}: {error}");
+        }
+        result
+    }
+
+    fn step_inner(&mut self) -> Result<Option<Gpu>> {
         match self.stage {
             GpuInitStage::CoreBindings => {
                 let bootstrap = self.bootstrap.as_ref().expect("bootstrap missing");
@@ -3309,6 +1709,10 @@ impl GpuPendingInit {
                         world_params: [1.0, 1.0, 0.0, 0.0],
                         prev_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
                         camera_forward: [0.0, 0.0, -1.0, 0.0],
+                        ray_right: [1.0, 0.0, 0.0, -1.0],
+                        ray_up: [0.0, 1.0, 0.0, -0.01],
+                        previous_camera_pos: [0.0; 4],
+                        scene_seed: [0; 4],
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
@@ -3475,7 +1879,7 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: false,
+                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -3488,7 +1892,7 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: false,
+                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -3558,7 +1962,7 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: false,
+                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -3827,7 +2231,7 @@ impl GpuPendingInit {
                 self.cloud_shader =
                     Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("cloud shader"),
-                        source: wgpu::ShaderSource::Wgsl(cloud_shader_source().into()),
+                        source: wgpu::ShaderSource::Wgsl(cloud_shader_source_for_filtering(device.features().contains(wgpu::Features::FLOAT32_FILTERABLE)).into()),
                     }));
                 self.cloud_composite_shader =
                     Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -3889,6 +2293,7 @@ impl GpuPendingInit {
                         self.camera_layout.as_ref().unwrap(),
                         self.lighting_layout.as_ref().unwrap(),
                         self.atmosphere_layout.as_ref().unwrap(),
+                        self.world_surface_layout.as_ref().unwrap(),
                     ],
                     push_constant_ranges: &[],
                 });
@@ -3982,7 +2387,7 @@ impl GpuPendingInit {
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
-                                format: config.format,
+                                format: postprocess::SCENE_FORMAT,
                                 blend: Some(wgpu::BlendState::REPLACE),
                                 write_mask: wgpu::ColorWrites::ALL,
                             })],
@@ -4016,7 +2421,7 @@ impl GpuPendingInit {
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
-                                format: config.format,
+                                format: postprocess::SCENE_FORMAT,
                                 blend: Some(wgpu::BlendState {
                                     color: wgpu::BlendComponent {
                                         src_factor: wgpu::BlendFactor::One,
@@ -4093,10 +2498,10 @@ impl GpuPendingInit {
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
-                                format: config.format,
+                                format: postprocess::SCENE_FORMAT,
                                 blend: Some(wgpu::BlendState::REPLACE),
                                 write_mask: wgpu::ColorWrites::ALL,
-                            })],
+                            }), Some(wgpu::ColorTargetState {format: postprocess::SCENE_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL})],
                         }),
                         primitive: wgpu::PrimitiveState {
                             cull_mode: Some(wgpu::Face::Back),
@@ -4134,7 +2539,7 @@ impl GpuPendingInit {
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
-                                format: config.format,
+                                format: postprocess::SCENE_FORMAT,
                                 blend: Some(blend),
                                 write_mask: wgpu::ColorWrites::ALL,
                             })],
@@ -4253,8 +2658,15 @@ impl GpuPendingInit {
             GpuInitStage::Complete => {
                 let bootstrap = self.bootstrap.take().expect("bootstrap missing");
                 let gpu_profiler = GpuProfiler::new(&bootstrap.device, &bootstrap.queue);
+                let postprocess =
+                    postprocess::PostProcess::new(&bootstrap.device, &bootstrap.config);
+                let indirect = indirect::IndirectLighting::new(&bootstrap.device, &bootstrap.config, self.camera_layout.as_ref().unwrap(), self.depth.as_ref().unwrap(), &postprocess.scene);
 
                 let mut gpu = Gpu {
+                    underwater: false,
+                    postprocess,
+                    indirect,
+                    fxaa_enabled: true,
                     surface: bootstrap.surface,
                     device: bootstrap.device,
                     queue: bootstrap.queue,
@@ -4303,6 +2715,9 @@ impl GpuPendingInit {
                     cloud_composite_pipeline: self.cloud_composite_pipeline.take().unwrap(),
                     sky_pipeline: self.sky_pipeline.take().unwrap(),
                     world_pipeline: self.world_pipeline.take().unwrap(),
+                    horizon: horizon::Horizon::default(),
+                    scene_stream: None,
+                    scene_vertices: 0,
                     line_pipeline: self.line_pipeline.take().unwrap(),
                     line_invert_pipeline: self.line_invert_pipeline.take().unwrap(),
                     ui_pipeline: self.ui_pipeline.take().unwrap(),
@@ -4315,15 +2730,23 @@ impl GpuPendingInit {
 
                     clear_color: bootstrap.clear_color,
                     current_lighting: bootstrap.default_lighting,
+                    current_debug_view: RenderDebugView::None,
                     last_camera_pos: Vec3::ZERO,
+                    last_camera_residual: Vec3::ZERO,
                     last_inv_view_proj: Mat4::IDENTITY,
+                    last_rotation_view_proj: Mat4::IDENTITY,
+                    last_camera_forward: Vec3::NEG_Z,
                     last_world_scale: 1.0,
 
                     // History is invalid until the first resolved cloud frame is produced.
                     cloud_history_valid: false,
+                    cloud_render_scale: cloud_render_scale(),
+                    frame_index: 0,
                     cloud_history_frame_stats: CloudHistoryFrameStats::default(),
                     last_weather_upload_stats: WeatherUploadStats::default(),
                     last_render_stats: RenderFrameStats::default(),
+                    capture_path: None,
+                    pending_captures: Vec::new(),
                     gpu_profiler,
                 };
 
@@ -4339,6 +2762,27 @@ impl GpuPendingInit {
     }
 }
 impl Gpu {
+    pub fn upload_scene(&mut self, vertices: &[Vertex3]) {
+        self.scene_vertices=vertices.len();
+        if vertices.is_empty() { return; }
+        let stream=self.scene_stream.get_or_insert_with(||DynamicVertexBuffer::new::<Vertex3>(&self.device,"animated scene models",vertices.len()));
+        stream.upload(&self.device,&self.queue,vertices);
+    }
+    pub fn vsync(&self) -> bool {
+        self.config.present_mode == wgpu::PresentMode::AutoVsync
+    }
+
+    pub fn set_vsync(&mut self, enabled: bool) {
+        if self.vsync() != enabled {
+            self.config.present_mode = if enabled {
+                wgpu::PresentMode::AutoVsync
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            };
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+
     pub fn begin_frame_stats(&mut self) {
         self.last_weather_upload_stats = WeatherUploadStats::default();
         self.cloud_history_frame_stats = CloudHistoryFrameStats::default();
@@ -4459,8 +2903,8 @@ impl Gpu {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: (config.width / CLOUD_RENDER_SCALE).max(1),
-                height: (config.height / CLOUD_RENDER_SCALE).max(1),
+                width: (config.width / cloud_render_scale()).max(1),
+                height: (config.height / cloud_render_scale()).max(1),
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -4794,23 +3238,28 @@ impl Gpu {
     }
 
     fn create_blue_noise_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
-        // Generate a 64x64 R8 blue noise texture using a simple void-and-cluster approximation.
-        // This is a good-enough approximation; a proper blue noise LUT would be baked offline.
-        let size = 64u32;
+        // Hash noise with its low frequencies removed, rank mapped to uniform R8.
+        // The former 64px interleaved-gradient lattice was visible on distant
+        // cloud bases. This larger tile has no shared diagonal phase.
+        let size = 256u32;
         let total = (size * size) as usize;
-        let mut data = vec![0u8; total];
-
-        // Use interleaved gradient noise as a fast blue-noise-like pattern
-        for y in 0..size {
-            for x in 0..size {
-                let fx = x as f32 + 0.5;
-                let fy = y as f32 + 0.5;
-                // Interleaved gradient noise (Jorge Jimenez, 2014)
-                let v = (52.9829189 * ((fx * 0.06711056 + fy * 0.00583715).fract())).fract();
-                data[(y * size + x) as usize] = (v * 255.0) as u8;
-            }
+        let hash = |mut v: u32| {
+            v ^= v >> 16; v = v.wrapping_mul(0x7feb352d);
+            v ^= v >> 15; v = v.wrapping_mul(0x846ca68b);
+            ((v ^ (v >> 16)) as f64 / u32::MAX as f64) as f32
+        };
+        let raw: Vec<f32> = (0..total).map(|i| hash(i as u32 ^ 0xa1539e27)).collect();
+        let mut ranked: Vec<(usize,f32)> = (0..total).map(|i| {
+            let x = i as u32 % size; let y = i as u32 / size;
+            let at = |dx:i32,dy:i32| raw[(((y as i32+dy).rem_euclid(size as i32) as u32)*size
+                +(x as i32+dx).rem_euclid(size as i32) as u32) as usize];
+            (i,raw[i]-(at(-1,0)+at(1,0)+at(0,-1)+at(0,1))*0.25)
+        }).collect();
+        ranked.sort_unstable_by(|a,b| a.1.total_cmp(&b.1));
+        let mut data = vec![0u8;total];
+        for (rank,(index,_)) in ranked.into_iter().enumerate() {
+            data[index]=(rank*256/total) as u8;
         }
-
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("blue noise"),
             size: wgpu::Extent3d {
@@ -4962,6 +3411,7 @@ impl Gpu {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
+        self.cloud_render_scale = cloud_render_scale();
         self.size = new_size;
         self.config.width = new_size.width;
         self.config.height = new_size.height;
@@ -4969,6 +3419,8 @@ impl Gpu {
         self.atmosphere
             .resize(&self.queue, self.config.width, self.config.height);
         self.depth = Self::create_depth(&self.device, &self.config);
+        self.postprocess.resize(&self.device, &self.config);
+        self.indirect.resize(&self.device, &self.config, &self.depth, &self.postprocess.scene);
         self.cloud_render_bind_group = Self::create_cloud_render_bind_group(
             &self.device,
             &self.cloud_render_layout,
@@ -5012,17 +3464,40 @@ impl Gpu {
         self.cloud_history_valid = false;
     }
 
-    pub fn upload_camera(&mut self, view_proj: Mat4, eye: Vec3, world_scale: f32) {
-        let inv_view_proj = view_proj.inverse();
+    pub fn request_capture(&mut self, path: std::path::PathBuf) {
+        self.capture_path = Some(path);
+    }
 
-        let cur_center_world = unproject_clip(inv_view_proj, Vec3::new(0.0, 0.0, 1.0));
-        let prev_center_world = unproject_clip(self.last_inv_view_proj, Vec3::new(0.0, 0.0, 1.0));
+    pub fn update_horizon(&mut self, world: &mut crate::world::World, eye: Vec3) {
+        let scale = world.voxel_scale.meters();
+        let revision = world.revision();
+        let hidden_radius = (128.0 * scale).min(render_distance_settings().view_distance_chunks as f32 * CHUNK_SIZE as f32 * scale * 0.65);
+        self.horizon.update(&self.device, &self.queue, world, revision, eye, hidden_radius);
+    }
 
-        let cur_forward = (cur_center_world - eye).normalize_or_zero();
-        let prev_forward = (prev_center_world - self.last_camera_pos).normalize_or_zero();
+    pub fn horizon_ready(&self)->bool {self.horizon.mesh.is_some()}
+
+    pub fn upload_camera(&mut self, precise_eye: glam::DVec3, world_scale: f32, forward: Vec3, projection: Mat4, world_seed: u32, generator_version: u32) {
+        // Invert only the rotation/projection. Inverting the translated f32 matrix
+        // makes rays and motion estimates increasingly unstable away from the origin.
+        // Capture-time A/B uses the same executable and shader pipeline.
+        static MIST_DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let mist_disabled = *MIST_DISABLED.get_or_init(|| {
+            let disabled = std::env::var("VOXEL_LOCAL_MIST").as_deref() == Ok("0");
+            eprintln!("[mist] analytic_enabled={}", !disabled);
+            disabled
+        });
+        let eye = precise_eye.as_vec3();
+        let residual = (precise_eye - eye.as_dvec3()).as_vec3();
+        let cur_forward = forward.normalize();
+        let rotation_view_proj = projection * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y) * Mat4::from_translation(-residual);
+        let inv_view_proj = Mat4::from_translation(eye) * rotation_view_proj.inverse();
+        let right = cur_forward.cross(Vec3::Y).normalize() / projection.x_axis.x;
+        let up = right.normalize().cross(cur_forward) / projection.y_axis.y;
+        let prev_forward = self.last_camera_forward;
 
         let angular_motion = (1.0 - cur_forward.dot(prev_forward).clamp(-1.0, 1.0)).clamp(0.0, 1.0);
-        let translation_delta = eye - self.last_camera_pos;
+        let translation_delta = (eye - self.last_camera_pos) + (residual - self.last_camera_residual);
         let translation_motion = (translation_delta.length() / 8.0).clamp(0.0, 1.0);
         let camera_motion = (angular_motion * 6.0 + translation_motion * 0.25).clamp(0.0, 1.0);
 
@@ -5034,12 +3509,15 @@ impl Gpu {
         let visible_world =
             render_settings.view_distance_chunks as f32 * CHUNK_SIZE as f32 * world_scale;
 
+        self.frame_index = self.frame_index.wrapping_add(1);
+
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                view_proj: view_proj.to_cols_array_2d(),
-                camera_pos: [eye.x, eye.y, eye.z, 0.0],
+                // Terrain and outlines subtract the eye before projection.
+                view_proj: rotation_view_proj.to_cols_array_2d(),
+                camera_pos: [eye.x, eye.y, eye.z, if self.underwater { 1.0 } else { 0.0 }],
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
                 world_params: [
                     world_scale,
@@ -5047,8 +3525,23 @@ impl Gpu {
                     camera_motion,
                     visible_world,
                 ],
-                prev_view_proj: self.last_inv_view_proj.inverse().to_cols_array_2d(),
-                camera_forward: [cur_forward.x, cur_forward.y, cur_forward.z, 0.0],
+                scene_seed: [world_seed, generator_version, u32::from(mist_disabled), u32::from(!shadow::enabled())],
+                // Previous projection has no translation; temporal uses camera deltas.
+                prev_view_proj: self.last_rotation_view_proj.to_cols_array_2d(),
+                camera_forward: [
+                    cur_forward.x,
+                    cur_forward.y,
+                    cur_forward.z,
+                    self.frame_index as f32,
+                ],
+                ray_right: [right.x, right.y, right.z, projection.z_axis.z],
+                ray_up: [up.x, up.y, up.z, projection.w_axis.z],
+                previous_camera_pos: [
+                    self.last_camera_pos.x,
+                    self.last_camera_pos.y,
+                    self.last_camera_pos.z,
+                    self.horizon.visibility(),
+                ],
             }),
         );
 
@@ -5061,7 +3554,10 @@ impl Gpu {
         }
 
         self.last_camera_pos = eye;
+        self.last_camera_residual = residual;
         self.last_inv_view_proj = inv_view_proj;
+        self.last_rotation_view_proj = rotation_view_proj;
+        self.last_camera_forward = cur_forward;
         self.last_world_scale = world_scale;
 
         let render_settings = render_distance_settings();
@@ -5072,15 +3568,19 @@ impl Gpu {
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
             inv_view_proj,
-            0.01,
+            0.05 * world_scale,
             far_plane_world,
             world_scale,
         );
+        self.atmosphere
+            .sync_camera(&self.device, &self.queue, &self.camera_bind_group, eye.y);
         if self.atmosphere.needs_aerial_perspective() {
             self.atmosphere.update_aerial_perspective(
                 &self.device,
                 &self.queue,
                 &self.camera_bind_group,
+                eye.y,
+                visible_world,
             );
         }
     }
@@ -5114,14 +3614,9 @@ impl Gpu {
                 debug_view,
             },
         );
-        self.atmosphere.sync_from_lighting(
-            &self.device,
-            &self.queue,
-            lighting,
-            cloud_controls,
-            &self.camera_bind_group,
-        );
+        self.atmosphere.sync_from_lighting(lighting, cloud_controls);
         self.current_lighting = *lighting;
+        self.current_debug_view = debug_view;
 
         let render_settings = render_distance_settings();
         let far_plane_voxels =
@@ -5131,7 +3626,7 @@ impl Gpu {
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
             self.last_inv_view_proj,
-            0.01,
+            0.05 * self.last_world_scale,
             far_plane_world,
             self.last_world_scale,
         );
@@ -5163,6 +3658,7 @@ impl Gpu {
         let mut secondary_upload_bytes = Vec::new();
         let mut shadow_upload_bytes = Vec::new();
         for upload_batch in upload_manifest.clipmap_uploads() {
+            should_invalidate_history |= upload_batch.invalidate_history;
             for &dirty_rect in upload_batch.dirty_rects() {
                 stats.dirty_rects += 1;
                 let origin = wgpu::Origin3d {
@@ -5180,12 +3676,6 @@ impl Gpu {
                     height: dirty_rect.texel_height,
                     depth_or_array_layers: 1,
                 };
-                let is_full_level_refresh = dirty_rect.texel_x == 0
-                    && dirty_rect.texel_y == 0
-                    && dirty_rect.texel_width == WEATHER_TEXTURE_RESOLUTION
-                    && dirty_rect.texel_height == WEATHER_TEXTURE_RESOLUTION;
-                should_invalidate_history |= is_full_level_refresh;
-
                 weather_field.pack_primary_upload_bytes(
                     upload_batch.clipmap_level,
                     dirty_rect,
@@ -5311,11 +3801,16 @@ impl Gpu {
             });
         }
 
+        // Blend egui gamma-space premultiplied colors after the scene resolve.
+        let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format.remove_srgb_suffix()),
+            ..Default::default()
+        });
         overlay(
             &self.device,
             &self.queue,
             &mut encoder,
-            &view,
+            &ui_view,
             self.config.width,
             self.config.height,
         );
@@ -5364,8 +3859,10 @@ impl Gpu {
             u32,
         ),
     {
-        if let Some(profiler) = self.gpu_profiler.as_mut() {
-            profiler.collect_finished(&self.device);
+        if self.cloud_render_scale != cloud_render_scale() { self.resize(self.size); }
+        if self.gpu_profiler.as_mut().is_some_and(|profiler| !profiler.collect_finished(&self.device)) {
+            // Drop all slots together; no failed map can be reused next frame.
+            self.gpu_profiler = None;
         }
 
         let acquire_start = Instant::now();
@@ -5376,6 +3873,7 @@ impl Gpu {
             frame_stats.gpu_pass_total_ms = gpu_timings.total_ms;
             frame_stats.gpu_shadow_ms = gpu_timings.shadow_ms;
             frame_stats.gpu_terrain_ms = gpu_timings.terrain_ms;
+            frame_stats.gpu_indirect_ms = gpu_timings.indirect_ms;
             frame_stats.gpu_cloud_raymarch_ms = gpu_timings.cloud_raymarch_ms;
             frame_stats.gpu_cloud_temporal_ms = gpu_timings.cloud_temporal_ms;
             frame_stats.gpu_sky_ms = gpu_timings.sky_ms;
@@ -5439,38 +3937,42 @@ impl Gpu {
         // only when the snapped light camera or the uploaded mesh set changes.
         let shadow_start = Instant::now();
         let redraw_shadow_map = !paused
+            && shadow::enabled()
             && self
                 .shadow_renderer
                 .apply_update_if_needed(&self.queue, chunk_cache.gpu_mesh_revision);
 
         if redraw_shadow_map {
             self.shadow_renderer.build_cascade_draw_lists(chunk_cache);
-            let shadow_timestamp_start = gpu_query_count;
+            let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {
+                    if !self.shadow_renderer.renders_cascade(pass_index as usize) { continue; }
                     let begin = gpu_query_count;
                     let end = begin + 1;
                     gpu_query_count += 2;
                     gpu_pass_queries[pass_index as usize] = Some((begin, end));
+                    shadow_timestamp_queries[pass_index as usize] = Some((begin, end));
                 }
             }
             self.shadow_renderer.render(
                 &mut encoder,
                 chunk_cache,
                 gpu_query_set.as_ref(),
-                shadow_timestamp_start,
+                &shadow_timestamp_queries,
             );
         }
         frame_stats.shadow_redraw = redraw_shadow_map;
-        frame_stats.shadow_draw_calls = self.shadow_renderer.draw_call_count();
+        frame_stats.shadow_draw_calls = if redraw_shadow_map { self.shadow_renderer.draw_call_count() } else { 0 };
         frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0;
 
+        let scene_view = &self.postprocess.scene;
         let terrain_start = Instant::now();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -5486,7 +3988,7 @@ impl Gpu {
                         },
                         store: wgpu::StoreOp::Store,
                     },
-                })],
+                }), Some(wgpu::RenderPassColorAttachment {view: &self.indirect.receiver, depth_slice: None, resolve_target: None, ops: wgpu::Operations {load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store: wgpu::StoreOp::Store}})],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -5524,17 +4026,48 @@ impl Gpu {
                         terrain_indices += mesh.index_count as usize;
                     }
                 }
+                if let Some(mesh) = &self.horizon.mesh {
+                    let planes = streaming::extract_planes(self.last_rotation_view_proj);
+                    for page in &mesh.pages {
+                        pass.set_vertex_buffer(0, page.vertices.slice(..));
+                        pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        if mesh.cull {
+                            for batch in &page.batches {
+                                if !batch.visible(self.last_camera_pos, &planes) { continue; }
+                                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                                terrain_draw_calls += 1;
+                                terrain_indices += batch.indices.len();
+                            }
+                        } else {
+                            pass.draw_indexed(0..page.count, 0, 0..1);
+                            terrain_draw_calls += 1;
+                            terrain_indices += page.count as usize;
+                        }
+                    }
+                }
                 frame_stats.terrain_draw_calls = terrain_draw_calls;
+                if self.scene_vertices>0 {
+                    if let Some(stream)=&self.scene_stream {
+                        pass.set_vertex_buffer(0,stream.slice::<Vertex3>(self.scene_vertices));
+                        pass.draw(0..self.scene_vertices as u32,0..1);
+                        frame_stats.terrain_draw_calls+=1;
+                    }
+                }
                 frame_stats.terrain_indices = terrain_indices;
             }
         }
         frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0;
+        if !paused && indirect_lighting_enabled() {
+            let timestamps = allocate_pass_timestamp_writes(gpu_query_set.as_ref(), &mut gpu_query_count, &mut gpu_pass_queries, GPU_TIMESTAMP_PASS_INDIRECT);
+            self.indirect.render(&mut encoder, &self.camera_bind_group, scene_view,
+                timestamps.map(|t| (t.query_set, t.beginning_of_pass_write_index.unwrap(), t.end_of_pass_write_index.unwrap())));
+        }
 
         let cloud_start = Instant::now();
         if !paused {
             let cloud_extent = wgpu::Extent3d {
-                width: (self.config.width / CLOUD_RENDER_SCALE).max(1),
-                height: (self.config.height / CLOUD_RENDER_SCALE).max(1),
+                width: (self.config.width / cloud_render_scale()).max(1),
+                height: (self.config.height / cloud_render_scale()).max(1),
                 depth_or_array_layers: 1,
             };
 
@@ -5638,7 +4171,7 @@ impl Gpu {
                 let mut sky_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("sky pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: scene_view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -5666,6 +4199,7 @@ impl Gpu {
                 sky_pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 sky_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 sky_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
+                sky_pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
                 sky_pass.draw(0..3, 0..1);
             }
 
@@ -5673,7 +4207,7 @@ impl Gpu {
                 let mut composite_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("cloud composite pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: scene_view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -5695,14 +4229,16 @@ impl Gpu {
                 composite_pass.set_bind_group(1, &self.cloud_bind_group, &[]);
                 composite_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 composite_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                composite_pass.draw(0..3, 0..1);
+                if !self.underwater {
+                    composite_pass.draw(0..3, 0..1);
+                }
             }
 
             if has_outline || has_invert_outline {
                 let mut outline_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("outline pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: scene_view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -5752,6 +4288,21 @@ impl Gpu {
         }
         frame_stats.cloud_encode_ms = cloud_start.elapsed().as_secs_f32() * 1000.0;
 
+        self.postprocess.render(
+            &self.queue,
+            &mut encoder,
+            &view,
+            [
+                self.current_lighting.exposure.max(0.01),
+                self.current_lighting.saturation,
+                if self.fxaa_enabled { 1.0 } else { 0.0 },
+                if self.current_debug_view == RenderDebugView::None {
+                    0.0
+                } else {
+                    1.0
+                },
+            ],
+        );
         let ui_start = Instant::now();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -5786,15 +4337,35 @@ impl Gpu {
         frame_stats.ui_encode_ms = ui_start.elapsed().as_secs_f32() * 1000.0;
 
         let overlay_start = Instant::now();
+        // Blend egui gamma-space premultiplied colors after the scene resolve.
+        let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format.remove_srgb_suffix()),
+            ..Default::default()
+        });
         overlay(
             &self.device,
             &self.queue,
             &mut encoder,
-            &view,
+            &ui_view,
             self.config.width,
             self.config.height,
         );
         frame_stats.overlay_encode_ms = overlay_start.elapsed().as_secs_f32() * 1000.0;
+
+        if !self.pending_captures.is_empty() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            self.pending_captures
+                .retain(|capture| !capture.finish_if_ready());
+        }
+        let capture = self.capture_path.take().and_then(|path| {
+            capture::PendingCapture::encode(
+                &self.device,
+                &mut encoder,
+                &frame.texture,
+                &self.config,
+                path,
+            )
+        });
 
         if let Some(slot_index) = gpu_timestamp_slot {
             if gpu_query_count != 0 {
@@ -5813,6 +4384,11 @@ impl Gpu {
             }
         }
         frame_stats.submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
+
+        if let Some(mut capture) = capture {
+            capture.map();
+            self.pending_captures.push(capture);
+        }
 
         let present_start = Instant::now();
         frame.present();

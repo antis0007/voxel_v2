@@ -18,7 +18,7 @@ struct VsOut {
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out : VsOut;
-    out.pos = cam.view_proj * vec4<f32>(in.pos * cam.world_params.x, 1.0);
+    out.pos = cam.view_proj * vec4<f32>(in.pos * cam.world_params.x - cam.camera_pos.xyz, 1.0);
     return out;
 }
 
