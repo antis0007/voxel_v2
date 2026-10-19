@@ -37,16 +37,24 @@ struct VsOut {
     @location(8) water_optics: vec2<f32>,
 };
 
+fn wave_heading(wxz: vec2<f32>) -> mat2x2<f32> {
+    let ang = (surface_noise(wxz * 0.007) - 0.5) * 2.6;
+    let c = cos(ang);
+    let s = sin(ang);
+    return mat2x2<f32>(c, -s, s, c);
+}
+
 fn gerstner_vertex_point(wxz: vec2<f32>, t: f32) -> vec3<f32> {
-    let d0 = vec2<f32>(0.88, 0.47);
-    let d1 = vec2<f32>(0.52, -0.85);
-    let d2 = vec2<f32>(-0.74, 0.67);
-    let d3 = vec2<f32>(-0.31, -0.95);
+    let rot = wave_heading(wxz);
+    let d0 = rot * vec2<f32>(0.88, 0.47);
+    let d1 = rot * vec2<f32>(0.52, -0.85);
+    let d2 = rot * vec2<f32>(-0.74, 0.67);
+    let d3 = rot * vec2<f32>(-0.31, -0.95);
 
     let ph0 = dot(wxz, d0) * 0.26 - t * 1.45;
     let ph1 = dot(wxz, d1) * 0.43 - t * 1.88 + 1.7;
     let ph2 = dot(wxz, d2) * 0.68 - t * 2.35 + 3.1;
-    let ph3 = dot(wxz, d3) * 1.05 - t * 2.90 + 0.8;
+    let ph3 = dot(wxz, d3) * 0.36 - t * 1.70 + 0.8;
 
     let a0 = 0.028;
     let a1 = 0.019;
@@ -102,23 +110,39 @@ fn vs_main(in: VsIn) -> VsOut {
         world_pos += wave_disp * (shore_atten * dist_atten * scale);
     }
     var backdrop_depth_bias = 0.0;
-    if in.ao_strength < 0.0 && in.ao_strength > -1.5 {
-        let handoff_outer = cam.world_params.w + 16.0 * scale;
-        let handoff_inner = max(cam.world_params.w * 0.58, cam.world_params.w - 72.0 * scale);
-        let underlap = 1.0 - smoothstep(handoff_inner, handoff_outer, horiz_dist);
-        world_pos.y -= underlap * select(0.2 * scale, 0.08 * scale, geometry_kind == 8.0);
-        // Scale bias byremaining depth budget (w - z) rather than w so perspective
+    if in.ao_strength < 0.0 {
+        // Same window as the fragment handoff. Bias peaks in the overlap and
+        // reaches zero at the outer edge so the surfaces meet without a step.
+        let backdrop_start = cam.world_params.w * 0.78;
+        let seam = max(120.0 * scale, cam.world_params.w * 0.06);
+        // The backdrop is fragment-discarded inside `backdrop_start`, so the band where
+        // it can actually overlap resident voxels is [start, start + seam]. Hold the
+        // full sink across the first part of that band, then release it to zero where
+        // resident chunks end.
+        let underlap = 1.0 - smoothstep(backdrop_start + 0.4 * seam, backdrop_start + seam, horiz_dist);
+        // A linear heightfield over-estimates concave, stepped voxel terrain by roughly
+        // half a ring cell times the slope, so sink steep ground further. Ring spacing
+        // grows with distance (cells span ~1/96 of the ring half-width).
+        let ring_cell = max(4.0, horiz_dist / 96.0);
+        let ny = clamp(normalize(in.normal).y, 0.25, 1.0);
+        let slope = sqrt(max(1.0 - ny * ny, 0.0)) / ny;
+        let relief_sink = clamp(0.5 * ring_cell * slope, 0.0, 3.0);
+        world_pos.y -= underlap * select(0.45 + relief_sink, 0.12, geometry_kind != 0.0); // only terrain, not water/foliage proxies, takes the relief sink
+        // Scale bias by the surface's own reverse-Z depth so perspective
         // hyperbolic depth never saturates or flattens across the overlap zone.
-        backdrop_depth_bias = underlap * 0.0012;
+        backdrop_depth_bias = underlap * 0.0035;
     }
     out.pos        = cam.view_proj * vec4<f32>(world_pos - cam.camera_pos.xyz, 1.0);
     // Separate exact fallback/resident depth without splitting shared world edges.
     // Per-face normal insets opened sky pinholes on fine voxel silhouettes.
+    // Depth is reverse-Z (1 near, 0 far): pushing a surface away scales its depth
+    // toward zero by a fraction of its own value, the mirror of the old forward-Z
+    // `z += (w - z) * bias`.
     if in.ao_strength < -1.5 {
-        out.pos.z += max(out.pos.w - out.pos.z, 0.0) * 0.00015;
+        out.pos.z -= max(out.pos.z, 0.0) * 0.00015;
     }
     if backdrop_depth_bias > 0.0 {
-        out.pos.z += max(out.pos.w - out.pos.z, 0.0) * backdrop_depth_bias;
+        out.pos.z -= max(out.pos.z, 0.0) * backdrop_depth_bias;
     }
     out.base_color = in.color;
     out.world_pos  = world_pos;
@@ -496,15 +520,15 @@ fn eval_torch_light(
     let dist = sqrt(max(dist2, 1e-6));
     let l    = to_torch / dist;
     let d = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
-    let falloff = d * d / (1.0 + dist2 * 0.12);
+    let falloff = d * d / (1.0 + dist2 * 0.045);
     let flicker  = torch_flicker(torch_pos_radius.xyz * 0.23 + vec3<f32>(0.0, 1.7, 0.0), time);
     let intensity = torch_color_strength.w * falloff * flicker;
     let lambert   = max(dot(n, l), 0.0);
-    let wrap = max((dot(n, l) + 0.12) / 1.12, 0.0);
+    let wrap = max((dot(n, l) + 0.38) / 1.38, 0.0);
     let color     = torch_color_strength.rgb;
     return TorchLightSample(
-        color * intensity * wrap * 1.16,
-        color * intensity * (0.035 + 0.045 * (1.0 - roughness)),
+        color * intensity * wrap * 1.35,
+        color * intensity * (0.09 + 0.06 * (1.0 - roughness)),
         color * intensity * specular_term(n, to_eye, l, roughness) * 0.05,
     );
 }
@@ -532,6 +556,19 @@ fn surface_noise(p: vec2<f32>) -> f32 {
     let w = f * f * (3.0 - 2.0 * f);
     return mix(mix(surface_hash(cell), surface_hash(cell + vec2<f32>(1.0, 0.0)), w.x),
                mix(surface_hash(cell + vec2<f32>(0.0, 1.0)), surface_hash(cell + vec2<f32>(1.0)), w.x), w.y);
+}
+
+// Block colour is the biome. These two octaves only bend the smooth normal.
+// Wavelength snaps to powers of two and crossfades, so the pattern stays put
+// in the world and a crest stays a few pixels wide as it recedes.
+fn far_shade(n: vec3<f32>, xz: vec2<f32>, footprint_m: f32) -> vec3<f32> {
+    let lod = log2(max(footprint_m, 1.5));
+    let w0 = exp2(floor(lod)) * 5.0;
+    let t = fract(lod);
+    let g0 = surface_noise_grad(xz / w0 + vec2<f32>(2.0, -4.0));
+    let g1 = surface_noise_grad(xz / (w0 * 2.0) + vec2<f32>(-5.0, 1.0));
+    let g = mix(g0.yz, g1.yz, t);
+    return normalize(n + vec3<f32>(g.x, 0.0, g.y) * (0.20 + (1.0 - n.y) * 0.10));
 }
 
 fn surface_noise_grad(p: vec2<f32>) -> vec3<f32> {
@@ -588,18 +625,27 @@ fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind:i32, f
     if fp<4.0 {clumps=(surface_noise(q.xz*0.65+q.y*vec2<f32>(0.21,0.16))-0.5)*(1.0-smoothstep(1.0,4.0,fp));}
     let up=smoothstep(-0.05,0.65,normal.y);
     let soil=mix(vec3<f32>(0.21,0.155,0.10),vec3<f32>(0.28,0.21,0.135),1.0-wet);
-    let green=mix(vec3<f32>(0.048,0.102,0.038),vec3<f32>(0.115,0.150,0.062),1.0-wet);
+    let green=mix(vec3<f32>(0.055,0.145,0.038),vec3<f32>(0.132,0.198,0.058),1.0-wet);
     let cool=1.0-smoothstep(0.22,0.44,heat);
     let forest=smoothstep(0.48,0.72,wet);
     let meadow=mix(green,vec3<f32>(0.135,0.175,0.076), (1.0-forest)*mottle*0.42);
     let boreal=mix(vec3<f32>(0.18,0.155,0.095),vec3<f32>(0.058,0.105,0.068),forest);
-    let turf=mix(mix(meadow,boreal,cool*0.75),vec3<f32>(0.35,0.28,0.12),arid);
+    // Vegetation vigour varies over 100-300 m. These fields are continuous and
+    // world-anchored, so unlike the 17 m mottling they stay visible at distance
+    // instead of filtering away into one flat tone.
+    let vigor=clamp(0.5+(surface_noise(q.xz/310.0+vec2<f32>(7.0,-3.0))-0.5)*1.1
+        +(surface_noise(q.xz/105.0+vec2<f32>(-19.0,41.0))-0.5)*0.55,0.0,1.0);
+    let lush_tint=vec3<f32>(0.90,1.12,0.86);
+    let dry_tint=vec3<f32>(1.14,1.02,0.78);
+    let base_turf=mix(meadow,boreal,cool*0.75)*mix(dry_tint,lush_tint,vigor);
+    // Dry climates read as golden-green grassland, not bare khaki.
+    let turf=mix(base_turf,vec3<f32>(0.27,0.255,0.105),arid*0.5);
     let sand=mix(vec3<f32>(0.54,0.45,0.29),vec3<f32>(0.68,0.57,0.38),heat);
     var color=base;
     if kind==0 || kind==1 || kind==7 {
         let coastal_dune=(1.0-smoothstep(12.2,13.6+mottle*0.6,q.y))*0.28;
         let backdrop_beach=select(0.0,coastal_dune,kind==0);
-        let sparse=smoothstep(0.15,0.85,arid)*0.85;
+        let sparse=smoothstep(0.15,0.85,arid)*0.40;
         let top_coat=mix(turf,sand,max(coastal_dune,sparse));
         let turf_overhang=select(0.0,smoothstep(0.48,0.82,fract(p.y)+clumps*0.18),kind==1 || kind==7);
         let side_coat=mix(soil,top_coat,max(backdrop_beach,turf_overhang*0.78));
@@ -627,9 +673,11 @@ fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind:i32, f
         let dip_coord = q.x * 0.038 + q.z * 0.029 + (drift_noise - 0.5) * 2.2;
         let strata=surface_noise(vec2<f32>(dip_coord, q.y*0.16 + sin(dip_coord * 1.4) * 0.8))*0.65
                   +surface_noise(vec2<f32>(q.x*0.13-q.z*0.09,q.y*0.34+mottle*0.8))*0.35;
-        let limestone_band = smoothstep(0.68, 0.86, sin(q.y * 0.24 + dip_coord * 3.2) * 0.5 + 0.5);
+        // Thick, faint bedding (tens of metres) to match generator 15 bedrock; the old
+        // 26 m high-contrast bands read as stripes on every distant mountain.
+        let limestone_band = smoothstep(0.62, 0.92, sin(q.y * 0.085 + dip_coord * 1.1 + (drift_noise - 0.5) * 2.4) * 0.5 + 0.5);
         let rock_base = mix(vec3<f32>(0.16,0.18,0.20),vec3<f32>(0.25,0.20,0.15),heat);
-        let mineral = mix(rock_base, vec3<f32>(0.28, 0.27, 0.24), limestone_band * 0.45) * (0.78 + strata * 0.44);
+        let mineral = mix(rock_base, vec3<f32>(0.28, 0.27, 0.24), limestone_band * 0.20) * (0.90 + strata * 0.20);
         let alpine_rock=smoothstep(52.0,108.0,q.y+(scree_noise-0.5)*20.0)*smoothstep(0.10,0.48,1.0-normal.y+(scree_noise-0.5)*0.16);
         let exposed=clamp(max(exposure*0.48,alpine_rock*0.68),0.0,1.0);
         color=mix(color,mineral*(0.86+mottle*0.28),exposed*(1.0-snow*0.78));
@@ -644,7 +692,7 @@ fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind:i32, f
         if cam.scene_seed.y >= 10u {
             let savanna=smoothstep(0.50,0.65,heat)*(1.0-smoothstep(0.38,0.53,wet));
             let rainforest=smoothstep(0.50,0.65,heat)*smoothstep(0.60,0.78,wet);
-            color=mix(color,vec3<f32>(0.32,0.255,0.085)*(0.85+mottle*0.3),savanna*up*0.62*(1.0-coastal_dune));
+            color=mix(color,vec3<f32>(0.26,0.245,0.080)*(0.85+mottle*0.3),savanna*up*0.30*(1.0-coastal_dune));
             color=mix(color,vec3<f32>(0.042,0.105,0.031),rainforest*up*0.38);
         }
     } else if kind==2 {
@@ -673,8 +721,21 @@ fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind:i32, f
 fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, footprint: f32) -> vec3<f32> {
     if kind==1 || kind==2 || kind==3 || kind==4 || kind==7 || kind==16 { return natural_surface(base,p,normal,kind,footprint); }
     if kind==8 {return base;}
+    let landscape_p = p.xz * cam.world_params.x;
     if (kind==5 || kind==6) && footprint*cam.world_params.x>0.5 {
-        return base*(0.88+surface_noise(p.xz*cam.world_params.x/17.0)*0.24);
+        // Large crowns alias leaf shapes away, but they still need the same
+        // species palette as nearby trees. A flat scale of the dark vertex
+        // colour turned distant woodland into muddy blobs.
+        let pine = step(base.r, base.b + 0.02);
+        let grove = surface_noise(landscape_p / 34.0 + vec2<f32>(8.0, 61.0));
+        let land = surface_noise(landscape_p / 83.0);
+        let summer = mix(vec3<f32>(0.055, 0.125, 0.040), vec3<f32>(0.125, 0.195, 0.062), land);
+        let autumn = mix(vec3<f32>(0.165, 0.088, 0.034), vec3<f32>(0.220, 0.125, 0.046), smoothstep(0.78, 0.95, grove));
+        let broadleaf = mix(summer, autumn, smoothstep(0.68, 0.90, grove) * 0.55);
+        let needles = mix(vec3<f32>(0.042, 0.092, 0.058), vec3<f32>(0.082, 0.145, 0.092), land);
+        let canopy = mix(mix(broadleaf, needles, pine), base, 0.28);
+        let clump = surface_noise(landscape_p / 17.0 + vec2<f32>(31.0, -12.0));
+        return canopy * (0.92 + clump * 0.16);
     }
     var uv = p.xz;
     if abs(normal.x) > 0.5 { uv = p.zy; }
@@ -683,7 +744,6 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
     let fine_fade = 1.0 - smoothstep(0.035, 0.095, metric_footprint);
     let medium_fade = 1.0 - smoothstep(0.08, 0.4, metric_footprint);
     let physical_uv = uv * cam.world_params.x;
-    let landscape_p = p.xz * cam.world_params.x;
     // Meter-scale color survives when individual blades and voxel faces no
     // longer resolve. The same continuous field spans every mesh/LOD boundary.
     let broad = surface_noise(landscape_p / 83.0);
@@ -691,9 +751,9 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
     let ridge = surface_noise(landscape_p / 5.2 + vec2<f32>(-73.0, 22.0));
     let patch_keep = 1.0 - smoothstep(4.0, 18.0, metric_footprint);
     let land_tone = mix(broad, broad * 0.50 + landscape_patch * 0.32 + ridge * 0.18, patch_keep);
-    // Close surface painting shares one 16-texel/metre grid.
-    // Only the near detail snaps; distant colors retain the filtered base.
-    uv = mix(physical_uv,(floor(physical_uv*16.0)+0.5)/16.0,fine_fade);
+    // Keep continuous metre coordinates up close. Snapping onto a 16-sample
+    // grid flattened mortar, grain and leaf shapes at every playable distance.
+    uv = physical_uv;
     let grain = (surface_hash(floor(physical_uv * 16.0)) - 0.5) * fine_fade;
     let mottling = (surface_noise(physical_uv * 3.0) - 0.5) * medium_fade;
     let mineral_grain = (surface_noise(physical_uv * 11.0 + vec2<f32>(19.0, 53.0)) - 0.5) * fine_fade;
@@ -734,14 +794,32 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         let board = surface_hash(floor(plank_uv));
         color = base * (0.88+board*0.22+wood*0.075) * (1.0-seam*0.48*medium_fade);
     } else if kind == 12 {
-        var brick_uv = uv * vec2<f32>(2.0,4.0);
-        brick_uv.x += (floor(brick_uv.y)%2.0)*0.5;
+        // Cut stone: two bricks per metre, four courses, running bond.
+        // Joints are measured in continuous metres so they stay open next to the camera.
+        let courses = uv.y * 4.0;
+        let row = floor(courses);
+        let row_phase = row - 2.0 * floor(row * 0.5);
+        let brick_uv = vec2<f32>(uv.x * 2.0 + row_phase * 0.5, courses);
+        let cell = floor(brick_uv);
         let local = fract(brick_uv);
-        let border = min(min(local.x,1.0-local.x),min(local.y,1.0-local.y));
-        let mortar = 1.0-smoothstep(0.025,0.065+metric_footprint*3.0,border);
-        let variation = surface_hash(floor(brick_uv));
-        color = base*(0.82+variation*0.32+grain*0.22);
-        color = mix(color, vec3<f32>(0.09,0.085,0.075), mortar*medium_fade*0.8);
+        let edge = min(min(local.x, 1.0 - local.x), min(local.y, 1.0 - local.y));
+        let joint = 0.075 + min(metric_footprint, 0.08) * 0.8;
+        let mortar = 1.0 - smoothstep(joint, joint + 0.028, edge);
+        let bevel = smoothstep(0.0, 0.2, edge);
+        let id = surface_hash(cell);
+        let speckle = surface_noise(uv * vec2<f32>(19.0, 14.0) + id * 11.0);
+        let chip = smoothstep(0.76, 0.92, speckle);
+        let crack = smoothstep(0.84, 0.93, surface_noise(vec2<f32>(local.x * 2.4 + id * 5.0, local.y * 0.35)));
+        let weathered = smoothstep(0.045, 0.11, base.g - base.r);
+        let tint = mix(vec3<f32>(0.84, 0.82, 0.76), vec3<f32>(1.12, 1.07, 0.98), id);
+        let moss = vec3<f32>(0.30, 0.38, 0.22);
+        color = base * tint * (0.70 + bevel * 0.36 + (speckle - 0.5) * 0.08);
+        color = mix(color, color * vec3<f32>(0.58, 0.54, 0.50), (chip * 0.55 + crack * 0.22) * (1.0 - mortar));
+        let mortar_col = mix(base * vec3<f32>(0.46, 0.42, 0.37), moss, weathered * (0.45 + id * 0.35));
+        let joint_keep = 1.0 - smoothstep(0.16, 0.6, metric_footprint);
+        color = mix(color, mortar_col, mortar * joint_keep);
+        let stain = smoothstep(0.58, 0.86, surface_noise(cell * 0.41 + uv * 1.3));
+        color = mix(color, moss, stain * weathered * (1.0 - mortar) * 0.34);
     } else if kind == 13 {
         let q = uv*4.0;
         let cell = floor(q); let local = fract(q);
@@ -878,35 +956,23 @@ fn fs_main(in: VsOut) -> WorldOutput {
     if in.ao_strength >= 0.0 || in.ao_strength < -1.5 || kind != 0 {
         let detail_color=block_surface(albedo, in.voxel_pos/max(material_props.y,0.0625), n, kind, footprint/max(material_props.y,0.0625));
         albedo=max(mix(albedo,detail_color,clamp(material_props.z,0.0,2.0)),vec3<f32>(0.0));
+        // Coarse resident cells are real blocks, but a few metres across. A filtered
+        // relief normal keeps those faces from reading as flat boxes.
+        let fp_m = footprint * cam.world_params.x;
+        if (kind == 0 || kind == 1 || kind == 3 || kind == 7) && fp_m > 0.7 {
+            let q_far = in.voxel_pos * cam.world_params.x;
+            let g = surface_noise_grad(q_far.xz * 0.02 + vec2<f32>(13.7, -29.4));
+            let filt = exp(-0.5 * pow(fp_m * 0.04, 2.0));
+            let slope = clamp(1.0 - geometric_normal.y, 0.0, 1.0);
+            n = normalize(n + vec3<f32>(g.y, 0.0, g.z) * (0.28 * filt * (0.35 + slope)));
+        }
     } else {
-        let q_far = in.voxel_pos * cam.world_params.x;
         let fp_far = footprint * cam.world_params.x;
-        // Evaluate material zones using the unperturbed macro normal so snow
-        // and scree boundaries never chatter with high-frequency normal noise.
-        albedo = natural_surface(albedo, in.voxel_pos, n, 0, footprint);
-        // Apply multi-scale geological relief and ridged arête facet shading after
-        // surface coloration so distant mountains have crisp pyramidal crags & couloirs.
-        let crag_weight = clamp((1.0 - geometric_normal.y) * 1.65 + smoothstep(42.0, 115.0, q_far.y) * 0.58, 0.0, 1.0);
-        let filter_macro = exp(-0.5 * pow(fp_far * 0.022, 2.0));
-        let filter_meso  = exp(-0.5 * pow(fp_far * 0.078, 2.0));
-        let filter_micro = exp(-0.5 * pow(fp_far * 0.22, 2.0));
-        let rot_far = mat2x2<f32>(0.80, -0.60, 0.60, 0.80);
-        let g_macro = surface_noise_grad(q_far.xz * 0.018 + vec2<f32>(13.7, -29.4));
-        let g_meso  = surface_noise_grad((rot_far * q_far.xz) * 0.058 + vec2<f32>(-41.2, 17.8));
-        let g_micro = surface_noise_grad(q_far.xz * 0.165 + vec2<f32>(27.1, 53.6));
-        // Ridged derivative: d/dx (1 - |2n - 1|) flips sign across arête crests,
-        // producing sharp angular mountain facets rather than round pillowy bumps.
-        let arete_macro = -tanh((g_macro.x - 0.5) * 6.0) * g_macro.yz;
-        let arete_meso  = -tanh((g_meso.x - 0.5) * 6.0) * (rot_far * g_meso.yz);
-        let ridge_grad = mix(g_macro.yz, arete_macro, crag_weight * 0.65) * (0.16 * filter_macro)
-                       + mix(rot_far * g_meso.yz, arete_meso, crag_weight * 0.72) * (0.12 * filter_meso * (0.35 + 0.65 * crag_weight))
-                       + g_micro.yz * (0.075 * filter_micro * crag_weight);
-        n = normalize(n + vec3<f32>(ridge_grad.x, 0.0, ridge_grad.y));
-        // Couloir crevice occlusion and sunlit arête crest highlight.
-        let ridge_crest = 1.0 - abs(g_macro.x * 2.0 - 1.0);
-        let couloir_groove = 1.0 - abs(g_meso.x * 2.0 - 1.0);
-        let gully_ao = mix(0.80, 1.10, clamp(ridge_crest * 0.62 + (1.0 - couloir_groove) * 0.38, 0.0, 1.0));
-        albedo *= mix(1.0, gully_ao, (0.42 + 0.58 * crag_weight) * filter_macro);
+        // Walked-terrain grain on top of the sampled block, so the biome is the
+        // block and the grain is the same function the near ground uses.
+        let cover = natural_surface(albedo, in.voxel_pos, n, 1, footprint);
+        albedo = mix(albedo, cover, 0.42);
+        n = far_shade(n, in.voxel_pos.xz * cam.world_params.x, fp_far);
     }
     var water_depth = 10.0;
     var water_foam = 0.0;
@@ -953,17 +1019,18 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let shoal_boost = 1.0 + 0.42 * exp(-depth * 0.95) * smoothstep(0.06, 0.42, depth);
         let shoal_lag = (1.0 - tanh(min(depth * 0.85, 3.0))) * 2.1;
 
-        let d0 = vec2<f32>(0.88, 0.47);
-        let d1 = vec2<f32>(0.52, -0.85);
-        let d2 = vec2<f32>(-0.74, 0.67);
-        let d3 = vec2<f32>(-0.31, -0.95);
-        let d4 = vec2<f32>(0.96, -0.28);
+        let rot = wave_heading(p);
+        let d0 = rot * vec2<f32>(0.88, 0.47);
+        let d1 = rot * vec2<f32>(0.52, -0.85);
+        let d2 = rot * vec2<f32>(-0.74, 0.67);
+        let d3 = rot * vec2<f32>(-0.31, -0.95);
+        let d4 = rot * vec2<f32>(0.96, -0.28);
 
         let ph0 = dot(wp, d0) * 0.26 - t * 1.45 + shoal_lag + n0.x * 2.8;
         let ph1 = dot(wp, d1) * 0.43 - t * 1.88 + shoal_lag * 1.3 + n1.x * 2.4;
         let ph2 = dot(wp, d2) * 0.68 - t * 2.35 + n0.y * 2.1;
-        let ph3 = dot(p,  d3) * 1.15 - t * 3.05 + n2.x * 1.9;
-        let ph4 = dot(p,  d4) * 1.85 - t * 3.85 + n1.y * 1.6;
+        let ph3 = dot(wp, d3) * 1.15 - t * 3.05 + n2.x * 1.9;
+        let ph4 = dot(wp, d4) * 1.85 - t * 3.85 + n1.y * 1.6;
 
         // Trochoidal / Gerstner wave slopes: sin(ph) / (1 - Q*cos(ph)) sharpens crests
         // and widens troughs, while the Jacobian J tracks crest convergence.
@@ -1024,21 +1091,16 @@ fn fs_main(in: VsOut) -> WorldOutput {
             water_col = water_col * (vec3<f32>(1.0) - transmission) + refracted_bed * transmission;
         }
 
-        // Dual-layer refracted sun caustics with subtle R/G/B chromatic dispersion.
-        let shallow_vis = exp(-depth * 0.52) * w2;
-        let c_uv = bed_p * 1.52 + n.xz * (refract_depth * 0.85);
-        let ca_r = surface_noise(c_uv + vec2<f32>(t * 0.44 + 0.035, -t * 0.32));
-        let cb_r = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38, t * 0.49 - 0.035));
-        let ca_g = surface_noise(c_uv + vec2<f32>(t * 0.44, -t * 0.32));
-        let cb_g = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38, t * 0.49));
-        let ca_b = surface_noise(c_uv + vec2<f32>(t * 0.44 - 0.035, -t * 0.32 + 0.025));
-        let cb_b = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38 - 0.025, t * 0.49 + 0.035));
-        let caustic_rgb = vec3<f32>(
-            smoothstep(0.60, 0.93, 1.0 - abs(ca_r - cb_r) * 2.25),
-            smoothstep(0.60, 0.93, 1.0 - abs(ca_g - cb_g) * 2.25),
-            smoothstep(0.60, 0.93, 1.0 - abs(ca_b - cb_b) * 2.25)
-        );
-        water_col += caustic_rgb * vec3<f32>(0.075, 0.105, 0.092) * shallow_vis;
+        // One moving web, focused by the sun. Two samples instead of six colour
+        // fields: the lines are the overlap of two wave phases, bright only where
+        // the water is shallow and the sun is up.
+        let sun_up = smoothstep(0.02, 0.28, light.sun_dir_intensity.y);
+        let shallow_vis = exp(-depth * 0.62) * w2 * sun_up;
+        let c_uv = bed_p * 0.72 + n.xz * (refract_depth * 0.55);
+        let ca = surface_noise(c_uv + vec2<f32>(t * 0.22, -t * 0.16));
+        let cb = surface_noise((rot1 * c_uv) * 1.37 + vec2<f32>(-t * 0.18, t * 0.21));
+        let web = pow(saturate1(1.0 - abs(ca - cb) * 2.1), 5.0);
+        water_col += vec3<f32>(0.42, 0.62, 0.50) * web * shallow_vis;
 
         // Cellular perforated shoreline swash foam & Jacobian-driven breaking whitecaps.
         let bubble_fine = surface_noise(bed_p * 5.8 + n1.yz * 1.1 + vec2<f32>(t * 0.25, -t * 0.19));
@@ -1079,7 +1141,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
         if axis.x > axis.y && axis.x > axis.z { uv = cell.zy; }
         else if axis.z > axis.y { uv = cell.xy; }
         let radius = length(uv * vec2<f32>(1.0, select(1.0, 0.8, kind == 42)));
-        let feather = 1.0 - smoothstep(0.18, 0.50, radius);
+        let feather = 1.0 - smoothstep(0.12, 0.48, radius);
+        albedo *= feather * feather;
         if threshold > select(0.30, 0.72, kind == 42) * feather { discard; }
     }
     if kind == 40 && in.surface.x < 0.0 {
@@ -1089,6 +1152,10 @@ fn fs_main(in: VsOut) -> WorldOutput {
         if dither > alpha { discard; }
     }
     roughness = clamp(sqrt(roughness * roughness + min(normal_variance, 0.25)), 0.08, 1.0);
+    // Coarse heightfield facets otherwise sparkle as the camera moves.
+    if in.ao_strength < 0.0 && in.ao_strength > -1.5 {
+        roughness = max(roughness, 0.40);
+    }
     let specular_weight=reflectance*pow(1.0-roughness,2.0);
     let to_eye  = normalize(cam.camera_pos.xyz - in.world_pos);
     let view_dir = normalize(in.world_pos - cam.camera_pos.xyz);
@@ -1149,16 +1216,18 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // backdrop geometry outside the playable inner residency, including water.
     // Outer chunks can still be streaming while moving. Exclude the
     // prioritized local coverage rather than the entire requested draw radius.
-    let backdrop_start = min(256.0 * cam.world_params.x, cam.world_params.w * 0.70);
-    if in.ao_strength < 0.0 && in.ao_strength > -1.5 && kind != 5 && kind != 6
+    let backdrop_start = cam.world_params.w * 0.78;
+    let seam = max(120.0 * cam.world_params.x, cam.world_params.w * 0.06);
+    if in.ao_strength < 0.0 && kind != 5 && kind != 6
         && horizontal_dist < backdrop_start { discard; }
     // Foliage proxies start where the solid heightfield does, with a short
     // overlap so voxel trees and distant crowns do not leave a bare ring.
-    if in.ao_strength < 0.0 && in.ao_strength > -1.5 && (kind == 5 || kind == 6)
-        && horizontal_dist < backdrop_start - 36.0 * cam.world_params.x { discard; }
+    if in.ao_strength < 0.0 && (kind == 5 || kind == 6)
+        && horizontal_dist < backdrop_start - 48.0 * cam.world_params.x { discard; }
     // Coarse resident cells past the handoff are full of caves and borders.
     // The heightfield covers that band; edited fallback faces still draw.
-    if in.ao_strength >= 0.0 && horizontal_dist > backdrop_start + 36.0 * cam.world_params.x { discard; }
+    // The seam is wide enough that a moving camera does not strobe the cut.
+    if in.ao_strength >= 0.0 && horizontal_dist > backdrop_start + seam { discard; }
     // In the outer overlap, depth selects detailed chunks over the lowered
     // backdrop without a stippled material transition.
 
@@ -1198,9 +1267,11 @@ fn fs_main(in: VsOut) -> WorldOutput {
     if in.ao_strength >= 0.0 && cam.scene_seed.w == 0u
         && (sun_shadow_strength > 0.0 || debug_mode == 11) {
         shadow_visibility = sample_sun_shadow(in.world_pos, linear_depth, sun_lambert, world_dx, world_dy);
-    } else if in.ao_strength < 0.0 && in.ao_strength > -1.5 {
+    } else if in.ao_strength < 0.0 {
         // Distant horizon slopes self-shadow when facing away from the sun.
-        shadow_visibility = smoothstep(-0.08, 0.22, dot(geometric_normal, sun_dir));
+        // Wrap the terminator so kilometre-scale slopes keep form without
+        // turning every lee face into a black cutout.
+        shadow_visibility = smoothstep(-0.28, 0.38, dot(geometric_normal, sun_dir));
     }
     if debug_mode == 11 { return debug_surface_output(vec4<f32>(vec3<f32>(shadow_visibility), 1.0)); }
 
@@ -1210,7 +1281,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let sun_diffuse = select(mix(sun_lambert,
                           oren_nayar(n, to_eye, sun_dir, roughness),
                           roughness * 0.22), foliage_sun, foliage)
-                      * light.sun_dir_intensity.w * sun_trans * sun_shadow * 1.18;
+                      * light.sun_dir_intensity.w * sun_trans * sun_shadow * 1.32;
     let moon_diffuse = select(mix(moon_lambert,
                            oren_nayar(n, to_eye, moon_dir, roughness),
                            roughness * 0.16), foliage_moon, foliage)
@@ -1237,7 +1308,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Dense clouds remove the direct sun, but should replace it with a broad
     // bright sky dome rather than turning the terrain nearly black. Keep the
     // clear-day level restrained and let the local cloud field lift overcast.
-    let sky_fill_strength = mix(mix(0.30, 0.95, cloudiness * daylight), 0.66, twilight_fill);
+    let sky_fill_strength = mix(mix(0.42, 0.95, cloudiness * daylight), 0.66, twilight_fill);
 
     // A low sun still leaves a broad cool hemisphere above shaded ground.
     // Sampling only the bright solar horizon made that fill too warm while
@@ -1258,7 +1329,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
 
     // Ground bounce contribution for downward-facing surfaces
     let ground_irr  = light.sun_color_daylight.rgb * sky_transmittance_to_sun(sun_dir.y)
-                    * saturate1(sun_dir.y) * light.sun_dir_intensity.w * 0.05 * sun_trans;
+                    * saturate1(sun_dir.y) * light.sun_dir_intensity.w * 0.14 * sun_trans;
     let ground_col  = mix(vec3<f32>(0.018, 0.025, 0.042), ground_irr, daylight);
     let ground_amt  = saturate1(1.0 - hemi) * 0.56;
     // Strengthen local cavity & canopy AO so tree trunks under foliage,
@@ -1277,7 +1348,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // --- Explicit ember / flame emission ---
     // Fire retains its luminance when the environment is darkened for night.
     // Cancel both the shared exposure and the terrain-only night grade below.
-    let fire_exposure = 0.9 / (exposure * mix(0.40, 1.0, daylight));
+    let fire_exposure = 0.9 / (exposure * mix(0.75, 1.0, daylight));
     var emissive = vec3<f32>(0.0);
     if kind == 42 { emissive += albedo * 3.5; }
     if kind == 51 { emissive += albedo * 0.42; }
@@ -1504,18 +1575,23 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // the endpoint's overhead visibility here erased distant haze precisely
     // on dark slopes, leaving black cutout bands against the landscape.
     lit = mix(lit, fog_target, total_fog_t);
-    if cam.camera_pos.w > 0.5 {
-        // Wavelength-dependent absorption gives short red visibility and a blue-green distance haze.
-        let transmission = exp(-vec3<f32>(0.24, 0.075, 0.045) * dist);
-        let underwater_color = vec3<f32>(0.012, 0.085, 0.11) * mix(0.18, 1.0, daylight);
-        lit = lit * transmission + underwater_color * (vec3<f32>(1.0)-transmission);
+    if uw_active() {
+        if kind == 8 && in.world_pos.y > cam.camera_pos.y {
+            // The surface above a diver is the same Snell's-window sky the sky pass paints
+            // behind it, so the two meet without seams.
+            let jitter = fract(dot(floor(in.pos.xy), vec2<f32>(0.754877666, 0.569840296)));
+            lit = uw_backdrop(view_dir, jitter);
+        } else {
+            // Absorption, caustic light and a haze that matches the sky pass's underwater backdrop.
+            lit = uw_apply_fragment(lit, albedo, in.world_pos, n, view_dir, dist, sun_shadow * sun_trans);
+        }
     }
-    lit *= mix(0.40, 1.0, daylight);
+    lit *= mix(0.75, 1.0, daylight);
     // Streaming-edge haze must also cover downward rays while flying.
     // Kilometre-scale extinction preserves layered silhouettes instead of leaving
     // remote slopes as bright and contrasty as the foreground.
-    let horizon_haze = (1.0 - exp(-max(horizontal_dist - 480.0, 0.0)
-        / mix(4200.0, 7200.0, daylight))) * sky_access * 0.72;
+    let horizon_haze = (1.0 - exp(-max(horizontal_dist - 900.0, 0.0)
+        / mix(6400.0, 9800.0, daylight))) * sky_access * 0.42;
     let raw_sky_radiance = atmosphere_color(view_dir);
     let sky_luma = dot(raw_sky_radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
     let weather_sky_radiance = mix(raw_sky_radiance, vec3<f32>(sky_luma), cloudiness * 0.55)
