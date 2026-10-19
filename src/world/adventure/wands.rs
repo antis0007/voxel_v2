@@ -318,6 +318,7 @@ pub fn evaluate_cast_block(
             recharge_delta += spell_recharge_delta(s);
             spread_deg = (spread_deg + spell_spread_delta(s)).max(0.0);
 
+            let carrier_slot = cur;
             let mut payload = None;
             let mut payload_slot = None;
             if attach_trigger && projectile(s) {
@@ -334,7 +335,7 @@ pub fn evaluate_cast_block(
             }
 
             actions.push(CastAction {
-                slot: cur,
+                slot: carrier_slot,
                 spell: s,
                 payload,
                 payload_slot,
@@ -879,16 +880,17 @@ mod acceptance {
         let mut b = Adventure::default();
         b.wand = 3;
         b.rare_spells = !0;
-        b.loadout.slots = [21, 10, 17, 11];
+        b.loadout.slots = [18, 10, 11, 17];
         b.loadout.aux_slots = [12, 0, 0, 0];
         b.swap_wand_slots(0, 4);
         assert_eq!(b.loadout.slot(0), 12);
-        assert_eq!(b.loadout.slot(4), 21);
+        assert_eq!(b.loadout.slot(4), 18);
         b.swap_wand_slots(0, 4);
         let eval = evaluate_cast_block(b.wand, b.rank(), b.discoveries, b.rare_spells, &b.loadout, 0);
         assert_eq!(eval.actions.len(), 1);
-        assert_eq!(eval.actions[0].slot, 0);
-        assert_eq!(eval.actions[0].payload, Some(10));
-        assert_eq!(eval.actions[0].payload_slot, Some(1));
+        assert_eq!(eval.actions[0].slot, 1);
+        assert_eq!(eval.actions[0].spell, 10);
+        assert_eq!(eval.actions[0].payload, Some(11));
+        assert_eq!(eval.actions[0].payload_slot, Some(2));
     }
 }

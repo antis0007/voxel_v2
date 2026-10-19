@@ -430,6 +430,59 @@ fn benchmark_motion_active(benchmark: Option<&BenchmarkState>) -> bool {
     })
 }
 
+fn cloud_review_hills_target(terrain: world::WorldSampleConfig) -> (f32, f32) {
+    static TARGET: std::sync::OnceLock<(f32, f32)> = std::sync::OnceLock::new();
+    *TARGET.get_or_init(|| {
+        let meters_per_block = terrain.voxel_scale.meters();
+        let blocks_per_meter = meters_per_block.recip();
+        let water_m = terrain.water_level() as f32 * meters_per_block;
+        let preview_height = |x_m: f32, z_m: f32| {
+            world::landscape::preview_surface(
+                &terrain,
+                (x_m * blocks_per_meter).round() as i32,
+                (z_m * blocks_per_meter).round() as i32,
+            )
+            .0 * meters_per_block
+        };
+        let mut best = (16_500.0f32, 0.0f32);
+        let mut best_score = f32::NEG_INFINITY;
+        let mut best_height = 0.0f32;
+        let mut best_relief = 0.0f32;
+        // Search a narrow 16-20 km annulus cheaply with the same preview
+        // surface used by the distant terrain. Prefer inland, locally rugged
+        // candidates; the capture validator still checks the actual terrain.
+        for radius in [16_500.0, 17_500.0, 18_500.0, 19_500.0] {
+            for sector in 0..48 {
+                let angle = std::f32::consts::TAU * sector as f32 / 48.0;
+                let x = radius * angle.cos();
+                let z = radius * angle.sin();
+                let center = preview_height(x, z);
+                let mut low = center;
+                let mut high = center;
+                for (dx, dz) in [(-128.0, 0.0), (128.0, 0.0), (0.0, -128.0), (0.0, 128.0)] {
+                    let h = preview_height(x + dx, z + dz);
+                    low = low.min(h);
+                    high = high.max(h);
+                }
+                let relief = high - low;
+                let inland = (center - water_m - 12.0).max(0.0);
+                let score = center + relief * 1.4 + inland * 0.25;
+                if score > best_score {
+                    best_score = score;
+                    best = (x, z);
+                    best_height = center;
+                    best_relief = relief;
+                }
+            }
+        }
+        println!(
+            "[cloud-review-target] x_m={:.1} z_m={:.1} preview_ground_m={:.1} local_relief_m={:.1}",
+            best.0, best.1, best_height, best_relief,
+        );
+        best
+    })
+}
+
 fn apply_benchmark_camera_motion(
     state: &BenchmarkState,
     player: &mut Player,
@@ -490,8 +543,13 @@ fn apply_benchmark_camera_motion(
         // presets at 16 km. Each 15-second shot includes translation and rotation.
         let travel = ((elapsed - 75.0) / 15.0).clamp(0.0, 1.0);
         let shot_time = elapsed % 15.0;
-        let x = travel * 16_384.0 + (shot_time * 0.18).sin() * 24.0;
-        let z = -travel * 8_192.0 + (shot_time * 0.18).cos() * 24.0;
+        let (target_x, target_z) = if state.config.motion == BenchmarkMotionMode::CloudReviewFar {
+            cloud_review_hills_target(terrain)
+        } else {
+            (16_384.0, -8_192.0)
+        };
+        let x = travel * target_x + (shot_time * 0.18).sin() * 24.0;
+        let z = travel * target_z + (shot_time * 0.18).cos() * 24.0;
         // A fixed Y put the previous Hills review underground. Follow generated
         // terrain, with room for nearby crests and the tallest tree canopies.
         let ground = [

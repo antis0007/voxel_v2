@@ -172,8 +172,8 @@ fn draw_hunger(
     let mut mesh = egui::Mesh::default();
 
     for idx in 0..10 {
-        let slot_Index_from_right = 9 - idx;
-        let threshold = slot_Index_from_right as f32 * 10.0;
+        let slot_index_from_right = 9 - idx;
+        let threshold = slot_index_from_right as f32 * 10.0;
         let fill = ((value - threshold) / 10.0).clamp(0.0, 1.0);
         let old = ((trail - threshold) / 10.0).clamp(0.0, 1.0);
         let prev_fill = ((preview_top - threshold) / 10.0).clamp(0.0, 1.0);
@@ -183,7 +183,7 @@ fn draw_hunger(
         } else if low_hunger {
             ((time * 8.5 + idx as f32 * 1.4).sin() * 1.0).round()
         } else if eating {
-            let wave = ((time * 14.0 - slot_Index_from_right as f32 * 0.6).sin()).max(0.0);
+            let wave = ((time * 14.0 - slot_index_from_right as f32 * 0.6).sin()).max(0.0);
             -(wave * 1.5).round()
         } else {
             0.0

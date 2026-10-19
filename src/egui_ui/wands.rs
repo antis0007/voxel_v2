@@ -13,7 +13,7 @@ const SPELL_ORDER: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
 const MODIFIER_ORDER: &[u32] = &[16, 17, 18, 19, 20, 21, 22, 23];
 
 #[derive(Clone, Copy, Debug)]
-enum WandDrag {
+pub(super) enum WandDrag {
     DeckSlot(usize, u32),
     PaletteSpell(u32),
 }

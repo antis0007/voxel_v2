@@ -24,7 +24,7 @@ pub(crate) fn savanna_climate(temperature: f32, moisture: f32) -> bool {
     temperature > 0.56 && moisture < 0.49 && !desert_climate(temperature, moisture)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Biome {
     Ocean,
     Coast,
@@ -1358,17 +1358,24 @@ mod tectonics_and_oceans {
         let mut ocean_columns = 0;
         let mut coast_columns = 0;
         let mut land_columns = 0;
+        let mut alpine_columns = 0;
+        let mut max_mountain_height = 0.0_f32;
         let mut volcanic_or_orogenic = 0;
         let mut strata_blocks = std::collections::HashSet::new();
+        let mut mountain_surfaces = std::collections::HashSet::new();
 
-        for gz in -8..=8 {
-            for gx in -8..=8 {
-                let x = gx * 120;
-                let z = gz * 120;
+        for gz in -10..=10 {
+            for gx in -10..=10 {
+                let x = gx * 96;
+                let z = gz * 96;
                 let s = sample(&cfg, x, z);
                 let tect = sample_tectonics(x as f32, z as f32, cfg.seed);
                 if tect.orogeny > 0.22 || tect.volcanism > 0.25 || tect.trench > 0.20 || tect.rift_graben > 0.20 {
                     volcanic_or_orogenic += 1;
+                }
+                max_mountain_height = max_mountain_height.max(s.height);
+                if s.biome == Biome::Alpine {
+                    alpine_columns += 1;
                 }
                 match s.biome {
                     Biome::Ocean => ocean_columns += 1,
@@ -1376,6 +1383,9 @@ mod tectonics_and_oceans {
                     _ => land_columns += 1,
                 }
                 let col = column(&cfg, x, z);
+                if s.height > 75.0 {
+                    mountain_surfaces.insert(col.surface);
+                }
                 for d in [4, 10, 18, 28, 42] {
                     let b = geological_stratum(&cfg, glam::IVec3::new(x, col.height - d, z), col.height, d);
                     strata_blocks.insert(b);
@@ -1386,6 +1396,14 @@ mod tectonics_and_oceans {
         assert!(ocean_columns >= 12, "expected true oceans across tectonic grid, got {ocean_columns}");
         assert!(land_columns >= 40, "expected continents across tectonic grid, got {land_columns}");
         assert!(volcanic_or_orogenic >= 10, "expected active tectonic boundaries, got {volcanic_or_orogenic}");
+        assert!(
+            max_mountain_height > 115.0,
+            "expected tectonic cordilleras to reach true alpine heights (>115m), got {max_mountain_height}"
+        );
+        assert!(
+            alpine_columns > 0 || mountain_surfaces.contains(&BlockId::SnowGrass) || mountain_surfaces.contains(&BlockId::Stone),
+            "expected alpine mountain zonation across high peaks"
+        );
         assert!(strata_blocks.contains(&BlockId::Limestone), "expected marine Limestone strata");
         assert!(strata_blocks.contains(&BlockId::Basalt), "expected Basalt lithosphere/dikes");
         assert!(strata_blocks.contains(&BlockId::Sandstone) || coast_columns > 0, "expected Sandstone strata or coastal shelves");
