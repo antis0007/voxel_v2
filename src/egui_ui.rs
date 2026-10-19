@@ -1878,6 +1878,7 @@ pub struct EguiUi {
     pub elevation_m: f32,
     pub show_hud: bool,
     pub target_block: Option<BlockId>,
+    pub target_cell_temp_c: Option<f32>,
     pub tool_feedback: tool_hud::Feedback,
     pub fov_degrees: f32,
     pub mouse_sensitivity: f32,
@@ -1942,6 +1943,7 @@ impl EguiUi {
             biome_label: "Wilderness",
             elevation_m: 0.0,
             target_block: None,
+            target_cell_temp_c: None,
             tool_feedback: Default::default(),
             fov_degrees: 70.0,
             mouse_sensitivity: 0.0025,
@@ -2809,6 +2811,11 @@ impl EguiUi {
                         });
                     });
                 if self.show_hud && !creative_state.any_ui_open() {
+                    let held_food = self.survival.hotbar[creative_state.selected_slot]
+                        .and_then(|stack| match stack.item {
+                            crate::world::inventory::Item::Food(food) => Some(food),
+                            _ => None,
+                        });
                     let vitals = adventure::hud(
                         &self.ctx,
                         &self.adventure,
@@ -2816,6 +2823,8 @@ impl EguiUi {
                         player.yaw,
                         self.survival.eat_timer,
                         self.survival.armor_points(),
+                        held_food,
+                        self.ctx.wants_pointer_input(),
                     );
                     let use_survival = creative_state.tool == ToolKind::Hand
                         && !player.flying
