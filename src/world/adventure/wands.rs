@@ -874,5 +874,21 @@ mod acceptance {
         assert_eq!(decoded.loadout.aux_slots, [22, 18, 12, 15]);
         assert_eq!(decoded.loadout.cursor, 5);
         assert_eq!(decoded.loadout.mode, 3);
+
+        // 6. Direct drag-and-drop wand slot swapping & trigger-payload slot tracking
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.rare_spells = !0;
+        b.loadout.slots = [21, 10, 17, 11];
+        b.loadout.aux_slots = [12, 0, 0, 0];
+        b.swap_wand_slots(0, 4);
+        assert_eq!(b.loadout.slot(0), 12);
+        assert_eq!(b.loadout.slot(4), 21);
+        b.swap_wand_slots(0, 4);
+        let eval = evaluate_cast_block(b.wand, b.rank(), b.discoveries, b.rare_spells, &b.loadout, 0);
+        assert_eq!(eval.actions.len(), 1);
+        assert_eq!(eval.actions[0].slot, 0);
+        assert_eq!(eval.actions[0].payload, Some(10));
+        assert_eq!(eval.actions[0].payload_slot, Some(1));
     }
 }

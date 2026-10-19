@@ -1799,4 +1799,45 @@ mod tests {
         assert_eq!(decoded.equipment, inv.equipment);
         assert_eq!(decoded.resource_remainders, inv.resource_remainders);
     }
+
+    #[test]
+    fn mouse_tweaks_gather_wheel_sort_and_quick_stack() {
+        let mut inv = SurvivalInventory::empty();
+        let stone = Item::Block(BlockId::Stone);
+        let wood = Item::Block(BlockId::Log);
+        inv.pack[0] = Some(ItemStack::new(stone, 12));
+        inv.pack[5] = Some(ItemStack::new(stone, 18));
+        inv.pack[9] = Some(ItemStack::new(wood, 7));
+
+        // Double-click gather collects partial stone stacks into cursor (12 + 18 = 30)
+        inv.gather_to_cursor(SlotAddr::Pack(0));
+        assert_eq!(inv.cursor, Some(ItemStack::new(stone, 30)));
+        assert!(inv.pack[0].is_none());
+        assert!(inv.pack[5].is_none());
+
+        // Mouse wheel down (-1) deposits 1 item from cursor into Pack(0); up (+1) pulls 1 back
+        inv.wheel_slot(SlotAddr::Pack(0), -1);
+        assert_eq!(inv.pack[0], Some(ItemStack::new(stone, 1)));
+        assert_eq!(inv.cursor, Some(ItemStack::new(stone, 29)));
+        inv.wheel_slot(SlotAddr::Pack(0), 1);
+        assert!(inv.pack[0].is_none());
+        assert_eq!(inv.cursor, Some(ItemStack::new(stone, 30)));
+
+        // Place cursor into Pack(12) and test sort_pack + quick_stack_to_hotbar
+        inv.click_slot(SlotAddr::Pack(12));
+        inv.pack[20] = Some(ItemStack::new(stone, 10));
+        inv.sort_pack();
+        // Pack should now be compacted into two slots (stone=40, wood=7)
+        assert_eq!(inv.count_item(stone), 40);
+        assert_eq!(inv.count_item(wood), 7);
+        assert!(inv.pack[0].is_some());
+        assert!(inv.pack[1].is_some());
+        assert!(inv.pack[2].is_none());
+
+        // Quick-stack merges matching pack items into existing hotbar partial stacks
+        inv.hotbar[2] = Some(ItemStack::new(stone, 10));
+        inv.quick_stack_to_hotbar();
+        assert_eq!(inv.hotbar[2], Some(ItemStack::new(stone, 50)));
+        assert_eq!(inv.count_item(stone), 50);
+    }
 }

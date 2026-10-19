@@ -2387,6 +2387,10 @@ fn main() -> Result<()> {
                                     input.pick_block = false;
                                 }
                                 egui_ui.target_block = hit.map(|(cell, _)| world.get(cell));
+                                egui_ui.target_cell_temp_c = hit.and_then(|(cell, _)| {
+                                    let t = world.sandbox.cell(cell).temperature;
+                                    (t > 35.0).then_some(t)
+                                });
                                 // A bounded second probe distinguishes empty sky from an unreachable face.
                                 let sight = hit.or_else(|| world::raycast_block_precise(
                                     world, player.precise_eye(world.voxel_scale) + forward.as_dvec3() * 0.0005,

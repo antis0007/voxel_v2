@@ -78,24 +78,28 @@ pub fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig, center:(i32,i32)) {
             let distance=(x-center.0 as f32).hypot(z-center.1 as f32);
             if distance<inner || distance>=outer { continue; }
             let (height,slope)=ground(mesh,center,x,z,scale);
-            if slope<0.79 || height<(cfg.water_level() as f32+1.0)*scale+2.0 { continue; }
+            let elev_m = height / scale.max(0.05);
+            if slope<0.79 || height<(cfg.water_level() as f32+1.0)*scale+2.0 || elev_m > 122.0 { continue; }
+            let timberline = ((122.0 - elev_m) / 36.0).clamp(0.0, 1.0);
             let (heat,wet,grove)=visual_ecology(cfg,x,z,height);
             let savanna = cfg.generator_version >= 10 && savanna_climate(heat, wet);
             let rainforest=cfg.generator_version>=10 && heat>0.56 && wet>0.68;
-            let heath=cfg.generator_version>=10 && heat>=0.24 && heat<0.44 && wet<0.58 && height>32.0;
-            let density=if savanna {0.12} else if rainforest {0.90} else if heath {0.045}
-                else {((wet-0.24)*1.3+(grove-0.40)*1.7).clamp(0.03,0.88)};
+            let heath=cfg.generator_version>=10 && heat>=0.24 && heat<0.44 && wet<0.58 && elev_m>32.0;
+            let density=(if savanna {0.12} else if rainforest {0.90} else if heath {0.045}
+                else {((wet-0.24)*1.3+(grove-0.40)*1.7).clamp(0.03,0.88)}) * timberline;
             if random(&mut rng)>density || heat<0.08 { continue; }
-            let conifer=(heat<0.35 || random(&mut rng)<0.18) && !savanna && !rainforest;
+            let conifer=(heat<0.38 || elev_m>68.0 || random(&mut rng)<0.18) && !savanna && !rainforest;
             let dry=wet<0.30;
             let count=if tier==2 { 6 } else { 3+(random(&mut rng)*4.0) as usize };
             for _ in 0..count {
                 let px=x+(random(&mut rng)-0.5)*spacing as f32*0.80;
                 let pz=z+(random(&mut rng)-0.5)*spacing as f32*0.80;
                 let (y,slope)=ground(mesh,center,px,pz,scale);
-                if slope<0.77 || y<(cfg.water_level() as f32+1.0)*scale+1.0 {continue;}
-                let h=if savanna {5.0+random(&mut rng)*3.0} else if rainforest {11.0+random(&mut rng)*7.0}
-                    else if heath {2.5+random(&mut rng)*2.0} else {(6.0+random(&mut rng)*12.0)*if dry {0.48}else{1.0}};
+                let y_m = y / scale.max(0.05);
+                if slope<0.77 || y<(cfg.water_level() as f32+1.0)*scale+1.0 || y_m > 120.0 {continue;}
+                let krummholz = ((124.0 - y_m) / 42.0).clamp(0.45, 1.0);
+                let h=(if savanna {5.0+random(&mut rng)*3.0} else if rainforest {11.0+random(&mut rng)*7.0}
+                    else if heath {2.5+random(&mut rng)*2.0} else {(6.0+random(&mut rng)*12.0)*if dry {0.48}else{1.0}}) * krummholz;
                 let r=h*if savanna {0.72} else if conifer {0.26}else{0.36+random(&mut rng)*0.18};
                 let p=Vec3::new(px,y-0.25,pz);
                 let tone=random(&mut rng);

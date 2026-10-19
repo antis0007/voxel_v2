@@ -2747,30 +2747,137 @@ impl EguiUi {
                 if !creative_state.any_ui_open() && !self.show_debug_performance_panel {
                     tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback);
                 }
-                if let Some(block) = self.target_block.filter(|block| !creative_state.any_ui_open() && *block != BlockId::Air) {
-                    egui::Area::new("target_name".into())
-                        .anchor(Align2::CENTER_TOP, [0.0, 10.0])
-                        .interactable(false)
-                        .show(&self.ctx, |ui| {
-                            presentation::hud_frame().show(ui, |ui| {
-                                ui.set_max_width(240.0);
-                                ui.horizontal(|ui| {
-                                    let (r, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
-                                    draw_voxel_icon(ui.painter(), r, block);
+                if !creative_state.any_ui_open() {
+                    if let Some(enemy) = self.adventure.enemy_focus.filter(|_| self.adventure.boss.is_none()) {
+                        egui::Area::new("target_name".into())
+                            .anchor(Align2::CENTER_TOP, [0.0, 10.0])
+                            .interactable(false)
+                            .show(&self.ctx, |ui| {
+                                presentation::hud_frame().show(ui, |ui| {
+                                    ui.set_min_width(172.0);
+                                    ui.set_max_width(260.0);
                                     ui.vertical(|ui| {
-                                        ui.spacing_mut().item_spacing.y = 1.0;
-                                        ui.label(RichText::new(block.display_name()).size(12.5).strong().color(presentation::PAPER));
-                                        let sub = if let Some(expedition) = &self.expedition {
-                                            let h = crate::world::expedition::hint(block, expedition.tool_tier);
-                                            if !h.is_empty() { h } else { crate::world::inventory::Item::Block(block).category() }
-                                        } else {
-                                            crate::world::inventory::Item::Block(block).category()
-                                        };
-                                        ui.label(RichText::new(sub).size(10.5).color(presentation::MUTED));
+                                        ui.spacing_mut().item_spacing.y = 2.0;
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new(enemy.name)
+                                                    .size(12.5)
+                                                    .strong()
+                                                    .color(presentation::PAPER),
+                                            );
+                                            if enemy.frozen {
+                                                ui.label(
+                                                    RichText::new("FROZEN")
+                                                        .size(9.5)
+                                                        .strong()
+                                                        .color(Color32::from_rgb(120, 214, 248)),
+                                                );
+                                            }
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    ui.monospace(
+                                                        RichText::new(format!(
+                                                            "{:.0}/{:.0}",
+                                                            enemy.health.max(0.0),
+                                                            enemy.maximum
+                                                        ))
+                                                        .size(10.5)
+                                                        .color(presentation::AMBER),
+                                                    );
+                                                },
+                                            );
+                                        });
+                                        let ratio = (enemy.health / enemy.maximum.max(1.0)).clamp(0.0, 1.0);
+                                        let (bar_r, _) = ui.allocate_exact_size(
+                                            egui::vec2(ui.available_width().max(150.0), 6.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        let p = ui.painter();
+                                        p.rect_filled(bar_r, 0, Color32::from_rgb(28, 16, 18));
+                                        let mut fill = bar_r;
+                                        fill.set_width(bar_r.width() * ratio);
+                                        p.rect_filled(
+                                            fill,
+                                            0,
+                                            if enemy.frozen {
+                                                Color32::from_rgb(92, 188, 224)
+                                            } else {
+                                                presentation::DANGER
+                                            },
+                                        );
+                                        p.rect_stroke(
+                                            bar_r,
+                                            0,
+                                            egui::Stroke::new(1.0, presentation::EDGE),
+                                            egui::StrokeKind::Inside,
+                                        );
                                     });
                                 });
                             });
-                        });
+                    } else if let Some(block) = self.target_block.filter(|block| *block != BlockId::Air) {
+                        egui::Area::new("target_name".into())
+                            .anchor(Align2::CENTER_TOP, [0.0, 10.0])
+                            .interactable(false)
+                            .show(&self.ctx, |ui| {
+                                presentation::hud_frame().show(ui, |ui| {
+                                    ui.set_max_width(276.0);
+                                    ui.horizontal(|ui| {
+                                        let (r, _) = ui.allocate_exact_size(
+                                            egui::vec2(22.0, 22.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        draw_voxel_icon(ui.painter(), r, block);
+                                        ui.vertical(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 1.5;
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new(block.display_name())
+                                                        .size(12.5)
+                                                        .strong()
+                                                        .color(presentation::PAPER),
+                                                );
+                                                if let Some(temp_c) = self.target_cell_temp_c {
+                                                    ui.monospace(
+                                                        RichText::new(format!("{temp_c:.0}°C"))
+                                                            .size(10.0)
+                                                            .color(Color32::from_rgb(245, 134, 62)),
+                                                    );
+                                                }
+                                            });
+                                            let sub = if let Some(expedition) = &self.expedition {
+                                                let h = crate::world::expedition::hint(block, expedition.tool_tier);
+                                                if !h.is_empty() {
+                                                    h
+                                                } else {
+                                                    crate::world::inventory::Item::Block(block).category()
+                                                }
+                                            } else {
+                                                crate::world::inventory::Item::Block(block).category()
+                                            };
+                                            if let Some((_, node)) = self.factory.focused.as_ref().filter(|(_, n)| n.kind.block() == block) {
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "{} · E {} · H₂O {:.1}m³",
+                                                        node.status,
+                                                        node.energy,
+                                                        node.water as f32 / 512.0
+                                                    ))
+                                                    .size(10.0)
+                                                    .color(presentation::JADE),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    RichText::new(sub)
+                                                        .size(10.5)
+                                                        .color(presentation::MUTED),
+                                                );
+                                            }
+                                        });
+                                    });
+                                });
+                            });
+                    }
                 }
                 if self.show_debug_performance_panel {
                     egui::Area::new("debug_readout".into())

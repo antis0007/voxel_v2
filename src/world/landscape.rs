@@ -305,14 +305,72 @@ pub fn sample_tectonics(wx: f32, wz: f32, seed: u32) -> TectonicSample {
     }
 }
 
+/// Rotated, domain-warped Musgrave Ridged Multifractal for authentic alpine massifs.
+/// Returns `(primary_spine, lateral_spur_chutes)`:
+/// - `primary_spine`: sharp pyramidal horns and knife-edge arêtes where each finer octave
+///   is weighted by the previous octave's crest, keeping valley floors broad and passable.
+/// - `lateral_spur_chutes`: branching dendritic spurs separated by incised couloir chutes.
+fn mountain_ridged_multifractal(
+    x: f32,
+    z: f32,
+    seed: u32,
+    tect: &TectonicSample,
+) -> (f32, f32, f32) {
+    // Domain warp aligned with mantle & tectonic strike so ridge lines curve naturally.
+    let wx = x + (value_noise2(x / 210.0, z / 210.0, seed.wrapping_add(4301)) - 0.5) * 82.0;
+    let wz = z + (value_noise2(x / 210.0, z / 210.0, seed.wrapping_add(4309)) - 0.5) * 82.0;
+
+    // 4-octave rotated Musgrave ridged multifractal:
+    let mut px = wx / 165.0;
+    let mut pz = wz / 165.0;
+    let mut weight = 1.0f32;
+    let mut spine = 0.0f32;
+    let mut amp = 0.52f32;
+    let mut norm = 0.0f32;
+    for oct in 0..4u32 {
+        let n = value_noise2(px, pz, seed.wrapping_add(137 + oct * 31));
+        // Value noise centers around 0.5 with effective span ~[0.14, 0.86]; normalize before folding
+        // so ridge crests reach true 1.0 knife edges instead of flat-topped plateaus.
+        let centered = ((n - 0.5) * 2.55).clamp(-1.0, 1.0);
+        let ridge = 1.0 - centered.abs();
+        let sharpened = ridge * ridge;
+        let signal = sharpened * weight;
+        spine += signal * amp;
+        norm += amp;
+        weight = (signal * 1.95).clamp(0.12, 1.0);
+        // Rotate by 37 degrees (cos=0.8, sin=0.6) and scale by lacunarity 2.08:
+        let rx = (px * 0.80 - pz * 0.60) * 2.08 + 13.7;
+        let rz = (px * 0.60 + pz * 0.80) * 2.08 - 9.4;
+        px = rx;
+        pz = rz;
+        amp *= 0.50;
+    }
+    let primary_spine = (spine / norm).clamp(0.0, 1.0);
+
+    // Branching lateral spurs & incised couloirs oriented across the tectonic dip/strike:
+    let strike_c = -wx * tect.boundary_normal[1] + wz * tect.boundary_normal[0];
+    let dip_c = wx * tect.boundary_normal[0] + wz * tect.boundary_normal[1];
+    let spur_warp = (value_noise2(wx / 58.0, wz / 58.0, seed.wrapping_add(4327)) - 0.5) * 2.6;
+    let spur_phase = strike_c * 0.052 + (dip_c * 0.022).sin() * 1.4 + spur_warp;
+    let spur_ridge = (1.0 - spur_phase.sin().abs()).powf(1.65);
+
+    // Glacial cirque amphitheaters: concave bowls scooped out on upper flanks between spurs.
+    let cirque_cell = value_noise2(wx / 76.0, wz / 76.0, seed.wrapping_add(4339));
+    let cirque_bowl = smoothstep(0.58, 0.86, cirque_cell) * (1.0 - spur_ridge * 0.75);
+
+    (primary_spine, spur_ridge, cirque_bowl)
+}
+
 // V9+ combines deterministic seeded plate tectonics (oceans, continental shelves,
 // subduction trenches, volcanic island/cordilleran arcs, rift grabens, and
 // fold-and-thrust mountain belts) with connected, walkable valleys.
 fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
     let tect = sample_tectonics(x, z, seed);
-    let ranges = value_noise2(x / 180.0, z / 180.0, seed.wrapping_add(97));
-    let mountain_mask = smoothstep(if ridged { 0.26 } else { 0.34 }, 0.74, ranges);
-    let ridge = 1.0 - (fbm2(x / 95.0, z / 95.0, seed.wrapping_add(137)) * 2.0 - 1.0).abs();
+    let ranges = value_noise2(x / 195.0, z / 195.0, seed.wrapping_add(97));
+    let massif_cluster = value_noise2(x / 360.0, z / 360.0, seed.wrapping_add(4349));
+    let range_envelope = (ranges * 0.68 + massif_cluster * 0.32).clamp(0.0, 1.0);
+    let mountain_mask = smoothstep(if ridged { 0.24 } else { 0.32 }, 0.70, range_envelope);
+    let (primary_spine, spur_ridge, cirque_bowl) = mountain_ridged_multifractal(x, z, seed, &tect);
     let hills = (fbm2(x / 65.0, z / 65.0, seed.wrapping_add(71)) - 0.5) * 16.0;
 
     // Hypsometric curve from abyssal oceanic crust (-18..+4m) across the continental
@@ -325,18 +383,31 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
     let continental_base = 17.5 + craton_t * 11.5 + hills * (0.65 + 0.35 * craton_t);
     let mut h = ocean_floor * (1.0 - shelf_t) + continental_base * shelf_t;
 
-    // 1. Orogenic fold-and-thrust mountain belts & cratonic ranges:
-    let fold_ridges = (0.55 + 0.45 * tect.fold_wave) * ridge.powf(1.35);
-    let orogenic_uplift = (tect.orogeny * 1.15 + mountain_mask * craton_t * 0.72)
-        * fold_ridges
-        * if ridged { 84.0 } else { 64.0 };
+    // 1. Orogenic fold-and-thrust mountain belts, pyramidal peaks, lateral spurs & cirques:
+    // Asymmetric cuesta/thrust profile: steeper scarp toward the plate suture, longer dip slope behind.
+    let fold_asymmetry = 0.52 + 0.48 * (tect.fold_wave + 0.28 * (tect.fold_wave * 2.0).sin()).clamp(-1.0, 1.0);
+    let arête_profile = primary_spine.powf(1.28) * (0.68 + 0.32 * spur_ridge);
+    let pyramidal_horn = smoothstep(0.55, 0.92, primary_spine) * smoothstep(0.45, 0.88, spur_ridge);
+    let massif_drive = (tect.orogeny * 1.25 + mountain_mask * craton_t * 0.88).clamp(0.0, 1.65);
+
+    // Piedmont foothill apron rises smoothly into steep alpine massifs and horns:
+    let piedmont_apron = massif_drive * (0.35 + 0.65 * fold_asymmetry) * 18.0 * shelf_t;
+    let cordillera_scale = if ridged { 132.0 } else { 106.0 };
+    let mut orogenic_uplift = piedmont_apron
+        + massif_drive * (0.58 + 0.42 * fold_asymmetry) * (arête_profile * cordillera_scale + pyramidal_horn * 34.0);
+
+    // Glacial cirque & U-shaped valley scouring: scoops concave amphitheaters out of
+    // mid-to-upper flanks while leaving knife-edge arêtes and horns standing tall above them.
+    let flank_zone = smoothstep(32.0, 78.0, orogenic_uplift) * (1.0 - smoothstep(0.76, 0.95, primary_spine));
+    let glacial_scour = cirque_bowl * flank_zone * 22.0;
+    orogenic_uplift = (orogenic_uplift - glacial_scour).max(0.0);
     h += orogenic_uplift;
 
-    // 2. Volcanic arcs & seamount island chains (can breach sea level from oceanic plates!):
-    let volcano_cone = ridge.powf(1.6) * (0.6 + 0.4 * mountain_mask);
-    let volcanic_uplift = tect.volcanism * (24.0 + volcano_cone * 52.0);
-    // High volcanic peaks occasionally feature a sunken summit caldera crater.
-    let caldera = smoothstep(0.76, 0.94, tect.volcanism * ridge) * 14.0;
+    // 2. Volcanic arcs & stratovolcano island chains (can breach sea level from oceanic plates!):
+    let volcano_cone = primary_spine.powf(1.45) * (0.65 + 0.35 * spur_ridge) * (0.55 + 0.45 * mountain_mask);
+    let volcanic_uplift = tect.volcanism * (28.0 + volcano_cone * 82.0);
+    // High volcanic stratocones feature a sunken summit caldera crater rimmed by basalt cliffs.
+    let caldera = smoothstep(0.74, 0.92, tect.volcanism * primary_spine) * 19.0;
     h += volcanic_uplift - caldera;
 
     // 3. Oceanic subduction trench depression:
@@ -349,7 +420,7 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
         // Sunken rift valley (graben) often deep enough to host rift lakes or sea inlets,
         // bordered by uplifted horst fault-block escarpments.
         h -= tect.rift_graben * 19.5;
-        h += horst_shoulders * 13.5;
+        h += horst_shoulders * 15.5;
     } else {
         // Mid-ocean spreading ridge rising from the abyssal floor with a central axial cleft.
         h += horst_shoulders * 14.0 - tect.rift_graben * 6.0;
@@ -375,9 +446,9 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32) -> f32 {
         bedrock(sx, sz, seed, kind == WorldType::Ridged as u8)
     };
     if version >= 3 {
-        let mountain = smoothstep(40.0, 95.0, h);
+        let mountain = smoothstep(42.0, 108.0, h);
         let fold = (sx * 0.018 + (sz * 0.006).sin() * 2.0).sin().abs();
-        h += mountain * fold.powf(1.8) * if version >= 9 { 9.0 } else { 28.0 };
+        h += mountain * fold.powf(1.65) * if version >= 9 { 16.0 } else { 28.0 };
         let (heat, wet) = climate(wx, wz, seed);
         let mesa = smoothstep(0.52, 0.75, heat) * (1.0 - smoothstep(0.32, 0.5, wet));
         let terrace = (h / 9.0).floor() * 9.0 + smoothstep(0.25, 0.85, (h / 9.0).fract()) * 9.0;
@@ -422,15 +493,26 @@ pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, 
     } else {
         None
     };
+    let patch = value_noise2(wx / 19.0, wz / 19.0, cfg.seed.wrapping_add(9341));
+    let snow_score = (1.0 - smoothstep(0.08, 0.48, temperature)) * 0.22
+        + smoothstep(104.0, 158.0, h) * 0.62
+        + patch * 0.28
+        - slope * 0.22;
     let block = if h < 1.5 {
         BlockId::Basalt
     } else if h < 14.8 && slope < 0.42 {
         BlockId::Sand
-    } else if tect.is_some_and(|t| t.volcanism > 0.56 && (h > 36.0 || slope > 0.42)) {
+    } else if tect.is_some_and(|t| t.volcanism > 0.54 && (h > 38.0 || slope > 0.38)) && snow_score <= 0.68 {
         BlockId::Basalt
-    } else if h > 158.0 || slope > 0.86 {
-        if temperature < 0.35 && h > 148.0 && slope < 0.65 {
+    } else if snow_score > 0.64 && slope < 0.74 && h > 88.0 {
+        if h > 134.0 && slope < 0.34 && temperature < 0.22 && patch > 0.60 {
+            BlockId::Ice
+        } else {
             BlockId::SnowGrass
+        }
+    } else if h > 112.0 || slope > 0.68 {
+        if let Some(t) = tect {
+            sample_stratigraphic_bed(wx, h, wz, cfg.seed, &t)
         } else {
             BlockId::Stone
         }
@@ -500,13 +582,16 @@ fn build_tile(key: TileKey) -> Tile {
                     delta_s[i] -= carried;
                     delta_s[j] += carried;
                 }
-                // Thermal creep moves unstable scree down slopes above ~35 degrees.
+                // Thermal creep & alpine frost-wedging move unstable scree down steep headwalls,
+                // building natural talus aprons in couloirs and at the base of cliffs.
                 if step % 3 == 0 {
                     let j = *neighbors
                         .iter()
                         .min_by(|&&a, &&b| height[a].total_cmp(&height[b]))
                         .unwrap();
-                    let talus = ((height[i] - height[j] - SPACING * 0.7) * 0.08).clamp(0.0, 0.24);
+                    let frost_boost = if height[i] > 68.0 { 1.35 } else { 1.0 };
+                    let angle_of_repose = if height[i] > 82.0 { SPACING * 0.62 } else { SPACING * 0.70 };
+                    let talus = ((height[i] - height[j] - angle_of_repose) * 0.085 * frost_boost).clamp(0.0, 0.30);
                     delta_h[i] -= talus;
                     delta_h[j] += talus;
                     deposit[j] += talus;
@@ -625,7 +710,9 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
         }
     }
     let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h, slope, sediment);
-    let alpine = if cfg.generator_version >= 7 {
+    let alpine = if cfg.generator_version >= 9 {
+        h > 124.0 || (h > 98.0 && temperature < 0.24) || (h > 84.0 && slope > 0.78)
+    } else if cfg.generator_version >= 7 {
         h > 190.0 || (h > 158.0 && temperature < 0.20)
     } else {
         h > if cfg.generator_version >= 5 {
@@ -778,20 +865,30 @@ fn apply_macro_shaping(
         let c_eff = 0.5 + (c - 0.5) * shore_detail;
         let exposed = smoothstep(0.12, 0.75, slope).max(smoothstep(48.0, 105.0, h));
         let rib = (1.0 - (a * 2.0 - 1.0).abs()).powi(3);
-        let broken = (rib - 0.35) * 9.0 + (b_eff - 0.5) * 4.0 + (c_eff - 0.5) * 1.3;
+        // Rotated secondary arête rib & incised couloir chute detail for high mountains:
+        let rx = wx * 0.80 - wz * 0.60;
+        let rz = wx * 0.60 + wz * 0.80;
+        let a_rot = value_noise2(rx / 18.0, rz / 18.0, cfg.seed.wrapping_add(9233));
+        let chute_furrow = (1.0 - ((a_rot - 0.5) * 2.4).clamp(-1.0, 1.0).abs()).powi(2);
+        let alpine_relief = smoothstep(52.0, 118.0, h);
+        // Structural rock benches along tilted mountain strata:
+        let bench_phase = ((h + wx * 0.04 - wz * 0.03) / 10.5).fract();
+        let rock_bench = (smoothstep(0.18, 0.82, bench_phase) - bench_phase) * 2.6 * alpine_relief;
+        let couloir_cut = (1.0 - chute_furrow) * 4.2 * alpine_relief * smoothstep(0.25, 0.78, slope);
+
+        let broken = (rib - 0.35) * 9.0 + (b_eff - 0.5) * 4.0 + (c_eff - 0.5) * 1.3 + rock_bench - couloir_cut;
         let hummock = (a - 0.5) * 3.0 + (b_eff - 0.5) * 1.5;
         let dunes = (wx * 0.085 + wz * 0.032 + a * 4.0).sin() * 2.2;
         let arid = smoothstep(0.55, 0.8, temperature) * (1.0 - smoothstep(0.2, 0.4, moisture));
         let residual = (hummock * (1.0 - arid) + dunes * arid) * (1.0 - exposed) + broken * exposed;
         let strength = smoothstep(20.0, 65.0, wx.hypot(wz)) * smoothstep(12.2, 19.0, h);
-        h += residual
-            * strength
-            * if cfg.generator_version >= 9 {
-                0.45
-            } else {
-                1.0
-            };
-        slope += (b_eff - 0.5).abs() * exposed * 0.25 * strength;
+        let mountain_scale = if cfg.generator_version >= 9 {
+            0.48 + 0.38 * alpine_relief
+        } else {
+            1.0
+        };
+        h += residual * strength * mountain_scale;
+        slope += ((b_eff - 0.5).abs() * 0.25 + chute_furrow * alpine_relief * 0.14) * exposed * strength;
     }
     // Prevent shoreline heights from lingering in the 11.2..12.15m rounding band
     // where 1m voxel quantization creates isolated 1-block water lines on beaches.
@@ -881,19 +978,39 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
         ) {
             if cfg.generator_version >= 7 {
                 let cold = 1.0 - smoothstep(0.08, 0.52, s.temperature);
-                let snowline = smoothstep(138.0, 205.0, s.height);
-                let sheltered = 1.0 - smoothstep(0.18, 1.10, s.slope);
+                let snowline = if cfg.generator_version >= 9 {
+                    smoothstep(104.0, 158.0, s.height)
+                } else {
+                    smoothstep(138.0, 205.0, s.height)
+                };
+                let sheltered = 1.0 - smoothstep(0.18, 1.05, s.slope);
                 let cold_weight = if cfg.generator_version >= 9 {
-                    0.16
+                    0.20
                 } else {
                     0.50
                 };
-                let snow = cold * cold_weight + snowline * 0.55 + patch * 0.35 + sheltered * 0.10
-                    - s.slope * 0.16;
-                surface = if snow > 0.67 {
-                    BlockId::SnowGrass
-                } else if s.slope > 0.55 {
-                    BlockId::Stone
+                let snow = cold * cold_weight + snowline * 0.58 + patch * 0.32 + sheltered * 0.12
+                    - s.slope * 0.18;
+                surface = if snow > 0.64 && s.slope < 0.74 {
+                    if cfg.generator_version >= 9
+                        && s.height > 134.0
+                        && s.slope < 0.34
+                        && s.temperature < 0.22
+                        && patch > 0.60
+                    {
+                        BlockId::Ice
+                    } else {
+                        BlockId::SnowGrass
+                    }
+                } else if s.slope > 0.54 {
+                    if s.sediment > 0.58 && s.slope < 0.74 {
+                        BlockId::Gravel
+                    } else {
+                        BlockId::Stone
+                    }
+                } else if s.height > 72.0 && s.sediment > 0.62 && patch > 0.52 {
+                    // Alpine talus scree aprons at the foot of cirque headwalls & couloirs.
+                    BlockId::Gravel
                 } else if matches!(surface, BlockId::SnowGrass) {
                     BlockId::Grass
                 } else {
@@ -986,12 +1103,14 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
                     filler = BlockId::Limestone;
                 }
             } else if tect.volcanism > 0.54 && (s.slope > 0.34 || s.height > 42.0) {
-                // Active volcanic arc cones & basaltic rift shields.
-                surface = if patch > 0.74 {
-                    BlockId::Gravel
-                } else {
-                    BlockId::Basalt
-                };
+                // Active volcanic arc cones & basaltic rift shields (preserving snowcaps on high flat rims).
+                if !matches!(surface, BlockId::SnowGrass | BlockId::Ice) || s.slope > 0.48 {
+                    surface = if patch > 0.74 {
+                        BlockId::Gravel
+                    } else {
+                        BlockId::Basalt
+                    };
+                }
                 filler = BlockId::Basalt;
                 vegetation *= 0.12;
             } else if (s.slope > 0.68 || (tect.fault_plane > 0.62 && s.slope > 0.40)) && s.height > 15.0 {
@@ -1004,6 +1123,17 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
                 };
                 filler = bed;
             }
+            // Subalpine timberline tapers tree density between 86m and 122m elevation.
+            let timberline = 1.0 - smoothstep(86.0, 122.0, s.height);
+            vegetation *= timberline;
+            if matches!(
+                surface,
+                BlockId::Stone | BlockId::Basalt | BlockId::Limestone | BlockId::Sandstone | BlockId::Ice
+            ) {
+                vegetation = 0.0;
+            } else if surface == BlockId::Gravel {
+                vegetation *= 0.15;
+            }
         }
         // Exposed rock has rock beneath it. A thin stone cap over dirt made
         // steep slopes a distracting brown/grey checkerboard at every step.
@@ -1011,6 +1141,8 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
             filler = BlockId::Stone;
         } else if matches!(surface, BlockId::Basalt | BlockId::Limestone | BlockId::Sandstone) {
             filler = surface;
+        } else if surface == BlockId::Ice {
+            filler = BlockId::Ice;
         }
     }
     ColumnSample {
