@@ -201,8 +201,9 @@ fn mood_rainbow(dir: vec3<f32>, sun_dir: vec3<f32>) -> vec3<f32> {
 fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<f32>) -> vec3<f32> {
     let total = a.x + a.y + a.z + a.w;
     if total < 0.002 { return vec3<f32>(0.0); }
-    let presence = a.x * 0.10 + a.y * 0.12 + a.z * 0.14 + a.w * 0.10;
-    let far = min(max_d, 28.0);
+    // Sparse on purpose: a mote should be found, not sprinkled across every view.
+    let presence = (a.x * 0.10 + a.y * 0.12 + a.z * 0.14 + a.w * 0.10) * 0.5;
+    let far = min(max_d, 22.0);
 
     // One mote per lattice cell, fixed in world space. The ray walks the cells
     // it crosses (Amanatides-Woo) and takes its closest approach to each mote.
@@ -218,6 +219,11 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
     let next_edge = (cell + max(step_dir, vec3<f32>(0.0))) * cell_size;
     var t_max = (next_edge - origin) * step_dir / safe_dir;
 
+    // Screen-facing axes for the four-point glint. They depend only on the ray.
+    let up_ref = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(dir.y) > 0.99);
+    let axis_r = normalize(cross(dir, up_ref));
+    let axis_u = cross(axis_r, dir);
+
     var acc = vec3<f32>(0.0);
     for (var i = 0; i < 20; i++) {
         let h = mood_hash31(cell);
@@ -227,42 +233,80 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
                 mood_hash31(cell + vec3<f32>(4.4, 5.2, 6.1)),
                 mood_hash31(cell + vec3<f32>(7.9, 8.3, 9.5)));
             let ph = mood_hash31(cell + vec3<f32>(3.3, 1.1, 7.7)) * 60.0;
+            let pick = fract(h * 37.7) * total;
+            // 0 firefly, 1 pollen, 2 diamond dust, 3 ember.
+            var kind = 3;
+            if pick < a.x + a.y + a.z { kind = 2; }
+            if pick < a.x + a.y { kind = 1; }
+            if pick < a.x { kind = 0; }
+            let rising = kind == 1 || kind == 3;
+
             // Rest position in the middle half of the cell plus a bounded drift,
             // so the mote never leaves its own cell and cannot pop at a border.
-            let drift = vec3<f32>(
+            var offset = (jitter - vec3<f32>(0.5)) * 0.5;
+            var drift = vec3<f32>(
                 sin(t * 0.21 + ph),
                 sin(t * 0.33 + ph * 1.7) * 0.7,
                 cos(t * 0.17 + ph * 0.6)) * 0.16;
-            let center = (cell + vec3<f32>(0.5) + (jitter - vec3<f32>(0.5)) * 0.5 + drift) * cell_size;
+            // Pollen and embers climb through their cell, then start again from
+            // the bottom. They are invisible at both ends of the climb (`vis`),
+            // so the loop never shows.
+            var vis = 1.0;
+            if rising {
+                let u = fract(t * select(0.05, 0.11, kind == 3) + ph * 0.137);
+                offset.y = 0.0;
+                drift.y = (u - 0.5) * 0.9;
+                vis = pow(sin(3.14159265 * u), 1.5);
+            }
+            let center = (cell + vec3<f32>(0.5) + offset + drift) * cell_size;
             let rel = center - origin;
             let s = dot(rel, dir);
-            if s > 0.15 && s < far {
-                let miss = length(rel - dir * s);
+            if s > 0.15 && s < far && vis > 0.01 {
+                let perp = rel - dir * s;
+                let miss = length(perp);
                 // Never thinner than about a pixel, with the energy of the real
                 // mote kept so a distant one dims instead of aliasing.
                 let body = 0.03;
                 let rad = max(body, s * 0.0016);
-                let cover = (1.0 - smoothstep(rad * 0.55, rad, miss))
-                    * clamp((body * body) / (rad * rad), 0.4, 1.0);
-                if cover > 0.001 {
-                    let pick = fract(h * 37.7) * total;
-                    var col = vec3<f32>(0.0);
-                    if pick < a.x {
-                        // Fireflies breathe slowly, mostly dark, flaring warm green-gold.
-                        // Stepped flicker: four brightness frames, like sprite animation.
-                        let breath = floor(pow(0.5 + 0.5 * sin(t * (0.8 + fract(ph) * 0.9) + ph), 3.0) * 4.0) / 4.0;
-                        col = vec3<f32>(0.75, 1.0, 0.26) * (0.15 + 0.85 * breath) * 3.2;
-                    } else if pick < a.x + a.y {
-                        col = vec3<f32>(1.0, 0.92, 0.60) * 1.1;
-                    } else if pick < a.x + a.y + a.z {
-                        // Diamond dust: a brief, hard glint rather than a steady light.
-                        col = vec3<f32>(0.86, 0.95, 1.0) * pow(max(sin(t * 1.7 + ph), 0.0), 10.0) * 3.0;
-                    } else {
-                        col = vec3<f32>(1.0, 0.42, 0.14) * (0.6 + 0.4 * sin(t * 6.0 + ph)) * 2.2;
-                    }
-                    let fade = smoothstep(0.15, 1.2, s) * (1.0 - smoothstep(16.0, 28.0, s));
-                    acc += col * cover * fade * 1.35;
+                let energy = clamp((body * body) / (rad * rad), 0.4, 1.0);
+                let core = 1.0 - smoothstep(rad * 0.5, rad, miss);
+                // A soft bloom around the pixel core, like a light seen through haze.
+                let halo = exp(-(miss * miss) / (rad * rad * 14.0)) * 0.22;
+                var col = vec3<f32>(0.0);
+                var glint = 0.0;
+                let tone = fract(ph * 0.37);
+                if kind == 0 {
+                    // Fireflies breathe slowly and mostly stay dark. Six stepped
+                    // brightness frames keep the pixel-sprite feel.
+                    let breath = floor(pow(0.5 + 0.5 * sin(t * (0.8 + fract(ph) * 0.9) + ph), 3.0) * 6.0) / 6.0;
+                    col = mix(vec3<f32>(0.62, 1.0, 0.22), vec3<f32>(0.25, 1.0, 0.62), tone)
+                        * (0.12 + 0.88 * breath) * 3.4;
+                    glint = breath * breath;
+                } else if kind == 1 {
+                    // Pollen: warm, pale, a slow shimmer.
+                    col = mix(vec3<f32>(1.0, 0.92, 0.58), vec3<f32>(1.0, 0.80, 0.72), tone)
+                        * (0.75 + 0.25 * sin(t * 1.3 + ph)) * 1.25 * vis;
+                } else if kind == 2 {
+                    // Diamond dust: a brief, hard glint with a four-point star.
+                    let flash = pow(max(sin(t * 1.7 + ph), 0.0), 10.0);
+                    col = mix(vec3<f32>(0.80, 0.93, 1.0), vec3<f32>(0.95, 0.88, 1.0), tone) * flash * 3.4;
+                    glint = flash;
+                } else {
+                    // Embers cool from white-yellow to deep orange as they rise.
+                    let heat = vis;
+                    col = mix(vec3<f32>(1.0, 0.30, 0.07), vec3<f32>(1.0, 0.78, 0.38), heat)
+                        * (0.65 + 0.35 * sin(t * 6.0 + ph)) * 2.4 * vis;
                 }
+                var shape = core + halo;
+                if glint > 0.02 {
+                    let px = dot(perp, axis_r);
+                    let py = dot(perp, axis_u);
+                    let arm_x = exp(-abs(px) / (rad * 7.0)) * exp(-abs(py) / (rad * 0.45));
+                    let arm_y = exp(-abs(py) / (rad * 7.0)) * exp(-abs(px) / (rad * 0.45));
+                    shape += (arm_x + arm_y) * 0.55 * glint;
+                }
+                let fade = smoothstep(0.15, 1.2, s) * (1.0 - smoothstep(far * 0.7, far, s));
+                acc += col * shape * energy * fade * 1.35;
             }
         }
         // Step into the next cell along the ray; stop once past the draw range.
