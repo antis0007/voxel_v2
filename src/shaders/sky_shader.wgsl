@@ -28,7 +28,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
         vec2<f32>( 3.0,  1.0),
     );
     let ndc = pos[vertex_index];
-    out.pos = vec4<f32>(ndc, 1.0, 1.0);
+    out.pos = vec4<f32>(ndc, 0.0, 1.0); // reverse-Z: far plane is depth 0
     out.ndc = ndc;
     return out;
 }
@@ -107,8 +107,13 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
 
     let d = length(local - jitter * 0.58);
 
-    // Star disk (anti-aliased point).
-    let shape = 1.0 - smoothstep(0.0, 0.058, d);
+    // Pixel stars: one hard texel per star. The brightest few (seed above
+    // 0.9985) grow a plus-shaped cross, as a pixel-art sprite would.
+    let off = local - jitter * 0.58;
+    let texel = max(abs(off.x), abs(off.y)) < 0.5 * 0.56;
+    let cross = (abs(off.x) < 0.5 * 0.56 && abs(off.y) < 1.5 * 0.56)
+             || (abs(off.y) < 0.5 * 0.56 && abs(off.x) < 1.5 * 0.56);
+    let shape = select(0.0, 1.0, select(texel, cross, seed > 0.9985));
 
     // Colour temperature: mix cool blue-white (O/B type) with warm yellow-white (K/G).
     let hue  = hash12(cell + vec2<f32>(23.7, -11.2));
@@ -120,14 +125,15 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
 
     // Twinkling: slow atmospheric shimmer.
     let twinkle_phase = hash12(cell + vec2<f32>(31.4, 5.9)) * 6.28318;
-    let twinkle = 0.88 + 0.12 * sin(light.weather_globals[0].x * 0.7 + twinkle_phase);
+    // Stepped twinkle: three brightness frames instead of a smooth shimmer.
+    let twinkle = 0.84 + 0.16 * floor(0.5 + 0.5 * sin(light.weather_globals[0].x * 0.7 + twinkle_phase) * 2.0) / 2.0;
 
     return star_color * (present * shape * twinkle * fade);
 }
 
 // Sun disk with limb darkening.
-// Limb darkening: centre of the solar disk is hotter and brighter than the edge.
-// Simple power-law approximation: I(μ) ∝ 1 - u(1 - μ)  where μ = cos(θ_limb).
+// The core stays hotter than the limb. Both follow solar_disk_chroma so a
+// gold or rose sky has a sun of the same family, redder than the scattered air.
 fn sun_disk(dir: vec3<f32>, sun_dir: vec3<f32>,
             sun_color: vec3<f32>, sun_intensity: f32,
             cloud_cover: f32, daylight: f32) -> vec3<f32> {
@@ -135,18 +141,27 @@ fn sun_disk(dir: vec3<f32>, sun_dir: vec3<f32>,
     // Angular radius of sun disk: ~0.5° → cos ≈ 1 - 3.8e-5
     // Larger apparent disk (0.9°) is more visually readable in a game.
     let disk_cos  = 0.99998;   // inner disk
-    let halo_cos  = 0.99970;   // outer corona lobe
+
+    let low = 1.0 - smoothstep(0.02, 0.24, sun_dir.y);
+    let chroma = solar_disk_chroma(sun_dir.y);
+    // Noon stays the authored near-white source. Low sun replaces it.
+    let core = mix(sun_color, chroma, smoothstep(0.08, 0.55, low));
+    // Limb and glow lose green and blue first, matching a real photosphere.
+    let limb = core * vec3<f32>(1.0, mix(0.94, 0.42, low), mix(0.88, 0.18, low));
+    let glow = mix(core, chroma, 0.65 + 0.35 * low);
 
     // Limb darkening coefficient u ≈ 0.6 (solar observation)
     let mu         = saturate1((cos_angle - disk_cos) / max(1.0 - disk_cos, 1e-6));
     let limb_dark  = 1.0 - 0.6 * (1.0 - sqrt(max(mu, 0.0)));
+    let disk_color = mix(limb, core, sqrt(max(mu, 0.0)));
 
     let disk  = smoothstep(disk_cos - 0.00002, disk_cos, cos_angle) * limb_dark;
-    let halo  = pow(max(cos_angle, 0.0), 380.0) * 0.38;
-    let corona = pow(max(cos_angle, 0.0), 40.0) * 0.06 * (1.0 - cloud_cover * 0.80);
+    let halo  = pow(max(cos_angle, 0.0), mix(380.0, 220.0, low)) * mix(0.38, 0.55, low);
+    let corona = pow(max(cos_angle, 0.0), mix(40.0, 16.0, low))
+        * mix(0.06, 0.20, low) * (1.0 - cloud_cover * 0.80);
 
-    let vis = (disk + halo + corona) * sun_intensity;
-    return sun_color * vis * (1.0 - cloud_cover * 0.72);
+    let cover = 1.0 - cloud_cover * 0.72;
+    return (disk_color * disk + glow * halo + glow * corona) * sun_intensity * cover;
 }
 
 // Moon disk with flat shading and subtle blue-grey colour temperature.
@@ -174,10 +189,11 @@ fn moon_disk(dir: vec3<f32>, moon_dir: vec3<f32>,
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    if cam.camera_pos.w > 0.5 {
-        return vec4<f32>(vec3<f32>(0.018, 0.095, 0.13) * mix(0.18, 1.0, light.sun_color_daylight.w), 1.0);
-    }
     let dir = sky_dir(in.ndc);
+    if uw_active() {
+        let jitter = fract(dot(floor(in.pos.xy), vec2<f32>(0.754877666, 0.569840296)));
+        return vec4<f32>(uw_backdrop(dir, jitter), 1.0);
+    }
 
     let daylight   = saturate1(light.sun_color_daylight.w);
     let twilight   = saturate1(light.moon_color_twilight.w);
@@ -212,6 +228,25 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // --- Star field ---
     sky += star_field(dir, night, cloud_cover_stars);
 
+    // --- Sky events: aurora, meteor shower, rainbow ---
+    let event_time = light.torch_meta.y;
+    let dark_sky = 0.25 + 0.75 * smoothstep(0.35, 0.95, night);
+    if light.mood.y > 0.001 {
+        sky += mood_aurora(dir, event_time) * light.mood.y * dark_sky * (1.0 - cloud_cover * 0.75);
+    }
+    if light.mood.z > 0.001 {
+        sky += mood_meteors(dir, event_time) * light.mood.z * smoothstep(0.30, 0.9, night)
+            * (1.0 - cloud_cover * 0.85) * smoothstep(0.0, 0.08, dir.y);
+    }
+    sky += mood_ambience(cam.camera_pos.xyz, dir, 30.0, event_time, light.ambience) * smoothstep(-0.1, 0.1, dir.y + 0.1);
+    if light.mood.w > 0.001 {
+        // A bow needs rain in front of the viewer and direct sun behind them.
+        // The scheduled event alone drew one into clear or fully overcast sky.
+        let rain = smoothstep(0.08, 0.35, light.cloud_authoring[1].z);
+        let sunlit = 1.0 - smoothstep(0.45, 0.85, cloud_cover);
+        sky += mood_rainbow(dir, sun_dir) * light.mood.w * daylight * rain * sunlit;
+    }
+
     // Celestial disks cannot shine through the planet. The horizon dips with
     // altitude; use a smooth angular coverage to avoid a crawling hard line.
     let altitude = max(cam.camera_pos.y, 1.0);
@@ -221,6 +256,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     sky = mix(background, sky, sky_visibility);
     let mist = local_mist(dir, MIST_RANGE_M + MIST_NEAR_CLEARANCE_M, 1.0, background);
     sky = sky*mist.a+mist.rgb;
+    if light.mood.x > 0.001 {
+        sky = mix(sky, mood_cosmos_backdrop(dir, event_time), clamp(light.mood.x, 0.0, 1.0));
+    }
 
     return vec4<f32>(max(sky, vec3<f32>(0.0)), 1.0);
 }
