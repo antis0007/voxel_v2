@@ -4,10 +4,12 @@
 mod output;
 mod synth;
 use glam::Vec3;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
-    mpsc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
+        mpsc, Arc,
+    },
+    time::Instant,
 };
 
 static VOLUME: AtomicU32 = AtomicU32::new(0.65_f32.to_bits());
@@ -61,21 +63,49 @@ pub enum Cue {
     CinderStrike,
     Rift,
     Echo,
+    Splash,
 }
 impl Cue {
-    const COUNT: usize = 23;
+    const COUNT: usize = 24;
 }
 #[derive(Clone, Copy)]
 pub struct Event {
     pub cue: Cue,
     pub pos: Option<Vec3>,
     pub gain: f32,
+    /// Per-event playback pitch. 1.0 is neutral; spell families and variants
+    /// use this to avoid every projectile sharing one identical chirp.
+    pub pitch: f32,
 }
 pub(super) struct Play {
     cue: Cue,
     left: f32,
     right: f32,
     rate: f32,
+    /// Wet send into the short spatial delay/reverb bus.
+    reverb: f32,
+    /// One of the three decorrelated renders for this cue.
+    variant: usize,
+}
+
+/// Reverb sends are deliberately cue-specific: impacts and rifts get space,
+/// sparks stay tight so rapid fire does not smear into a wash.
+pub(super) fn reverb_send(cue: Cue) -> f32 {
+    match cue {
+        Cue::Burst | Cue::Rift | Cue::Echo | Cue::Shatter | Cue::Splash => 0.52,
+        Cue::Bloom
+        | Cue::ForgeSlam
+        | Cue::ForgeWindup
+        | Cue::ArchiveRelease
+        | Cue::PrismRelease
+        | Cue::CinderStrike => 0.38,
+        Cue::Spark | Cue::Frost | Cue::Swing => 0.14,
+        _ => 0.24,
+    }
+}
+
+fn rapid_repeat(last_ms: u64, now_ms: u64) -> bool {
+    last_ms != u64::MAX && now_ms.saturating_sub(last_ms) < 24
 }
 pub struct Audio {
     tx: mpsc::SyncSender<Play>,
@@ -83,6 +113,10 @@ pub struct Audio {
     active: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
     serial: u32,
+    started: Instant,
+    /// Last trigger time per cue. Rapid identical cues receive a ducked gain
+    /// instead of stacking at full amplitude and turning into a harsh buzz.
+    last_cue_ms: [u64; Cue::COUNT],
 }
 impl Audio {
     pub fn new() -> Self {
@@ -112,6 +146,8 @@ impl Audio {
             active,
             worker,
             serial: 0,
+            started: Instant::now(),
+            last_cue_ms: [u64::MAX; Cue::COUNT],
         }
     }
     pub fn set_active(&self, active: bool) {
@@ -139,12 +175,22 @@ impl Audio {
             (1.0, 0.0)
         };
         self.serial = self.serial.wrapping_mul(1664525).wrapping_add(1013904223);
-        let gain = gain * event.gain.clamp(0.0, 1.0);
+        let cue_index = event.cue as usize;
+        let now = self.started.elapsed().as_millis() as u64;
+        let last = self.last_cue_ms[cue_index];
+        let rapid = rapid_repeat(last, now);
+        self.last_cue_ms[cue_index] = now;
+        let duck = if rapid { 0.48 } else { 1.0 };
+        let gain = gain * event.gain.clamp(0.0, 1.0) * duck;
         let _ = self.tx.try_send(Play {
             cue: event.cue,
             left: gain * ((1.0 - pan) * 0.5).sqrt(),
             right: gain * ((1.0 + pan) * 0.5).sqrt(),
-            rate: 0.96 + (self.serial >> 24) as f32 / 255.0 * 0.08,
+            rate: ((0.96 + (self.serial >> 24) as f32 / 255.0 * 0.08)
+                * event.pitch.clamp(0.60, 1.70))
+            .clamp(0.55, 1.80),
+            reverb: reverb_send(event.cue),
+            variant: (self.serial.wrapping_mul(1_664_525) >> 7) as usize % 3,
         });
     }
 }
@@ -154,5 +200,25 @@ impl Drop for Audio {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn impact_cues_are_wetter_than_rapid_fire_cues() {
+        assert!(reverb_send(Cue::Rift) > reverb_send(Cue::Spark));
+        assert!(reverb_send(Cue::Burst) > reverb_send(Cue::Swing));
+        assert!(reverb_send(Cue::Splash) > reverb_send(Cue::Frost));
+        assert!((0.0..=0.6).contains(&reverb_send(Cue::Hurt)));
+    }
+
+    #[test]
+    fn the_first_trigger_is_not_treated_as_a_rapid_repeat() {
+        assert!(!rapid_repeat(u64::MAX, 0));
+        assert!(rapid_repeat(100, 110));
+        assert!(!rapid_repeat(100, 124));
     }
 }

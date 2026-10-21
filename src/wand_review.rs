@@ -533,7 +533,17 @@ impl Review {
             if !passed {
                 self.failures += 1;
             }
-            if self.blast_case() {println!("[wand-review] blast audio={} drops={} bounded={}",crate::audio::status(),w.inventory.dropped.len(),w.inventory.dropped.iter().all(|d|d.stack.count<=w.inventory.stack_limit(d.stack.item)));}
+            if self.blast_case() {
+                println!(
+                    "[wand-review] blast audio={} drops={} bounded={}",
+                    crate::audio::status(),
+                    w.inventory.dropped.len(),
+                    w.inventory
+                        .dropped
+                        .iter()
+                        .all(|d| d.stack.count <= w.inventory.stack_limit(d.stack.item))
+                );
+            }
             println!(
                 "[wand-review] acceptance {name} {} min_mana={:.1} peak_shots={} travelled={travelled:.2}",
                 if passed { "PASS" } else { "FAIL" },

@@ -1,6 +1,9 @@
 //! Opt-in deterministic visual fixture. Runs only in an unsaved benchmark world.
-use crate::{player::{Player, FlyMode}, world::{World, BlockId}};
-use glam::{Vec3, IVec3};
+use crate::{
+    player::{FlyMode, Player},
+    world::{BlockId, World},
+};
+use glam::{IVec3, Vec3};
 
 // Opt-in renderer integration replay: feeds the same egui events as native
 // mouse input, using rectangles recorded by the real inventory layout.
@@ -12,7 +15,10 @@ struct DragReview {
     before_cancel: Option<[BlockId; 9]>,
 }
 static DRAG: std::sync::Mutex<DragReview> = std::sync::Mutex::new(DragReview {
-    started: None, last_step: None, checked: 0, before_cancel: None,
+    started: None,
+    last_step: None,
+    checked: 0,
+    before_cancel: None,
 });
 
 pub fn drag_input(ctx: &egui::Context, input: &mut egui::RawInput) {
@@ -21,30 +27,51 @@ pub fn drag_input(ctx: &egui::Context, input: &mut egui::RawInput) {
         rect(egui::Id::new("review_torch_card")),
         rect(egui::Id::new(("review_hotbar", 1usize))),
         rect(egui::Id::new(("review_hotbar", 4usize))),
-    ) else { return; };
+    ) else {
+        return;
+    };
     input.focused = true;
     let mut review = DRAG.lock().unwrap();
-    let elapsed = review.started.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f32();
+    let elapsed = review
+        .started
+        .get_or_insert_with(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f32();
     let step = (elapsed / 0.35) as usize;
-    if review.last_step == Some(step) { return; }
+    if review.last_step == Some(step) {
+        return;
+    }
     review.last_step = Some(step);
     let mut pointer = |pos, pressed| {
         input.events.push(egui::Event::PointerMoved(pos));
-        input.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
-            pressed, modifiers: egui::Modifiers::NONE });
+        input.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
     };
     match step {
         3 | 17 => pointer(card.center(), true),
-        4 | 18 => input.events.push(egui::Event::PointerMoved(card.center() + egui::vec2(14.0, 0.0))),
+        4 | 18 => input.events.push(egui::Event::PointerMoved(
+            card.center() + egui::vec2(14.0, 0.0),
+        )),
         5 => input.events.push(egui::Event::PointerMoved(slot4.center())),
         6 => pointer(slot4.center(), false),
         10 | 24 => pointer(slot4.center(), true),
-        11 | 25 => input.events.push(egui::Event::PointerMoved(slot4.center() + egui::vec2(14.0, 0.0))),
+        11 | 25 => input.events.push(egui::Event::PointerMoved(
+            slot4.center() + egui::vec2(14.0, 0.0),
+        )),
         12 => input.events.push(egui::Event::PointerMoved(slot1.center())),
         13 => pointer(slot1.center(), false),
-        19 => input.events.push(egui::Event::PointerMoved(egui::pos2(1.0, 1.0))),
+        19 => input
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(1.0, 1.0))),
         20 => pointer(egui::pos2(1.0, 1.0), false),
-        26 => { input.focused = false; input.events.push(egui::Event::WindowFocused(false)); },
+        26 => {
+            input.focused = false;
+            input.events.push(egui::Event::WindowFocused(false));
+        }
         27 => pointer(slot1.center(), false),
         _ => {}
     }
@@ -53,16 +80,46 @@ pub fn drag_input(ctx: &egui::Context, input: &mut egui::RawInput) {
 pub fn check_drag(creative: &crate::creative::CreativeState, dragging: bool) {
     let mut review = DRAG.lock().unwrap();
     let step = review.last_step.unwrap_or(0);
-    let checkpoint = if step >= 28 { 4 } else if step >= 21 { 3 } else if step >= 14 { 2 } else if step >= 7 { 1 } else { 0 };
-    if checkpoint <= review.checked { return; }
+    let checkpoint = if step >= 28 {
+        4
+    } else if step >= 21 {
+        3
+    } else if step >= 14 {
+        2
+    } else if step >= 7 {
+        1
+    } else {
+        0
+    };
+    if checkpoint <= review.checked {
+        return;
+    }
     let passed = match checkpoint {
         1 => creative.hotbar()[4] == BlockId::Torch && creative.selected_slot == 4 && !dragging,
-        2 => creative.hotbar()[1] == BlockId::Torch && creative.hotbar()[4] == BlockId::Grass && creative.selected_slot == 1 && !dragging,
+        2 => {
+            creative.hotbar()[1] == BlockId::Torch
+                && creative.hotbar()[4] == BlockId::Grass
+                && creative.selected_slot == 1
+                && !dragging
+        }
         _ => review.before_cancel.as_ref() == Some(creative.hotbar()) && !dragging,
     };
-    if checkpoint == 2 { review.before_cancel = Some(*creative.hotbar()); }
-    let name = ["", "palette_to_hotbar", "hotbar_swap", "outside_cancel", "focus_loss_cancel"][checkpoint];
-    println!("[torch-drag] {name} {} hotbar={:?} selected={} dragging={dragging}", if passed { "PASS" } else { "FAIL" }, creative.hotbar(), creative.selected_slot);
+    if checkpoint == 2 {
+        review.before_cancel = Some(*creative.hotbar());
+    }
+    let name = [
+        "",
+        "palette_to_hotbar",
+        "hotbar_swap",
+        "outside_cancel",
+        "focus_loss_cancel",
+    ][checkpoint];
+    println!(
+        "[torch-drag] {name} {} hotbar={:?} selected={} dragging={dragging}",
+        if passed { "PASS" } else { "FAIL" },
+        creative.hotbar(),
+        creative.selected_slot
+    );
     review.checked = checkpoint;
 }
 
@@ -82,10 +139,18 @@ pub fn motion_camera(player: &mut Player, scale: f32, elapsed: f32) {
 }
 
 pub fn camera(player: &mut Player, scale: f32) {
-    let z_dist = if mode() == "survival" { 2.2 } else { 4.5 };
-    player.pos = Vec3::new(0.5 * scale, 100.0, z_dist + 0.5 * scale) / scale;
+    let z_dist = match mode() {
+        "survival" => 2.2,
+        "factory" => 7.5,
+        _ => 4.5,
+    };
+    player.pos = if mode() == "factory" {
+        Vec3::new(-0.5, 101.0, 3.6) / scale
+    } else {
+        Vec3::new(0.5 * scale, 100.0, z_dist + 0.5 * scale) / scale
+    };
     player.yaw = 0.0;
-    player.pitch = -0.15;
+    player.pitch = if mode() == "factory" { -0.22 } else { -0.15 };
     player.vel = Vec3::ZERO;
     player.flying = true;
     player.fly_mode = FlyMode::Noclip;
@@ -93,18 +158,86 @@ pub fn camera(player: &mut Player, scale: f32) {
     player.selected_block = BlockId::Stone;
 }
 
-pub fn install(world: &mut World) {
+/// Magical-tech fixture: an extractor line, a lift that climbs a level, and a
+/// powered line, so pipe traffic and machine models can be captured together.
+fn install_factory(world: &mut World) {
+    use crate::world::factory::{self, CAPACITY, Kind};
     let scale = world.voxel_scale.meters();
     let n = (1.0 / scale) as i32;
     let mut edits = Vec::new();
-    for y in 99*n..104*n { for z in -2*n..3*n { for x in -3*n..3*n {
-        let block = if y < 100*n || (x >= 0 && x < 2*n && z >= -n && z < 0 && y < 103*n) {
-            BlockId::StoneBricks
-        } else { BlockId::Air };
-        edits.push((IVec3::new(x,y,z),block));
-    } } }
-    edits.push((IVec3::new(-n,100*n,0),BlockId::Torch));
-    edits.push((IVec3::new(n,101*n,0),BlockId::TorchWallSouth));
+    for y in 99 * n..106 * n {
+        for z in -4 * n..4 * n {
+            for x in -6 * n..6 * n {
+                edits.push((
+                    IVec3::new(x, y, z),
+                    if y < 100 * n {
+                        BlockId::StoneBricks
+                    } else {
+                        BlockId::Air
+                    },
+                ));
+            }
+        }
+    }
+    world.set_many(&edits);
+    let at = |x: i32, y: i32, z: i32| IVec3::new(x * n, (100 + y) * n, z * n);
+    // Line A: crate -> extractor -> pipes -> furnace.
+    if let Some(c) = factory::fixture_place(world, at(-4, 0, 0), Kind::Storage) {
+        c.input[9] = CAPACITY;
+        c.input[10] = CAPACITY;
+    }
+    if let Some(p) = factory::fixture_place(world, at(-3, 0, 0), Kind::Pipe) {
+        p.mode = 1;
+    }
+    for x in -2..=1 {
+        factory::fixture_place(world, at(x, 0, 0), Kind::Pipe);
+    }
+    factory::fixture_place(world, at(2, 0, 0), Kind::Furnace);
+    // Line B: a crusher's output climbs two levels into a crate.
+    if let Some(m) = factory::fixture_place(world, at(-4, 0, -2), Kind::Crusher) {
+        m.output[9] = CAPACITY;
+    }
+    for (x, y) in [(-3, 0), (-2, 0), (-2, 1), (-2, 2), (-1, 2), (0, 2)] {
+        factory::fixture_place(world, at(x, y, -2), Kind::Pipe);
+    }
+    factory::fixture_place(world, at(1, 2, -2), Kind::Storage);
+    // Line C: generator and cable into a fabricator, plus a tank and pump.
+    if let Some(g) = factory::fixture_place(world, at(-4, 0, 2), Kind::Generator) {
+        g.mode = 1;
+        g.input[17] = 256;
+    }
+    for x in -3..=0 {
+        factory::fixture_place(world, at(x, 0, 2), Kind::Cable);
+    }
+    factory::fixture_place(world, at(1, 0, 2), Kind::Fabricator);
+    factory::fixture_place(world, at(3, 0, 2), Kind::Tank);
+    factory::fixture_place(world, at(3, 0, 0), Kind::Pump);
+    factory::fixture_place(world, at(3, 0, 1), Kind::FluidPipe);
+}
+
+pub fn install(world: &mut World) {
+    if mode() == "factory" {
+        install_factory(world);
+        return;
+    }
+    let scale = world.voxel_scale.meters();
+    let n = (1.0 / scale) as i32;
+    let mut edits = Vec::new();
+    for y in 99 * n..104 * n {
+        for z in -2 * n..3 * n {
+            for x in -3 * n..3 * n {
+                let block =
+                    if y < 100 * n || (x >= 0 && x < 2 * n && z >= -n && z < 0 && y < 103 * n) {
+                        BlockId::StoneBricks
+                    } else {
+                        BlockId::Air
+                    };
+                edits.push((IVec3::new(x, y, z), block));
+            }
+        }
+    }
+    edits.push((IVec3::new(-n, 100 * n, 0), BlockId::Torch));
+    edits.push((IVec3::new(n, 101 * n, 0), BlockId::TorchWallSouth));
     world.set_many(&edits);
     // Representative collected/refined stacks for the inventory capture.
     for (i, count) in [(0, 1536), (3, 320), (4, 160), (6, 640), (12, 64), (18, 96)] {
@@ -168,7 +301,9 @@ pub fn apply_survival_phase(
             world.adventure.hunger = 5.0;
             world.inventory.eat_timer = 0.0;
             world.inventory.starve_timer = 0.85;
-            world.inventory.notify_overflow(crate::world::inventory::Item::Block(BlockId::Stone));
+            world
+                .inventory
+                .notify_overflow(crate::world::inventory::Item::Block(BlockId::Stone));
         }
         _ => {
             // Phase 3: E-key survival inventory screen open with 2x2 crafting grid & armor preview

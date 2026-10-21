@@ -34,6 +34,34 @@ pub struct PlasmaCross {
 }
 
 impl Adventure {
+    /// An arcane pile ran out of coolant. Violent, local and survivable: a
+    /// fireball, a shove, and damage that falls off with distance. The machine
+    /// itself survives (disabled and hot) so the player can rebuild the cooling.
+    pub(super) fn reactor_meltdown(&mut self, world: &mut World, at: Vec3, eye: Vec3) {
+        let color = [0.55, 0.95, 1.0];
+        self.blast_visual(at, 3.4, Vec3::Y, color);
+        self.spawn_voxel_burst(at, color, 48, 6.5, 0.06);
+        self.spawn_voxel_burst(at, [1.0, 0.55, 0.2], 24, 4.0, 0.05);
+        sound(&mut self.sounds, Cue::Burst, Some(at), 1.0);
+        world
+            .sandbox
+            .apply_radial_impulse(at, 4.5, 6.0, world.voxel_scale.meters());
+        self.thermal_bloom(world, at, 3.0, true);
+        let distance = (eye - at).length();
+        if distance < 6.0 {
+            self.damage(34.0 * (1.0 - distance / 6.0), eye - at);
+        }
+        for e in &mut self.enemies {
+            if e.health > 0.0 && (e.center() - at).length() < 5.0 {
+                e.hurt(30.0);
+                e.flash = 0.2;
+            }
+        }
+        world
+            .expedition
+            .say("Arcane pile meltdown! Pipe coolant water into it before restarting.");
+    }
+
     pub fn spawn_voxel_particle(
         &mut self,
         pos: Vec3,
@@ -48,14 +76,16 @@ impl Adventure {
         if self.particles.len() >= 480 {
             self.particles.remove(0);
         }
+        let fx = self.zone_fx;
+        let life = life * fx.life_mul;
         self.particles.push(VoxelParticle {
             pos,
             vel,
-            color,
-            size,
-            glow,
+            color: fx.tinted(color),
+            size: size * fx.size_mul,
+            glow: fx.glow(glow, pos.x * 1.3 + pos.z * 0.7 + self.time),
             alpha,
-            gravity,
+            gravity: gravity * fx.gravity_mul,
             life,
             total: life.max(0.05),
         });
@@ -79,24 +109,89 @@ impl Adventure {
             )
             .normalize_or_zero();
             let v_mag = speed * (0.55 + (i % 5) as f32 * 0.18);
-            let tint = if i % 3 == 0 {
-                [
-                    (color[0] * 1.25 + 0.12).min(1.0),
-                    (color[1] * 1.25 + 0.12).min(1.0),
-                    (color[2] * 1.25 + 0.12).min(1.0),
-                ]
+            self.spawn_voxel_particle(
+                pos + dir * 0.04,
+                dir * v_mag * 0.55,
+                color,
+                size * (0.85 + (i % 3) as f32 * 0.08),
+                1.35,
+                0.55,
+                0.8,
+                0.85 + (i % 4) as f32 * 0.12,
+            );
+        }
+    }
+
+    /// Emit the visible free-surface response to a water entry. The solver owns
+    /// the volume; this only adds a bounded crown, droplets and a contact ring
+    /// at the exposed top of the local water column.
+    pub(crate) fn splash(&mut self, surface: Vec3, strength: f32) {
+        if !surface.is_finite() {
+            return;
+        }
+        let strength = strength.clamp(0.12, 1.0);
+        if self.splashes.len() >= 24 {
+            self.splashes.remove(0);
+        }
+        let life = 0.56 + 0.38 * strength;
+        self.splashes.push(crate::tool_effects::Splash {
+            pos: surface,
+            radius: 0.34 + 1.05 * strength,
+            age: 0.0,
+            life,
+            strength,
+        });
+        let count = (5.0 + strength * 19.0).round() as usize;
+        for i in 0..count {
+            let a = i as f32 * 2.399963 + self.time * 4.1 + surface.x * 0.37;
+            let radial = Vec3::new(a.cos(), 0.0, a.sin());
+            let lift = 1.15 + (i % 5) as f32 * 0.22 + strength * 1.8;
+            let speed = (0.8 + strength * 2.5) * (0.7 + (i % 4) as f32 * 0.11);
+            let tint = if i % 4 == 0 {
+                [0.91, 0.97, 0.98]
+            } else if i % 3 == 0 {
+                [0.52, 0.83, 0.85]
             } else {
-                color
+                [0.72, 0.93, 0.95]
             };
             self.spawn_voxel_particle(
-                pos + dir * 0.05,
-                dir * v_mag,
+                surface
+                    + radial * (0.10 + (i % 3) as f32 * 0.06)
+                    + Vec3::Y * (0.015 + (i % 2) as f32 * 0.025),
+                radial * speed + Vec3::Y * lift * (0.7 + (i % 3) as f32 * 0.12),
                 tint,
-                size * (0.8 + (i % 3) as f32 * 0.22),
-                3.2,
-                0.76,
-                if i % 2 == 0 { 3.2 } else { -0.6 },
-                0.45 + (i % 4) as f32 * 0.14,
+                (0.026 + (i % 3) as f32 * 0.012) * (0.8 + strength * 0.5),
+                2.0 + strength * 1.6,
+                0.74 + strength * 0.18,
+                7.5,
+                0.38 + (i % 5) as f32 * 0.075 + strength * 0.20,
+            );
+        }
+        sound(
+            &mut self.sounds,
+            Cue::Splash,
+            Some(surface),
+            0.42 + strength * 0.38,
+        );
+    }
+
+    /// The pixels of a pickup leave the object: outward, upward, then they thin out.
+    pub fn pickup_burst(&mut self, pos: Vec3, color: [f32; 3]) {
+        for i in 0..32 {
+            let a = i as f32 * 2.399963 + pos.x;
+            let lift = 0.25 + (i % 6) as f32 * 0.14;
+            let dir = Vec3::new(a.cos(), lift, a.sin()).normalize_or_zero();
+            let speed = 1.1 + (i % 8) as f32 * 0.28;
+            let tint = if i % 4 == 0 { [1.0, 1.0, 1.0] } else { color };
+            self.spawn_voxel_particle(
+                pos + Vec3::Y * (0.35 + (i % 5) as f32 * 0.06),
+                dir * speed,
+                tint,
+                0.028 + (i % 3) as f32 * 0.014,
+                4.2,
+                0.92,
+                -0.15,
+                0.7 + (i % 5) as f32 * 0.1,
             );
         }
     }
@@ -105,6 +200,23 @@ impl Adventure {
         world.activity.wake(cell);
         if self.dirty_voxels.len() < 2048 {
             self.dirty_voxels.push(cell);
+        }
+    }
+
+    /// Apply one spell's terrain changes as a single world transaction.
+    ///
+    /// Applying a `world.set` per voxel incremented the world revision and
+    /// repeated chunk bookkeeping thousands of times inside one simulation
+    /// tick. `set_many` keeps the same result while paying that bookkeeping a
+    /// bounded number of times; the dirty list still drives the immediate mesh
+    /// refresh.
+    pub(super) fn apply_terrain_edits(&mut self, world: &mut World, edits: &[(IVec3, B)]) {
+        if edits.is_empty() {
+            return;
+        }
+        world.set_many(edits);
+        for &(cell, _) in edits {
+            self.mark_voxel_dirty(world, cell);
         }
     }
 
@@ -124,14 +236,32 @@ impl Adventure {
         let scale = world.voxel_scale.meters();
         let center = (cell.as_vec3() + Vec3::splat(0.5)) * scale;
         let col = old.color(cell);
-        let mut blocks = std::collections::HashSet::new();
-        let mut chunks = std::collections::HashSet::new();
-        if harvest {
-            super::super::expedition::blast_harvest(world, cell, &mut blocks, &mut chunks);
+        // Drills and singularity carving should not run the mining inventory
+        // pipeline for every stone voxel. Only genuinely valuable blocks are
+        // harvested; ordinary terrain is simply removed in one write.
+        let valuable = super::super::expedition::resource(old).is_some()
+            || matches!(
+                old,
+                B::Log | B::SalvageCrate | B::SurveyCache | B::CultivatorCache
+            );
+        if harvest && valuable {
+            let mut blocks = std::collections::HashSet::new();
+            let mut chunks = std::collections::HashSet::new();
+            if !super::super::expedition::blast_harvest(world, cell, &mut blocks, &mut chunks) {
+                return false;
+            }
+            for touched in blocks {
+                self.mark_voxel_dirty(world, touched);
+            }
         } else {
             world.set(cell, B::Air);
+            if world.get(cell) != B::Air {
+                return false;
+            }
         }
         self.mark_voxel_dirty(world, cell);
+        // `blast_harvest` fells a tree when the removed block is a log, so the
+        // caller does not run the canopy search a second time.
         self.spawn_voxel_burst(center, col, 4, 1.8, 0.036);
         true
     }
@@ -206,8 +336,8 @@ impl Adventure {
             let closest = start + seg_dir * t;
             if (e.center() - closest).length() < if tall(e.kind) { 0.85 } else { 0.65 } {
                 let shatter = e.slow > 0.0;
-                e.health -= (26.0 + rank as f32 * 3.5 + if shatter { 16.0 } else { 0.0 })
-                    * mods.damage_mul;
+                e.health -=
+                    (26.0 + rank as f32 * 3.5 + if shatter { 16.0 } else { 0.0 }) * mods.damage_mul;
                 if shatter {
                     e.slow = 0.0;
                 }
@@ -228,8 +358,8 @@ impl Adventure {
                 ),
                 spell_color(9),
                 0.035,
-                4.2,
-                0.82,
+                1.3,
+                0.45,
                 0.5,
                 0.28,
             );
@@ -254,6 +384,8 @@ impl Adventure {
         let c_cell = (center / scale).floor().as_ivec3();
         let r = (radius_m / scale).ceil().clamp(1.0, 5.0) as i32;
         let r_sq = (radius_m / scale) * (radius_m / scale);
+        let mut edits = Vec::new();
+        let mut thermal = Vec::new();
         for dy in -r..=r {
             for dx in -r..=r {
                 for dz in -r..=r {
@@ -263,27 +395,28 @@ impl Adventure {
                     let cell = c_cell + IVec3::new(dx, dy, dz);
                     let b = world.get(cell);
                     if b == B::Water {
-                        world.set(cell, B::Ice);
-                        world.sandbox.set(
+                        edits.push((cell, B::Ice));
+                        thermal.push((
                             cell,
                             ThermalCell {
                                 temperature: -5.0,
                                 fuel: 0.0,
                                 gas: 0,
                             },
-                        );
-                        self.mark_voxel_dirty(world, cell);
+                        ));
                     } else if b == B::Fire {
-                        world.set(cell, B::Ash);
-                        world.sandbox.set(cell, ThermalCell::default());
-                        self.mark_voxel_dirty(world, cell);
+                        edits.push((cell, B::Ash));
+                        thermal.push((cell, ThermalCell::default()));
                     } else if b == B::Lava {
-                        world.set(cell, B::Basalt);
-                        world.sandbox.set(cell, ThermalCell::default());
-                        self.mark_voxel_dirty(world, cell);
+                        edits.push((cell, B::Basalt));
+                        thermal.push((cell, ThermalCell::default()));
                     }
                 }
             }
+        }
+        self.apply_terrain_edits(world, &edits);
+        for (cell, state) in thermal {
+            world.sandbox.set(cell, state);
         }
         for e in &mut self.enemies {
             if e.health > 0.0 && (e.center() - center).length() < radius_m + 0.8 {
@@ -306,6 +439,8 @@ impl Adventure {
         let r = (radius_m / scale).ceil().clamp(1.0, 4.0) as i32;
         let r_sq = (radius_m / scale) * (radius_m / scale);
         let mut fires_placed = 0usize;
+        let mut edits = Vec::new();
+        let mut thermal = Vec::new();
         for dy in -r..=r {
             for dx in -r..=r {
                 for dz in -r..=r {
@@ -315,37 +450,33 @@ impl Adventure {
                     let cell = c_cell + IVec3::new(dx, dy, dz);
                     let b = world.get(cell);
                     if b == B::Ice {
-                        world.set_water_volume(cell, 8);
-                        self.mark_voxel_dirty(world, cell);
+                        edits.push((cell, B::Water));
                     } else if b == B::SnowGrass {
-                        world.set(cell, B::Dirt);
-                        self.mark_voxel_dirty(world, cell);
+                        edits.push((cell, B::Dirt));
                     } else if b == B::Water {
-                        world.set(cell, B::Steam);
-                        world.sandbox.set(
+                        edits.push((cell, B::Steam));
+                        thermal.push((
                             cell,
                             ThermalCell {
                                 temperature: 135.0,
                                 fuel: 0.0,
                                 gas: 8,
                             },
-                        );
-                        self.mark_voxel_dirty(world, cell);
+                        ));
                     } else if b == B::Air
                         && spawn_fire
                         && fires_placed < 6
                         && world.solid(cell - IVec3::Y)
                     {
-                        world.set(cell, B::Fire);
-                        world.sandbox.set(
+                        edits.push((cell, B::Fire));
+                        thermal.push((
                             cell,
                             ThermalCell {
                                 temperature: 820.0,
                                 fuel: 75.0,
                                 gas: 0,
                             },
-                        );
-                        self.mark_voxel_dirty(world, cell);
+                        ));
                         fires_placed += 1;
                     } else if world.sandbox.can_admit(&[cell]) {
                         let mut tc = world.sandbox.cell(cell);
@@ -355,6 +486,10 @@ impl Adventure {
                     }
                 }
             }
+        }
+        self.apply_terrain_edits(world, &edits);
+        for (cell, state) in thermal {
+            world.sandbox.set(cell, state);
         }
         for e in &mut self.enemies {
             let d = (e.center() - center).length();
@@ -414,6 +549,7 @@ impl Adventure {
         let c_cell = (center / scale).floor().as_ivec3();
         let r = (radius_m / scale).ceil().clamp(1.0, 3.0) as i32;
         let r_sq = (radius_m / scale) * (radius_m / scale);
+        let mut edits = Vec::new();
         for dy in -r..=r {
             for dx in -r..=r {
                 for dz in -r..=r {
@@ -443,12 +579,12 @@ impl Adventure {
                         _ => None,
                     };
                     if let Some(nb) = transmuted {
-                        world.set(cell, nb);
-                        self.mark_voxel_dirty(world, cell);
+                        edits.push((cell, nb));
                     }
                 }
             }
         }
+        self.apply_terrain_edits(world, &edits);
         self.spawn_voxel_burst(center, spell_color(15), 26, 2.4, 0.045);
     }
 
@@ -477,14 +613,15 @@ impl Adventure {
             let a = self.time * 4.2;
             for i in 0..4 {
                 let ang = a + i as f32 * std::f32::consts::FRAC_PI_2;
-                let dir = Vec3::new(ang.cos(), (ang * 0.5).sin() * 0.35, ang.sin()).normalize_or_zero();
+                let dir =
+                    Vec3::new(ang.cos(), (ang * 0.5).sin() * 0.35, ang.sin()).normalize_or_zero();
                 self.spawn_voxel_particle(
                     p + dir * 1.1,
                     dir * 1.8 + Vec3::Y * 0.4,
                     spell_color(11),
                     0.034,
-                    4.0,
-                    0.80,
+                    1.2,
+                    0.4,
                     -0.3,
                     0.35,
                 );
@@ -505,7 +642,16 @@ impl Adventure {
         for p in &mut self.particles {
             p.life -= dt;
             p.vel.y -= p.gravity * dt;
-            p.vel *= (1.0 - dt * 1.8).max(0.0);
+            if p.gravity < 0.5 {
+                // Rising pickup fog tumbles as it spreads instead of flying in a straight line.
+                let curl = Vec3::new(
+                    (p.pos.y * 1.4 + self.time * 0.7).sin(),
+                    0.2,
+                    (p.pos.x * 1.4 + self.time * 0.5).cos(),
+                );
+                p.vel += curl * dt * 0.35;
+            }
+            p.vel *= (1.0 - dt * 1.4).max(0.0);
             let next = p.pos + p.vel * dt;
             let cell = (next / scale).floor().as_ivec3();
             if world.solid(cell) {
@@ -546,7 +692,7 @@ impl Adventure {
             e.stagger = 0.18;
             if e.kind < 6 || frozen && e.poise <= 0.0 {
                 e.tell = 0.0;
-                if e.kind >= 6 {
+                if is_boss(e.kind) {
                     e.poise = 3.0;
                 }
             }
@@ -614,6 +760,116 @@ impl Adventure {
         self.blooms.retain(|b| b.life > 0.0);
     }
 
+    pub(super) fn cast_timberfall(&mut self, world: &mut World, eye: Vec3, dir: Vec3) {
+        let hit = wands::aim_cell(world, eye, dir, 28.0);
+        let Some((hit_cell, _)) = hit else {
+            self.effect(eye + dir * 1.5, spell_color(24), 0.5);
+            return;
+        };
+        let mut target = if world.get(hit_cell) == B::Log {
+            Some(hit_cell)
+        } else {
+            // Aiming at leaves should still find the supporting trunk nearby.
+            let mut found = None;
+            for dy in -2..=2 {
+                for dz in -2..=2 {
+                    for dx in -2..=2 {
+                        let p = hit_cell + IVec3::new(dx, dy, dz);
+                        if world.get(p) == B::Log {
+                            found = Some(p);
+                            break;
+                        }
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+            found
+        };
+        let Some(target_cell) = target.take() else {
+            self.effect(eye + dir * 1.5, spell_color(24), 0.5);
+            return;
+        };
+        self.effect(
+            (target_cell.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters(),
+            spell_color(24),
+            1.2,
+        );
+        if let Some(cells) = super::super::expedition::fell_tree(world, target_cell) {
+            for cell in cells {
+                self.mark_voxel_dirty(world, cell);
+            }
+        }
+        self.spawn_voxel_burst(
+            (target_cell.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters(),
+            spell_color(24),
+            18,
+            2.2,
+            0.04,
+        );
+    }
+
+    pub(super) fn cast_gale(&mut self, world: &mut World, eye: Vec3, dir: Vec3) {
+        let center = eye + dir * 2.2;
+        self.kinetic_pulse(world, center, 6.0, 5.0);
+        self.effect(center, spell_color(25), 1.6);
+        self.spawn_voxel_burst(center, spell_color(25), 28, 3.4, 0.042);
+    }
+
+    /// Screen-space magic envelope for the resolve. This is deliberately
+    /// additive and short-lived: ordinary exploration stays clean, while a cast,
+    /// ward impact, singularity or laser storm visibly bends the image.
+    pub fn screen_magic(&self) -> (f32, [f32; 3]) {
+        let cast = (self.cast_pose / 0.4).clamp(0.0, 1.0).powf(1.35) * 0.36;
+        let mana = (self.mana_flash * 1.6).clamp(0.0, 1.0) * 0.20;
+        let ward = (self.ward * 0.20).clamp(0.0, 0.18);
+        let projectiles = (self.projectiles.len() as f32 * 0.022).min(0.20);
+        let particles = (self.particles.len() as f32 / 480.0 * 0.03).min(0.04);
+        let fields = ((self.crosses.len() + self.wells.len()) as f32 * 0.11).min(0.24);
+        let lasers = (self.lasers.len() as f32 * 0.10).min(0.20);
+        let intensity =
+            (cast + mana + ward + projectiles + particles + fields + lasers).clamp(0.0, 0.88);
+        let mut color = spell_color(if self.last_cast == 8 {
+            self.spell
+        } else {
+            self.last_cast
+        });
+        if self.ward > 0.0 {
+            let ward = spell_color(4);
+            color = [
+                color[0] * 0.65 + ward[0] * 0.35,
+                color[1] * 0.65 + ward[1] * 0.35,
+                color[2] * 0.65 + ward[2] * 0.35,
+            ];
+        }
+        (intensity, color)
+    }
+
+    /// A short-lived light at the wand tip. The emissive mesh alone lit nothing
+    /// around it, so a cast in a cave read as a glowing prop rather than an
+    /// event. This piggybacks on the existing dynamic torch-light array.
+    pub fn cast_light(&self, eye: Vec3, forward: Vec3) -> Option<(Vec3, f32, [f32; 3], f32)> {
+        if self.cast_pose <= 0.01 || self.wand == 0 {
+            return None;
+        }
+        let t = self.cast_motion().clamp(0.0, 1.0);
+        let spell = if self.last_cast == 8 {
+            self.spell
+        } else {
+            self.last_cast
+        };
+        Some((
+            eye + forward * 0.82,
+            5.8,
+            spell_color(spell),
+            (1.65 * t * t).max(0.0),
+        ))
+    }
+
     pub fn magic_models(&self, m: &mut Model, eye: Vec3, forward: Vec3) {
         self.danger_models(m);
         self.relic_models(m);
@@ -622,16 +878,18 @@ impl Adventure {
         // 3D Glowing Translucent Voxel Particles (Noita-style living 3D pixel sparks & motes)
         for p in &self.particles {
             let t = (p.life / p.total).clamp(0.0, 1.0);
-            let s = p.size * (0.45 + 0.55 * t);
-            let rot = Quat::from_rotation_y(self.time * 2.2 + p.pos.x * 1.7)
-                * Quat::from_rotation_x(p.pos.z * 1.3);
-            m.glow_voxel(
+            let s = p.size * (0.35 + 0.65 * t);
+            // Fixed pose. A spinning cube catches a new edge every frame.
+            let rot = Quat::from_rotation_y(p.pos.x * 1.7) * Quat::from_rotation_x(p.pos.z);
+            let dissolve = ((1.0 - t) * 1.35 - 0.55).clamp(0.0, 1.0);
+            m.glow_voxel_with_dissolve(
                 p.pos,
                 Vec3::splat(s),
                 rot,
                 p.color,
-                p.glow * (0.5 + 0.5 * t),
-                (p.alpha * t).clamp(0.14, 0.92),
+                p.glow * t,
+                (p.alpha * t).clamp(0.0, 0.7),
+                dissolve,
             );
         }
 
@@ -642,33 +900,33 @@ impl Adventure {
                 laser.a,
                 laser.b,
                 laser.radius * 0.52 * fade,
-                [0.92, 1.0, 0.96],
-                5.2 * fade,
+                [0.72, 0.78, 0.74],
+                1.6 * fade,
             );
             m.glow_beam(
                 laser.a,
                 laser.b,
                 laser.radius * 1.45 * fade,
                 laser.color,
-                3.4 * fade,
-                0.58 * fade,
+                1.3 * fade,
+                0.35 * fade,
             );
             let axis = (laser.b - laser.a).normalize_or_zero();
             let right = axis
                 .cross(if axis.y.abs() < 0.9 { Vec3::Y } else { Vec3::X })
                 .normalize_or_zero();
             let up = axis.cross(right);
-            for i in 0..14 {
-                let u = i as f32 / 14.0;
-                let ang = u * 18.0 - self.time * 24.0;
+            for i in 0..6 {
+                let u = i as f32 / 6.0;
+                let ang = u * 8.0 - self.time * 0.8;
                 let ring = (right * ang.cos() + up * ang.sin()) * (laser.radius * 2.2 * fade);
                 m.glow_voxel(
                     laser.a.lerp(laser.b, u) + ring,
                     Vec3::splat(0.032 * fade),
                     Quat::from_rotation_y(ang),
                     laser.color,
-                    4.0 * fade,
-                    0.75 * fade,
+                    1.2 * fade,
+                    0.4 * fade,
                 );
             }
         }
@@ -677,22 +935,22 @@ impl Adventure {
         for cross in &self.crosses {
             let fade = cross.life.min(1.0);
             let c_col = spell_color(11);
-            let rot = Quat::from_rotation_y(self.time * 2.6)
-                * Quat::from_rotation_z((self.time * 1.3).sin() * 0.45);
-            m.glow_orb(cross.pos, 0.16 * fade, [0.92, 0.98, 1.0], 4.8 * fade, 0.88);
+            let rot = Quat::from_rotation_y(self.time * 0.55)
+                * Quat::from_rotation_z((self.time * 0.4).sin() * 0.18);
+            m.glow_orb(cross.pos, 0.14 * fade, c_col, 1.5 * fade, 0.45);
             m.temple_glyph(
                 cross.pos,
-                Quat::from_rotation_y(-self.time * 1.8),
+                Quat::from_rotation_y(-self.time * 0.4),
                 2,
-                0.032 * fade,
+                0.028 * fade,
                 c_col,
-                3.8 * fade,
-                0.78 * fade,
+                1.3 * fade,
+                0.4 * fade,
             );
             for dir in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z] {
                 let tip = cross.pos + rot * (dir * 1.75 * fade);
-                m.beam(cross.pos, tip, 0.022 * fade, [0.95, 0.99, 1.0], 4.5 * fade);
-                m.glow_beam(cross.pos, tip, 0.056 * fade, c_col, 3.0 * fade, 0.52 * fade);
+                m.beam(cross.pos, tip, 0.016 * fade, c_col, 1.2 * fade);
+                m.glow_beam(cross.pos, tip, 0.04 * fade, c_col, 1.15 * fade, 0.32 * fade);
                 for k in 1..=5 {
                     let p = cross.pos.lerp(tip, k as f32 / 5.0);
                     m.glow_voxel(
@@ -700,8 +958,8 @@ impl Adventure {
                         Vec3::splat(0.042 * fade),
                         rot,
                         c_col,
-                        3.6 * fade,
-                        0.72 * fade,
+                        1.15 * fade,
+                        0.38 * fade,
                     );
                 }
             }
@@ -721,24 +979,24 @@ impl Adventure {
                         * if j == 8 {
                             0.0
                         } else {
-                            (j as f32 * 13.7 + self.time * 32.0).sin() * 0.13
+                            (j as f32 * 2.17 + arc.a.x * 1.7 + arc.a.z * 0.9).sin() * 0.06
                         };
-                m.beam(previous, point, 0.015, [1.0, 0.96, 0.82], 4.2 * fade);
+                m.beam(previous, point, 0.012, [0.86, 0.78, 0.58], 1.4 * fade);
                 m.glow_beam(
                     previous,
                     point,
                     0.038,
                     spell_color(0),
-                    2.6 * fade,
-                    0.55 * fade,
+                    1.15 * fade,
+                    0.32 * fade,
                 );
                 m.glow_voxel(
                     point,
-                    Vec3::splat(0.038 * fade),
+                    Vec3::splat(0.026 * fade),
                     Quat::IDENTITY,
                     spell_color(14),
-                    3.8 * fade,
-                    0.78 * fade,
+                    1.25 * fade,
+                    0.4 * fade,
                 );
                 previous = point;
             }
@@ -753,11 +1011,11 @@ impl Adventure {
                 1,
                 0.034 * fade,
                 spell_color(5),
-                3.2 * fade,
-                0.74 * fade,
+                1.2 * fade,
+                0.4 * fade,
             );
-            for i in 0..24 {
-                let a = self.time * 0.8 + i as f32 * 2.39996;
+            for i in 0..8 {
+                let a = self.time * 0.28 + i as f32 * 2.39996;
                 let radius = 0.55 + (i % 6) as f32 * 0.42;
                 let p = bloom.pos
                     + Vec3::new(
@@ -774,8 +1032,8 @@ impl Adventure {
                     } else {
                         spell_color(5)
                     },
-                    2.6 * fade,
-                    0.66 * fade,
+                    1.05 * fade,
+                    0.38 * fade,
                 );
             }
             m.glow_orb(bloom.pos, 0.18 * fade, spell_color(5), 2.4 * fade, 0.72);
@@ -797,14 +1055,7 @@ impl Adventure {
                     2.8,
                     0.68,
                 );
-                m.glow_voxel(
-                    p,
-                    Vec3::splat(0.028),
-                    rot,
-                    [0.92, 0.99, 1.0],
-                    4.0,
-                    0.88,
-                );
+                m.glow_voxel(p, Vec3::splat(0.02), rot, spell_color(4), 1.2, 0.4);
             }
         }
     }

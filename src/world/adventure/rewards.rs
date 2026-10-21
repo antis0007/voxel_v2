@@ -8,6 +8,7 @@ pub(super) fn guardian(kind: u32) -> &'static [(usize, u32)] {
         2 => &[(5, 64), (12, 32)],             // Wisp: crystal and arcane circuitry.
         3 => &[(13, 256), (4, 64)],            // Brute: richer fungal materials.
         4 => &[(4, 128), (5, 32)],             // Spitter: luminous fibre and crystal.
+        9 => &[(13, 384), (3, 128), (17, 16)], // Colossus: bulk biomass and coal.
         _ => &[(12, 128), (15, 64), (17, 16)], // Warden: steel and a core fragment.
     }
 }

@@ -64,12 +64,24 @@ pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut 
         if hazards.len() < 16 {
             hazards.push(Hazard {
                 pos: e.aim,
-                radius: if e.kind == 5 { 3.6 } else { 2.6 },
+                radius: if e.kind == 9 {
+                    4.4
+                } else if e.kind == 5 {
+                    3.6
+                } else {
+                    2.6
+                },
                 delay: 0.35,
                 life: if e.kind == 5 { 0.2 } else { 3.2 },
                 pulse: 0.0,
-                damage: if e.kind == 5 { 22.0 } else { 8.0 },
-                spores: e.kind != 5,
+                damage: (if e.kind == 9 {
+                    28.0
+                } else if e.kind == 5 {
+                    22.0
+                } else {
+                    8.0
+                }) * (1.0 + e.menace as f32 * 0.25),
+                spores: matches!(e.kind, 1 | 12),
             });
         }
         return;
@@ -102,11 +114,17 @@ pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut 
                 * speed,
             hostile: true,
             payload: None,
+            payload_mods: Default::default(),
             spell: 0,
             life: 4.0,
-            mods: Default::default(),
+            mods: super::wands::ShotMods {
+                damage_mul: 1.0 + e.menace as f32 * 0.2,
+                ..Default::default()
+            },
             bore_budget: 0,
             trail_timer: 0.0,
+            splashed: false,
+            follow: None,
         });
     }
 }
@@ -163,7 +181,13 @@ impl Adventure {
                 ring(
                     m,
                     e.aim,
-                    if e.kind == 5 { 3.6 } else { 2.6 },
+                    if e.kind == 9 {
+                        4.4
+                    } else if e.kind == 5 {
+                        3.6
+                    } else {
+                        2.6
+                    },
                     [1.0, 0.44, 0.12],
                     0.9,
                 );

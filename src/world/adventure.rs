@@ -1,18 +1,22 @@
 //! Bounded local encounters, persistent victories, and player-cast magic.
-use super::{World, collides_world, factory, sites};
+use super::{World, collides_world, factory, sites, trace, undercrown};
 use crate::audio::{Cue, Event as Sound};
 use crate::{mesh::models::Model, player::Player};
 use glam::{IVec3, Quat, Vec3};
 use std::collections::HashMap;
+mod bestiary;
 mod bosses;
+pub mod discovery;
+pub(crate) mod growth;
 pub mod inscriptions;
-mod rare_magic;
 mod quest;
+mod rare_magic;
 pub mod reliquaries;
 mod rewards;
 mod spells;
+pub mod status;
 mod tactics;
-mod trace;
+pub mod tinkering;
 pub mod wands;
 
 pub const MAX_ENEMIES: usize = 24;
@@ -33,6 +37,7 @@ pub fn wand_recipe(tier: u32) -> &'static [(usize, u32)] {
 pub fn sword_recipe(tier: u32) -> &'static [(usize, u32)] {
     match tier {
         1 => &[(6, 128), (4, 64)],
+        5 => &[(15, 192), (16, 64), (17, 64)],
         _ => &[(15, 128), (16, 64)],
     }
 }
@@ -42,16 +47,16 @@ pub fn sword_name(tier: u32) -> &'static str {
         2 => "Steel sword",
         3 => "Cinderbrand",
         4 => "Winterglass",
+        5 => "Kinetic maul",
         _ => "Unarmed",
     }
 }
 pub fn ration_recipe() -> &'static [(usize, u32)] {
     &[(13, 64), (4, 64)]
 }
-pub const MAX_SPELL_ID: u32 = 23;
-pub const ALL_SPELLS: [u32; 23] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-];
+/// Highest spell id. Loadout slots are stored in 8-bit fields, so ids below 255
+/// fit the existing save layout; old saves only ever hold ids 0..=63.
+pub const MAX_SPELL_ID: u32 = 95;
 
 pub fn spell_name(spell: u32) -> &'static str {
     match spell {
@@ -79,38 +84,170 @@ pub fn spell_name(spell: u32) -> &'static str {
         21 => "Heavy bore",
         22 => "Rapid flux",
         23 => "Elemental wake",
-        _ => "Echo step",
+        24 => "Timberfall",
+        25 => "Gale",
+        26 => "Volatile edge",
+        27 => "Siphon",
+        34 => "Touch",
+        35 => "Growth",
+        36 => "Conjure lanterncap",
+        37 => "Widen",
+        38 => "Seek ally",
+        39 => "Shrink",
+        40 => "Divide by 2",
+        41 => "Divide by 4",
+        42 => "Curve",
+        43 => "Wiggle",
+        44 => "Orbiting arc",
+        45 => "Blood siphon",
+        46 => "Unstable",
+        47 => "If wounded",
+        48 => "If foe",
+        49 => "Alpha",
+        50 => "Chaotic path",
+        51 => "Light shot",
+        52 => "Long life",
+        53 => "Piercing",
+        54 => "Accelerate",
+        55 => "Damage plus",
+        56 => "Ignite",
+        57 => "Static charge",
+        58 => "Venom coat",
+        59 => "Drench",
+        60 => "Cold snap",
+        61 => "Chain arc",
+        62 => "Shrapnel",
+        63 => "Overcharge",
+        28 => "Ember seed",
+        29 => "Meteor",
+        30 => "Time snag",
+        31 => "Grapple",
+        32 => "Leap",
+        64 => "Reverse",
+        65 => "Gravity",
+        66 => "Phase",
+        67 => "Reckless",
+        68 => "Blood price",
+        69 => "Fork",
+        70 => "On timer",
+        _ => "Unknown spell",
     }
 }
-pub fn spell_count(tier: u32) -> u32 {
-    if tier == 0 { 0 } else { 6 }
+pub fn spell_flavor(spell: u32) -> &'static str {
+    match spell {
+        0 => "A small crackling mote. It is not much, but it is yours.",
+        1 => "Warmth rises through your hands. Your wounds close with a faint, embarrassed sigh.",
+        2 => "A spear of cold leaves your hand. The air behind it turns to glass.",
+        3 => {
+            "The bolt rings like a struck bell. The wall disagrees with it, then stops disagreeing."
+        }
+        4 => "Crystal runes circle you. They have opinions about incoming bolts.",
+        5 => "Something soft and pale unfolds at your feet. It smells of rain and bad decisions.",
+        6 => "A hole opens in the world. It is quietly hungry. You are advised not to feed it.",
+        7 => "You are here. Then you are there. The in-between was brief and unremarkable.",
+        8 => "An empty slot. A faint draught blows through it.",
+        9 => "A needle of white light. It does not stop for stone, and it is rude about it.",
+        10 => "The black hole is small and patient. It pulls, and everything near it complies.",
+        11 => "Two beams cross in the dark. Where they meet, the air burns.",
+        12 => "A glob of molten rock. It is heavier than it looks, and hotter.",
+        13 => "A pulse of cold rolls outward. Water stops pretending to be water.",
+        14 => "The charge builds in your palm until it cannot. Then it can.",
+        15 => "Everything you touch turns to gold. This is less useful than the legends suggest.",
+        16 => "One bolt becomes two. The second is slightly more confident than the first.",
+        17 => "One bolt becomes three. Nobody asked the walls.",
+        18 => "On impact, a second spell wakes up and looks around.",
+        19 => "An arc that remembers who it was aimed at, and keeps remembering.",
+        20 => "The bolt circles, strikes, and rebounds, unable to leave well enough alone.",
+        21 => "A heavy bore chews through the rock. It does not hurry. It does not stop.",
+        22 => "The wand stutters faster than thought. You feel your pulse in the spell.",
+        23 => "Fire and frost follow in the bolt's wake, taking turns.",
+        24 => "Somewhere above, a great deal of lumber has decided to arrive.",
+        25 => "A wind with an agenda. It moves things that were not asking to be moved.",
+        26 => "The edge is unstable. It will cut. It may also cut you.",
+        27 => "You take a little of what you strike. It is not generosity.",
+        34 => "No bolt, no flourish. You simply reach out. The world notices.",
+        35 => "The spell takes root and grows into something nobody planned.",
+        36 => "A lanterncap blinks awake at your side and decides to like you.",
+        37 => "The bolt swells. It is easier to hit things now, including things you liked.",
+        38 => "The bolt turns its head toward your friend, and nothing else matters to it.",
+        39 => "The bolt shrinks to a sliver. It slips between things that thought they were safe.",
+        40 => "Cast half as often, twice as carefully. Mostly the first part.",
+        41 => "A quarter of the haste. The rest of the wand is, frankly, relieved.",
+        42 => "The bolt leans into a gentle curve. It has somewhere to be.",
+        43 => "The bolt wiggles like it is trying to remember a dance.",
+        44 => "An arc spins in place around you, keeping its distance and its secrets.",
+        45 => "The spell drinks from what it wounds, and hands it back to you, warm.",
+        46 => "One cast in five goes wrong. You will not be told which one.",
+        47 => "If you are hurt, the next spell wakes up. It has been waiting for this.",
+        48 => "If a foe is near, the next spell wakes up. It has also been waiting.",
+        49 => "The first of the ordered things. Everything after it is a question of arrangement.",
+        50 => "The bolt takes no path anyone has drawn. Neither do you, now.",
+        51 => "A small, stubborn light that keeps the dark at arm's length.",
+        52 => "The bolt lingers a good deal longer than it should. It likes the company.",
+        53 => "The bolt goes through things instead of around them, like a bad idea.",
+        54 => "The bolt picks up speed as it goes. By the end it is not listening.",
+        55 => "More damage. No subtlety. No apologies.",
+        56 => "The bolt arrives already burning. So, shortly, does the target.",
+        57 => "Blue light crawls along the bolt. It is looking for something wet.",
+        58 => "The bolt is coated in something green and patient.",
+        59 => "The bolt is, improbably, a splash. Everything it touches is now conductive.",
+        60 => "Frost forms on the bolt in the space of a held breath.",
+        61 => "One hit, then a jump, then another. The bolt dislikes being alone.",
+        62 => "The bolt bursts into a fan of tiny, furious pieces.",
+        63 => "Too much power for the wand. It sulks about it, afterward.",
+        28 => "A seed of cinder. It waits for something dry to love.",
+        29 => "Somewhere above, a rock has been informed of your intentions.",
+        30 => "The air thickens. Everything near you reconsiders its hurry.",
+        31 => "A line of light, a hook of will, and the ground comes to you.",
+        32 => "Your feet remember being lighter.",
+        64 => "The bolt leaves the wand the way you came. Rude, and effective.",
+        65 => "Weight. The bolt develops opinions about the ground.",
+        66 => "The wall is, for one bolt, a suggestion.",
+        67 => "More damage. Fewer questions. Some of the cost is yours.",
+        68 => "The wand accepts payment in whatever you have left.",
+        69 => "The bolt shatters into three smaller ideas.",
+        70 => "A promise with a deadline. The payload keeps it.",
+        _ => "A spell. Nobody has written down what it does yet.",
+    }
 }
+
+/// Shared with the block swatches and the parchment interface.
+/// Paper, amber, copper, olive, leaf, mana, coral, plum.
+pub const PALETTE_PAPER: [f32; 3] = [0.96, 0.90, 0.79];
+pub const PALETTE_AMBER: [f32; 3] = [0.90, 0.72, 0.42];
+pub const PALETTE_COPPER: [f32; 3] = [0.86, 0.46, 0.24];
+pub const PALETTE_OLIVE: [f32; 3] = [0.62, 0.74, 0.38];
+pub const PALETTE_LEAF: [f32; 3] = [0.42, 0.58, 0.32];
+pub const PALETTE_MANA: [f32; 3] = [0.55, 0.74, 0.82];
+pub const PALETTE_MANA_LIT: [f32; 3] = [0.74, 0.82, 0.86];
+pub const PALETTE_WATER: [f32; 3] = [0.28, 0.48, 0.55];
+pub const PALETTE_CORAL: [f32; 3] = [0.86, 0.42, 0.36];
+pub const PALETTE_PLUM: [f32; 3] = [0.52, 0.36, 0.52];
 
 pub fn spell_color(spell: u32) -> [f32; 3] {
     match spell {
-        1 => [0.33, 0.91, 0.49],
-        2 => [0.32, 0.77, 1.0],
-        3 => [0.77, 0.44, 1.0],
-        4 => [0.55, 0.88, 1.0],
-        5 => [0.65, 0.87, 0.25],
-        6 => [0.66, 0.28, 1.0],
-        7 => [0.48, 0.9, 1.0],
-        9 => [0.22, 0.98, 0.68],
-        10 => [0.48, 0.16, 0.92],
-        11 => [0.28, 0.84, 1.0],
-        12 => [1.0, 0.38, 0.08],
-        13 => [0.52, 0.92, 1.0],
-        14 => [0.45, 0.94, 1.0],
-        15 => [1.0, 0.84, 0.24],
-        16 => [0.42, 0.82, 0.98],
-        17 => [0.56, 0.68, 1.0],
-        18 => [1.0, 0.56, 0.22],
-        19 => [0.38, 0.96, 0.78],
-        20 => [0.88, 0.52, 1.0],
-        21 => [0.94, 0.46, 0.26],
-        22 => [0.36, 0.98, 0.54],
-        23 => [1.0, 0.66, 0.28],
-        _ => [1.0, 0.73, 0.25],
+        1 | 19 | 22 | 35 | 38 | 43 | 58 => PALETTE_OLIVE,
+        5 | 24 => PALETTE_LEAF,
+        2 | 4 | 7 | 11 | 13 | 14 | 16 | 17 | 25 | 37 | 40 | 41 | 42 | 52 | 60 | 61 => PALETTE_MANA,
+        57 => PALETTE_MANA_LIT,
+        59 => PALETTE_WATER,
+        3 | 6 | 20 | 44 | 50 => PALETTE_PLUM,
+        10 => [0.32, 0.20, 0.34],
+        12 | 18 | 21 | 26 | 46 | 53 | 56 => PALETTE_COPPER,
+        15 | 23 | 36 | 47 | 48 | 51 | 54 | 62 => PALETTE_AMBER,
+        27 | 45 | 55 | 63 => PALETTE_CORAL,
+        9 | 34 | 49 => PALETTE_PAPER,
+        39 | 65 => [0.48, 0.36, 0.26],
+        28 => PALETTE_COPPER,
+        29 => [0.95, 0.40, 0.12],
+        30 => PALETTE_MANA_LIT,
+        31 => PALETTE_PAPER,
+        32 => PALETTE_OLIVE,
+        64 | 70 => PALETTE_PLUM,
+        66 => PALETTE_MANA,
+        67 => PALETTE_CORAL,
+        68 => [0.72, 0.16, 0.22],
+        _ => PALETTE_AMBER,
     }
 }
 pub fn spell_cost(spell: u32) -> f32 {
@@ -136,6 +273,36 @@ pub fn spell_cost(spell: u32) -> f32 {
         21 => 10.0,
         22 => 0.0,
         23 => 5.0,
+        24 => 8.0,
+        25 => 12.0,
+        26 => 7.0,
+        27 => 6.0,
+        34 => 4.0,
+        35 | 39 => 14.0,
+        36 => 28.0,
+        37 => 6.0,
+        38 => 8.0,
+        40 => 8.0,
+        41 => 16.0,
+        45 => 10.0,
+        46 => 4.0,
+        49 => 12.0,
+        56..=60 => 9.0,
+        61 => 10.0,
+        62 => 12.0,
+        63 => 20.0,
+        28 => 9.0,
+        29 => 40.0,
+        30 => 24.0,
+        31 => 12.0,
+        32 => 10.0,
+        64 => 4.0,
+        65 => 3.0,
+        66 => 12.0,
+        67 => 8.0,
+        68 => 0.0,
+        69 => 10.0,
+        70 => 7.0,
         _ => 12.0,
     }
 }
@@ -154,7 +321,15 @@ pub fn spell_cooldown(spell: u32) -> f32 {
         13 => 0.55,
         14 => 0.68,
         15 => 0.60,
-        16..=23 => 0.0,
+        24 => 1.1,
+        25 => 0.7,
+        16..=27 => 0.0,
+        28 => 0.30,
+        29 => 1.4,
+        30 => 1.6,
+        31 => 0.9,
+        32 => 0.6,
+        64..=70 => 0.0,
         _ => 0.28,
     }
 }
@@ -167,6 +342,7 @@ pub fn spell_cast_delay_delta(spell: u32) -> f32 {
         19 => 0.02,
         21 => 0.08,
         22 => -0.14,
+        24 => 0.02,
         _ => 0.0,
     }
 }
@@ -176,6 +352,7 @@ pub fn spell_recharge_delta(spell: u32) -> f32 {
         10 => 0.20,
         21 => 0.06,
         22 => -0.12,
+        24 => 0.03,
         _ => 0.0,
     }
 }
@@ -202,6 +379,8 @@ pub fn spell_base_damage(spell: u32) -> f32 {
         13 => 26.0,
         14 => 42.0,
         15 => 20.0,
+        28 => 16.0,
+        29 => 46.0,
         _ => 0.0,
     }
 }
@@ -216,6 +395,8 @@ pub fn spell_base_speed(spell: u32) -> f32 {
         13 => 25.0,
         14 => 38.0,
         15 => 28.0,
+        28 => 24.0,
+        29 => 34.0,
         _ => 26.0,
     }
 }
@@ -226,7 +407,16 @@ pub fn spell_kind_tag(spell: u32) -> &'static str {
         9 => "LASER DRILL",
         16 | 17 => "MULTICAST",
         18 => "TRIGGER MOD",
-        19..=23 => "MODIFIER",
+        24 | 25 => "UTILITY",
+        19..=27 => "MODIFIER",
+        37 | 38 | 40..=55 => "MODIFIER",
+        56..=60 => "ELEMENT",
+        61..=63 => "MODIFIER",
+        30..=32 => "UTILITY",
+        64..=69 => "MODIFIER",
+        70 => "TRIGGER MOD",
+        34 => "DELIVERY",
+        35 | 36 | 39 => "EFFECT",
         _ => "PROJECTILE",
     }
 }
@@ -251,10 +441,56 @@ pub fn spell_hint(spell: u32) -> &'static str {
         17 => "Draws and casts the next 3 spells in a 3D triad formation.",
         18 => "Attaches the next spell in the deck as a 3D impact payload.",
         19 => "Curves projectile trajectories in 3D toward nearby guardians.",
-        20 => "Adds orbiting satellite bolts, +30% damage, and 2 wall ricochet bounces.",
-        21 => "Matter Eater + Heavy Shot: 1.65x damage and bores through solid rock in flight.",
-        22 => "Add Mana + Chainsaw: generates +20 mana and cuts cast delay & recharge time.",
-        23 => "Projectiles leave a 3D thermal/hydro wake and glowing micro-voxel trail.",
+        20 => "Adds orbiting satellite bolts, +22% damage, and 2 wall ricochet bounces.",
+        21 => "Matter Eater + Heavy Shot: +35% damage and bores through solid rock in flight.",
+        22 => "Add Mana + Chainsaw: refunds up to 20 mana and cuts cast delay & recharge time.",
+        23 => "Projectiles leave a thermal/hydro wake, a micro-voxel trail, and +12% damage.",
+        24 => "Timberfall: shears a targeted tree. Leaves vanish; the trunk falls as a rigid body.",
+        25 => "Gale: a short radial wind burst that staggers foes and launches loose assemblies.",
+        26 => "Volatile edge: impacts release a small physics crater and +8% damage.",
+        27 => "Siphon: direct hits restore a little health and add +5% damage.",
+        34 => "Touch: the next effect reads the body under your crosshair.",
+        35 => "Growth: enlarge a lanterncap, or raise a juvenile from fungal soil.",
+        36 => "Conjure lanterncap: create your one owned juvenile where this cast lands.",
+        37 => "Widen: the bolt's collision grows to 1.8×. The creature's size does not.",
+        38 => "Seek ally: the bolt steers to your lanterncap, then to enemies.",
+        39 => "Shrink: step a lanterncap down one size class.",
+        40 => "Divide by 2: the next spell fires twice for one mana payment.",
+        41 => "Divide by 4: the next spell fires four times for one mana payment.",
+        42 => "Curve: the bolt yaws at a constant rate.",
+        43 => "Wiggle: the bolt snakes along its flight.",
+        44 => "Orbiting arc: the bolt circles you.",
+        45 => "Blood siphon: heal for a quarter of the magic damage this hit dealt.",
+        46 => "Unstable: more dangerous, and one cast in five fizzles.",
+        47 => "If wounded: the next spell fires only while you are below half health.",
+        48 => "If foe: the next spell fires only while an enemy is in sight.",
+        49 => "Alpha: copy the first projectile on the wand.",
+        50 => "Chaotic path: each cast rolls curve, wiggle, or orbit.",
+        51 => "Light shot: faster, and a little weaker.",
+        52 => "Long life: the bolt flies longer.",
+        53 => "Piercing: the bolt keeps one extra bounce.",
+        54 => "Accelerate: the bolt leaves faster.",
+        55 => "Damage plus: +15% damage, still inside the 2.6× cap.",
+        56 => "Ignite: hits set enemies burning. Wet enemies flash to steam instead.",
+        57 => "Static charge: hits stagger. A wet enemy is conducted for +80% damage.",
+        58 => "Venom coat: hits poison, stacking up to five times for deeper damage.",
+        59 => "Drench: hits soak the enemy. Sets up shock, frost and steam reactions.",
+        60 => "Cold snap: hits chill the enemy. A wet enemy flash-freezes for longer.",
+        61 => "Chain arc: on impact, lightning jumps between nearby enemies.",
+        62 => "Shrapnel: on impact, shards hit every enemy within two metres.",
+        63 => "Overcharge: +45% damage, slower bolt, expensive.",
+        28 => "Ember seed: a lobbed seed that ignites flammable ground where it lands.",
+        29 => "Meteor: calls a rock down on your crosshair. Wide crater, fire, and a shove.",
+        30 => "Time snag: slows nearby foes for 3.5 s and crushes hostile bolts to a crawl.",
+        31 => "Grapple: hooks the block you aim at (32 m) and hauls you toward it.",
+        32 => "Leap: launches you up and forward. Works in mid-air.",
+        64 => "Reverse: the next bolt fires behind you. Pair with Heavy bore to dig backward.",
+        65 => "Gravity: the bolt arcs downward. Stack for a steeper fall.",
+        66 => "Phase: the bolt passes through the next wall it meets.",
+        67 => "Reckless: +60% damage, but each cast costs you 4 health (never lethal).",
+        68 => "Blood price: pay half the mana cost in health instead. Unusable when low.",
+        69 => "Fork: on impact the bolt splits into three weak sparks.",
+        70 => "On timer: like Trigger bolt, but the next spell fires 0.6 s into flight.",
         _ => "Empty wand slot.",
     }
 }
@@ -265,47 +501,86 @@ pub fn spell_available(spell: u32, wand: u32, rare: u32) -> bool {
     match spell {
         0..=5 => true,
         6 | 7 => rare & (1 << spell) != 0,
-        9 | 12 | 13 | 16 | 18 | 20 | 22 | 23 => wand >= 1,
-        11 | 14 | 17 | 19 | 21 => wand >= 2 || rare != 0,
+        9 | 12 | 13 | 16 | 18 | 20 | 22 | 23 | 24 | 25 => wand >= 1,
+        11 | 14 | 17 | 19 | 21 | 26 | 27 | 37 | 38 | 40..=55 => wand >= 2 || rare != 0,
+        56..=60 => wand >= 1,
+        61..=63 => wand >= 2 || rare != 0,
+        34 | 35 | 36 | 39 => wand >= 1,
         10 | 15 => wand >= 3 || rare.count_ones() >= 2,
+        28 | 31 | 32 | 65 => wand >= 1,
+        30 | 64 | 66 | 69 | 70 => wand >= 2 || rare != 0,
+        29 | 67 | 68 => wand >= 3 || rare.count_ones() >= 2,
         _ => false,
     }
 }
 fn sound(queue: &mut Vec<Sound>, cue: Cue, pos: Option<Vec3>, gain: f32) {
     if queue.len() < 32 {
-        queue.push(Sound { cue, pos, gain });
+        queue.push(Sound {
+            cue,
+            pos,
+            gain,
+            pitch: 1.0,
+        });
     }
 }
+
+/// Sound with a family-specific pitch. Spell variants use this so repeated
+/// casts of different elements do not all read as the same chirp.
+fn sound_pitched(queue: &mut Vec<Sound>, cue: Cue, pos: Option<Vec3>, gain: f32, pitch: f32) {
+    if queue.len() < 32 {
+        queue.push(Sound {
+            cue,
+            pos,
+            gain,
+            pitch,
+        });
+    }
+}
+/// Underground layer archetype at a point, if it is deep enough to have one.
+fn zone_archetype(world: &World, pos: Vec3) -> Option<crate::world::zones::Archetype> {
+    let cfg = world.sample_config();
+    let inv = cfg.inv_voxel_meters();
+    let surface = cfg.world_y(
+        world.terrain_height_at((pos.x * inv).floor() as i32, (pos.z * inv).floor() as i32),
+    );
+    crate::world::zones::sample(cfg.seed, pos.x, pos.z, surface - pos.y)
+        .filter(|z| z.depth_weight > 0.5)
+        .map(|z| z.layer.archetype)
+}
 pub fn enemy_name(kind: u32) -> &'static str {
+    if let Some(name) = bestiary::name(kind) {
+        return name;
+    }
     match kind {
-        0 => "Ruin Skitterer",
-        1 => "Spore Sentinel",
         2 => "Arcane Wisp",
         3 => "Burrow Beetle",
-        4 => "Aether Moth",
-        5 => "Sanctum Warden",
         6..=8 => bosses::name(kind),
+        9 => "Gravelback Colossus",
         _ => "Sanctum Guardian",
     }
 }
+fn is_boss(kind: u32) -> bool {
+    matches!(kind, 6..=8)
+}
 fn enemy_health(kind: u32) -> f32 {
+    if let Some(species) = bestiary::species(kind) {
+        return species.health;
+    }
     match kind {
-        1 => 65.0,
         3 => 54.0,
-        4 => 42.0,
-        5 => 110.0,
+        9 => 210.0,
         6..=8 => bosses::health(kind),
         _ => 35.0,
     }
 }
 fn tall(kind: u32) -> bool {
-    matches!(kind, 1 | 5 | 6..=8)
+    bestiary::species(kind).map_or(matches!(kind, 9 | 6..=8), |s| s.tall)
 }
 fn flying(kind: u32) -> bool {
-    matches!(kind, 2 | 4)
+    bestiary::species(kind).map_or(matches!(kind, 2), |s| s.flying)
 }
 fn brawler(kind: u32) -> bool {
-    matches!(kind, 0 | 3)
+    bestiary::species(kind).map_or(matches!(kind, 3 | 9), |s| s.brawler)
 }
 pub fn mastery(clears: usize) -> u32 {
     if clears >= 7 {
@@ -352,16 +627,25 @@ pub struct Enemy {
     attack: u32,
     attacks: u32,
     poise: f32,
+    pub menace: u8,
+    pub affixes: status::Affixes,
+    pub status: status::Status,
+    /// Damage absorbed before health (Warded).
+    pub shield: f32,
+    /// Warden's carried shield. Breaking it removes the visible shield and its
+    /// frontal block without touching saved encounter records.
+    pub guard: bool,
 }
 impl Enemy {
-    fn new(site: IVec3, slot: u32, kind: u32, pos: Vec3) -> Self {
+    fn new(site: IVec3, slot: u32, kind: u32, pos: Vec3, menace: u8) -> Self {
+        let menace = menace.min(3);
         Self {
             site,
             slot,
             kind,
             pos,
             home: pos,
-            health: enemy_health(kind),
+            health: enemy_health(kind) * (1.0 + menace as f32 * 0.4),
             slow: 0.0,
             tell: 0.0,
             phase: 0.0,
@@ -381,11 +665,56 @@ impl Enemy {
             attack: 0,
             attacks: 0,
             poise: 0.0,
+            menace,
+            affixes: status::Affixes::default(),
+            status: status::Status::default(),
+            shield: 0.0,
+            guard: kind == 5,
+        }
+    }
+    fn with_affixes(mut self, affixes: status::Affixes) -> Self {
+        let base = enemy_health(self.kind) * (1.0 + self.menace as f32 * 0.4);
+        self.affixes = affixes;
+        self.health = base * affixes.health_mul();
+        self.shield = base * affixes.shield_frac();
+        self
+    }
+    pub fn max_health(&self) -> f32 {
+        enemy_health(self.kind) * (1.0 + self.menace as f32 * 0.4) * self.affixes.health_mul()
+    }
+    /// Drops the warden's shield once the body is badly hurt. Returns true only
+    /// on the transition, so callers can add one shatter effect and sound.
+    pub fn check_guard_break(&mut self) -> bool {
+        if self.kind == 5
+            && self.guard
+            && self.health > 0.0
+            && self.health <= self.max_health() * 0.5
+        {
+            self.guard = false;
+            self.flash = self.flash.max(0.14);
+            return true;
+        }
+        false
+    }
+
+    /// Damage lands on the shield first, then health.
+    fn hurt(&mut self, amount: f32) {
+        let absorbed = amount.min(self.shield).max(0.0);
+        self.shield -= absorbed;
+        self.health -= amount - absorbed;
+        self.check_guard_break();
+    }
+    pub fn display_name(&self) -> String {
+        match self.affixes.first() {
+            Some(a) => format!("{} {}", a.name(), enemy_name(self.kind)),
+            None => enemy_name(self.kind).to_string(),
         }
     }
     fn windup(&self) -> f32 {
-        if self.kind == 0 {
-            0.45
+        if let Some(species) = bestiary::species(self.kind) {
+            species.windup
+        } else if self.kind == 9 {
+            0.95
         } else if self.attack == 2 {
             1.0
         } else {
@@ -393,18 +722,21 @@ impl Enemy {
         }
     }
     fn center(&self) -> Vec3 {
-        self.pos
-            + Vec3::Y
-                * if self.kind >= 6 {
-                    1.2
-                } else if tall(self.kind) {
-                    0.8
-                } else {
-                    0.45
-                }
+        let height = if is_boss(self.kind) {
+            1.2
+        } else if self.kind == 9 {
+            1.35
+        } else if let Some(species) = bestiary::species(self.kind) {
+            species.center_height
+        } else if tall(self.kind) {
+            0.8
+        } else {
+            0.45
+        };
+        self.pos + Vec3::Y * height
     }
     pub fn model(&self, m: &mut Model, time: f32) {
-        if self.kind >= 6 {
+        if is_boss(self.kind) {
             bosses::model(self, m, time);
             return;
         }
@@ -420,7 +752,72 @@ impl Enemy {
         } else {
             [0.49, 0.32, 0.63]
         };
-        if self.kind == 3 {
+        if matches!(self.kind, 0 | 1 | 4 | 5 | 10..=13) {
+            // Shared articulated family rigs. Health bar, affixes and the
+            // crouch/flash/yaw transform below still wrap the body.
+            bestiary::draw_body(self, m, time, wind, hit);
+        } else if self.kind == 9 {
+            // Gravelback Colossus: a two-metre, four-legged quarry brute.
+            // Its height is authored in the model, while `free()` reserves the
+            // matching collision volume so it cannot squeeze through doorways.
+            let stride = (self.phase * 4.0).sin() * 0.08;
+            for (x, z) in [
+                (-0.42_f32, -0.30_f32),
+                (0.42, -0.30),
+                (-0.42, 0.34),
+                (0.42, 0.34),
+            ] {
+                m.cuboid(
+                    self.pos + Vec3::new(x, 0.36 + stride * z.signum(), z),
+                    Vec3::new(0.25, 0.70, 0.28),
+                    Quat::IDENTITY,
+                    [0.27, 0.25, 0.22],
+                    0.0,
+                );
+            }
+            m.cuboid(
+                self.pos + Vec3::Y * 1.10,
+                Vec3::new(1.02, 0.72, 0.72),
+                Quat::from_rotation_y((time * 0.35).sin() * 0.06),
+                [0.35, 0.30, 0.26],
+                0.0,
+            );
+            for x in [-0.34, 0.0, 0.34] {
+                m.cuboid(
+                    self.pos + Vec3::new(x, 1.48, 0.10),
+                    Vec3::new(0.22, 0.16, 0.52),
+                    Quat::IDENTITY,
+                    [0.24, 0.36, 0.30],
+                    0.18,
+                );
+            }
+            m.cuboid(
+                self.pos + Vec3::new(0.0, 1.78, -0.22),
+                Vec3::new(0.64, 0.42, 0.46),
+                Quat::IDENTITY,
+                [0.40, 0.34, 0.27],
+                0.0,
+            );
+            for x in [-0.19, 0.19] {
+                m.orb(self.pos + Vec3::new(x, 1.82, -0.46), 0.065, hit, 2.4);
+            }
+            for x in [-0.66, 0.66] {
+                m.beam(
+                    self.pos + Vec3::new(x, 1.30, 0.0),
+                    self.pos + Vec3::new(x * 1.45, 0.58 + wind * 0.2, -0.20),
+                    0.13,
+                    [0.32, 0.28, 0.24],
+                    0.0,
+                );
+                m.cuboid(
+                    self.pos + Vec3::new(x * 1.45, 0.52 + wind * 0.2, -0.20),
+                    Vec3::new(0.30, 0.28, 0.34),
+                    Quat::IDENTITY,
+                    hit,
+                    0.18,
+                );
+            }
+        } else if self.kind == 3 {
             // Low, armoured burrow beetle with six skittering legs.
             m.cuboid(
                 self.pos + Vec3::Y * 0.36,
@@ -519,7 +916,18 @@ impl Enemy {
                     0.0,
                 );
             }
-            if self.kind == 5 {
+            if self.kind == 1 {
+                for x in [-0.28, 0.28] {
+                    m.cuboid(
+                        self.pos + Vec3::new(x, 1.62, 0.0),
+                        Vec3::new(0.34, 0.12, 0.34),
+                        Quat::IDENTITY,
+                        [0.42, 0.62, 0.28],
+                        0.35,
+                    );
+                    m.orb(self.pos + Vec3::new(x, 1.74, 0.0), 0.08, hit, 1.4);
+                }
+            } else if self.kind == 5 {
                 m.cuboid(
                     self.pos + Vec3::new(-0.42, 0.82, -0.28),
                     Vec3::new(0.40, 0.84, 0.14),
@@ -549,27 +957,33 @@ impl Enemy {
                     );
                 }
             }
-            for i in 0..4 {
-                let a = time * 1.8 + i as f32 * 1.57;
+            for i in 0..3 {
+                let a = time * 0.7 + i as f32 * 2.094;
                 m.orb(
-                    c + Vec3::new(a.cos(), (a * 1.5).sin() * 0.5, a.sin()) * 0.41,
-                    0.08,
-                    [0.28, 0.86, 0.73],
-                    1.2,
+                    c + Vec3::new(a.cos(), (a * 0.6).sin() * 0.35, a.sin()) * 0.36,
+                    0.055,
+                    PALETTE_MANA,
+                    0.45,
                 );
             }
         }
         if self.tell > 0.0 {
             m.orb(
                 self.center() + Vec3::Y * 0.7,
-                0.10 + 0.08 * (time * 14.0).sin().abs(),
-                [1.0, 0.35, 0.12],
-                3.0,
+                0.11 + 0.015 * (time * 2.2).sin(),
+                PALETTE_CORAL,
+                1.15,
             );
         }
-        let maximum = enemy_health(self.kind);
+        let maximum = self.max_health();
         if self.health < maximum {
-            let y = if tall(self.kind) { 1.75 } else { 1.15 };
+            let y = if self.kind == 9 {
+                2.30
+            } else if tall(self.kind) {
+                1.75
+            } else {
+                1.15
+            };
             m.cuboid(
                 self.pos + Vec3::Y * y,
                 Vec3::new(0.64, 0.045, 0.035),
@@ -581,8 +995,8 @@ impl Enemy {
                 self.pos + Vec3::new(-0.32 + 0.32 * self.health.max(0.0) / maximum, y, -0.024),
                 Vec3::new(0.64 * self.health.max(0.0) / maximum, 0.045, 0.015),
                 Quat::IDENTITY,
-                [0.3, 0.8, 0.32],
-                0.7,
+                PALETTE_LEAF,
+                0.25,
             );
         }
         let crouch = if brawler(self.kind) { wind * 0.17 } else { 0.0 };
@@ -597,6 +1011,29 @@ impl Enemy {
             Quat::from_rotation_x(-wind * 0.10 + self.flash * 0.9),
         );
         m.rotate_since(mark, self.pos, Quat::from_rotation_y(self.yaw));
+        // Affix motes orbit the body in the affix colour; a ward shows as a
+        // faint bubble that thins as it is broken.
+        let mid = self.center();
+        for (i, affix) in self.affixes.list().iter().enumerate() {
+            let a = time * 0.55 + i as f32 * 2.094;
+            m.glow_orb(
+                mid + Vec3::new(a.cos() * 0.48, 0.08, a.sin() * 0.48),
+                0.032,
+                affix.color(),
+                1.05,
+                0.4,
+            );
+        }
+        if self.shield > 0.0 {
+            let strength = (self.shield / (self.max_health() * 0.45).max(1.0)).clamp(0.0, 1.0);
+            m.glow_orb(
+                mid,
+                0.72,
+                status::Affix::Warded.color(),
+                0.9,
+                0.08 + 0.14 * strength,
+            );
+        }
     }
 }
 pub struct Projectile {
@@ -606,12 +1043,20 @@ pub struct Projectile {
     pub spell: u32,
     pub life: f32,
     pub payload: Option<u32>,
+    /// Modifiers that wrap the payload cast, not the carrier.
+    pub payload_mods: wands::ShotMods,
     pub mods: wands::ShotMods,
     pub bore_budget: u8,
     pub trail_timer: f32,
+    /// First surface crossing emits a splash; subsequent substeps in the same
+    /// water body must not produce a ring per step.
+    pub splashed: bool,
+    pub follow: Option<u32>,
 }
 impl Projectile {
-    pub fn payload_color(&self)->Option<[f32;3]> {self.payload.map(spell_color)}
+    pub fn payload_color(&self) -> Option<[f32; 3]> {
+        self.payload.map(spell_color)
+    }
     pub fn color(&self) -> [f32; 3] {
         if self.hostile {
             [0.92, 0.26, 0.37]
@@ -656,9 +1101,34 @@ pub struct EnemyFocus {
     pub health: f32,
     pub maximum: f32,
     pub frozen: bool,
+    pub affixes: status::Affixes,
+    pub status: status::Status,
+    pub shield: f32,
 }
+
+/// The next authored objective, resolved to a world-space point for the compass.
+/// Bearing uses the game's north convention: +Z is south, -Z is north, +X east.
+#[derive(Clone, Debug)]
+pub struct QuestMarker {
+    pub pos: Vec3,
+    pub label: &'static str,
+    pub kind: u32,
+    pub bearing_deg: f32,
+    pub distance_m: f32,
+    pub vertical_m: f32,
+}
+
+impl View {
+    /// Placeable and castable now: right wand tier (and rare progress) and found.
+    pub fn can_wield(&self, spell: u32) -> bool {
+        spell_available(spell, self.wand, self.rare_spells) && self.spell_log.grants(spell)
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct View {
+    /// Spells the player has found; unfound spells show as locked.
+    pub spell_log: discovery::SpellLog,
     pub health: f32,
     pub mana: f32,
     pub wand: u32,
@@ -682,15 +1152,25 @@ pub struct View {
     pub rations: u32,
     pub weapons: u32,
     pub weapon: u32,
+    /// Fitted part materials: head (damage), binding (sweep), grip (speed).
+    pub tool_head: u8,
+    pub tool_bind: u8,
+    pub tool_grip: u8,
+    /// Installed modifier bitfield.
+    pub tool_mods: u8,
     pub reward: Option<Reward>,
     pub discoveries: u32,
     pub sigils: u32,
     pub heart_restored: bool,
     pub route: String,
     pub rare_spells: u32,
+    pub quest: Option<QuestMarker>,
     pub relic_focus: Option<reliquaries::RelicFocus>,
+    pub undercrown_focus: Option<super::interaction::Prompt>,
     pub boss: Option<reliquaries::BossView>,
     pub enemy_focus: Option<EnemyFocus>,
+    pub respawn_point: Option<Vec3>,
+    pub last_death_pos: Option<Vec3>,
 }
 pub struct Adventure {
     pub health: f32,
@@ -703,13 +1183,16 @@ pub struct Adventure {
     cast_delay_total: f32,
     recharge_total: f32,
     mana_flash: f32,
-    terrain_blasts: std::collections::VecDeque<(Vec3,f32)>,
+    pub respawn_point: Option<Vec3>,
+    pub last_death_pos: Option<Vec3>,
+    terrain_blasts: std::collections::VecDeque<(Vec3, f32)>,
     pub time: f32,
     pub enemies: Vec<Enemy>,
     pub projectiles: Vec<Projectile>,
     pub effects: Vec<Effect>,
     pub tool_debris: Vec<crate::tool_effects::Burst>,
     pub blasts: Vec<crate::tool_effects::Blast>,
+    pub splashes: Vec<crate::tool_effects::Splash>,
     pub remains: Vec<Remains>,
     pub arcs: Vec<Arc>,
     pub blooms: Vec<Bloom>,
@@ -721,20 +1204,32 @@ pub struct Adventure {
     /// Bit 0 is a copper sword; bit 1 is a steel sword.
     pub weapons: u32,
     pub weapon: u32,
+    /// Tinkers-style part materials, each 0–5: head (damage), binding (sweep),
+    /// grip (speed). See `adventure::tinkering` for the material table.
+    pub tool_head: u8,
+    pub tool_bind: u8,
+    pub tool_grip: u8,
+    /// Optional one-shot modifiers: jagged, flux, core, moss, luck.
+    pub tool_mods: u8,
     reward: Option<Reward>,
     pub discoveries: u32,
     discoveries_ready: bool,
     pub rare_spells: u32,
+    /// Spells the player has found. Persisted from save version 19.
+    pub spell_log: discovery::SpellLog,
     sigils: u32,
     route: String,
     stations: Vec<quest::Station>,
     puzzle_cd: f32,
     relic_focus: Option<reliquaries::RelicFocus>,
+    undercrown_focus: Option<super::interaction::Prompt>,
     boss_view: Option<reliquaries::BossView>,
     enemy_focus: Option<EnemyFocus>,
     reliquaries: Vec<reliquaries::Reliquary>,
     wells: Vec<rare_magic::Well>,
     pub particles: Vec<spells::VoxelParticle>,
+    /// Underground zone bending particle behaviour; neutral on the surface.
+    pub zone_fx: crate::world::zones::Fx,
     pub lasers: Vec<spells::LaserBeam>,
     pub crosses: Vec<spells::PlasmaCross>,
     pub dirty_voxels: Vec<IVec3>,
@@ -744,6 +1239,7 @@ pub struct Adventure {
     cast_pose: f32,
     // One bit per defeated guardian; bit 8 records the one-time clear reward.
     pub records: HashMap<IVec3, u32>,
+    pub companion: Option<growth::Companion>,
     cast_cd: f32,
     queued_cast: bool,
     queued_cycle: bool,
@@ -770,6 +1266,8 @@ impl Default for Adventure {
             cast_delay_total: 0.28,
             recharge_total: 0.0,
             mana_flash: 0.0,
+            respawn_point: None,
+            last_death_pos: None,
             terrain_blasts: Default::default(),
             time: 0.0,
             enemies: Vec::new(),
@@ -777,6 +1275,7 @@ impl Default for Adventure {
             effects: Vec::new(),
             tool_debris: Vec::new(),
             blasts: Vec::new(),
+            splashes: Vec::new(),
             remains: Vec::new(),
             arcs: Vec::new(),
             blooms: Vec::new(),
@@ -787,20 +1286,27 @@ impl Default for Adventure {
             rations: 0,
             weapons: 0,
             weapon: 0,
+            tool_head: 0,
+            tool_bind: 0,
+            tool_grip: 0,
+            tool_mods: 0,
             reward: None,
             discoveries: 0,
             discoveries_ready: false,
             rare_spells: 0,
+            spell_log: discovery::SpellLog::default(),
             sigils: 0,
             route: String::new(),
             stations: Vec::new(),
             puzzle_cd: 0.0,
             relic_focus: None,
+            undercrown_focus: None,
             boss_view: None,
             enemy_focus: None,
             reliquaries: Vec::new(),
             wells: Vec::new(),
             particles: Vec::new(),
+            zone_fx: crate::world::zones::Fx::NEUTRAL,
             lasers: Vec::new(),
             crosses: Vec::new(),
             dirty_voxels: Vec::new(),
@@ -809,6 +1315,7 @@ impl Default for Adventure {
             strike_delay: 0.0,
             cast_pose: 0.0,
             records: HashMap::new(),
+            companion: None,
             cast_cd: 0.0,
             queued_cast: false,
             queued_cycle: false,
@@ -826,14 +1333,17 @@ impl Default for Adventure {
 }
 fn free(world: &World, pos: Vec3, kind: u32) -> bool {
     let s = world.voxel_scale.meters();
-    let h = if kind >= 6 {
-        2.6
+    let (h, width) = if is_boss(kind) {
+        (2.6, 0.52)
+    } else if kind == 9 {
+        (2.1, 0.64)
+    } else if let Some(species) = bestiary::species(kind) {
+        (species.body_height, species.body_width * 0.5)
     } else if tall(kind) {
-        1.6
+        (1.6, 0.28)
     } else {
-        0.85
+        (0.85, 0.28)
     };
-    let width = if kind >= 6 { 0.52 } else { 0.28 };
     !collides_world(
         world,
         (pos - Vec3::new(width, 0.0, width)) / s,
@@ -841,7 +1351,7 @@ fn free(world: &World, pos: Vec3, kind: u32) -> bool {
     )
 }
 fn line(world: &World, a: Vec3, b: Vec3) -> bool {
-    (b-a).length_squared()<=128.0*128.0 && trace::solid(world,a,b).is_none()
+    (b - a).length_squared() <= 128.0 * 128.0 && trace::solid(world, a, b).is_none()
 }
 
 impl Adventure {
@@ -859,7 +1369,8 @@ impl Adventure {
     }
     /// Seconds from wind-up to recovery; shared by gameplay and the held model.
     pub fn swing_duration(&self) -> f32 {
-        if self.finisher() { 0.46 } else { 0.30 }
+        let base = if self.finisher() { 0.46 } else { 0.30 };
+        (base / tinkering::grip_multiplier(self.tool_grip)).max(0.16)
     }
     /// Seconds from swing start to contact. Keep below swing_duration().
     pub fn swing_impact_time(&self) -> f32 {
@@ -902,22 +1413,31 @@ impl Adventure {
             rations: self.rations,
             weapons: self.weapons,
             weapon: self.weapon,
+            tool_head: self.tool_head,
+            tool_bind: self.tool_bind,
+            tool_grip: self.tool_grip,
+            tool_mods: self.tool_mods,
             reward: self.reward.clone(),
             discoveries: self.discoveries,
             rare_spells: self.rare_spells,
+            spell_log: self.spell_log,
             sigils: self.sigils,
             heart_restored: self.heart_restored(),
             route: self.route.clone(),
+            quest: None,
             relic_focus: self.relic_focus.clone(),
+            undercrown_focus: self.undercrown_focus.clone(),
             boss: self.boss_view.clone(),
             enemy_focus: self.enemy_focus.clone(),
+            respawn_point: self.respawn_point,
+            last_death_pos: self.last_death_pos,
         }
     }
     pub fn owns_weapon(&self, tier: u32) -> bool {
-        (1..=4).contains(&tier) && self.weapons & (1 << (tier - 1)) != 0
+        (1..=5).contains(&tier) && self.weapons & (1 << (tier - 1)) != 0
     }
     pub fn add_weapon(&mut self, tier: u32) -> bool {
-        if !(1..=4).contains(&tier) || self.owns_weapon(tier) {
+        if !(1..=5).contains(&tier) || self.owns_weapon(tier) {
             return false;
         }
         self.weapons |= 1 << (tier - 1);
@@ -930,6 +1450,33 @@ impl Adventure {
         } else {
             false
         }
+    }
+    /// Fits a material into one slot. Save bytes are validated on load, and
+    /// callers only reach this after the resource cost has been paid.
+    pub fn fit_part(&mut self, part: tinkering::Part, material: tinkering::Material) {
+        match part {
+            tinkering::Part::Head => self.tool_head = material.as_u8(),
+            tinkering::Part::Binding => self.tool_bind = material.as_u8(),
+            tinkering::Part::Grip => self.tool_grip = material.as_u8(),
+        }
+    }
+    /// Adds or removes a known modifier bit. Returns the new installed state.
+    pub fn toggle_modifier(&mut self, bit: u8) -> bool {
+        if tinkering::modifier(bit).is_none() {
+            return false;
+        }
+        self.tool_mods ^= bit;
+        self.tool_mods &= 0x1F;
+        self.tool_mods & bit != 0
+    }
+    /// Returns every slot to neutral copper. Installed modifiers are retained.
+    pub fn clear_fittings(&mut self) {
+        self.tool_head = 0;
+        self.tool_bind = 0;
+        self.tool_grip = 0;
+    }
+    pub fn has_modifier(&self, bit: u8) -> bool {
+        self.tool_mods & bit != 0
     }
     pub fn eat_ration(&mut self) -> bool {
         if self.rations == 0 || self.hunger >= 99.0 {
@@ -985,16 +1532,45 @@ impl Adventure {
                 }
                 *record
             };
-            let count = if id == IVec3::ZERO { 2 } else { 3 };
+            let count = if id == IVec3::ZERO {
+                2
+            } else if id.z == 2 || id.z == 3 || id.y.abs() >= 500 {
+                1
+            } else {
+                3
+            };
             for slot in 0..count {
                 let variation = (id.x.wrapping_mul(31) ^ id.y.wrapping_mul(17) ^ world.seed as i32)
                     .unsigned_abs();
-                let kind = if id == IVec3::ZERO || slot == 0 {
+                let menace = (kind >> 8) as u8;
+                let kind = kind & 0xFF;
+                let mut kind = if slot == 0 {
                     kind
                 } else {
-                    const ESCORTS: [[u32; 2]; 4] = [[3, 4], [1, 2], [0, 5], [2, 4]];
-                    ESCORTS[variation as usize % 4][(slot - 1) as usize]
+                    // Escorts contrast the lead by role: ranged pressure or a
+                    // flyer beside a brawler, a defender beside a rooted body.
+                    const BY_LEAD: [[u32; 2]; 6] = [[4, 3], [5, 0], [0, 4], [0, 1], [2, 5], [1, 4]];
+                    let pair = BY_LEAD[(kind as usize) % 6];
+                    let pick = pair[((variation as usize) + slot as usize) % 2];
+                    if pick == kind { pair[0] } else { pick }
                 };
+                // Deep rooms and some escorts use the broader bestiary. These
+                // selections are deterministic from the site id and seed, so a
+                // cleared record can never resurrect a different family on load.
+                if id.z == 2 || id.z == 3 {
+                    if variation % 2 == 0 {
+                        kind = 10; // Threshold Mimic in a cache room.
+                    }
+                } else if id.z >= 4 || (slot > 0 && variation % 3 == 0) {
+                    const DEEP: [u32; 4] = [10, 11, 12, 13];
+                    kind = DEEP[((variation / 7 + slot + id.z.unsigned_abs()) % 4) as usize];
+                }
+                // High-menace sites occasionally field a size-varied brute.
+                // Keeping it rare preserves the existing encounter rhythm while
+                // making a dangerous site read differently at a glance.
+                if menace >= 2 && slot == 0 && variation % 3 == 0 {
+                    kind = 9;
+                }
                 if self.enemies.len() >= MAX_ENEMIES
                     || record & (1 << slot) != 0
                     || self.enemies.iter().any(|e| e.site == id && e.slot == slot)
@@ -1028,7 +1604,20 @@ impl Adventure {
                     }
                 }
                 if let Some(pos) = found {
-                    self.enemies.push(Enemy::new(id, slot, kind, pos));
+                    let affixes = if is_boss(kind) {
+                        status::Affixes::default()
+                    } else {
+                        status::roll(
+                            world.sample_config().seed,
+                            id.x,
+                            id.y,
+                            slot,
+                            menace,
+                            zone_archetype(world, pos),
+                        )
+                    };
+                    self.enemies
+                        .push(Enemy::new(id, slot, kind, pos, menace).with_affixes(affixes));
                 }
             }
         }
@@ -1054,10 +1643,20 @@ impl Adventure {
         let cycle = std::mem::take(&mut self.queued_cycle);
         let scale = world.voxel_scale.meters();
         self.restore_discoveries(world);
-        if !spell_available(self.spell, self.wand, self.rare_spells) {
+        if !self.can_wield(self.spell) {
             self.spell = 0;
         }
         self.puzzle_cd = (self.puzzle_cd - dt).max(0.0);
+        world.undercrown.tick(dt);
+        for (item, amount) in world.factory.take_refunds() {
+            world.expedition.add(item, amount);
+        }
+        for cell in world.factory.take_meltdowns() {
+            let half = crate::world::factory::step(world) as f32 * 0.5;
+            let at = (cell.as_vec3() + Vec3::splat(half)) * scale;
+            let eye_m = player.eye(world.voxel_scale) * scale;
+            self.reactor_meltdown(world, at, eye_m);
+        }
         self.melee_buffer = (self.melee_buffer - dt).max(0.0);
         if melee && self.melee_cd <= 0.14 {
             self.melee_buffer = 0.14;
@@ -1131,11 +1730,31 @@ impl Adventure {
 
         let forward = player.forward_dir();
         self.prepare_wand();
-        if cycle && self.wand > 0 { self.advance_wand(); }
-        if cast && self.cast_cd <= 0.0 { self.cast_wand(world,player,eye,forward); }
+        if cycle && self.wand > 0 {
+            self.advance_wand();
+        }
+        if cast && self.cast_cd <= 0.0 {
+            self.cast_wand(world, player, eye, forward);
+        }
         // Echo step changes the current-frame collision and aiming origin.
         let eye = player.eye(world.voxel_scale) * scale;
         let feet = player.pos * scale;
+        // Drain surface-contact events once. The splash uses the exposed top of
+        // the local water column, not the player's feet, so partial cells and
+        // cave pools put the ring on the visible surface.
+        let water_impact = std::mem::take(&mut player.water_impact);
+        let water_exit = std::mem::take(&mut player.water_exit);
+        if water_impact > 0.25 || water_exit {
+            if let Some(surface) = world.water_surface_at(feet + Vec3::Y * (0.35 * scale)) {
+                let strength = (water_impact / 7.0).clamp(0.22, 1.0)
+                    * if water_exit && water_impact <= 0.25 {
+                        0.58
+                    } else {
+                        1.0
+                    };
+                self.splash(surface, strength);
+            }
+        }
         let (player_min, player_max) =
             super::player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t);
         let player_min = player_min * scale - Vec3::splat(0.10);
@@ -1158,8 +1777,9 @@ impl Adventure {
                         } else {
                             ARMED_REACH_BONUS
                         };
-                    let sweep =
-                        (MELEE_SWEEP_BASE + aim_distance * MELEE_SWEEP_GROWTH).min(MELEE_SWEEP_MAX);
+                    let sweep = (MELEE_SWEEP_BASE + aim_distance * MELEE_SWEEP_GROWTH)
+                        .min(MELEE_SWEEP_MAX)
+                        * tinkering::binding_multiplier(self.tool_bind);
                     (e.health > 0.0
                         && aim_distance > 0.0
                         && aim_distance < reach
@@ -1191,6 +1811,7 @@ impl Adventure {
                     let e = &mut self.enemies[i];
                     let shatter = e.slow > 0.0;
                     let shield = e.kind == 5
+                        && e.guard
                         && !shatter
                         && forward.dot(Vec3::new(-e.yaw.sin(), 0.0, -e.yaw.cos())) < -0.3;
                     let base = match self.weapon {
@@ -1198,12 +1819,23 @@ impl Adventure {
                         2 => 32.0,
                         3 => 38.0,
                         4 => 28.0,
+                        5 => 44.0,
                         _ => 14.0,
                     };
-                    let damage = if finisher { base * 1.7 } else { base }
+                    let damage = (if finisher { base * 1.7 } else { base }
                         + rank as f32 * 3.0
-                        + if shatter { 18.0 } else { 0.0 };
+                        + if shatter { 18.0 } else { 0.0 }
+                        + if self.tool_mods & 16 != 0 { 4.0 } else { 0.0 })
+                        * tinkering::head_multiplier(self.tool_head)
+                        * if self.tool_mods & 1 != 0 { 1.08 } else { 1.0 };
                     e.health -= damage * if shield { 0.35 } else { 1.0 };
+                    if let Some(element) = tinkering::edge(self.tool_head) {
+                        let affixes = e.affixes;
+                        let reaction = e.status.apply(element, affixes);
+                        // Frost reactions return their chill separately; without
+                        // this the Rime edge would apply wetness but never slow.
+                        e.slow = e.slow.max(reaction.chill);
+                    }
                     if self.weapon == 4 && !shatter {
                         e.slow = 2.5;
                     }
@@ -1212,10 +1844,21 @@ impl Adventure {
                         self.mana = (self.mana + 8.0).min(100.0 + rank as f32 * 15.0);
                     }
                     e.flash = 0.16;
-                    e.stagger = if finisher || shatter { 0.55 } else { 0.20 };
+                    e.stagger = if finisher || shatter { 0.55 } else { 0.20 }
+                        + if finisher && self.tool_mods & 4 != 0 {
+                            0.25
+                        } else {
+                            0.0
+                        };
+                    if self.tool_mods & 8 != 0 {
+                        self.health = (self.health + 2.0).min(100.0 + rank as f32 * 20.0);
+                    }
+                    if self.tool_mods & 2 != 0 {
+                        self.mana = (self.mana + 2.0).min(100.0 + rank as f32 * 15.0);
+                    }
                     if e.kind < 6 || shatter && e.poise <= 0.0 {
                         e.tell = 0.0;
-                        if e.kind >= 6 {
+                        if is_boss(e.kind) {
                             e.poise = 3.0;
                         }
                     }
@@ -1247,14 +1890,45 @@ impl Adventure {
                         Some(p),
                         0.9,
                     );
-                    self.effect(p, if self.weapon==3 {[1.0,0.32,0.045]} else if self.weapon==4 {spell_color(2)} else {[0.9,0.8,0.5]}, 0.6);
-                    if !shield {self.relic_hit(world,eye,p,forward,i,finisher,shatter);}
+                    self.effect(
+                        p,
+                        if self.tool_head != 0 {
+                            let c = tinkering::material_color(self.tool_head);
+                            [
+                                c[0] as f32 / 255.0,
+                                c[1] as f32 / 255.0,
+                                c[2] as f32 / 255.0,
+                            ]
+                        } else if self.weapon == 3 {
+                            [1.0, 0.32, 0.045]
+                        } else if self.weapon == 4 {
+                            spell_color(2)
+                        } else if self.weapon == 5 {
+                            [0.56, 0.85, 0.78]
+                        } else {
+                            [0.9, 0.8, 0.5]
+                        },
+                        0.6,
+                    );
+                    if self.weapon == 5 {
+                        self.kinetic_pulse(
+                            world,
+                            p,
+                            if finisher { 4.2 } else { 2.4 },
+                            if finisher { 8.0 } else { 3.2 },
+                        );
+                    }
+                    if !shield {
+                        self.relic_hit(world, eye, p, forward, i, finisher, shatter);
+                    }
                 }
             }
         }
         self.spawn_timer -= dt;
+        growth::tick(self, dt);
         if self.spawn_timer <= 0.0 {
             self.spawn_timer = 1.0;
+            growth::cultivate(world);
             self.spawn(world, feet);
             self.update_reliquaries(world, feet);
             for r in self.reliquaries.clone() {
@@ -1314,8 +1988,60 @@ impl Adventure {
             if e.health <= 0.0 {
                 continue;
             }
+            if e.check_guard_break() {
+                let at = e.center();
+                sound(&mut self.sounds, Cue::Clang, Some(at), 0.9);
+                self.effects.push(Effect {
+                    pos: at,
+                    color: [0.36, 0.55, 0.72],
+                    radius: 0.7,
+                    life: 0.35,
+                    total: 0.35,
+                });
+            }
             e.flash = (e.flash - dt).max(0.0);
             e.poise = (e.poise - dt).max(0.0);
+            let dot = e.status.tick(dt, e.affixes);
+            if dot != 0.0 {
+                e.health = (e.health - dot).min(e.max_health());
+                if dot > 0.0 {
+                    e.flash = e.flash.max(0.06);
+                }
+            }
+            if e.status.any() || !e.affixes.is_empty() {
+                // One mote when the half-second changes. The old gate was true
+                // for every frame inside a 24 Hz bin, so statuses strobed.
+                let tick = (self.time * 1.6) as u32;
+                let prev = ((self.time - dt).max(0.0) * 1.6) as u32;
+                if tick != prev && self.particles.len() < 240 {
+                    let (color, rise) = if e.status.burn > 0.0 {
+                        (status::Element::Fire.color(), 0.55)
+                    } else if e.status.poison > 0.0 {
+                        (status::Element::Toxic.color(), 0.28)
+                    } else if e.status.shock > 0.0 {
+                        (status::Element::Shock.color(), 0.12)
+                    } else if e.status.wet > 0.0 {
+                        (status::Element::Wet.color(), -0.15)
+                    } else if let Some(a) = e.affixes.first() {
+                        (a.color(), 0.22)
+                    } else {
+                        (PALETTE_AMBER, 0.15)
+                    };
+                    let a = e.slot as f32 * 1.7 + tick as f32 * 0.9;
+                    self.particles.push(spells::VoxelParticle {
+                        pos: e.center()
+                            + Vec3::new(a.cos() * 0.28, 0.05, a.sin() * 0.28),
+                        vel: Vec3::new(0.0, rise, 0.0),
+                        color,
+                        size: 0.026,
+                        glow: 1.05,
+                        alpha: 0.42,
+                        gravity: 0.4,
+                        life: 0.9,
+                        total: 0.9,
+                    });
+                }
+            }
             e.stagger = (e.stagger - dt).max(0.0);
             // Sweep knockback and charges; neither may teleport through thin walls.
             let impulse = if e.charge > 0.0 {
@@ -1323,7 +2049,7 @@ impl Adventure {
             } else {
                 e.knock
             };
-            let impulse = if e.kind >= 6 {
+            let impulse = if is_boss(e.kind) {
                 impulse.clamp_length_max(1.5)
             } else {
                 impulse
@@ -1350,7 +2076,7 @@ impl Adventure {
                 }
             }
             e.slow = (e.slow - dt).max(0.0);
-            e.cooldown -= dt;
+            e.cooldown -= dt * e.affixes.speed_mul();
             e.sight -= dt;
             let d = eye - e.center();
             let distance = d.length();
@@ -1363,7 +2089,7 @@ impl Adventure {
                 }
             }
             e.alert = (e.alert - dt).max(0.0);
-            if e.kind >= 6 {
+            if is_boss(e.kind) {
                 bosses::tick(
                     e,
                     world,
@@ -1402,23 +2128,28 @@ impl Adventure {
                             0.55,
                         );
                     }
-                    e.cooldown = if brawler(e.kind) { 1.6 } else { 2.8 };
+                    e.cooldown = bestiary::species(e.kind)
+                        .map_or(if brawler(e.kind) { 1.6 } else { 2.8 }, |s| s.cooldown);
                 }
                 continue;
             }
-            if e.visible
-                && e.cooldown <= 0.0
-                && distance
-                    < if e.kind == 3 {
-                        7.0
-                    } else if e.kind == 0 {
-                        1.9
-                    } else {
-                        18.0
-                    }
-            {
+            let attack_range = bestiary::species(e.kind).map_or(
+                if e.kind == 3 {
+                    7.0
+                } else if e.kind == 9 {
+                    6.5
+                } else {
+                    18.0
+                },
+                |s| s.attack_range,
+            );
+            if e.visible && e.cooldown <= 0.0 && distance < attack_range {
                 e.attacks = e.attacks.wrapping_add(1);
-                e.attack = if e.kind == 5 && distance < 4.5 || e.kind == 4 && e.attacks % 2 == 0 {
+                e.attack = if (e.kind == 5 && distance < 4.5)
+                    || (e.kind == 9 && distance < 6.5)
+                    || (matches!(e.kind, 10..=13) && distance < 3.4)
+                    || (e.kind == 4 && e.attacks % 2 == 0)
+                {
                     2
                 } else {
                     0
@@ -1456,16 +2187,18 @@ impl Adventure {
             );
             let speed = if e.slow > 0.0 {
                 0.5
-            } else if brawler(e.kind) {
-                2.5
             } else {
-                1.3
+                bestiary::species(e.kind)
+                    .map_or(if brawler(e.kind) { 2.5 } else { 1.3 }, |s| s.speed)
             };
-            let movement = if brawler(e.kind) && chasing && distance < 1.55 {
-                Vec3::ZERO
-            } else {
-                direction.normalize_or_zero() * speed * dt
-            };
+            let rooted =
+                bestiary::species(e.kind).is_some_and(|s| s.role == bestiary::Role::Rooted);
+            let movement =
+                if (rooted && !chasing) || (brawler(e.kind) && chasing && distance < 1.55) {
+                    Vec3::ZERO
+                } else {
+                    direction.normalize_or_zero() * speed * e.affixes.speed_mul() * dt
+                };
             if movement.length_squared() > 1e-8 {
                 e.yaw = (-movement.x).atan2(-movement.z);
             }
@@ -1559,44 +2292,116 @@ impl Adventure {
                 continue;
             }
             if !shot.hostile {
-                if matches!(shot.spell, 5 | 12) {
-                    shot.velocity.y -= dt * if shot.spell == 12 { 6.5 } else { 8.5 };
+                if matches!(shot.spell, 5 | 12 | 28) {
+                    shot.velocity.y -= dt
+                        * match shot.spell {
+                            12 => 6.5,
+                            28 => 7.5,
+                            _ => 8.5,
+                        };
                 }
-                if shot.mods.homing {
-                    if let Some(target_pos) = self
+                if shot.mods.gravity != 0.0 {
+                    shot.velocity.y -= dt * 14.0 * shot.mods.gravity;
+                }
+                if shot.mods.timer > 0.0 && shot.payload.is_some() {
+                    shot.mods.timer -= dt;
+                    if shot.mods.timer <= 0.0 {
+                        // The payload leaves the carrier mid-flight; the carrier
+                        // keeps flying and no longer holds a payload for impact.
+                        if let Some(payload) = shot.payload.take() {
+                            let p_dir = shot.velocity.normalize_or_zero();
+                            if wands::is_effect(payload) {
+                                let created = growth::resolve_effect(world, payload, shot.pos, None);
+                                if let Some(follow) = shot.follow.filter(|f| wands::is_effect(*f)) {
+                                    growth::resolve_effect(world, follow, shot.pos, created);
+                                }
+                            } else if payload == 9 {
+                                self.cast_luminous_drill(
+                                    world,
+                                    shot.pos,
+                                    p_dir,
+                                    shot.payload_mods,
+                                    None,
+                                );
+                            } else {
+                                self.emit_spell_modified(
+                                    payload,
+                                    shot.pos,
+                                    p_dir,
+                                    None,
+                                    shot.payload_mods,
+                                );
+                            }
+                            self.spawn_voxel_burst(shot.pos, shot.color(), 8, 1.4, 0.03);
+                        }
+                    }
+                }
+                if shot.mods.homing || shot.mods.seek_ally {
+                    let ally = if shot.mods.seek_ally {
+                        self.companion.as_ref().and_then(|c| {
+                            let p = c.pos + Vec3::Y * (c.shown * 0.5);
+                            let d = (p - shot.pos).length();
+                            (d < 18.0 && line(world, shot.pos, p)).then_some((p, d))
+                        })
+                    } else {
+                        None
+                    };
+                    let foe = self
                         .enemies
                         .iter()
                         .filter(|e| e.health > 0.0)
                         .filter_map(|e| {
                             let d = (e.center() - shot.pos).length();
-                            (d < 18.0 && line(world, shot.pos, e.center())).then_some((e.center(), d))
+                            (d < 18.0 && line(world, shot.pos, e.center()))
+                                .then_some((e.center(), d))
                         })
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                        .map(|(p, _)| p)
-                    {
+                        .min_by(|a, b| a.1.total_cmp(&b.1));
+                    if let Some((target_pos, _)) = ally.or(foe) {
                         let speed = shot.velocity.length().max(8.0);
                         let desired = (target_pos - shot.pos).normalize_or_zero();
                         let current = shot.velocity.normalize_or_zero();
-                        let steered = (current + (desired - current) * (dt * 7.2).min(1.0)).normalize_or_zero();
+                        let steered = (current + (desired - current) * (dt * 7.2).min(1.0))
+                            .normalize_or_zero();
                         shot.velocity = steered * speed;
+                    }
+                }
+                if shot.mods.path == 1 {
+                    shot.velocity = Quat::from_rotation_y(dt * 2.2) * shot.velocity;
+                } else if shot.mods.path == 2 {
+                    let side = shot.velocity.cross(Vec3::Y).normalize_or_zero();
+                    shot.velocity += side * (self.time * 14.0).sin() * dt * 8.0;
+                } else if shot.mods.path == 3 {
+                    let radial = (shot.pos - eye) * Vec3::new(1.0, 0.0, 1.0);
+                    if radial.length() > 0.4 {
+                        let tangent = Vec3::new(-radial.z, 0.0, radial.x).normalize_or_zero();
+                        let speed = shot.velocity.length().max(6.0);
+                        shot.velocity = tangent * speed;
                     }
                 }
                 shot.trail_timer -= dt;
                 if shot.trail_timer <= 0.0 {
-                    shot.trail_timer = if shot.spell == 10 { 0.07 } else { 0.055 };
-                    let col = shot.color();
+                    shot.trail_timer = if shot.spell == 10 { 0.16 } else { 0.18 };
+                    let col = shot
+                        .mods
+                        .element
+                        .map(|element| element.color())
+                        .unwrap_or_else(|| shot.color());
                     self.spawn_voxel_particle(
-                        shot.pos - shot.velocity.normalize_or_zero() * 0.14,
+                        shot.pos - shot.velocity.normalize_or_zero() * 0.1,
                         Vec3::new(
-                            (self.time * 13.1 + shot.pos.x).cos() * 0.45,
-                            0.35,
-                            (self.time * 13.1 + shot.pos.z).sin() * 0.45,
+                            (shot.pos.x * 0.7).cos() * 0.08,
+                            0.12,
+                            (shot.pos.z * 0.7).sin() * 0.08,
                         ),
                         col,
-                        if shot.spell == 10 { 0.048 } else { 0.030 },
-                        3.4,
-                        0.74,
-                        if matches!(shot.spell, 12 | 5) { 2.2 } else { -0.4 },
+                        if shot.spell == 10 { 0.04 } else { 0.022 },
+                        1.2,
+                        0.4,
+                        if matches!(shot.spell, 12 | 5) {
+                            2.2
+                        } else {
+                            -0.4
+                        },
                         0.32,
                     );
                     if shot.spell == 10 && shot.bore_budget > 0 {
@@ -1632,11 +2437,34 @@ impl Adventure {
             }
             let travel = shot.velocity * dt;
             let mut spark_target = None;
+            let mut reaction_fx: Option<(Vec3, status::Element, Option<&'static str>)> = None;
             let steps = (travel.length() / (scale * 0.2).min(0.10)).ceil().max(1.0) as usize;
             let mut hit = false;
             for _ in 0..steps {
                 let end = shot.pos + travel / steps as f32;
                 if let Some((impact, cell)) = trace::solid(world, shot.pos, end) {
+                    if !shot.hostile && shot.mods.phase > 0 {
+                        let dir = (end - shot.pos).normalize_or_zero();
+                        let stride = scale * 0.5;
+                        let mut probe = impact;
+                        let mut exit = None;
+                        if dir != Vec3::ZERO {
+                            for _ in 0..24 {
+                                probe += dir * stride;
+                                if !world.solid((probe / scale).floor().as_ivec3()) {
+                                    exit = Some(probe);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(exit) = exit {
+                            shot.mods.phase -= 1;
+                            self.spawn_voxel_burst(impact, shot.color(), 6, 1.2, 0.03);
+                            shot.pos = exit;
+                            self.spawn_voxel_burst(exit, shot.color(), 6, 1.2, 0.03);
+                            continue;
+                        }
+                    }
                     if !shot.hostile && shot.bore_budget > 0 && self.carve_cell(world, cell, true) {
                         shot.bore_budget -= 1;
                         shot.pos = end;
@@ -1666,12 +2494,13 @@ impl Adventure {
                         shot.velocity -= 2.0 * shot.velocity.dot(normal) * normal;
                         shot.pos += normal * 0.04;
                         self.spawn_voxel_burst(shot.pos, shot.color(), 6, 1.8, 0.032);
-                        sound(&mut self.sounds, Cue::Spark, Some(shot.pos), 0.35);
+                        let (cue, pitch) = wands::spell_audio(shot.spell);
+                        sound_pitched(&mut self.sounds, cue, Some(shot.pos), 0.35, pitch);
                         break;
                     }
                     sound(
                         &mut self.sounds,
-                        if matches!(shot.spell, 3 | 12) {
+                        if matches!(shot.spell, 3 | 12 | 29) {
                             Cue::Burst
                         } else if matches!(shot.spell, 2 | 13) {
                             Cue::Shatter
@@ -1687,6 +2516,15 @@ impl Adventure {
                     break;
                 }
                 shot.pos = end;
+                if !shot.splashed
+                    && world.get((shot.pos / scale).floor().as_ivec3()) == super::BlockId::Water
+                {
+                    if let Some(surface) = world.water_surface_at(shot.pos) {
+                        shot.splashed = true;
+                        let strength = (shot.velocity.length() * 0.032).clamp(0.18, 0.85);
+                        self.splash(surface, strength);
+                    }
+                }
                 if shot.hostile {
                     if shot.pos.cmpge(player_min).all() && shot.pos.cmple(player_max).all() {
                         if self.ward > 0.0 && self.ward_hits > 0 {
@@ -1705,7 +2543,10 @@ impl Adventure {
                             self.effect(shot.pos, spell_color(4), 0.5);
                             break;
                         }
-                        self.damage(12.0 * (1.0 - armor_reduction), -shot.velocity);
+                        self.damage(
+                            12.0 * shot.mods.damage_mul.max(1.0) * (1.0 - armor_reduction),
+                            -shot.velocity,
+                        );
                         hit = true;
                         break;
                     }
@@ -1715,11 +2556,12 @@ impl Adventure {
                             < if tall(e.kind) { 0.8 } else { 0.58 }
                                 + if shot.mods.orbit { 0.24 } else { 0.0 }
                 }) {
-                    if matches!(shot.spell, 0 | 14) {
+                    if matches!(shot.spell, 0 | 14) || shot.mods.chain {
                         spark_target = Some((e.site, e.slot));
                     }
                     let shatter = e.slow > 0.0 && !matches!(shot.spell, 2 | 13);
                     let shield = e.kind == 5
+                        && e.guard
                         && shot.spell == 0
                         && !shatter
                         && !shot.mods.bore
@@ -1741,11 +2583,31 @@ impl Adventure {
                         0.7,
                     );
                     let base_dmg = spell_base_damage(shot.spell).max(22.0);
-                    e.health -= (base_dmg + rank as f32 * 4.0 + if shatter { 18.0 } else { 0.0 })
-                        * shot.mods.damage_mul
-                        * if shield { 0.3 } else { 1.0 };
+                    let mut dealt =
+                        (base_dmg + rank as f32 * 4.0 + if shatter { 18.0 } else { 0.0 })
+                            * shot.mods.damage_mul
+                            * if shield { 0.3 } else { 1.0 }
+                            * e.affixes.damage_taken();
+                    let mut element_stagger = 0.0;
+                    if let Some(element) = shot.mods.element {
+                        let reaction = e.status.apply(element, e.affixes);
+                        dealt *= reaction.damage_mul;
+                        element_stagger = reaction.stagger;
+                        if reaction.chill > 0.0 {
+                            e.slow = e.slow.max(reaction.chill);
+                        }
+                        reaction_fx = Some((e.center(), element, reaction.name));
+                    }
+                    e.hurt(dealt);
+                    if shot.mods.siphon {
+                        self.health = (self.health + 4.0).min(100.0 + rank as f32 * 20.0);
+                    }
+                    if shot.mods.blood {
+                        let dealt = (base_dmg + rank as f32 * 4.0) * shot.mods.damage_mul;
+                        self.health = (self.health + dealt * 0.25).min(100.0 + rank as f32 * 20.0);
+                    }
                     e.flash = 0.16;
-                    e.stagger = if shatter { 0.65 } else { 0.24 };
+                    e.stagger = (if shatter { 0.65_f32 } else { 0.24 }).max(element_stagger);
                     e.knock = shot.velocity.normalize_or_zero()
                         * if matches!(shot.spell, 3 | 14) || shot.mods.bore {
                             5.0
@@ -1754,7 +2616,7 @@ impl Adventure {
                         };
                     if e.kind < 6 || shatter && e.poise <= 0.0 {
                         e.tell = 0.0;
-                        if e.kind >= 6 {
+                        if is_boss(e.kind) {
                             e.poise = 3.0;
                         }
                     }
@@ -1777,6 +2639,57 @@ impl Adventure {
                 }
             }
             if hit {
+                if let Some((at, element, name)) = reaction_fx {
+                    self.spawn_voxel_burst(
+                        at,
+                        element.color(),
+                        if name.is_some() { 18 } else { 7 },
+                        if name.is_some() { 3.2 } else { 1.8 },
+                        0.045,
+                    );
+                    if name.is_some() {
+                        self.effect(at, element.color(), 0.9);
+                        sound(&mut self.sounds, Cue::Spark, Some(at), 0.7);
+                    }
+                }
+                if !shot.hostile && shot.mods.shrapnel {
+                    self.spawn_voxel_burst(shot.pos, spell_color(62), 16, 4.5, 0.035);
+                    let element = shot.mods.element;
+                    for e in &mut self.enemies {
+                        if e.health > 0.0 && (e.center() - shot.pos).length() < 2.0 {
+                            e.hurt(11.0 * shot.mods.damage_mul * e.affixes.damage_taken());
+                            if let Some(el) = element {
+                                let r = e.status.apply(el, e.affixes);
+                                if r.chill > 0.0 {
+                                    e.slow = e.slow.max(r.chill);
+                                }
+                            }
+                            e.flash = 0.16;
+                            e.stagger = e.stagger.max(0.2);
+                        }
+                    }
+                }
+                if !shot.hostile && shot.mods.volatile {
+                    self.blast_visual(
+                        shot.pos,
+                        1.25,
+                        -shot.velocity.normalize_or_zero(),
+                        [1.0, 0.42, 0.16],
+                    );
+                    world
+                        .sandbox
+                        .apply_radial_impulse(shot.pos, 2.2, 3.2, scale);
+                    if self.terrain_blasts.len() < 4 {
+                        self.terrain_blasts.push_back((shot.pos, 1.25));
+                    }
+                    for e in &mut self.enemies {
+                        if e.health > 0.0 && (e.center() - shot.pos).length() < 2.0 {
+                            e.health -= 10.0 * shot.mods.damage_mul;
+                            e.flash = 0.16;
+                            e.stagger = e.stagger.max(0.2);
+                        }
+                    }
+                }
                 if !shot.hostile && matches!(shot.spell, 6 | 10) && self.wells.len() < 4 {
                     sound(&mut self.sounds, Cue::Rift, Some(shot.pos), 0.85);
                     if shot.spell == 10 {
@@ -1800,12 +2713,61 @@ impl Adventure {
                 if !shot.hostile && shot.spell == 12 {
                     self.thermal_bloom(world, shot.pos, 2.3, true);
                 }
-                if !shot.hostile && matches!(shot.spell, 2 | 13) {
-                    self.cryo_bloom(
-                        world,
+                if !shot.hostile && shot.spell == 28 {
+                    self.thermal_bloom(world, shot.pos, 1.5, true);
+                }
+                if !shot.hostile && shot.spell == 29 {
+                    self.blast_visual(
                         shot.pos,
-                        if shot.spell == 13 { 3.2 } else { 1.35 },
+                        2.6,
+                        -shot.velocity.normalize_or_zero(),
+                        [0.95, 0.40, 0.12],
                     );
+                    world
+                        .sandbox
+                        .apply_radial_impulse(shot.pos, 4.2, 8.0, scale);
+                    if self.terrain_blasts.len() < 4 {
+                        self.terrain_blasts.push_back((shot.pos, 2.6));
+                    }
+                    self.thermal_bloom(world, shot.pos, 2.8, true);
+                    let distance = (eye - shot.pos).length();
+                    if distance < 4.0 {
+                        self.damage(24.0 * (1.0 - distance / 4.0), shot.pos - eye);
+                    }
+                    for e in &mut self.enemies {
+                        let d = (e.center() - shot.pos).length();
+                        if e.health > 0.0 && d < 3.6 && line(world, shot.pos, e.center()) {
+                            e.hurt(
+                                (34.0 + rank as f32 * 3.0)
+                                    * (1.0 - 0.5 * d / 3.6)
+                                    * shot.mods.damage_mul
+                                    * e.affixes.damage_taken(),
+                            );
+                            e.flash = 0.2;
+                            e.stagger = e.stagger.max(0.5);
+                            e.knock = (e.center() - shot.pos).normalize_or_zero() * 6.0;
+                            self.hit = 0.18;
+                        }
+                    }
+                    sound(&mut self.sounds, Cue::Burst, Some(shot.pos), 1.0);
+                }
+                if !shot.hostile && shot.mods.fork {
+                    // Three weak sparks fan back out of the impact. They carry
+                    // default mods, so a fork can never fork again.
+                    let back = -shot.velocity.normalize_or_zero();
+                    for a in [-0.9_f32, 0.0, 0.9] {
+                        let d = (Quat::from_axis_angle(Vec3::Y, a) * back + Vec3::Y * 0.35)
+                            .normalize_or_zero();
+                        let mods = wands::ShotMods {
+                            damage_mul: 0.45,
+                            life_mul: 0.5,
+                            ..Default::default()
+                        };
+                        self.emit_spell_modified(0, shot.pos + back * 0.15, d, None, mods);
+                    }
+                }
+                if !shot.hostile && matches!(shot.spell, 2 | 13) {
+                    self.cryo_bloom(world, shot.pos, if shot.spell == 13 { 3.2 } else { 1.35 });
                 }
                 if !shot.hostile && shot.spell == 14 {
                     self.electrify_pool(world, shot.pos, rank + 1);
@@ -1837,7 +2799,11 @@ impl Adventure {
                         -shot.velocity.normalize_or_zero(),
                         [0.42, 0.38, 0.34],
                     );
-                    if self.terrain_blasts.len() < 8 {
+                    // Resonant bursts also toss loose frames, not just terrain.
+                    world
+                        .sandbox
+                        .apply_radial_impulse(shot.pos, 3.4, 5.5, scale);
+                    if self.terrain_blasts.len() < 4 {
                         self.terrain_blasts.push_back((shot.pos, 2.0));
                     }
                     let distance = (eye - shot.pos).length();
@@ -1849,8 +2815,9 @@ impl Adventure {
                             && line(world, shot.pos, e.center())
                         {
                             let shatter = e.slow > 0.0 && self.discoveries & (1 << 3) != 0;
-                            e.health -= (18.0 + rank as f32 * 2.0 + if shatter { 12.0 } else { 0.0 })
-                                * shot.mods.damage_mul;
+                            e.health -=
+                                (18.0 + rank as f32 * 2.0 + if shatter { 12.0 } else { 0.0 })
+                                    * shot.mods.damage_mul;
                             if shatter {
                                 e.slow = 0.0;
                                 sound(&mut self.sounds, Cue::Shatter, Some(e.center()), 0.6);
@@ -1859,7 +2826,7 @@ impl Adventure {
                             e.knock = (e.center() - shot.pos).normalize_or_zero() * 5.0;
                             if e.kind < 6 || shatter && e.poise <= 0.0 {
                                 e.tell = 0.0;
-                                if e.kind >= 6 {
+                                if is_boss(e.kind) {
                                     e.poise = 3.0;
                                 }
                             }
@@ -1869,23 +2836,34 @@ impl Adventure {
                 }
                 if let Some(payload) = shot.payload {
                     let p_dir = shot.velocity.normalize_or_zero();
-                    if payload == 9 {
-                        self.cast_luminous_drill(world, shot.pos - p_dir * 0.15, p_dir, shot.mods, None);
+                    if wands::is_effect(payload) {
+                        let created = growth::resolve_effect(world, payload, shot.pos, None);
+                        if let Some(follow) = shot.follow.filter(|f| wands::is_effect(*f)) {
+                            growth::resolve_effect(world, follow, shot.pos, created);
+                        }
+                    } else if payload == 9 {
+                        self.cast_luminous_drill(
+                            world,
+                            shot.pos - p_dir * 0.15,
+                            p_dir,
+                            shot.payload_mods,
+                            None,
+                        );
                     } else {
-                        self.emit_spell_modified(payload, shot.pos, p_dir, None, shot.mods);
+                        self.emit_spell_modified(payload, shot.pos, p_dir, None, shot.payload_mods);
                     }
                 }
                 self.spawn_voxel_burst(
                     shot.pos,
                     shot.color(),
-                    if shot.spell == 3 { 18 } else { 10 },
-                    if shot.spell == 3 { 3.2 } else { 1.8 },
+                    if matches!(shot.spell, 3 | 29) { 18 } else { 10 },
+                    if matches!(shot.spell, 3 | 29) { 3.2 } else { 1.8 },
                     0.038,
                 );
                 self.effect(
                     shot.pos,
                     shot.color(),
-                    if shot.spell == 3 { 3.0 } else { 0.7 },
+                    if matches!(shot.spell, 3 | 29) { 3.0 } else { 0.7 },
                 );
             } else {
                 self.projectiles.push(shot);
@@ -1895,6 +2873,10 @@ impl Adventure {
         self.tick_wells(world, dt);
         self.tick_crosses(world, dt);
         self.tick_particles(world, dt);
+        let mut death_blasts: Vec<Vec3> = Vec::new();
+        // Spells found this frame: (salt, where). Applied after the loop, which
+        // borrows the enemy list.
+        let mut finds: Vec<(u32, Vec3)> = Vec::new();
         for e in &self.enemies {
             if e.health > 0.0 {
                 continue;
@@ -1902,6 +2884,9 @@ impl Adventure {
             let mask = self.records.entry(e.site).or_default();
             if *mask & (1 << e.slot) == 0 {
                 *mask |= 1 << e.slot;
+                if e.affixes.has(status::Affix::Volatile) {
+                    death_blasts.push(e.center());
+                }
                 sound(&mut self.sounds, Cue::Defeat, Some(e.center()), 0.7);
                 if self.remains.len() < 24 {
                     self.remains.push(Remains {
@@ -1913,9 +2898,18 @@ impl Adventure {
                 if self.discoveries & (1 << 7) != 0 && self.health > 0.0 {
                     self.health = (self.health + 4.0).min(100.0 + rank as f32 * 20.0);
                 }
-                world.expedition.add(18, 64);
+                world.expedition.add(18, 64 + e.menace as u32 * 32);
+                if e.menace >= 2 {
+                    world.expedition.add(16, 32);
+                }
+                if e.menace >= 3 {
+                    world.expedition.add(17, 16);
+                }
                 for &(item, amount) in rewards::guardian(e.kind) {
                     world.expedition.add(item, amount);
+                }
+                if let Some(salt) = discovery::drop_roll(e.site, e.slot, e.menace) {
+                    finds.push((salt, e.center()));
                 }
                 if e.kind == 5 && self.weapons & 2 == 0 {
                     self.weapons |= 2;
@@ -1923,7 +2917,7 @@ impl Adventure {
                         .expedition
                         .say("Steel sword recovered from the warden. Equip it in Gear.");
                 }
-                if e.kind >= 6 {
+                if is_boss(e.kind) {
                     world.expedition.say("The guardian has fallen. Return to the reliquary and claim its relic with F.");
                 }
                 let all = if e.site == IVec3::ZERO { 3 } else { 7 };
@@ -1937,7 +2931,27 @@ impl Adventure {
                         world.expedition.add(i, n);
                     }
                     self.reward = Some(reward);
+                    // Clearing a whole site always teaches something.
+                    finds.push((discovery::site_salt(e.site), e.center()));
                     sound(&mut self.sounds, Cue::Treasure, None, 0.75);
+                }
+            }
+        }
+        for (salt, at) in finds {
+            self.discover_spell(world, salt, at);
+        }
+        for at in death_blasts {
+            self.blast_visual(at, 1.8, Vec3::Y, status::Affix::Volatile.color());
+            self.spawn_voxel_burst(at, status::Affix::Volatile.color(), 26, 5.0, 0.05);
+            sound(&mut self.sounds, Cue::Burst, Some(at), 0.9);
+            let distance = (eye - at).length();
+            if distance < 3.2 && line(world, at, eye) {
+                self.damage(22.0 * (1.0 - distance / 3.2), eye - at);
+            }
+            for other in &mut self.enemies {
+                if other.health > 0.0 && (other.center() - at).length() < 3.0 {
+                    other.hurt(18.0);
+                    other.flash = 0.16;
                 }
             }
         }
@@ -1955,15 +2969,29 @@ impl Adventure {
             e.life -= dt;
         }
         self.effects.retain(|e| e.life > 0.0);
-        for burst in &mut self.tool_debris { burst.age += dt; }
+        for burst in &mut self.tool_debris {
+            burst.age += dt;
+        }
         self.tool_debris.retain(|burst| burst.age < 0.55);
-        for blast in &mut self.blasts { blast.age += dt; }
+        for blast in &mut self.blasts {
+            blast.age += dt;
+        }
         self.blasts.retain(|blast| blast.age < 1.2);
+        for splash in &mut self.splashes {
+            splash.age += dt;
+        }
+        self.splashes
+            .retain(|splash| splash.age < splash.life && splash.life.is_finite());
         if self.health <= 0.0 {
-            player.pos = world.suggested_spawn();
+            self.last_death_pos = Some(feet);
+            let spawn_m = self
+                .respawn_point
+                .unwrap_or_else(|| world.suggested_spawn() * scale);
+            player.pos = spawn_m / scale;
             player.vel = Vec3::ZERO;
             self.health = self.max_health();
-            self.mana = 50.0;
+            self.mana = (self.max_mana() * 0.65).max(50.0);
+            self.hunger = self.hunger.max(65.0);
             self.invulnerable = 5.0;
             self.projectiles.clear();
             self.hazards.clear();
@@ -1977,15 +3005,31 @@ impl Adventure {
             self.crosses.clear();
             self.lasers.clear();
             self.particles.clear();
+            self.splashes.clear();
             self.remains.clear();
             self.ward = 0.0;
             self.ward_hits = 0;
-            world.expedition.say("Returned to the inland clearing. Supplies retained; your mana needs time to recover.");
+            self.spawn_voxel_burst(spawn_m + Vec3::Y * 0.9, [0.98, 0.78, 0.34], 26, 2.8, 0.045);
+            sound(&mut self.sounds, Cue::Mend, Some(spawn_m), 0.85);
+            let death_dist = (feet - spawn_m).length();
+            if self.respawn_point.is_some() {
+                world.expedition.say(format!(
+                    "Revived at your attuned Sanctum reliquary ({:.0} m from where you fell). Supplies retained.",
+                    death_dist
+                ));
+            } else {
+                world.expedition.say(format!(
+                    "Returned to the inland clearing ({:.0} m from where you fell). Supplies retained; attune a Sanctum reliquary to bind your respawn.",
+                    death_dist
+                ));
+            }
         }
         self.refresh_focus(world, player.eye(world.voxel_scale) * scale, forward);
         consumed
     }
-    pub fn take_terrain_blast(&mut self)->Option<(Vec3,f32)> {self.terrain_blasts.pop_front()}
+    pub fn take_terrain_blast(&mut self) -> Option<(Vec3, f32)> {
+        self.terrain_blasts.pop_front()
+    }
     /// Dynamic point lights (position, radius, color, strength) for active spells, projectiles,
     /// black holes, plasma crosses, and sanctum altars.
     pub fn spell_lights(&self) -> Vec<(Vec3, f32, [f32; 3], f32)> {
@@ -2013,7 +3057,20 @@ impl Adventure {
             ));
         }
         for b in self.blooms.iter().take(2) {
-            out.push((b.pos + Vec3::Y * 0.4, 8.5, spell_color(5), 2.1 * b.life.min(1.0)));
+            out.push((
+                b.pos + Vec3::Y * 0.4,
+                8.5,
+                spell_color(5),
+                2.1 * b.life.min(1.0),
+            ));
+        }
+        if let Some(c) = &self.companion {
+            out.push((
+                c.pos + Vec3::Y * (c.shown * 0.72),
+                6.0,
+                [0.95, 0.82, 0.35],
+                1.6,
+            ));
         }
         out
     }
@@ -2043,11 +3100,18 @@ impl Adventure {
         for i in 0..4 {
             let primary = self.loadout.slots[i] & 0xFF;
             let aux = self.loadout.aux_slots[i];
-            let aux_enc = if aux == wands::EMPTY { 0 } else { (aux + 1) & 0xFF };
+            let aux_enc = if aux == wands::EMPTY {
+                0
+            } else {
+                (aux + 1) & 0xFF
+            };
             put(primary | (aux_enc << 8));
         }
-        put(self.loadout.cursor as u32);
-        put(self.loadout.mode);
+        put(self.loadout.cursor as u32 | (self.tool_mods as u32) << 8);
+        put(self.loadout.mode
+            | (self.tool_head as u32) << 8
+            | (self.tool_bind as u32) << 16
+            | (self.tool_grip as u32) << 24);
     }
     pub fn decode(
         read: &mut impl FnMut() -> anyhow::Result<u32>,
@@ -2082,14 +3146,16 @@ impl Adventure {
             ensure!(
                 p.x.unsigned_abs() < 100000
                     && p.y.unsigned_abs() < 100000
-                    && (0..=1).contains(&p.z)
+                    && (0..=5).contains(&p.z)
                     && mask
                         & !(263
                             | 8
                             | reliquaries::AWAKENED
                             | reliquaries::CLAIMED
                             | reliquaries::PHYSICAL
-                            | quest::VALVES | quest::BYPASS | quest::RESTORED)
+                            | quest::VALVES
+                            | quest::BYPASS
+                            | quest::RESTORED)
                         == 0,
                 "Invalid encounter record"
             );
@@ -2107,8 +3173,8 @@ impl Adventure {
                 a.hunger.is_finite()
                     && (0.0..=100.0).contains(&a.hunger)
                     && a.rations <= 65535
-                    && a.weapons <= 15
-                    && a.weapon <= 4
+                    && a.weapons <= 31
+                    && a.weapon <= 5
                     && (a.weapon == 0 || a.owns_weapon(a.weapon)),
                 "Invalid survival inventory"
             );
@@ -2130,11 +3196,21 @@ impl Adventure {
                 a.loadout.slots[i] = primary;
                 a.loadout.aux_slots[i] = aux;
             }
-            a.loadout.cursor = read()? as usize;
-            a.loadout.mode = read()?;
+            let cursor_word = read()?;
+            a.loadout.cursor = (cursor_word & 0xFF) as usize;
+            a.tool_mods = ((cursor_word >> 8) & 0x1F) as u8;
+            let mode_word = read()?;
+            a.loadout.mode = mode_word & 0xFF;
+            a.tool_head = ((mode_word >> 8) & 0xFF) as u8;
+            a.tool_bind = ((mode_word >> 16) & 0xFF) as u8;
+            a.tool_grip = ((mode_word >> 24) & 0xFF) as u8;
             let cap = wands::capacity(a.wand);
             ensure!(
-                a.loadout.cursor < cap && a.loadout.mode <= 3,
+                a.loadout.cursor < cap
+                    && a.loadout.mode <= 3
+                    && a.tool_head <= 5
+                    && a.tool_bind <= 5
+                    && a.tool_grip <= 5,
                 "Invalid wand layout"
             );
             ensure!(
@@ -2166,4 +3242,69 @@ pub fn tick(
     world.reconcile_legacy_to_inventory();
     world.sync_from_inventory();
     consumed
+}
+
+#[cfg(test)]
+mod flavor_tests {
+    use super::*;
+
+    /// Every id that has a name. Unnamed ids fall through to "Unknown spell".
+    fn defined() -> Vec<u32> {
+        (0..=MAX_SPELL_ID)
+            .filter(|id| *id != wands::EMPTY && spell_name(*id) != "Unknown spell")
+            .collect()
+    }
+
+    #[test]
+    fn every_named_spell_has_its_own_flavor_line() {
+        let generic = spell_flavor(9999);
+        let mut seen = std::collections::HashSet::new();
+        for id in defined() {
+            let line = spell_flavor(id);
+            assert_ne!(line, generic, "spell {id} ({}) has no flavor", spell_name(id));
+            assert!(seen.insert(line), "spell {id} repeats another line");
+        }
+    }
+
+    #[test]
+    fn every_defined_spell_is_complete_and_unique() {
+        let ids = defined();
+        assert!(ids.len() >= 56, "spell table shrank to {}", ids.len());
+        let mut names = std::collections::HashSet::new();
+        for id in ids {
+            let name = spell_name(id);
+            assert!(names.insert(name), "spell {id} duplicates the name {name}");
+            assert_ne!(spell_hint(id), "Empty wand slot.", "spell {id} ({name}) has no hint");
+            assert!(spell_cost(id) >= 0.0 && spell_cost(id) <= 60.0, "{name} cost");
+            assert!(spell_cooldown(id) >= 0.0, "{name} cooldown");
+            let c = spell_color(id);
+            assert!(c.iter().all(|v| (0.0..=1.0).contains(v)), "{name} colour");
+            assert!(spell_available(id, 3, !0), "{name} must be reachable on the top wand");
+            let tag = spell_kind_tag(id);
+            // The evaluator's classification must agree with the UI tag, so a
+            // modifier can never be tagged as a bolt (or the reverse).
+            assert_eq!(
+                wands::is_modifier(id),
+                matches!(tag, "MODIFIER" | "MULTICAST" | "TRIGGER MOD" | "ELEMENT"),
+                "{name} ({id}) tag {tag} disagrees with is_modifier"
+            );
+        }
+    }
+
+    #[test]
+    fn unnamed_ids_are_visible_instead_of_posing_as_a_real_spell() {
+        assert_eq!(spell_name(33), "Unknown spell");
+        assert_eq!(spell_name(MAX_SPELL_ID), "Unknown spell");
+        assert!(!spell_available(33, 3, !0));
+    }
+
+    #[test]
+    fn new_spells_unlock_in_tiers() {
+        // Cheap tools arrive with the first wand; heavy ones need the top wand
+        // or deep rare-magic progress.
+        assert!(spell_available(28, 1, 0) && spell_available(32, 1, 0));
+        assert!(!spell_available(30, 1, 0) && spell_available(30, 2, 0));
+        assert!(!spell_available(29, 2, 0) && spell_available(29, 3, 0));
+        assert!(spell_available(29, 2, (1 << 6) | (1 << 7)));
+    }
 }

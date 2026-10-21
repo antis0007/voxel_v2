@@ -124,7 +124,7 @@ impl Adventure {
                 if e.health <= 0.0 || d.length() > 4.5 || !line(world, well.pos, e.center()) {
                     continue;
                 }
-                let strength = if e.kind >= 6 { 1.4 } else { 5.0 };
+                let strength = if is_boss(e.kind) { 1.4 } else { 5.0 };
                 e.knock += d.normalize_or_zero() * dt * strength * 5.0;
                 e.knock = e.knock.clamp_length_max(strength);
                 if pulse {
@@ -141,13 +141,7 @@ impl Adventure {
             let fade = w.life.min(1.0);
             // Dark event horizon core + glowing inner shell
             m.orb(w.pos, 0.17 * fade, [0.06, 0.02, 0.12], 0.25);
-            m.glow_orb(
-                w.pos,
-                0.24 * fade,
-                spell_color(6),
-                3.4 * fade,
-                0.55 * fade,
-            );
+            m.glow_orb(w.pos, 0.24 * fade, spell_color(6), 3.4 * fade, 0.55 * fade);
             m.temple_glyph(
                 w.pos,
                 Quat::from_rotation_y(self.time * 1.6) * Quat::from_rotation_x(0.45),

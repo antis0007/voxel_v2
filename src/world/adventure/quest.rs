@@ -25,6 +25,46 @@ pub(super) fn sealed(kind: u32, state: u32) -> bool {
     kind == 3 && state & (AWAKENED | CLAIMED | 8) == 0 && state & VALVES != VALVES
 }
 impl Adventure {
+    /// Resolve the next authored expedition objective to a compass waypoint.
+    /// This is derived from the same generator used by the relic trace, so the
+    /// marker can never point at a fabricated or stale location.
+    pub fn quest_marker(
+        &self,
+        cfg: &crate::world::WorldSampleConfig,
+        origin: Vec3,
+    ) -> Option<QuestMarker> {
+        let (pos, label, kind) = if self.sigils == 7 && !self.heart_restored() {
+            (sites::workshop_heart(cfg)?, "Workshop heart", 3)
+        } else if let Some((kind, pos)) = sites::next_relic(cfg, origin, self.sigils) {
+            (
+                pos,
+                match kind {
+                    3 => "Foundry resonance",
+                    5 => "Archive resonance",
+                    _ => "Crystal cathedral",
+                },
+                kind,
+            )
+        } else if self.heart_restored() {
+            let heart = sites::workshop_heart(cfg)?;
+            if (heart - origin).length() < 64.0 {
+                return None;
+            }
+            (heart, "Workshop heart", 3)
+        } else {
+            return None;
+        };
+        let delta = pos - origin;
+        Some(QuestMarker {
+            pos,
+            label,
+            kind,
+            bearing_deg: delta.x.atan2(-delta.z).to_degrees().rem_euclid(360.0),
+            distance_m: Vec3::new(delta.x, 0.0, delta.z).length(),
+            vertical_m: delta.y,
+        })
+    }
+
     pub(super) fn update_stations(&mut self, world: &World) {
         self.stations.clear();
         let cfg = world.sample_config();
@@ -124,6 +164,7 @@ impl Adventure {
                 self.health = (self.health + 35.0).min(self.max_health());
                 self.mana = (self.mana + 45.0).min(self.max_mana());
                 sound(&mut self.sounds, Cue::Mend, Some(pos), 0.8);
+                self.pickup_burst(pos + Vec3::Y * 0.7, [0.45, 0.95, 0.55]);
                 world.expedition.say("Maintenance cache: restorative tonic. The bypass vents the steam trap safely; the valve sequence still controls the furnace.");
             }
         } else if sealed(3, state) {
@@ -132,7 +173,10 @@ impl Adventure {
             let next = if correct { progress + 1 } else { 0 };
             *self.records.entry(site).or_default() = (state & !VALVES) | ((next as u32) << 12);
             if correct {
-                if next==3 {self.health=self.max_health();self.mana=self.max_mana();}
+                if next == 3 {
+                    self.health = self.max_health();
+                    self.mana = self.max_mana();
+                }
                 sound(&mut self.sounds, Cue::Clang, Some(pos), 0.65);
                 self.effect(pos + Vec3::Y, [0.3, 1.0, 0.65], 0.6);
                 world.expedition.say(if next == 3 { "The furnace settles into a steady beat. You recover health and mana before the guardian fight." } else { "Pressure stabilizing. The next valve is marked on the operating plate." });
@@ -256,6 +300,55 @@ impl Adventure {
         }
         world.expedition.say(&self.route);
     }
+    /// A tall, bobbing diamond and beam at the authored objective. The HUD
+    /// compass gives bearing; this is the diegetic counterpart visible through
+    /// an open line of sight.
+    pub fn quest_beacon_models(
+        &self,
+        cfg: &crate::world::WorldSampleConfig,
+        origin: Vec3,
+        m: &mut Model,
+    ) {
+        let Some(marker) = self.quest_marker(cfg, origin) else {
+            return;
+        };
+        let color = match marker.kind {
+            3 => [1.0, 0.72, 0.24],
+            5 => [0.66, 0.52, 1.0],
+            _ => [0.30, 0.94, 0.78],
+        };
+        let phase = self.time * 1.7 + marker.pos.x * 0.07 + marker.pos.z * 0.05;
+        // Preserve a readable silhouette at several hundred metres without
+        // turning a nearby marker into a giant obstruction.
+        let far_scale = (marker.distance_m / 240.0).clamp(0.0, 3.0);
+        let center = marker.pos + Vec3::Y * (2.1 + far_scale * 0.55 + phase.sin() * 0.18);
+        let spin = Quat::from_rotation_y(self.time * 1.25) * Quat::from_rotation_z(0.62);
+        m.glow_beam(
+            marker.pos + Vec3::Y * 0.25,
+            center + Vec3::Y * 0.18,
+            0.022 + far_scale * 0.018,
+            color,
+            2.8,
+            0.46,
+        );
+        m.glow_voxel(
+            center,
+            Vec3::splat(0.13 + far_scale * 0.10),
+            spin,
+            color,
+            3.4,
+            0.78,
+        );
+        m.glow_voxel(
+            center,
+            Vec3::splat(0.052),
+            Quat::from_rotation_y(-self.time * 2.1),
+            [0.92, 1.0, 0.94],
+            4.4,
+            0.88,
+        );
+    }
+
     pub(super) fn station_models(&self, m: &mut Model) {
         for s in &self.stations {
             let mark = m.mark();
@@ -343,5 +436,39 @@ impl Adventure {
             }
             m.rotate_since(mark, s.pos, Quat::from_rotation_y(s.yaw));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use crate::world::{WorldSampleConfig, WorldType};
+
+    fn cfg() -> WorldSampleConfig {
+        WorldSampleConfig {
+            generator_version: 18,
+            seed: 424242,
+            world_type: WorldType::Hills,
+            voxel_scale: VoxelScalePreset::OneMeter,
+        }
+    }
+
+    #[test]
+    fn compass_waypoint_uses_authored_relic_and_heart_targets() {
+        let mut adventure = Adventure::default();
+        let origin = Vec3::new(11.0, -8.0, -90.0);
+        let relic = adventure
+            .quest_marker(&cfg(), origin)
+            .expect("foundry target");
+        assert!(relic.distance_m.is_finite() && relic.distance_m > 0.0);
+        assert!((0.0..360.0).contains(&relic.bearing_deg));
+
+        adventure.sigils = 7;
+        let heart = adventure
+            .quest_marker(&cfg(), origin)
+            .expect("heart target");
+        assert_eq!(heart.label, "Workshop heart");
+        assert!(heart.distance_m < 1.0);
     }
 }

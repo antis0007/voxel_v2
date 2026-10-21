@@ -73,8 +73,54 @@ struct Voice {
     play: Play,
     cursor: f32,
 }
+
+/// Equal-cue voices share one bus so rapid fire cannot phase-stack into a
+/// clipped buzz. Distinct cues keep their own full-level bus.
+fn equal_cue_gain(count: u32) -> f32 {
+    1.0 / count.max(1) as f32
+}
+
+/// A tiny ping-pong delay with a damped feedback path. It is not a full
+/// convolution room; it gives rifts, impacts and blooms a believable short
+/// space without adding a dependency or a large allocation.
+struct Reverb {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    index: usize,
+    low_l: f32,
+    low_r: f32,
+}
+
+impl Reverb {
+    fn new(rate: u32) -> Self {
+        let len = ((rate as f32 * 0.071) as usize).max(256);
+        Self {
+            left: vec![0.0; len],
+            right: vec![0.0; len],
+            index: 0,
+            low_l: 0.0,
+            low_r: 0.0,
+        }
+    }
+
+    fn process(&mut self, mono: f32, send: f32) -> (f32, f32) {
+        let i = self.index;
+        let dl = self.left[i];
+        let dr = self.right[i];
+        // Damp the feedback path so the tail settles instead of ringing.
+        self.low_l += (dl - self.low_l) * 0.32;
+        self.low_r += (dr - self.low_r) * 0.32;
+        let wet_l = self.low_l;
+        let wet_r = self.low_r;
+        let input = mono * send;
+        self.left[i] = input + wet_r * 0.34;
+        self.right[i] = input + wet_l * 0.34;
+        self.index = (i + 1) % self.left.len();
+        (wet_l * 0.22, wet_r * 0.22)
+    }
+}
 pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Arc<AtomicBool>) {
-    let bank = super::synth::bank();
+    let bank = super::synth::variants();
     let mut gain = 0.0;
     while running.load(Ordering::Relaxed) {
         let format = Format {
@@ -102,6 +148,7 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
         STATUS.store(1, Ordering::Relaxed);
         let mut buffers: Vec<_> = (0..3).map(|_| Buffer::new()).collect();
         let mut voices: Vec<Voice> = Vec::with_capacity(24);
+        let mut reverb = Reverb::new(synth::RATE);
         let mut failed = false;
         while running.load(Ordering::Relaxed) && !failed {
             let enabled = active.load(Ordering::Relaxed);
@@ -110,6 +157,25 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
             }
             while let Ok(play) = rx.try_recv() {
                 if enabled && voices.len() < 24 {
+                    // Rapid-fire casts used to stack up to 24 copies of the same
+                    // transient at full gain. Keep a small polyphony per cue;
+                    // distinct cues are unaffected.
+                    let cue = play.cue as usize;
+                    let same = voices.iter().filter(|v| v.play.cue as usize == cue).count();
+                    if same >= 4 {
+                        // Replace the voice furthest into its sample; it is the
+                        // closest to a natural release and least likely to
+                        // click, while rapid fire remains audible.
+                        if let Some(index) = voices
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, v)| v.play.cue as usize == cue)
+                            .max_by(|(_, a), (_, b)| a.cursor.total_cmp(&b.cursor))
+                            .map(|(index, _)| index)
+                        {
+                            voices.remove(index);
+                        }
+                    }
                     voices.push(Voice { play, cursor: 0.0 });
                 }
             }
@@ -132,27 +198,45 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                     buffer.prepared = false;
                 }
                 let target = if enabled { volume() } else { 0.0 };
+                let mut cue_counts = [0u32; Cue::COUNT];
+                for voice in &voices {
+                    cue_counts[voice.play.cue as usize] += 1;
+                }
+                let send = voices
+                    .iter()
+                    .map(|voice| voice.play.reverb)
+                    .fold(0.0f32, f32::max);
                 for frame in buffer.data.chunks_exact_mut(2) {
                     let mut stereo = [0.0f32; 2];
                     gain += (target - gain) * 0.002;
                     for voice in &mut voices {
-                        let sample = &bank[voice.play.cue as usize];
+                        let cue = voice.play.cue as usize;
+                        let sample = &bank[cue][voice.play.variant];
                         let i = voice.cursor as usize;
                         if i + 1 < sample.len() {
                             let value =
                                 sample[i] + (sample[i + 1] - sample[i]) * voice.cursor.fract();
-                            stereo[0] += value * voice.play.left;
-                            stereo[1] += value * voice.play.right;
+                            // Equal-cue voices share one bus. This keeps a burst
+                            // of 16 Sparks as loud as one Spark instead of
+                            // phase-stacking into a clipped buzz.
+                            let norm = equal_cue_gain(cue_counts[cue]);
+                            stereo[0] += value * voice.play.left * norm;
+                            stereo[1] += value * voice.play.right * norm;
                             voice.cursor += voice.play.rate;
                         } else {
                             voice.cursor = sample.len() as f32;
                         }
                     }
+                    let (wet_l, wet_r) = reverb.process((stereo[0] + stereo[1]) * 0.5, send);
+                    stereo[0] += wet_l;
+                    stereo[1] += wet_r;
                     for ch in 0..2 {
                         frame[ch] = (stereo[ch].tanh() * gain * 28000.0) as i16;
                     }
                 }
-                voices.retain(|v| (v.cursor as usize) < bank[v.play.cue as usize].len());
+                voices.retain(|v| {
+                    (v.cursor as usize) < bank[v.play.cue as usize][v.play.variant].len()
+                });
                 buffer.header.flags = 0;
                 if unsafe {
                     waveOutPrepareHeader(device, &mut *buffer.header, size_of::<Header>() as u32)
@@ -199,5 +283,40 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
             }
             thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equal_cue_voices_share_one_normalized_bus() {
+        assert_eq!(equal_cue_gain(0), 1.0);
+        assert_eq!(equal_cue_gain(1), 1.0);
+        assert_eq!(equal_cue_gain(4), 0.25);
+        assert!(equal_cue_gain(16) < equal_cue_gain(2));
+    }
+
+    #[test]
+    fn reverb_keeps_a_damped_tail_after_the_input_stops() {
+        let mut reverb = Reverb::new(synth::RATE);
+        let delay = reverb.left.len();
+        reverb.process(0.5, 1.0);
+        let mut early_peak = 0.0f32;
+        for _ in 0..delay * 4 {
+            let (left, right) = reverb.process(0.0, 0.0);
+            early_peak = early_peak.max(left.abs()).max(right.abs());
+        }
+        let mut late_peak = 0.0f32;
+        for _ in 0..delay * 24 {
+            let (left, right) = reverb.process(0.0, 0.0);
+            late_peak = late_peak.max(left.abs()).max(right.abs());
+        }
+        assert!(early_peak > 0.0, "the impulse should produce a wet tail");
+        assert!(
+            late_peak < early_peak,
+            "feedback must decay, not ring forever"
+        );
     }
 }

@@ -263,11 +263,14 @@ pub(super) fn tick(
                         velocity: direction * if enraged { 12.0 } else { 9.0 },
                         hostile: true,
                         payload: None,
+                        payload_mods: Default::default(),
                         spell: 0,
                         life: 4.0,
                         mods: Default::default(),
                         bore_budget: 0,
                         trail_timer: 0.0,
+                        splashed: false,
+                        follow: None,
                     });
                 }
             }

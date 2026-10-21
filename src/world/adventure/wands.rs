@@ -15,6 +15,41 @@ pub struct ShotMods {
     pub orbit: bool,
     pub bore: bool,
     pub trail: bool,
+    /// Releases a small crater and radial impulse on impact.
+    pub volatile: bool,
+    /// Restores player health on a direct hit.
+    pub siphon: bool,
+    /// Projectile collision scale. 1.0 is the authored bolt.
+    pub radius: f32,
+    /// Steer toward the owned lanterncap before enemies.
+    pub seek_ally: bool,
+    /// 0 straight, 1 curve, 2 wiggle, 3 orbit.
+    pub path: u8,
+    /// Heal for a fraction of magic damage dealt.
+    pub blood: bool,
+    /// One cast in five fizzles.
+    pub unstable: bool,
+    pub life_mul: f32,
+    /// Elemental status applied to enemies on a direct hit.
+    pub element: Option<super::status::Element>,
+    /// Arcs to nearby enemies on impact.
+    pub chain: bool,
+    /// Bursts into shrapnel that hurts nearby enemies on impact.
+    pub shrapnel: bool,
+    /// Fires the bolt behind the caster.
+    pub reverse: bool,
+    /// Downward pull on the bolt in units of 14 m/s^2; negative floats it.
+    pub gravity: f32,
+    /// Walls this bolt may pass straight through before it behaves normally.
+    pub phase: u8,
+    /// +damage, but each cast costs a little health.
+    pub reckless: bool,
+    /// The cast is paid for in health instead of mana.
+    pub blood_price: bool,
+    /// Breaks into three weak sparks on impact.
+    pub fork: bool,
+    /// Seconds of flight before an attached payload fires mid-air (0 = off).
+    pub timer: f32,
 }
 
 impl Default for ShotMods {
@@ -27,6 +62,24 @@ impl Default for ShotMods {
             orbit: false,
             bore: false,
             trail: false,
+            volatile: false,
+            siphon: false,
+            radius: 1.0,
+            seek_ally: false,
+            path: 0,
+            blood: false,
+            unstable: false,
+            life_mul: 1.0,
+            element: None,
+            chain: false,
+            shrapnel: false,
+            reverse: false,
+            gravity: 0.0,
+            phase: 0,
+            reckless: false,
+            blood_price: false,
+            fork: false,
+            timer: 0.0,
         }
     }
 }
@@ -54,6 +107,11 @@ pub struct CastAction {
     pub spell: u32,
     pub payload: Option<u32>,
     pub payload_slot: Option<usize>,
+    /// Modifiers drawn after the carrier and before the payload. They do not
+    /// touch the carrier. An empty payload leaves this at the default shot.
+    pub payload_mods: ShotMods,
+    pub follow: Option<u32>,
+    pub follow_slot: Option<usize>,
     pub mods: ShotMods,
 }
 
@@ -118,12 +176,71 @@ pub fn capacity(tier: u32) -> usize {
     }
 }
 
+/// Fills newly unlocked empty slots when a wand is assembled or upgraded.
+/// Existing spells stay put so a player's deck is never overwritten.
+pub fn seed_unlocked_slots(loadout: &mut Loadout, tier: u32) {
+    seed_unlocked_slots_known(loadout, tier, &|_| true);
+}
+
+/// Like [`seed_unlocked_slots`], but only places spells the player has found.
+pub fn seed_unlocked_slots_known(loadout: &mut Loadout, tier: u32, known: &dyn Fn(u32) -> bool) {
+    let offers: &[u32] = match tier {
+        1 => &[0, 2, 1, 4],
+        2 => &[9, 16, 3, 5],
+        _ => &[12, 19, 13, 20],
+    };
+    let mut offer = 0usize;
+    let cap = capacity(tier);
+    for idx in 0..cap {
+        if loadout.slot(idx) != EMPTY {
+            continue;
+        }
+        while offer < offers.len()
+            && ((0..idx).any(|i| loadout.slot(i) == offers[offer]) || !known(offers[offer]))
+        {
+            offer += 1;
+        }
+        if offer >= offers.len() {
+            break;
+        }
+        loadout.set_slot(idx, offers[offer]);
+        offer += 1;
+    }
+}
+
 pub fn projectile(spell: u32) -> bool {
-    matches!(spell, 0 | 2 | 3 | 5 | 6 | 10 | 11 | 12 | 13 | 14 | 15)
+    matches!(spell, 0 | 2 | 3 | 5 | 6 | 10 | 11 | 12 | 13 | 14 | 15 | 28 | 29)
 }
 
 pub fn is_modifier(spell: u32) -> bool {
-    (16..=23).contains(&spell)
+    matches!(spell, 16..=23 | 26 | 27 | 37 | 38 | 40..=70)
+}
+
+pub fn is_effect(spell: u32) -> bool {
+    matches!(spell, 35 | 36 | 39)
+}
+
+/// Projectile spell -> audio family and pitch. Keeping this here gives each
+/// element a recognizable voice instead of every bolt using the same Spark cue.
+pub fn spell_audio(spell: u32) -> (Cue, f32) {
+    match spell {
+        2 | 13 => (Cue::Frost, 0.88),
+        3 => (Cue::Burst, 0.80),
+        11 => (Cue::Burst, 0.92),
+        12 => (Cue::CinderStrike, 0.76),
+        28 => (Cue::CinderStrike, 0.98),
+        29 => (Cue::Burst, 0.66),
+        14 => (Cue::Clang, 0.84),
+        15 => (Cue::Treasure, 0.78),
+        5 => (Cue::Bloom, 1.16),
+        6 | 10 => (Cue::Rift, 0.62),
+        7 => (Cue::Echo, 1.32),
+        9 => (Cue::Spark, 1.12),
+        18 => (Cue::Echo, 1.08),
+        22 => (Cue::Spark, 0.92),
+        16 | 17 => (Cue::Spark, 1.24),
+        _ => (Cue::Spark, 1.0),
+    }
 }
 
 pub fn stats(tier: u32, mode: u32, rank: u32) -> WandStats {
@@ -180,7 +297,115 @@ pub fn evaluate_cast_block(
     loadout: &Loadout,
     start_cursor: usize,
 ) -> CastBlockEval {
+    evaluate_programmed(
+        wand,
+        rare_spells,
+        discoveries,
+        rank,
+        loadout,
+        start_cursor,
+        1.0,
+        false,
+        0,
+    )
+}
+
+/// Stat modifiers. Control-flow cards (multicast, trigger, divide, conditions,
+/// alpha) return false so the caller can nest the next draw.
+fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
+    match spell {
+        19 => mods.homing = true,
+        20 => {
+            mods.orbit = true;
+            mods.bounces = (mods.bounces + 2).min(4);
+            mods.damage_mul = (mods.damage_mul + 0.22).min(2.6);
+            mods.speed_mul = (mods.speed_mul * 1.08).min(1.6);
+        }
+        21 => {
+            mods.bore = true;
+            mods.damage_mul = (mods.damage_mul + 0.35).min(2.6);
+            mods.speed_mul = (mods.speed_mul * 0.84).max(0.65);
+        }
+        23 => {
+            mods.trail = true;
+            mods.damage_mul = (mods.damage_mul + 0.12).min(2.6);
+        }
+        26 => {
+            mods.volatile = true;
+            mods.damage_mul = (mods.damage_mul + 0.08).min(2.6);
+        }
+        27 => {
+            mods.siphon = true;
+            mods.damage_mul = (mods.damage_mul + 0.05).min(2.6);
+        }
+        37 => mods.radius = 1.8,
+        38 => {
+            mods.seek_ally = true;
+            mods.homing = true;
+        }
+        42 => mods.path = 1,
+        43 => mods.path = 2,
+        44 => mods.path = 3,
+        45 => mods.blood = true,
+        46 => mods.unstable = true,
+        50 => mods.path = 1 + (salt % 3) as u8,
+        51 => {
+            mods.speed_mul = (mods.speed_mul * 1.35).min(1.6);
+            mods.damage_mul = (mods.damage_mul - 0.15).max(0.5);
+        }
+        52 => mods.life_mul = (mods.life_mul * 1.8).min(3.0),
+        53 => mods.bounces = (mods.bounces + 1).min(4),
+        54 => mods.speed_mul = (mods.speed_mul * 1.25).min(1.6),
+        55 => mods.damage_mul = (mods.damage_mul + 0.15).min(2.6),
+        56 => mods.element = Some(super::status::Element::Fire),
+        57 => mods.element = Some(super::status::Element::Shock),
+        58 => mods.element = Some(super::status::Element::Toxic),
+        59 => mods.element = Some(super::status::Element::Wet),
+        60 => mods.element = Some(super::status::Element::Frost),
+        61 => mods.chain = true,
+        62 => mods.shrapnel = true,
+        63 => {
+            mods.damage_mul = (mods.damage_mul + 0.45).min(2.6);
+            mods.speed_mul = (mods.speed_mul * 0.9).max(0.65);
+        }
+        64 => mods.reverse = true,
+        65 => mods.gravity = (mods.gravity + 1.0).min(2.0),
+        66 => mods.phase = (mods.phase + 1).min(2),
+        67 => {
+            mods.reckless = true;
+            mods.damage_mul = (mods.damage_mul + 0.6).min(2.6);
+        }
+        68 => mods.blood_price = true,
+        69 => mods.fork = true,
+        _ => return false,
+    }
+    true
+}
+
+pub fn evaluate_programmed(
+    wand: u32,
+    rare_spells: u32,
+    discoveries: u32,
+    rank: u32,
+    loadout: &Loadout,
+    start_cursor: usize,
+    health_frac: f32,
+    foe_visible: bool,
+    salt: u32,
+) -> CastBlockEval {
     let cap = capacity(wand);
+    if !(0..cap).any(|i| spell_available(loadout.slot(i), wand, rare_spells)) {
+        return CastBlockEval {
+            actions: Vec::new(),
+            modifier_slots: Vec::new(),
+            last_slot: start_cursor % cap.max(1),
+            mana_cost: 0.0,
+            cast_delay: 0.12,
+            recharge_time: 0.0,
+            spread_deg: 0.0,
+            mods: ShotMods::default(),
+        };
+    }
     let wand_stats = stats(wand, loadout.mode, rank);
     let find_next = |after: usize| -> usize {
         (1..=cap)
@@ -232,6 +457,9 @@ pub fn evaluate_cast_block(
                 spell: first_spell,
                 payload,
                 payload_slot,
+                payload_mods: ShotMods::default(),
+                follow: None,
+                follow_slot: None,
                 mods: ShotMods::default(),
             });
         }
@@ -251,14 +479,20 @@ pub fn evaluate_cast_block(
     let mut mods = ShotMods::default();
     if wand_stats.always_cast == Some(23) {
         mods.trail = true;
-        mods.damage_mul *= 1.15;
+        mods.damage_mul = (mods.damage_mul + 0.10).min(2.6);
     }
     let mut draws: usize = if loadout.mode == 1 { 2 } else { 1 };
+    let mut mana_refund = 0.0f32;
     let mut attach_trigger = loadout.mode == 2;
     let mut delay_delta = if loadout.mode == 3 { -0.06 } else { 0.0 };
     let mut recharge_delta = if loadout.mode == 3 { -0.08 } else { 0.0 };
     let mut spread_deg = wand_stats.spread_deg;
     let mut mana_cost = 0.0f32;
+    let mut copies: u8 = 1;
+    let mut skip_draw = false;
+    let mut rejected_draw = false;
+    let mut copy_alpha = false;
+    let alpha = (0..cap).map(|i| loadout.slot(i)).find(|s| projectile(*s));
     let mut modifier_slots = Vec::new();
     let mut actions = Vec::new();
     let mut last_slot = first_slot;
@@ -277,34 +511,24 @@ pub fn evaluate_cast_block(
             delay_delta += spell_cast_delay_delta(s);
             recharge_delta += spell_recharge_delta(s);
             spread_deg = (spread_deg + spell_spread_delta(s)).max(0.0);
-            match s {
-                16 => draws = (draws + 1).min(6), // Bifurcate: -1 draw + 2 draws = +1 net
-                17 => draws = (draws + 2).min(6), // Trifurcate: -1 draw + 3 draws = +2 net
-                18 => attach_trigger = true,      // Trigger Bolt
-                19 => mods.homing = true,         // Homing Arc
-                20 => {
-                    // Orbit & Ricochet
-                    mods.orbit = true;
-                    mods.bounces = (mods.bounces + 2).min(6);
-                    mods.damage_mul *= 1.30;
-                    mods.speed_mul *= 1.15;
+            if !paint_shot(s, &mut mods, salt) {
+                match s {
+                    16 => draws = (draws + 1).min(4),
+                    17 => draws = (draws + 2).min(4),
+                    18 => attach_trigger = true,
+                    22 => mana_refund = mana_refund.max(20.0),
+                    40 => copies = 2,
+                    41 => copies = 4,
+                    47 => skip_draw = health_frac >= 0.5,
+                    48 => skip_draw = !foe_visible,
+                    49 => copy_alpha = true,
+                    70 => {
+                        // Like Trigger bolt, but the payload fires mid-flight.
+                        attach_trigger = true;
+                        mods.timer = 0.6;
+                    }
+                    _ => {}
                 }
-                21 => {
-                    // Heavy Bore (Matter Eater + Heavy Shot)
-                    mods.bore = true;
-                    mods.damage_mul *= 1.65;
-                    mods.speed_mul *= 0.78;
-                }
-                22 => {
-                    // Rapid Flux (Add Mana + Chainsaw)
-                    mana_cost -= 20.0;
-                }
-                23 => {
-                    // Elemental Wake
-                    mods.trail = true;
-                    mods.damage_mul *= 1.20;
-                }
-                _ => {}
             }
             let next = find_next(cur);
             if next == first_slot && actions.is_empty() && steps >= cap {
@@ -312,35 +536,84 @@ pub fn evaluate_cast_block(
             }
             cur = next;
         } else {
+            if skip_draw {
+                skip_draw = false;
+                rejected_draw = true;
+                cur = find_next(cur);
+                continue;
+            }
             draws -= 1;
-            mana_cost += inscriptions::cost(s, discoveries);
-            delay_delta += spell_cast_delay_delta(s);
-            recharge_delta += spell_recharge_delta(s);
-            spread_deg = (spread_deg + spell_spread_delta(s)).max(0.0);
+            let fired = if copy_alpha { alpha.unwrap_or(s) } else { s };
+            copy_alpha = false;
+            mana_cost += inscriptions::cost(fired, discoveries);
+            delay_delta += spell_cast_delay_delta(fired);
+            recharge_delta += spell_recharge_delta(fired);
+            spread_deg = (spread_deg + spell_spread_delta(fired)).max(0.0);
 
             let carrier_slot = cur;
             let mut payload = None;
             let mut payload_slot = None;
-            if attach_trigger && projectile(s) {
-                let next = find_next(cur);
-                let next_s = loadout.slot(next);
-                if next != cur && (projectile(next_s) || next_s == 9) {
+            let mut payload_mods = ShotMods::default();
+            let mut follow = None;
+            let mut follow_slot = None;
+            if attach_trigger && (projectile(fired) || fired == 34) {
+                // Payload is a separate cast. Stat cards between the carrier
+                // and the payload spell wrap the payload, not the carrier.
+                let mut scan = find_next(cur);
+                let mut guard = 0usize;
+                while guard < cap
+                    && scan != cur
+                    && spell_available(loadout.slot(scan), wand, rare_spells)
+                {
+                    let wrapped = loadout.slot(scan);
+                    if !paint_shot(wrapped, &mut payload_mods, salt) {
+                        break;
+                    }
+                    modifier_slots.push(scan);
+                    mana_cost += inscriptions::cost(wrapped, discoveries) * 0.85;
+                    last_slot = scan;
+                    scan = find_next(scan);
+                    guard += 1;
+                }
+                let next_s = loadout.slot(scan);
+                if scan != cur && (projectile(next_s) || next_s == 9 || is_effect(next_s)) {
                     payload = Some(next_s);
-                    payload_slot = Some(next);
+                    payload_slot = Some(scan);
                     mana_cost += inscriptions::cost(next_s, discoveries) * 0.85;
-                    last_slot = next;
-                    cur = next;
+                    last_slot = scan;
+                    cur = scan;
+                    if is_effect(next_s) {
+                        let after = find_next(scan);
+                        let after_s = loadout.slot(after);
+                        if after != scan && is_effect(after_s) {
+                            follow = Some(after_s);
+                            follow_slot = Some(after);
+                            mana_cost += inscriptions::cost(after_s, discoveries) * 0.85;
+                            last_slot = after;
+                            cur = after;
+                        }
+                    }
                 }
                 attach_trigger = false;
             }
 
-            actions.push(CastAction {
-                slot: carrier_slot,
-                spell: s,
-                payload,
-                payload_slot,
-                mods,
-            });
+            let n = copies.clamp(1, 4);
+            copies = 1;
+            for _ in 0..n {
+                if actions.len() >= 12 {
+                    break;
+                }
+                actions.push(CastAction {
+                    slot: carrier_slot,
+                    spell: fired,
+                    payload,
+                    payload_slot,
+                    payload_mods,
+                    follow,
+                    follow_slot,
+                    mods,
+                });
+            }
 
             if draws > 0 {
                 let next = find_next(cur);
@@ -353,12 +626,15 @@ pub fn evaluate_cast_block(
     }
 
     // If the deck only contained modifiers, fire a modified Spark Bolt so the cast isn't dead.
-    if actions.is_empty() {
+    if actions.is_empty() && !modifier_slots.is_empty() && !rejected_draw {
         actions.push(CastAction {
             slot: first_slot,
             spell: 0,
             payload: None,
             payload_slot: None,
+            payload_mods: ShotMods::default(),
+            follow: None,
+            follow_slot: None,
             mods,
         });
         mana_cost += inscriptions::cost(0, discoveries);
@@ -368,6 +644,11 @@ pub fn evaluate_cast_block(
         .iter()
         .map(|a| spell_cooldown(a.spell))
         .fold(0.18f32, f32::max);
+    // Repeated Rapid Flux copies may still reduce delay, but never below the
+    // single-copy allowance. This keeps a modifier deck from becoming a
+    // free-casting machine.
+    let delay_delta = delay_delta.max(-0.14);
+    let recharge_delta = recharge_delta.max(-0.12);
     let cast_delay = (base_cd + delay_delta).max(0.04);
     let after_cast = find_next(last_slot);
     let wrapped = after_cast <= last_slot;
@@ -381,12 +662,25 @@ pub fn evaluate_cast_block(
         actions,
         modifier_slots,
         last_slot,
-        mana_cost: mana_cost.max(0.0),
+        mana_cost: (mana_cost - mana_refund).max(0.0),
         cast_delay,
         recharge_time: recharge,
         spread_deg,
         mods,
     }
+}
+
+/// Cast a ray from a position in metres. `raycast_block` works in voxel
+/// coordinates, so at any scale other than 1 m a raw metre origin would aim from
+/// the wrong place. Returns the struck cell and its face normal.
+pub(super) fn aim_cell(
+    world: &World,
+    eye_m: Vec3,
+    dir: Vec3,
+    max_m: f32,
+) -> Option<(IVec3, IVec3)> {
+    let scale = world.voxel_scale.meters();
+    crate::world::raycast_block(world, eye_m / scale, dir, max_m / scale)
 }
 
 impl Adventure {
@@ -395,17 +689,11 @@ impl Adventure {
         if self.wand == 0
             || slot as usize >= cap
             || spell > MAX_SPELL_ID
-            || (spell != EMPTY && !spell_available(spell, self.wand, self.rare_spells))
+            || (spell != EMPTY && !self.can_wield(spell))
         {
             return;
         }
         self.loadout.set_slot(slot as usize, spell);
-        if !(0..cap).any(|i| {
-            let s = self.loadout.slot(i);
-            s != EMPTY && spell_available(s, self.wand, self.rare_spells)
-        }) {
-            self.loadout.set_slot(0, 0);
-        }
         self.loadout.cursor = slot as usize;
         self.prepare_wand();
     }
@@ -429,20 +717,20 @@ impl Adventure {
         self.loadout.cursor %= cap;
         for _ in 0..cap {
             let s = self.loadout.slot(self.loadout.cursor);
-            if spell_available(s, self.wand, self.rare_spells) {
+            if self.can_wield(s) {
                 self.spell = s;
                 return;
             }
             self.loadout.cursor = (self.loadout.cursor + 1) % cap;
         }
-        self.spell = 0;
+        self.spell = EMPTY;
     }
 
     fn next_slot(&self, after: usize) -> usize {
         let cap = capacity(self.wand);
         (1..=cap)
             .map(|n| (after + n) % cap)
-            .find(|&i| spell_available(self.loadout.slot(i), self.wand, self.rare_spells))
+            .find(|&i| self.can_wield(self.loadout.slot(i)))
             .unwrap_or(after % cap)
     }
 
@@ -470,6 +758,7 @@ impl Adventure {
         let arc_lift = match spell {
             5 => Vec3::Y * 2.0,
             12 => Vec3::Y * 1.6,
+            28 => Vec3::Y * 1.2,
             _ => Vec3::ZERO,
         };
         self.projectiles.push(Projectile {
@@ -477,8 +766,9 @@ impl Adventure {
             velocity: dir * speed + arc_lift,
             hostile: false,
             spell,
-            life: if spell == 10 { 3.6 } else { 3.0 },
+            life: (if spell == 10 { 3.6 } else { 3.0 }) * mods.life_mul.max(0.25),
             payload,
+            payload_mods: ShotMods::default(),
             mods,
             bore_budget: if spell == 10 {
                 24
@@ -488,6 +778,8 @@ impl Adventure {
                 0
             },
             trail_timer: 0.0,
+            splashed: false,
+            follow: None,
         });
     }
 
@@ -499,7 +791,7 @@ impl Adventure {
             .map(|p| usize::from(p.spell == spell) + usize::from(p.payload == Some(spell)))
             .sum::<usize>();
         match spell {
-            3 => self.terrain_blasts.len() + incoming + count <= 8,
+            3 | 29 => self.terrain_blasts.len() + incoming + count <= 4,
             5 => self.blooms.len() + incoming + count <= 6,
             6 | 10 => self.wells.len() + incoming + count <= 4,
             11 => self.crosses.len() + incoming + count <= 4,
@@ -523,14 +815,25 @@ impl Adventure {
         }
         self.prepare_wand();
         let rank = self.rank();
-        let eval = evaluate_cast_block(
+        let foe = self
+            .enemies
+            .iter()
+            .any(|e| e.health > 0.0 && (e.center() - eye).length() < 27.0);
+        let eval = evaluate_programmed(
             self.wand,
             self.rare_spells,
             self.discoveries,
             rank,
-            &self.loadout,
+            &self.usable_loadout(),
             self.loadout.cursor,
+            self.health / self.max_health().max(1.0),
+            foe,
+            self.time.to_bits(),
         );
+        if eval.actions.is_empty() {
+            self.cast_cd = 0.15;
+            return;
+        }
 
         if eval.actions.len() == 1 && eval.actions[0].spell == 1 && self.health >= self.max_health()
         {
@@ -539,32 +842,34 @@ impl Adventure {
             self.cast_cd = 0.12;
             return;
         }
-        if self.mana < eval.mana_cost {
+        // Blood price pays half the mana cost in health, and refuses to be the
+        // reason the caster dies.
+        let blood_price = eval.actions.iter().any(|a| a.mods.blood_price);
+        let health_cost = eval.mana_cost * 0.5;
+        if blood_price {
+            if self.health <= health_cost + 4.0 {
+                self.cast_cd = 0.12;
+                self.mana_flash = 0.45;
+                return;
+            }
+        } else if self.mana < eval.mana_cost {
             self.cast_cd = 0.12;
             self.mana_flash = 0.45;
             return;
         }
 
-        let proj_count = eval
-            .actions
-            .iter()
-            .filter(|a| projectile(a.spell))
-            .count();
+        let proj_count = eval.actions.iter().filter(|a| projectile(a.spell)).count();
         if proj_count > 0 && self.projectiles.len() + proj_count > 96 {
             self.cast_cd = 0.12;
             return;
         }
         for act in &eval.actions {
             if projectile(act.spell) {
-                let same_count = eval
-                    .actions
-                    .iter()
-                    .filter(|a| a.spell == act.spell)
-                    .count();
+                let same_count = eval.actions.iter().filter(|a| a.spell == act.spell).count();
                 if !self.room_for_spell(act.spell, same_count)
-                    || act
-                        .payload
-                        .is_some_and(|p| !self.room_for_spell(p, if p == act.spell { 2 } else { 1 }))
+                    || act.payload.is_some_and(|p| {
+                        !self.room_for_spell(p, if p == act.spell { 2 } else { 1 })
+                    })
                 {
                     self.cast_cd = 0.12;
                     return;
@@ -575,8 +880,25 @@ impl Adventure {
             self.cast_cd = 0.12;
             return;
         }
+        // A grapple with nothing in reach is a free no-op, not a wasted cast.
+        if eval.actions.len() == 1
+            && eval.actions[0].spell == 31
+            && aim_cell(world, eye, forward, 32.0).is_none()
+        {
+            self.cast_cd = 0.12;
+            return;
+        }
 
-        self.mana = (self.mana - eval.mana_cost).clamp(0.0, self.max_mana());
+        if blood_price {
+            self.health -= health_cost;
+            self.spawn_voxel_burst(eye + forward * 0.4, [0.72, 0.16, 0.22], 8, 1.0, 0.03);
+        } else {
+            self.mana = (self.mana - eval.mana_cost).clamp(0.0, self.max_mana());
+        }
+        if eval.actions.iter().any(|a| a.mods.reckless) {
+            // Never lethal: Reckless trades health for damage, not for a death.
+            self.health = (self.health - 4.0).max(1.0);
+        }
         self.last_cast = eval.actions[0].spell;
         self.cast_pose = 0.4;
 
@@ -587,6 +909,7 @@ impl Adventure {
             Vec3::Y
         };
         let mut played_cue = None;
+        let mut played_pitch = 1.0;
 
         for (idx, act) in eval.actions.iter().enumerate() {
             let spell = act.spell;
@@ -624,36 +947,103 @@ impl Adventure {
                     self.cast_luminous_drill(world, eye, dir, act.mods, act.payload);
                     played_cue.get_or_insert(Cue::Spark);
                 }
+                30 => {
+                    self.cast_time_snag(eye);
+                    played_cue.get_or_insert(Cue::Echo);
+                    played_pitch = 0.9;
+                }
+                31 => {
+                    self.cast_grapple(world, player, eye, forward);
+                    played_cue.get_or_insert(Cue::Spark);
+                    played_pitch = 1.4;
+                }
+                32 => {
+                    self.cast_leap(world, player, eye, forward);
+                    played_cue.get_or_insert(Cue::Echo);
+                    played_pitch = 1.25;
+                }
+                24 => {
+                    self.cast_timberfall(world, eye, forward);
+                    played_cue.get_or_insert(Cue::Impact);
+                }
+                25 => {
+                    self.cast_gale(world, eye, forward);
+                    played_cue.get_or_insert(Cue::Ward);
+                }
+                34 => {
+                    let at = aim_cell(world, eye, forward, 8.0)
+                        .map(|(cell, _)| {
+                            (cell.as_vec3() + Vec3::new(0.5, 1.0, 0.5)) * world.voxel_scale.meters()
+                        })
+                        .unwrap_or(eye + forward * 2.0);
+                    let created = act
+                        .payload
+                        .filter(|p| is_effect(*p))
+                        .and_then(|p| growth::resolve_effect(world, p, at, None));
+                    if let Some(follow) = act.follow.filter(|f| is_effect(*f)) {
+                        growth::resolve_effect(world, follow, at, created);
+                    }
+                    self.spawn_voxel_burst(at, spell_color(34), 10, 1.1, 0.04);
+                    played_cue.get_or_insert(Cue::Mend);
+                }
+                35 | 36 | 39 => {
+                    let at = eye + forward * 2.0;
+                    growth::resolve_effect(world, spell, at, None);
+                    played_cue.get_or_insert(Cue::Bloom);
+                }
                 _ => {
-                    let dir = if total_actions == 2 && self.loadout.mode == 1 && eval.modifier_slots.is_empty() {
+                    if act.mods.unstable && (idx as u32 + self.time.to_bits()) % 5 == 0 {
+                        self.spawn_voxel_burst(
+                            eye + forward * 0.4,
+                            [0.95, 0.55, 0.15],
+                            6,
+                            0.8,
+                            0.03,
+                        );
+                        continue;
+                    }
+                    let dir = if total_actions == 2
+                        && self.loadout.mode == 1
+                        && eval.modifier_slots.is_empty()
+                    {
                         Quat::from_axis_angle(up_axis, if idx == 0 { -0.055 } else { 0.055 })
                             * forward
                     } else if total_actions > 1 {
-                        let step_rad = (eval.spread_deg.to_radians() / (total_actions as f32 - 1.0).max(1.0)).clamp(0.045, 0.14);
+                        let step_rad = (eval.spread_deg.to_radians()
+                            / (total_actions as f32 - 1.0).max(1.0))
+                        .clamp(0.045, 0.14);
                         let centered = idx as f32 - (total_actions - 1) as f32 * 0.5;
                         Quat::from_axis_angle(up_axis, centered * step_rad) * forward
                     } else {
                         forward
                     };
-                    self.emit_spell_modified(spell, eye, dir, act.payload, act.mods);
+                    let dir = if act.mods.reverse { -dir } else { dir };
+                    let (origin, dir) = if spell == 29 {
+                        self.meteor_launch(world, eye, dir)
+                    } else {
+                        (eye, dir)
+                    };
+                    self.emit_spell_modified(spell, origin, dir, act.payload, act.mods);
+                    if let Some(shot) = self.projectiles.last_mut() {
+                        shot.payload_mods = act.payload_mods;
+                        if let Some(follow) = act.follow {
+                            shot.follow = Some(follow);
+                        }
+                    }
                     if spell == 14 && !player.flying {
                         player.vel -= dir * 1.4;
                     }
                     self.effect(eye + forward * 0.5, spell_color(spell), 0.14);
                     self.spawn_voxel_burst(eye + forward * 0.55, spell_color(spell), 8, 1.2, 0.032);
-                    played_cue.get_or_insert(match spell {
-                        2 | 13 => Cue::Frost,
-                        3 | 12 => Cue::Burst,
-                        5 => Cue::Bloom,
-                        6 | 10 => Cue::Rift,
-                        _ => Cue::Spark,
-                    });
+                    let (cue, pitch) = spell_audio(spell);
+                    played_cue.get_or_insert(cue);
+                    played_pitch = pitch;
                 }
             }
         }
 
         if let Some(cue) = played_cue {
-            sound(&mut self.sounds, cue, None, 0.7);
+            sound_pitched(&mut self.sounds, cue, None, 0.7, played_pitch);
         }
 
         self.loadout.cursor = eval.last_slot;
@@ -662,6 +1052,120 @@ impl Adventure {
         self.recharge_total = eval.recharge_time;
         self.cast_cd = eval.cast_delay + eval.recharge_time;
         self.cast_total = self.cast_cd;
+    }
+
+    /// A short, bounded physics shockwave. Rigid assemblies receive a real
+    /// impulse while enemies only receive stagger and knockback, so a single
+    /// melee finisher cannot fling every actor across the world.
+    pub(super) fn kinetic_pulse(
+        &mut self,
+        world: &mut World,
+        centre: Vec3,
+        radius: f32,
+        strength: f32,
+    ) {
+        if !centre.is_finite() || !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
+        let scale = world.voxel_scale.meters();
+        world
+            .sandbox
+            .apply_radial_impulse(centre, radius, strength, scale);
+        let radius_sq = radius * radius;
+        for enemy in &mut self.enemies {
+            let delta = enemy.center() - centre;
+            let distance_sq = delta.length_squared();
+            if distance_sq >= radius_sq {
+                continue;
+            }
+            let falloff = 1.0 - (distance_sq / radius_sq).sqrt();
+            enemy.knock += delta.normalize_or_zero() * (strength * falloff * 0.45);
+            enemy.stagger = enemy.stagger.max(0.22 + falloff * 0.2);
+        }
+        if self.effects.len() < 12 {
+            self.effect(centre, [0.56, 0.85, 0.78], radius * 0.16);
+        }
+    }
+
+    /// Where a Meteor starts and which way it falls so it lands on the aimed
+    /// block. It begins high above the target and toward the caster, but is
+    /// lowered under any ceiling so it cannot detonate on a cave roof.
+    pub(super) fn meteor_launch(&self, world: &World, eye: Vec3, aim: Vec3) -> (Vec3, Vec3) {
+        let scale = world.voxel_scale.meters();
+        let target = aim_cell(world, eye, aim, 60.0)
+            .map(|(cell, _)| (cell.as_vec3() + Vec3::new(0.5, 1.0, 0.5)) * scale)
+            .unwrap_or(eye + aim * 30.0);
+        let mut height = 22.0_f32;
+        if let Some((cell, _)) = aim_cell(world, target + Vec3::Y * 0.3, Vec3::Y, height) {
+            let roof = cell.y as f32 * scale;
+            height = (roof - target.y - 0.6).clamp(3.0, height);
+        }
+        let side = Vec3::new(-aim.x, 0.0, -aim.z).normalize_or_zero() * (height * 0.35);
+        let origin = target + Vec3::Y * height + side;
+        let dir = (target - origin).normalize_or_zero();
+        (origin, if dir == Vec3::ZERO { Vec3::NEG_Y } else { dir })
+    }
+
+    /// Slows every foe nearby and crushes hostile bolts to a crawl.
+    pub(super) fn cast_time_snag(&mut self, eye: Vec3) {
+        for e in &mut self.enemies {
+            if e.health > 0.0 && (e.center() - eye).length() < 9.0 {
+                e.slow = e.slow.max(3.5);
+                e.stagger = e.stagger.max(0.25);
+            }
+        }
+        for shot in self.projectiles.iter_mut().filter(|p| p.hostile) {
+            if (shot.pos - eye).length() < 12.0 {
+                shot.velocity *= 0.35;
+                shot.life += 1.0;
+            }
+        }
+        self.effect(eye, spell_color(30), 2.4);
+        self.spawn_voxel_burst(eye, spell_color(30), 22, 3.0, 0.04);
+    }
+
+    /// Hooks the aimed block and hauls the caster toward it.
+    pub(super) fn cast_grapple(
+        &mut self,
+        world: &World,
+        player: &mut Player,
+        eye: Vec3,
+        forward: Vec3,
+    ) {
+        let scale = world.voxel_scale.meters();
+        let Some((cell, _)) = aim_cell(world, eye, forward, 32.0) else {
+            return;
+        };
+        let target = (cell.as_vec3() + Vec3::splat(0.5)) * scale;
+        let to = (target - eye).normalize_or_zero();
+        if to == Vec3::ZERO {
+            return;
+        }
+        let pull = crate::world::speed_blocks(world.voxel_scale, 15.0);
+        let lift = crate::world::speed_blocks(world.voxel_scale, 2.5);
+        player.vel = to * pull + Vec3::Y * lift;
+        player.on_ground = false;
+        // A readable tether of motes from the hand to the hook.
+        for i in 1..=8 {
+            let at = eye.lerp(target, i as f32 / 8.0);
+            self.spawn_voxel_burst(at, spell_color(31), 2, 0.4, 0.025);
+        }
+        self.effect(target, spell_color(31), 0.7);
+    }
+
+    /// Launches the caster up and forward. Usable in mid-air.
+    pub(super) fn cast_leap(
+        &mut self,
+        world: &World,
+        player: &mut Player,
+        eye: Vec3,
+        forward: Vec3,
+    ) {
+        let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+        player.vel.y = crate::world::speed_blocks(world.voxel_scale, 9.0);
+        player.vel += flat * crate::world::speed_blocks(world.voxel_scale, 5.0);
+        player.on_ground = false;
+        self.spawn_voxel_burst(eye - Vec3::Y * 1.2, spell_color(32), 14, 1.6, 0.035);
     }
 
     pub fn cancel_cast_input(&mut self) {
@@ -790,6 +1294,75 @@ mod acceptance {
         }
     }
     #[test]
+    fn stacked_modifiers_are_capped_instead_of_multiplying_without_bound() {
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.rare_spells = !0;
+        // Four damage modifiers in a row. The old evaluator multiplied each
+        // copy, reaching 1.65^4 * 1.30 = 5.8x before rank bonuses.
+        b.loadout.slots = [21, 21, 21, 20];
+        b.loadout.aux_slots = [0, EMPTY, EMPTY, EMPTY];
+        let eval = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0);
+        assert!(eval.actions[0].mods.damage_mul <= 2.6);
+        assert!(eval.actions[0].mods.bounces <= 4);
+    }
+
+    #[test]
+    fn multicast_draw_count_is_bounded() {
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.rare_spells = !0;
+        // Trifurcate copies used to push draws to six. Five projectiles are
+        // available, so an uncapped evaluator would fire all five.
+        b.loadout.slots = [17, 17, 17, 0];
+        b.loadout.aux_slots = [2, 3, 0, 2];
+        let eval = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0);
+        assert!(eval.actions.len() <= 4, "{} actions", eval.actions.len());
+    }
+
+    #[test]
+    fn new_utility_spells_cast_and_new_modifiers_attach_to_the_next_spell() {
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.rare_spells = !0;
+        b.loadout.slots = [24, EMPTY, EMPTY, EMPTY];
+        let utility = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0);
+        assert_eq!(utility.actions[0].spell, 24);
+        assert!(utility.modifier_slots.is_empty());
+
+        b.loadout.slots = [26, 0, EMPTY, EMPTY];
+        let modified = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0);
+        assert_eq!(modified.actions[0].spell, 0);
+        assert!(modified.actions[0].mods.volatile);
+    }
+
+    #[test]
+    fn spell_blast_erases_without_running_the_mining_inventory() {
+        use crate::world::{BlockId as B, WorldType};
+        let mut w = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 17);
+        let cell = IVec3::new(0, 100, 0);
+        w.set(cell, B::Stone);
+        let before = w
+            .inventory
+            .count_item(crate::world::inventory::Item::Block(B::Stone));
+        let mut blocks = std::collections::HashSet::new();
+        let mut chunks = std::collections::HashSet::new();
+        assert!(crate::world::expedition::spell_blast(
+            &mut w,
+            cell,
+            &mut blocks,
+            &mut chunks
+        ));
+        assert_eq!(w.get(cell), B::Air);
+        assert_eq!(
+            w.inventory
+                .count_item(crate::world::inventory::Item::Block(B::Stone)),
+            before,
+            "spell craters must not auto-harvest rubble"
+        );
+    }
+
+    #[test]
     fn noita_modifier_chains_combine_multicast_trigger_and_rapid_flux() {
         let mut w = World::with_seed(WorldType::Superflat, VoxelScalePreset::HalfMeter, 17);
         let mut p = Player::new();
@@ -811,6 +1384,19 @@ mod acceptance {
         assert!(a.projectiles[1].mods.homing);
         // Cursor wrapped past slot 6 back to 0!
         assert_eq!(a.loadout.cursor, 0);
+    }
+
+    #[test]
+    fn splash_emits_a_bounded_ring_and_droplets() {
+        let mut a = Adventure::default();
+        a.splash(Vec3::new(2.0, 64.5, -3.0), 0.85);
+        assert_eq!(a.splashes.len(), 1);
+        assert!(a.splashes[0].radius > 0.5);
+        assert!(!a.particles.is_empty());
+        for _ in 0..40 {
+            a.splash(Vec3::new(2.0, 64.5, -3.0), 0.85);
+        }
+        assert_eq!(a.splashes.len(), 24);
     }
 
     #[test]
@@ -886,11 +1472,409 @@ mod acceptance {
         assert_eq!(b.loadout.slot(0), 12);
         assert_eq!(b.loadout.slot(4), 18);
         b.swap_wand_slots(0, 4);
-        let eval = evaluate_cast_block(b.wand, b.rank(), b.discoveries, b.rare_spells, &b.loadout, 0);
+        let eval = evaluate_cast_block(
+            b.wand,
+            b.rank(),
+            b.discoveries,
+            b.rare_spells,
+            &b.loadout,
+            0,
+        );
         assert_eq!(eval.actions.len(), 1);
         assert_eq!(eval.actions[0].slot, 1);
         assert_eq!(eval.actions[0].spell, 10);
         assert_eq!(eval.actions[0].payload, Some(11));
         assert_eq!(eval.actions[0].payload_slot, Some(2));
+    }
+
+    fn blank(wand: u32) -> Adventure {
+        let mut a = Adventure::default();
+        a.wand = wand;
+        a.loadout.slots = [EMPTY; 4];
+        a.loadout.aux_slots = [EMPTY; 4];
+        a.mana = 100.0;
+        a
+    }
+
+    #[test]
+    fn programmed_deck_can_be_empty_and_still_runs_divides_and_branches() {
+        let empty = blank(3);
+        let eval = evaluate_cast_block(3, 0, 0, 0, &empty.loadout, 0);
+        assert!(eval.actions.is_empty());
+        assert_eq!(eval.mana_cost, 0.0);
+
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 17);
+        let mut player = Player::new();
+        player.flying = true;
+        player.pos = Vec3::new(0.0, 150.0, 0.0);
+        let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
+        let mut quiet = blank(3);
+        quiet.cast_wand(&mut world, &mut player, eye, Vec3::NEG_Z);
+        assert!(quiet.projectiles.is_empty());
+        assert_eq!(quiet.mana, 100.0);
+
+        let mut divided = blank(3);
+        divided.loadout.slots = [40, 0, EMPTY, EMPTY];
+        let eval = evaluate_programmed(3, 0, 0, 0, &divided.loadout, 0, 1.0, false, 0);
+        assert_eq!(eval.actions.len(), 2);
+        assert!(eval.actions.iter().all(|a| a.spell == 0));
+        assert_eq!(eval.mana_cost, 20.0);
+        divided.cast_wand(&mut world, &mut player, eye, Vec3::NEG_Z);
+        assert_eq!(divided.projectiles.len(), 2);
+        assert_eq!(divided.mana, 80.0);
+
+        let mut quad = blank(3);
+        quad.loadout.slots = [41, 0, EMPTY, EMPTY];
+        let eval = evaluate_programmed(3, 0, 0, 0, &quad.loadout, 0, 1.0, true, 0);
+        assert_eq!(eval.actions.len(), 4);
+        assert_eq!(eval.mana_cost, 28.0);
+
+        let mut healthy = blank(3);
+        healthy.loadout.slots = [47, 0, 2, EMPTY];
+        let skipped = evaluate_programmed(3, 0, 0, 0, &healthy.loadout, 0, 1.0, false, 0);
+        assert_eq!(skipped.actions.len(), 1);
+        assert_eq!(skipped.actions[0].spell, 2);
+        let wounded = evaluate_programmed(3, 0, 0, 0, &healthy.loadout, 0, 0.2, false, 0);
+        assert_eq!(wounded.actions[0].spell, 0);
+
+        let mut only = blank(3);
+        only.loadout.slots = [47, 0, EMPTY, EMPTY];
+        let held = evaluate_programmed(3, 0, 0, 0, &only.loadout, 0, 1.0, false, 0);
+        assert!(
+            held.actions.is_empty(),
+            "a failed condition does not invent a spark"
+        );
+
+        let mut gated = blank(3);
+        gated.loadout.slots = [48, 3, 0, EMPTY];
+        let hidden = evaluate_programmed(3, 0, 0, 0, &gated.loadout, 0, 1.0, false, 0);
+        assert_eq!(hidden.actions[0].spell, 0);
+        let seen = evaluate_programmed(3, 0, 0, 0, &gated.loadout, 0, 1.0, true, 0);
+        assert_eq!(seen.actions[0].spell, 3);
+
+        let mut alpha = blank(3);
+        alpha.loadout.slots = [0, 49, 3, EMPTY];
+        let copied = evaluate_programmed(3, 0, 0, 0, &alpha.loadout, 1, 1.0, false, 0);
+        assert_eq!(copied.actions[0].spell, 0);
+
+        let mut path = blank(3);
+        path.loadout.slots = [50, 0, EMPTY, EMPTY];
+        assert_eq!(
+            evaluate_programmed(3, 0, 0, 0, &path.loadout, 0, 1.0, false, 0).actions[0]
+                .mods
+                .path,
+            1
+        );
+        assert_eq!(
+            evaluate_programmed(3, 0, 0, 0, &path.loadout, 0, 1.0, false, 2).actions[0]
+                .mods
+                .path,
+            3
+        );
+
+        let mut triggered = blank(3);
+        triggered.loadout.slots = [19, 18, 0, 56];
+        triggered.loadout.aux_slots = [3, EMPTY, EMPTY, EMPTY];
+        let cast = evaluate_programmed(3, 0, 0, 0, &triggered.loadout, 0, 1.0, true, 0);
+        assert_eq!(cast.actions[0].spell, 0);
+        assert!(cast.actions[0].mods.homing);
+        assert!(cast.actions[0].mods.element.is_none());
+        assert_eq!(cast.actions[0].payload, Some(3));
+        assert_eq!(
+            cast.actions[0].payload_mods.element,
+            Some(super::status::Element::Fire)
+        );
+        assert!(!cast.actions[0].payload_mods.homing);
+
+        let mut curve = blank(3);
+        curve.loadout.slots = [42, EMPTY, EMPTY, EMPTY];
+        let spark = evaluate_programmed(3, 0, 0, 0, &curve.loadout, 0, 1.0, false, 0);
+        assert_eq!(spark.actions[0].spell, 0);
+        assert_eq!(spark.actions[0].mods.path, 1);
+    }
+
+    #[test]
+    fn curve_turns_a_fired_bolt() {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 17);
+        let mut player = Player::new();
+        player.flying = true;
+        player.pos = Vec3::new(0.0, 150.0, 0.0);
+        let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
+        let mut a = blank(3);
+        a.loadout.slots = [42, 0, EMPTY, EMPTY];
+        a.cast_wand(&mut world, &mut player, eye, Vec3::NEG_Z);
+        let before = a.projectiles[0].velocity;
+        world.adventure = a;
+        super::super::tick(&mut world, &mut player, 1.0 / 60.0, false, false, false);
+        let after = world.adventure.projectiles[0].velocity;
+        let turned = before.cross(after).length();
+        assert!(
+            turned > 1.0,
+            "curve should yaw the bolt, cross was {turned}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod audio_mapping {
+    use super::*;
+
+    #[test]
+    fn spell_families_do_not_share_one_projectile_cue() {
+        let sparks = spell_audio(0).0 as usize;
+        for spell in [2, 3, 5, 6, 7] {
+            assert_ne!(
+                spell_audio(spell).0 as usize,
+                sparks,
+                "spell {spell} should have its own audio family"
+            );
+        }
+        assert!((spell_audio(2).1 - spell_audio(7).1).abs() > 0.2);
+        assert!((0.60..=1.70).contains(&spell_audio(6).1));
+    }
+}
+
+
+#[cfg(test)]
+mod new_spell_tests {
+    use super::*;
+    use crate::{
+        fluid::VoxelScalePreset,
+        world::{BlockId as B, WorldType},
+    };
+
+    const SCALES: [VoxelScalePreset; 3] = [
+        VoxelScalePreset::OneMeter,
+        VoxelScalePreset::HalfMeter,
+        VoxelScalePreset::QuarterMeter,
+    ];
+
+    /// A flying caster in open air with a full top-tier wand and a full tank.
+    fn rig(scale: VoxelScalePreset) -> (World, Player, Vec3, Adventure) {
+        let w = World::with_seed(WorldType::Superflat, scale, 17);
+        let mut p = Player::new();
+        p.pos = Vec3::new(0.0, 150.0, 0.0) / scale.meters();
+        p.flying = true;
+        let eye = p.eye(scale) * scale.meters();
+        let mut a = Adventure::default();
+        a.wand = 3;
+        a.rare_spells = !0;
+        a.mana = 100.0;
+        a.health = 100.0;
+        a.loadout.aux_slots = [EMPTY; 4];
+        (w, p, eye, a)
+    }
+
+    fn run(w: &mut World, p: &mut Player, frames: usize) {
+        for _ in 0..frames {
+            super::super::tick(w, p, 1.0 / 60.0, false, false, false);
+        }
+    }
+
+    #[test]
+    fn new_modifier_cards_flag_the_next_bolt() {
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.loadout.slots = [64, 65, 66, 67];
+        b.loadout.aux_slots = [0, EMPTY, EMPTY, EMPTY];
+        let eval = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0);
+        let m = eval.actions[0].mods;
+        assert_eq!(eval.actions[0].spell, 0);
+        assert!(m.reverse && m.reckless);
+        assert_eq!(m.phase, 1);
+        assert!((m.gravity - 1.0).abs() < 1e-6);
+        assert!(m.damage_mul > 1.5 && m.damage_mul <= 2.6);
+
+        b.loadout.slots = [68, 69, 0, EMPTY];
+        let eval = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0);
+        assert!(eval.actions[0].mods.blood_price && eval.actions[0].mods.fork);
+    }
+
+    #[test]
+    fn stacking_new_modifiers_stays_bounded() {
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.loadout.slots = [65, 65, 65, 66];
+        b.loadout.aux_slots = [66, 66, 67, 0];
+        let m = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0).actions[0].mods;
+        assert!(m.gravity <= 2.0, "gravity {}", m.gravity);
+        assert!(m.phase <= 2, "phase {}", m.phase);
+        assert!(m.damage_mul <= 2.6);
+    }
+
+    #[test]
+    fn on_timer_fires_its_payload_mid_flight() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.loadout.slots = [70, 0, 3, EMPTY];
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_eq!(a.projectiles.len(), 1);
+        assert_eq!(a.projectiles[0].payload, Some(3));
+        assert!(a.projectiles[0].mods.timer > 0.0);
+        w.adventure = a;
+        run(&mut w, &mut p, 50);
+        let shots = &w.adventure.projectiles;
+        assert!(shots.iter().any(|s| s.spell == 3), "payload never launched");
+        assert!(
+            shots.iter().any(|s| s.spell == 0 && s.payload.is_none()),
+            "the carrier must keep flying without a payload"
+        );
+    }
+
+    #[test]
+    fn blood_price_pays_in_health_and_refuses_when_low() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.loadout.slots = [68, 0, EMPTY, EMPTY];
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_eq!(a.projectiles.len(), 1);
+        assert_eq!(a.mana, 100.0, "mana must be untouched");
+        assert!((a.health - 94.0).abs() < 0.01, "health {}", a.health);
+
+        a.projectiles.clear();
+        a.loadout.cursor = 0;
+        a.health = 8.0;
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert!(a.projectiles.is_empty(), "must not cast at low health");
+        assert_eq!(a.health, 8.0);
+    }
+
+    #[test]
+    fn reckless_never_kills_its_caster() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.loadout.slots = [67, 0, EMPTY, EMPTY];
+        a.health = 3.0;
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_eq!(a.projectiles.len(), 1);
+        assert!(a.health >= 1.0 && a.health < 3.0, "health {}", a.health);
+        assert!(a.projectiles[0].mods.damage_mul > 1.5);
+    }
+
+    #[test]
+    fn meteor_falls_from_above_onto_the_aimed_block_at_every_scale() {
+        for scale in SCALES {
+            let (mut w, mut p, eye, mut a) = rig(scale);
+            let s = scale.meters();
+            let cell = (eye / s).floor().as_ivec3() + IVec3::new(0, 0, -8);
+            w.set(cell, B::Stone);
+            let target = (cell.as_vec3() + Vec3::new(0.5, 1.0, 0.5)) * s;
+            a.loadout.slots = [29, EMPTY, EMPTY, EMPTY];
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert_eq!(a.projectiles.len(), 1, "{scale:?}");
+            let shot = &a.projectiles[0];
+            assert_eq!(shot.spell, 29);
+            assert!(
+                shot.pos.y > target.y + 15.0,
+                "{scale:?}: meteor starts at {} for a target at {}",
+                shot.pos.y,
+                target.y
+            );
+            let aimed = (target - shot.pos).normalize();
+            assert!(
+                aimed.dot(shot.velocity.normalize()) > 0.99,
+                "{scale:?}: meteor is not heading for the target"
+            );
+        }
+    }
+
+    #[test]
+    fn grapple_hauls_the_caster_toward_the_hook_and_is_free_without_one() {
+        for scale in SCALES {
+            let (mut w, mut p, eye, mut a) = rig(scale);
+            let s = scale.meters();
+            a.loadout.slots = [31, EMPTY, EMPTY, EMPTY];
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert_eq!(a.mana, 100.0, "{scale:?}: a miss must be free");
+            assert_eq!(p.vel, Vec3::ZERO, "{scale:?}");
+
+            let cell = (eye / s).floor().as_ivec3() + IVec3::new(0, 0, -10);
+            w.set(cell, B::Stone);
+            a.loadout.cursor = 0;
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert!(a.mana < 100.0, "{scale:?}: a hit must cost mana");
+            assert!(p.vel.z < 0.0, "{scale:?}: pulled the wrong way {:?}", p.vel);
+        }
+    }
+
+    #[test]
+    fn leap_launches_the_caster_up_and_forward() {
+        for scale in SCALES {
+            let (mut w, mut p, eye, mut a) = rig(scale);
+            a.loadout.slots = [32, EMPTY, EMPTY, EMPTY];
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert!(p.vel.y > 0.0 && p.vel.z < 0.0, "{scale:?}: {:?}", p.vel);
+            assert!(a.mana < 100.0);
+        }
+    }
+
+    #[test]
+    fn phase_passes_through_one_wall_and_then_behaves_normally() {
+        for scale in SCALES {
+            let (mut w, mut p, eye, mut a) = rig(scale);
+            let s = scale.meters();
+            let base = (eye / s).floor().as_ivec3();
+            for dx in 3..5 {
+                w.set(base + IVec3::new(dx, 0, 0), B::Stone);
+            }
+            let mods = ShotMods {
+                phase: 1,
+                ..Default::default()
+            };
+            a.emit_spell_modified(0, eye, Vec3::X, None, mods);
+            w.adventure = a;
+            run(&mut w, &mut p, 30);
+            let shots = &w.adventure.projectiles;
+            assert_eq!(shots.len(), 1, "{scale:?}: the bolt should have survived the wall");
+            assert_eq!(shots[0].mods.phase, 0, "{scale:?}");
+            assert!(shots[0].pos.x > eye.x + 6.0 * s, "{scale:?}: x = {}", shots[0].pos.x);
+        }
+    }
+
+    #[test]
+    fn fork_splits_into_three_weak_sparks_that_cannot_fork_again() {
+        let scale = VoxelScalePreset::OneMeter;
+        let mut w = World::with_seed(WorldType::Superflat, scale, 17);
+        let mut p = Player::new();
+        p.pos = Vec3::new(-0.05, 150.0, scale.meters() * 0.5) / scale.meters();
+        p.flying = true;
+        let eye = p.eye(scale) * scale.meters();
+        w.set(IVec3::new(0, (eye.y / scale.meters()).floor() as i32, 0), B::Stone);
+        let mut a = Adventure::default();
+        a.wand = 3;
+        a.invulnerable = 0.0;
+        let mods = ShotMods {
+            fork: true,
+            ..Default::default()
+        };
+        a.emit_spell_modified(0, eye, Vec3::X, None, mods);
+        w.adventure = a;
+        run(&mut w, &mut p, 1);
+        let shots = &w.adventure.projectiles;
+        assert_eq!(shots.len(), 3, "a forked impact must leave three children");
+        assert!(
+            shots
+                .iter()
+                .all(|s| s.spell == 0 && !s.mods.fork && s.mods.damage_mul < 0.5)
+        );
+    }
+
+    #[test]
+    fn gravity_bends_a_bolt_downward() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        let mods = ShotMods {
+            gravity: 1.0,
+            ..Default::default()
+        };
+        a.emit_spell_modified(0, eye, Vec3::X, None, mods);
+        w.adventure = a;
+        run(&mut w, &mut p, 20);
+        assert!(w.adventure.projectiles[0].velocity.y < -1.0);
+    }
+
+    #[test]
+    fn reverse_fires_behind_the_caster() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.loadout.slots = [64, 0, EMPTY, EMPTY];
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_eq!(a.projectiles.len(), 1);
+        assert!(a.projectiles[0].velocity.z > 1.0, "{:?}", a.projectiles[0].velocity);
     }
 }
