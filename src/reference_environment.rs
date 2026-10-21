@@ -124,9 +124,21 @@ fn valley(b: &mut Builder) {
         }
     }
     // Layered shoulders close the flat horizon while leaving a central spring pass.
-    for (x,z,rx,ry,rz) in [(-34.0,-77.0,26.0,24.0,20.0),(35.0,-79.0,25.0,28.0,21.0),(-5.0,-99.0,27.0,34.0,16.0)] {
-        b.ellipsoid(Vec3::new(x,16.0,z),Vec3::new(rx,ry,rz),BlockId::Limestone);
-        b.ellipsoid(Vec3::new(x-2.0,15.0,z+3.0),Vec3::new(rx+1.0,ry*0.70,rz+1.0),BlockId::Grass);
+    for (x, z, rx, ry, rz) in [
+        (-34.0, -77.0, 26.0, 24.0, 20.0),
+        (35.0, -79.0, 25.0, 28.0, 21.0),
+        (-5.0, -99.0, 27.0, 34.0, 16.0),
+    ] {
+        b.ellipsoid(
+            Vec3::new(x, 16.0, z),
+            Vec3::new(rx, ry, rz),
+            BlockId::Limestone,
+        );
+        b.ellipsoid(
+            Vec3::new(x - 2.0, 15.0, z + 3.0),
+            Vec3::new(rx + 1.0, ry * 0.70, rz + 1.0),
+            BlockId::Grass,
+        );
     }
     // Woodland edges frame the open stream corridor without hiding the landmarks.
     for (x, z, h, pine) in [

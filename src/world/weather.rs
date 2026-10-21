@@ -373,8 +373,7 @@ impl WeatherClipmapLevel {
         );
 
         let humidity = saturate(
-            0.22
-                + macro_mass * 0.34
+            0.22 + macro_mass * 0.34
                 + humidity_noise * 0.30
                 + frontal * 0.14
                 + controls.stratus * 0.08,
@@ -389,9 +388,7 @@ impl WeatherClipmapLevel {
         );
 
         let convection = saturate(
-            instability * (0.46 + humidity * 0.54)
-                + frontal * 0.10
-                + controls.wind_shear * 0.10,
+            instability * (0.46 + humidity * 0.54) + frontal * 0.10 + controls.wind_shear * 0.10,
         );
 
         // The storm preset must actually build storm cells. The previous
@@ -403,9 +400,7 @@ impl WeatherClipmapLevel {
         );
 
         let coverage = saturate(
-            controls.coverage * (0.18 + macro_mass * 1.08)
-                + humidity * 0.12
-                + frontal * 0.18
+            controls.coverage * (0.18 + macro_mass * 1.08) + humidity * 0.12 + frontal * 0.18
                 - 0.16,
         );
 
@@ -447,7 +442,8 @@ impl WeatherClipmapLevel {
         let low_optical_depth = (low_amount
             * density_gain
             * controls.layer_thickness
-            * (1.0 + controls.stratus * 0.80 + storm * 2.0) * 2.8)
+            * (1.0 + controls.stratus * 0.80 + storm * 2.0)
+            * 2.8)
             .clamp(0.0, 4.0);
 
         let mid_optical_depth = (coverage

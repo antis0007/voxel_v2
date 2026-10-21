@@ -52,7 +52,11 @@ impl DetailPlan {
                     let h = hash(p);
                     // Beaches should read as broad sand, not a regular field
                     // of dark stones. Keep the physical density scale invariant.
-                    let density = if b == B::Sand { threshold / 4 } else { threshold };
+                    let density = if b == B::Sand {
+                        threshold / 4
+                    } else {
+                        threshold
+                    };
                     if (h & 65535) > density {
                         continue;
                     }
@@ -165,9 +169,14 @@ impl DetailPlan {
                         let variation = (d.hash.rotate_left(i * 5) & 255) as f32 / 255.0;
                         let radial = Vec3::new(a.cos(), 0.0, a.sin() * 0.72);
                         let radius = (0.72 + variation * 0.28) * if ring == 0 { 0.8 } else { 0.43 };
-                        let y = if ring == 0 { -0.012 / scale } else { size * height * (0.8 + variation * 0.2) };
+                        let y = if ring == 0 {
+                            -0.012 / scale
+                        } else {
+                            size * height * (0.8 + variation * 0.2)
+                        };
                         let p = d.p + radial * size * radius + Vec3::Y * y;
-                        let normal = (radial + Vec3::Y * if ring == 0 { 0.45 } else { 1.8 }).normalize();
+                        let normal =
+                            (radial + Vec3::Y * if ring == 0 { 0.45 } else { 1.8 }).normalize();
                         mesh.vertices.push(Vertex3 {
                             pos: p.to_array(),
                             color: d.color,
@@ -187,9 +196,15 @@ impl DetailPlan {
                 for i in 0..5 {
                     let next = (i + 1) % 5;
                     mesh.indices.extend([
-                        base + i, base + i + 5, base + next,
-                        base + next, base + i + 5, base + next + 5,
-                        base + 10, base + next + 5, base + i + 5,
+                        base + i,
+                        base + i + 5,
+                        base + next,
+                        base + next,
+                        base + i + 5,
+                        base + next + 5,
+                        base + 10,
+                        base + next + 5,
+                        base + i + 5,
                     ]);
                 }
             }

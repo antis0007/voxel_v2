@@ -206,46 +206,65 @@ fn take(input: &mut &[u8]) -> Result<u32> {
     *input = &input[4..];
     Ok(v)
 }
+/// LEB128: runs, materials and light levels are small, so most take one or two
+/// bytes instead of four. VXREG001 spent 8 bytes on every run.
+fn put_varint(out: &mut Vec<u8>, mut value: u32) {
+    while value >= 0x80 {
+        out.push(value as u8 | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+fn take_varint(input: &mut &[u8]) -> Result<u32> {
+    let mut value = 0u32;
+    for (i, &byte) in input.iter().enumerate().take(5) {
+        value |= u32::from(byte & 0x7f) << (7 * i);
+        if byte & 0x80 == 0 {
+            *input = &input[i + 1..];
+            return Ok(value);
+        }
+    }
+    anyhow::bail!("Truncated region varint")
+}
+fn put_runs<T: Copy + PartialEq>(out: &mut Vec<u8>, values: &[T], raw: impl Fn(T) -> u32) {
+    let mut i = 0;
+    while i < values.len() {
+        let start = i;
+        let value = values[i];
+        i += 1;
+        while i < values.len() && values[i] == value {
+            i += 1;
+        }
+        put_varint(out, (i - start) as u32);
+        put_varint(out, raw(value));
+    }
+}
 fn encode(coord: IVec3, version: u64, data: &ChunkData, water: &HashMap<IVec3, u8>) -> Vec<u8> {
-    let mut out = b"VXREG001".to_vec();
+    let mut out = b"VXREG002".to_vec();
     for c in coord.to_array() {
         put(&mut out, c as u32);
     }
     out.extend_from_slice(&version.to_le_bytes());
-    let mut i = 0;
-    while i < VOXELS {
-        let start = i;
-        let block = data.blocks[i];
-        i += 1;
-        while i < VOXELS && data.blocks[i] == block {
-            i += 1;
-        }
-        put(&mut out, (i - start) as u32);
-        put(&mut out, block.as_u32());
-    }
-    i = 0;
-    while i < VOXELS {
-        let start = i;
-        let light = data.light[i];
-        i += 1;
-        while i < VOXELS && data.light[i] == light {
-            i += 1;
-        }
-        put(&mut out, (i - start) as u32);
-        put(&mut out, light as u32);
-    }
-    put(&mut out, water.len() as u32);
+    put_runs(&mut out, &data.blocks[..], BlockId::as_u32);
+    put_runs(&mut out, &data.light[..], u32::from);
+    put_varint(&mut out, water.len() as u32);
     for (&p, &v) in water {
-        put(&mut out, ChunkData::local_index(p.x, p.y, p.z) as u32);
-        put(&mut out, v as u32);
+        put_varint(&mut out, ChunkData::local_index(p.x, p.y, p.z) as u32);
+        put_varint(&mut out, v as u32);
     }
     out
 }
 fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
     ensure!(
-        bytes.len() >= 28 && &bytes[..8] == b"VXREG001",
+        bytes.len() >= 28 && matches!(&bytes[..8], b"VXREG001" | b"VXREG002"),
         "Invalid region version"
     );
+    // Header fields are fixed u32s in both versions; the body is varints in 002.
+    let body: fn(&mut &[u8]) -> Result<u32> = if &bytes[..8] == b"VXREG002" {
+        take_varint
+    } else {
+        take
+    };
     ensure!(
         checksum(bytes) == record.checksum,
         "Region checksum mismatch at {coord}"
@@ -266,8 +285,8 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
     let mut blocks = vec![BlockId::Air; VOXELS];
     let mut offset = 0;
     while offset < VOXELS {
-        let n = take(&mut input)? as usize;
-        let raw = take(&mut input)?;
+        let n = body(&mut input)? as usize;
+        let raw = body(&mut input)?;
         ensure!(n > 0 && n <= VOXELS - offset, "Invalid region block run");
         let b = BlockId::from_u32(raw);
         ensure!(b.as_u32() == raw, "Unknown region material");
@@ -277,8 +296,8 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
     let mut light = vec![0u8; VOXELS];
     offset = 0;
     while offset < VOXELS {
-        let n = take(&mut input)? as usize;
-        let v = take(&mut input)?;
+        let n = body(&mut input)? as usize;
+        let v = body(&mut input)?;
         ensure!(
             n > 0 && n <= VOXELS - offset && v <= 255,
             "Invalid region light run"
@@ -287,7 +306,7 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
         offset += n;
     }
     let mut water = HashMap::new();
-    let count = take(&mut input)? as usize;
+    let count = body(&mut input)? as usize;
     ensure!(count <= VOXELS, "Invalid region water count");
     let mut torches = HashSet::new();
     for (i, b) in blocks.iter().enumerate() {
@@ -296,8 +315,8 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
         }
     }
     for _ in 0..count {
-        let i = take(&mut input)? as usize;
-        let v = take(&mut input)?;
+        let i = body(&mut input)? as usize;
+        let v = body(&mut input)?;
         ensure!(
             i < VOXELS && (1..8).contains(&v) && blocks[i] == BlockId::Water,
             "Invalid region water volume"
@@ -553,7 +572,10 @@ impl RegionStream {
             std::process::id(),
             SESSION_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
-        Self::open(super::storage::save_directory().join("regions").join(id), HashMap::new())
+        Self::open(
+            super::storage::save_directory().join("regions").join(id),
+            HashMap::new(),
+        )
     }
     pub fn open(root: PathBuf, mut records: HashMap<IVec3, Record>) -> Self {
         let next_version = records
@@ -593,7 +615,9 @@ impl RegionStream {
         }
     }
     pub fn mark_dirty(&mut self, c: IVec3) {
-        if self.write_queued.insert(c) { self.write_queue.push_back(c); }
+        if self.write_queued.insert(c) {
+            self.write_queue.push_back(c);
+        }
         self.dirty.insert(c, self.next_version);
         self.modified.entry(c).or_insert_with(Instant::now);
         self.next_version = self.next_version.wrapping_add(1);
@@ -609,7 +633,7 @@ impl World {
             || self.snapshot_range != Some((center, radius))
             || self.snapshot_cache.cfg != self.sample_config()
         {
-            let chunks: HashMap<_, _> = self
+            let chunks: crate::fast_hash::FastMap<_, _> = self
                 .chunks
                 .iter()
                 .filter(|(c, _)| {
@@ -680,7 +704,9 @@ impl World {
         self.water_levels
             .extend(data.water.iter().map(|(&p, &v)| (p, v)));
         self.chunks.insert(c, data.chunk);
-        if !self.regions.view.records.contains_key(&c) { self.regions.mark_dirty(c); }
+        if !self.regions.view.records.contains_key(&c) {
+            self.regions.mark_dirty(c);
+        }
         self.invalidate_snapshot_at(c);
     }
     pub(super) fn resident_edit(&mut self, c: IVec3) -> Result<()> {
@@ -775,15 +801,24 @@ impl World {
             let slots = IO_CAPACITY.saturating_sub(self.regions.pending()).min(4);
             let mut dirty = Vec::with_capacity(slots);
             for _ in 0..self.regions.write_queue.len().min(64) {
-                if dirty.len() >= slots { break; }
+                if dirty.len() >= slots {
+                    break;
+                }
                 let c = self.regions.write_queue.pop_front().unwrap();
                 self.regions.write_queued.remove(&c);
-                let Some(&v) = self.regions.dirty.get(&c) else { continue; };
+                let Some(&v) = self.regions.dirty.get(&c) else {
+                    continue;
+                };
                 self.regions.write_queue.push_back(c);
                 self.regions.write_queued.insert(c);
                 if !self.regions.pending.contains_key(&c)
-                    && (pressure || self.regions.modified.get(&c)
-                        .is_none_or(|t| t.elapsed() >= Duration::from_millis(750))) {
+                    && (pressure
+                        || self
+                            .regions
+                            .modified
+                            .get(&c)
+                            .is_none_or(|t| t.elapsed() >= Duration::from_millis(750)))
+                {
                     dirty.push((c, v));
                 }
             }
@@ -792,7 +827,7 @@ impl World {
             if !selected.is_empty() {
                 for &c in &selected {
                     if let Some(water) = self.water_levels.chunk(c) {
-                        water_by_chunk.insert(c, water.clone());
+                        water_by_chunk.insert(c, water.iter().map(|(&p, &v)| (p, v)).collect());
                     }
                 }
             }
@@ -866,7 +901,9 @@ impl World {
                 }
             }
             if !victims.is_empty() {
-                for c in victims { self.evict_edited_chunk(c); }
+                for c in victims {
+                    self.evict_edited_chunk(c);
+                }
                 // A bounded sweep must continue next frame if more clean
                 // entries remain outside the streaming window.
                 self.regions.last_eviction = None;
@@ -960,5 +997,132 @@ impl World {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod encoding {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use crate::world::{World, WorldType};
+
+    fn record(bytes: &[u8], version: u64) -> Record {
+        Record {
+            pin: None,
+            generation: 0,
+            offset: 0,
+            len: bytes.len() as u32,
+            checksum: checksum(bytes),
+            version,
+            resident_bytes: 0,
+        }
+    }
+
+    /// The pre-varint writer, kept to prove old saves still load.
+    fn encode_v1(
+        coord: IVec3,
+        version: u64,
+        data: &ChunkData,
+        water: &HashMap<IVec3, u8>,
+    ) -> Vec<u8> {
+        let mut out = b"VXREG001".to_vec();
+        for c in coord.to_array() {
+            put(&mut out, c as u32);
+        }
+        out.extend_from_slice(&version.to_le_bytes());
+        let mut runs = |values: Vec<u32>| {
+            let mut i = 0;
+            while i < values.len() {
+                let start = i;
+                while i < values.len() && values[i] == values[start] {
+                    i += 1;
+                }
+                put(&mut out, (i - start) as u32);
+                put(&mut out, values[start]);
+            }
+        };
+        runs(data.blocks.iter().map(|b| b.as_u32()).collect());
+        runs(data.light.iter().map(|&l| l as u32).collect());
+        put(&mut out, water.len() as u32);
+        for (&p, &v) in water {
+            put(&mut out, ChunkData::local_index(p.x, p.y, p.z) as u32);
+            put(&mut out, v as u32);
+        }
+        out
+    }
+
+    fn sample_chunk() -> (IVec3, ChunkData, HashMap<IVec3, u8>) {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        let coord = IVec3::new(1, 1, -2);
+        let mut data = ChunkData::generate(&cfg, coord);
+        let mut water = HashMap::new();
+        for (i, light) in data.light.iter_mut().enumerate() {
+            *light = (i % 300 / 20) as u8;
+        }
+        let i = ChunkData::local_index(3, 4, 5);
+        data.blocks[i] = BlockId::Water;
+        water.insert(coord * CHUNK_SIZE + local_pos(i), 5);
+        (coord, data, water)
+    }
+
+    fn assert_same(decoded: &DiskChunk, data: &ChunkData, water: &HashMap<IVec3, u8>) {
+        assert!(decoded.chunk.blocks[..] == data.blocks[..]);
+        assert!(decoded.chunk.light[..] == data.light[..]);
+        assert_eq!(*decoded.water, *water);
+    }
+
+    #[test]
+    fn varint_records_round_trip_and_v1_still_loads() {
+        let (coord, data, water) = sample_chunk();
+        let v2 = encode(coord, 9, &data, &water);
+        assert_same(&decode(coord, &record(&v2, 9), &v2).unwrap(), &data, &water);
+        let v1 = encode_v1(coord, 9, &data, &water);
+        assert_same(&decode(coord, &record(&v1, 9), &v1).unwrap(), &data, &water);
+        assert!(
+            v2.len() * 3 < v1.len(),
+            "v2 {} bytes vs v1 {}",
+            v2.len(),
+            v1.len()
+        );
+        // Truncation anywhere must fail cleanly instead of panicking.
+        for cut in [9, 40, v2.len() / 2, v2.len() - 1] {
+            let short = &v2[..cut];
+            assert!(decode(coord, &record(short, 9), short).is_err());
+        }
+    }
+
+    #[test]
+    fn varints_cover_the_full_u32_range() {
+        for value in [0, 1, 127, 128, 16_383, 16_384, 32_768, u32::MAX] {
+            let mut out = Vec::new();
+            put_varint(&mut out, value);
+            let mut input = &out[..];
+            assert_eq!(take_varint(&mut input).unwrap(), value);
+            assert!(input.is_empty());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn region_record_sizes() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        let (mut v1, mut v2, mut chunks) = (0usize, 0usize, 0usize);
+        for x in -3..3 {
+            for z in -3..3 {
+                for y in 0..3 {
+                    let c = IVec3::new(x, y, z);
+                    let data = ChunkData::generate(&cfg, c);
+                    v1 += encode_v1(c, 1, &data, &HashMap::new()).len();
+                    v2 += encode(c, 1, &data, &HashMap::new()).len();
+                    chunks += 1;
+                }
+            }
+        }
+        let kib = |b: usize| b as f64 / chunks as f64 / 1024.0;
+        println!(
+            "{chunks} chunks: v1 {:.2} KiB/chunk, v2 {:.2} KiB/chunk",
+            kib(v1),
+            kib(v2)
+        );
     }
 }

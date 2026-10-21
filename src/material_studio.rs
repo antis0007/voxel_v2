@@ -78,9 +78,13 @@ pub fn bind_world(id: &str) {
     if active.as_ref() == Some(&root) {
         return;
     }
-    if s.palette!=s.saved {if let Some(old)=active.as_ref(){
-        if let Err(e)=write_palette(&old.join("materials.vmat"),s.palette){eprintln!("[material-world] save failed: {e}");}
-    }}
+    if s.palette != s.saved {
+        if let Some(old) = active.as_ref() {
+            if let Err(e) = write_palette(&old.join("materials.vmat"), s.palette) {
+                eprintln!("[material-world] save failed: {e}");
+            }
+        }
+    }
     *active = Some(root.clone());
     *s = Studio {
         selected: 12,
@@ -240,11 +244,11 @@ pub fn draw(
             let mut finish=s.palette.tints[i][3]>=0.0;
             if ui.checkbox(&mut finish,"Override finish").changed(){
                 s.palette.tints[i][3]=if finish{0.75}else{-1.0};
-                s.palette.properties[i][0]=if finish{0.25}else{-1.0};
+                s.palette.properties[i][0]=if finish{0.5}else{-1.0};
             }
             if finish {
                 ui.add(egui::Slider::new(&mut s.palette.tints[i][3],0.08..=1.0).text("Roughness"));
-                ui.add(egui::Slider::new(&mut s.palette.properties[i][0],0.0..=1.0).text("Reflectance"));
+                ui.add(egui::Slider::new(&mut s.palette.properties[i][0],0.0..=1.0).text("Reflectance (0.5 = 4% F0)"));
             }
             ui.collapsing("Surface response",|ui|{
                 ui.add(egui::Slider::new(&mut s.palette.properties[i][1],0.25..=4.0).text("Texture scale"));

@@ -1,10 +1,11 @@
-use glam::{Vec2, Vec3, DVec3, IVec3};
+use glam::{DVec3, IVec3, Vec2, Vec3};
 
 use crate::world::{
     AIR_ACCEL, BlockId, CREATIVE_FLY_SPEED, CREATIVE_FLY_SPRINT_SPEED, FLY_ACCEL, GRAVITY,
     GROUND_ACCEL, GROUND_FRICTION, JUMP_VELOCITY, NOCLIP_FLY_FAST_SPEED, NOCLIP_FLY_SPEED,
     SNEAK_SPEED, SPRINT_SPEED, WALK_SPEED, World, acceleration_blocks, hotbar_block,
-    player_eye_height_blocks, speed_blocks, try_move_local, try_step_up_local,
+    player_eye_height_blocks, resolve_penetration_local, speed_blocks, try_move_local,
+    try_step_up_local,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +111,11 @@ pub struct Player {
     walk_bob_meters: f32,
     pub swimming: bool,
     pub underwater: bool,
+    /// Downward speed captured on the transition into water. Adventure drains
+    /// this once to emit a splash at the true voxel surface.
+    pub water_impact: f32,
+    /// Sticky surface-exit flag, drained by the next Adventure update.
+    pub water_exit: bool,
     jump_buffer: f32,
     coyote_time: f32,
 }
@@ -137,6 +143,8 @@ impl Player {
             walk_bob_meters: 0.0,
             swimming: false,
             underwater: false,
+            water_impact: 0.0,
+            water_exit: false,
             jump_buffer: 0.0,
             coyote_time: 0.0,
         }
@@ -159,10 +167,14 @@ impl Player {
     }
 
     pub fn precise_eye(&self, voxel_scale: crate::fluid::VoxelScalePreset) -> DVec3 {
-        let position = if self.precise_pos.as_vec3() == self.pos { self.precise_pos } else { self.pos.as_dvec3() };
+        let position = if self.precise_pos.as_vec3() == self.pos {
+            self.precise_pos
+        } else {
+            self.pos.as_dvec3()
+        };
         let meters_per_voxel = voxel_scale.meters().max(1e-6);
-        let height = player_eye_height_blocks(voxel_scale,self.scale)
-            - 0.25*self.scale*self.crouch_t/voxel_scale.meters().max(1e-6)
+        let height = player_eye_height_blocks(voxel_scale, self.scale)
+            - 0.25 * self.scale * self.crouch_t / voxel_scale.meters().max(1e-6)
             + (self.step_camera_offset + self.walk_bob_meters) / meters_per_voxel;
         position + DVec3::Y * height as f64
     }
@@ -172,8 +184,10 @@ impl Player {
         let meters_per_voxel = voxel_scale.meters().max(1e-6);
         let crouch_drop = 0.25 * self.scale / voxel_scale.meters().max(1e-6);
         let current_eye = base_eye - crouch_drop * self.crouch_t;
-        self.pos + Vec3::Y * (current_eye
-            + (self.step_camera_offset + self.walk_bob_meters) / meters_per_voxel)
+        self.pos
+            + Vec3::Y
+                * (current_eye
+                    + (self.step_camera_offset + self.walk_bob_meters) / meters_per_voxel)
     }
 }
 
@@ -229,19 +243,44 @@ fn update_flight_toggle(player: &mut Player, input: &Input, dt: f32) {
 }
 
 pub fn update_player(player: &mut Player, input: &mut Input, world: &World, dt: f32) {
-    if !player.pos.is_finite() || !dt.is_finite() || dt <= 0.0 { return; }
+    if !player.pos.is_finite() || !dt.is_finite() || dt <= 0.0 {
+        return;
+    }
     player.sprinting = input.sprint && input.forward && !input.sneak && !player.flying;
     // Existing teleports write pos. Reconcile once, then integrate only locally.
-    if player.precise_pos.as_vec3() != player.pos { player.precise_pos = player.pos.as_dvec3(); }
+    if player.precise_pos.as_vec3() != player.pos {
+        player.precise_pos = player.pos.as_dvec3();
+    }
     let origin = (player.precise_pos / 32.0).floor().as_ivec3() * 32;
     player.pos = (player.precise_pos - origin.as_dvec3()).as_vec3();
-    update_player_local(player,input,world,dt,origin);
+    update_player_local(player, input, world, dt, origin);
     player.precise_pos = origin.as_dvec3() + player.pos.as_dvec3();
     player.pos = player.precise_pos.as_vec3();
 }
-fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt: f32, origin: IVec3) {
+fn update_player_local(
+    player: &mut Player,
+    input: &mut Input,
+    world: &World,
+    dt: f32,
+    origin: IVec3,
+) {
     if dt <= 0.0 {
         return;
+    }
+    // Recover safely from a body that is already inside geometry (newly solid
+    // foliage, a save from an older tree, or a streaming edit). This is a
+    // no-op in the common case and runs before movement can make it worse.
+    if !(player.flying && matches!(player.fly_mode, FlyMode::Noclip))
+        && resolve_penetration_local(
+            origin,
+            world,
+            player.scale,
+            player.crouch_t,
+            &mut player.pos,
+        )
+    {
+        player.vel.y = player.vel.y.max(0.0);
+        player.on_ground = false;
     }
     // The collision body stays on the exact voxel surface. The view follows
     // its ledge displacement with an analytic critically damped spring in
@@ -259,13 +298,17 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
         point.y - (cell.y as f32) < world.water_volume(cell + origin) as f32 / 8.0
     };
     let body_scale = player.scale / world.voxel_scale.meters();
+    let was_swimming = player.swimming;
+    let was_underwater = player.underwater;
     player.underwater = immersed(player.eye(world.voxel_scale));
     player.swimming = !player.flying && immersed(player.pos + Vec3::Y * (0.65 * body_scale));
-    let horizontal_speed_m = Vec2::new(player.vel.x, player.vel.z).length() * world.voxel_scale.meters();
-    let walking = player.on_ground && !player.flying && !player.swimming && horizontal_speed_m > 0.16;
+    let horizontal_speed_m =
+        Vec2::new(player.vel.x, player.vel.z).length() * world.voxel_scale.meters();
+    let walking =
+        player.on_ground && !player.flying && !player.swimming && horizontal_speed_m > 0.16;
     if walking {
-        player.walk_phase = (player.walk_phase + dt * horizontal_speed_m * 2.3)
-            .rem_euclid(std::f32::consts::TAU);
+        player.walk_phase =
+            (player.walk_phase + dt * horizontal_speed_m * 2.3).rem_euclid(std::f32::consts::TAU);
     }
     let stride_weight = if walking {
         (horizontal_speed_m / 1.8).clamp(0.0, 1.0)
@@ -273,12 +316,21 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
         0.0
     };
     let target_walk_bob = 0.018 * stride_weight * (player.walk_phase * 2.0).sin();
-    player.walk_bob_meters += (target_walk_bob - player.walk_bob_meters) * (1.0 - (-dt * 14.0).exp());
+    player.walk_bob_meters +=
+        (target_walk_bob - player.walk_bob_meters) * (1.0 - (-dt * 14.0).exp());
     let fresh_jump = input.jump && !player.jump_was_down;
     // Flight is a movement mode, including while immersed. Swimming must not
     // consume/reset the double-tap before the mode switch can see it.
     update_flight_toggle(player, input, dt);
     player.swimming = !player.flying && immersed(player.pos + Vec3::Y * (0.65 * body_scale));
+    if player.swimming && !was_swimming {
+        // Capture the incoming vertical speed before the swimming branch damps
+        // it. A deliberate walk-in still gets a minimum contact splash.
+        player.water_impact = player.water_impact.max((-player.vel.y).max(0.35));
+    }
+    if was_underwater && !player.underwater {
+        player.water_exit = true;
+    }
     player.jump_buffer = if fresh_jump {
         0.12
     } else {
@@ -298,7 +350,9 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
         player.crouch_t + (target_crouch - player.crouch_t) * (1.0 - (-dt * 15.0).exp());
     let (min, max) =
         crate::world::player_aabb(player.pos, world.voxel_scale, player.scale, next_crouch);
-    if next_crouch >= player.crouch_t || !crate::world::collides_world_local(world, min, max, origin) {
+    if next_crouch >= player.crouch_t
+        || !crate::world::collides_world_local(world, min, max, origin)
+    {
         player.crouch_t = next_crouch;
     }
 
@@ -332,7 +386,8 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
         player.vel = player.vel.lerp(target, 1.0 - (-8.0 * dt).exp());
         // Water drag and buoyancy prevent an idle swimmer from sinking like a
         // stone, while sneak remains an intentional dive control.
-        player.vel.y += acceleration_blocks(world.voxel_scale, if input.sneak { -4.0 } else { 3.0 }) * dt;
+        player.vel.y +=
+            acceleration_blocks(world.voxel_scale, if input.sneak { -4.0 } else { 3.0 }) * dt;
         player.vel.y = player.vel.y.clamp(
             -speed_blocks(world.voxel_scale, 5.0),
             speed_blocks(world.voxel_scale, 9.0),
@@ -402,7 +457,7 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
                 player.on_ground = false;
                 let horiz_delta = Vec3::new(player.vel.x * dt, 0.0, player.vel.z * dt);
                 try_move_local(
-            origin,
+                    origin,
                     world,
                     player.scale,
                     player.crouch_t,
@@ -412,7 +467,7 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
                     false,
                 );
                 try_move_local(
-            origin,
+                    origin,
                     world,
                     player.scale,
                     player.crouch_t,
@@ -444,7 +499,8 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
     let underfoot = world.get(
         (player.pos - Vec3::Y * (0.05 / world.voxel_scale.meters()))
             .floor()
-            .as_ivec3() + origin,
+            .as_ivec3()
+            + origin,
     );
     let grip = if underfoot == BlockId::Ice { 0.08 } else { 1.0 };
     let terrain_speed = if underfoot == BlockId::Mud { 0.62 } else { 1.0 };
@@ -507,7 +563,7 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
     let horiz_delta = Vec3::new(player.vel.x * dt, 0.0, player.vel.z * dt);
     let old_pos = player.pos;
     try_move_local(
-            origin,
+        origin,
         world,
         player.scale,
         player.crouch_t,
@@ -539,7 +595,7 @@ fn update_player_local(player: &mut Player, input: &mut Input, world: &World, dt
 
     let old_y = player.pos.y;
     try_move_local(
-            origin,
+        origin,
         world,
         player.scale,
         player.crouch_t,

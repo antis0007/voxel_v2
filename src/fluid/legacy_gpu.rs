@@ -320,9 +320,9 @@ impl FluidSimulation {
             self.sim_time += self.tuning.fixed_dt;
             substeps += 1;
         }
-        if substeps == self.tuning.max_substeps_per_frame {
-            self.accumulator = 0.0;
-        }
+        // Whatever the cap left over stays in the accumulator. The entry clamp
+        // already bounds it to one step, so slow frames catch up instead of
+        // silently discarding simulated time.
 
         self.apply_pending(world, dirty_blocks, dirty_chunks);
         self.stats.active_chunks = self.chunks.len();

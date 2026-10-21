@@ -16,8 +16,29 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
-const FRAME_BUDGET: Duration = Duration::from_millis(3);
-const MAX_CELLS: usize = 1024;
+// The simulation shares the frame with streaming and meshing. Two and a half
+// milliseconds is enough for visible flow while avoiding a permanent catch-up
+// debt on fine voxel worlds.
+const FRAME_BUDGET: Duration = Duration::from_micros(2_500);
+// Water gets a larger slice only while its backlog grows. At the fixed slice a
+// flooded cave or dam break advanced at the pace of the slowest frame, because
+// every unprocessed cell waited for the next tick.
+const WATER_BACKLOG_CELLS: usize = 2_048;
+const WATER_BACKLOG_BUDGET: Duration = Duration::from_micros(6_000);
+
+fn water_budget(pending: usize) -> Duration {
+    if pending > WATER_BACKLOG_CELLS {
+        WATER_BACKLOG_BUDGET
+    } else {
+        FRAME_BUDGET
+    }
+}
+const FACTORY_BUDGET: Duration = Duration::from_micros(750);
+const RIGID_BUDGET: Duration = Duration::from_micros(600);
+// Per-tick work cap. Wall time (`deadline`) is the real frame guard; this only
+// stops one tick from monopolising a frame. The old 768 cap starved wet areas:
+// a dam break with ~850 active cells flowed at a third of its intended speed.
+const MAX_CELLS: usize = 8192;
 struct Recovery {
     rx: mpsc::Receiver<Option<IVec3>>,
     generation: u64,
@@ -32,6 +53,7 @@ pub struct WorldSimulation {
     ready: VecDeque<IVec3>,
     ready_set: HashSet<IVec3>,
     next_near: Instant,
+    near_center: Option<IVec3>,
     recovery: Option<Recovery>,
     next_recovery: Instant,
     machine_cursor: usize,
@@ -51,6 +73,7 @@ impl WorldSimulation {
             ready: VecDeque::new(),
             ready_set: HashSet::new(),
             next_near: Instant::now(),
+            near_center: None,
             recovery: None,
             next_recovery: Instant::now(),
             status: None,
@@ -70,6 +93,7 @@ impl WorldSimulation {
         self.ready_set.clear();
         self.recovery = None;
         self.next_near = Instant::now();
+        self.near_center = None;
         self.next_recovery = Instant::now();
         self.status = None;
     }
@@ -173,6 +197,7 @@ impl WorldSimulation {
         chunks: &mut HashSet<IVec3>,
     ) {
         let start = Instant::now();
+        let budget_end = start + FRAME_BUDGET;
         self.stats.applied_updates_last_step = 0;
         self.stats.simulated_chunks_last_step = 0;
         self.sources.poll(world);
@@ -188,25 +213,46 @@ impl WorldSimulation {
                 dt,
                 &mut self.sources,
                 &mut self.machine_cursor,
-                Instant::now() + Duration::from_millis(1),
+                (Instant::now() + FACTORY_BUDGET).min(budget_end),
                 blocks,
                 chunks,
             );
         }
         self.status = self.sources.error.clone().or(self.status.take());
         if self.enabled && !waiting_for_writeback && dt.is_finite() && dt > 0.0 {
-            super::rigid::tick(&mut self.sources, world, dt, world::player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t), blocks, chunks);
-            let interval = (0.08 * self.scale.meters()).max(1.0 / 60.0);
-            // Carry bounded debt across slow frames instead of limiting motion
-            // to one material tick per rendered frame. All ticks share 3 ms.
+            let rigid_end = (Instant::now() + RIGID_BUDGET).min(budget_end);
+            if Instant::now() < rigid_end {
+                super::rigid::tick(
+                    &mut self.sources,
+                    world,
+                    dt,
+                    world::player_aabb(
+                        player.pos,
+                        world.voxel_scale,
+                        player.scale,
+                        player.crouch_t,
+                    ),
+                    rigid_end,
+                    blocks,
+                    chunks,
+                );
+            }
+            // Fine voxel worlds are not rendered at 50-60 fluid Hz. A 30 Hz
+            // floor keeps flow responsive without paying a full simulation
+            // catch-up cost every rendered frame.
+            let interval = (0.08 * self.scale.meters()).max(1.0 / 30.0);
             self.accumulator = (self.accumulator + dt).min(interval * 8.0);
+            let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
+            let water_end = Instant::now() + water_budget(world.activity.pending());
             let mut catch_up = 0;
-            while self.accumulator >= interval && catch_up < 4 && start.elapsed() < FRAME_BUDGET {
+            while self.accumulator >= interval && catch_up < 4 && Instant::now() < water_end {
                 self.accumulator -= interval;
                 catch_up += 1;
                 world.activity.tick = world.activity.tick.wrapping_add(1);
-                let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
-                if Instant::now() >= self.next_near {
+                // Rebuild the near list when the player crosses a chunk, or
+                // every half second. Rebuilding it every 125 ms at quarter
+                // scale scanned thousands of inactive chunk coordinates.
+                if self.near_center != Some(center) || Instant::now() >= self.next_near {
                     self.near.clear();
                     let r = (48.0 / (32.0 * self.scale.meters())).ceil() as i32;
                     for y in -r..=r {
@@ -223,7 +269,8 @@ impl WorldSimulation {
                         let d = (*c - center).as_i64vec3();
                         (d.length_squared(), c.y, c.z, c.x)
                     });
-                    self.next_near = Instant::now() + Duration::from_millis(125);
+                    self.near_center = Some(center);
+                    self.next_near = Instant::now() + Duration::from_millis(500);
                 }
                 let body = world::player_aabb(
                     player.pos,
@@ -235,7 +282,7 @@ impl WorldSimulation {
                 self.touched.clear();
                 let mut cells = 0;
                 for visit in 0..128 {
-                    if cells >= MAX_CELLS || start.elapsed() >= FRAME_BUDGET {
+                    if cells >= MAX_CELLS || Instant::now() >= water_end {
                         break;
                     }
                     let preferred = if visit % 4 != 0 {
@@ -270,7 +317,7 @@ impl WorldSimulation {
                     }
                     let batch = world.activity.take(c, 256.min(MAX_CELLS - cells));
                     for (i, &p) in batch.iter().enumerate() {
-                        if start.elapsed() >= FRAME_BUDGET {
+                        if Instant::now() >= water_end {
                             for &p in &batch[i..] {
                                 world.activity.wake(p);
                             }
@@ -320,11 +367,15 @@ pub(crate) fn discover(chunk: &GeneratedChunk) -> Option<Box<Mask>> {
             for x in 0..32usize {
                 let i = row + x;
                 let b = chunk.blocks[i];
-                if !matches!(b, B::Water | B::Sand | B::Gravel | B::Ash | B::RigidCore) && !super::thermal::active(b) {
+                if !matches!(b, B::Water | B::Sand | B::Gravel | B::Ash | B::RigidCore)
+                    && !super::thermal::active(b)
+                {
                     continue;
                 }
                 let down = chunk.blocks[i - PLANE];
-                let unstable = if super::thermal::active(b) || b == B::RigidCore { true } else if b == B::Water {
+                let unstable = if super::thermal::active(b) || b == B::RigidCore {
+                    true
+                } else if b == B::Water {
                     let p = chunk.chunk * crate::world::CHUNK_SIZE
                         + IVec3::new(x as i32, y as i32, z as i32);
                     let volume = chunk.water_levels.get(&p).copied().unwrap_or(8);
@@ -347,8 +398,12 @@ pub(crate) fn discover(chunk: &GeneratedChunk) -> Option<Box<Mask>> {
                                 };
                                 matches!(chunk.blocks[n], B::Air | B::Water)
                                     && (volume.saturating_sub(target) > 1
-                                        || (volume == 1 && target == 0
-                                            && matches!(chunk.blocks[n - PLANE], B::Air | B::Water)))
+                                        || (volume == 1
+                                            && target == 0
+                                            && matches!(
+                                                chunk.blocks[n - PLANE],
+                                                B::Air | B::Water
+                                            )))
                             })
                 } else {
                     matches!(down, B::Air | B::Water)

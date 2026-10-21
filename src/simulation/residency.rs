@@ -1,4 +1,5 @@
 //! Simulation source residency is independent of camera/mesh residency. No frame-side I/O.
+use crate::fast_hash::FastMap;
 use crate::world::{
     BlockId, ChunkData, World, WorldSampleConfig, chunk_coord_from_world_block,
     regions::{DiskChunk, RegionView},
@@ -38,15 +39,15 @@ struct Entry {
     touched: u64,
 }
 pub(crate) struct Residency {
-    entries: HashMap<IVec3, Entry>,
-    pending: HashMap<IVec3, Option<u64>>,
+    entries: FastMap<IVec3, Entry>,
+    pending: FastMap<IVec3, Option<u64>>,
     bytes: usize,
     clock: u64,
     tx: Option<mpsc::SyncSender<Job>>,
     rx: mpsc::Receiver<Done>,
     epoch: Arc<AtomicU64>,
     retry: Instant,
-    waiters: HashMap<IVec3, Vec<IVec3>>,
+    waiters: FastMap<IVec3, Vec<IVec3>>,
     ready: Vec<IVec3>,
     edited_bytes: usize,
     edited_limit: usize,
@@ -57,8 +58,8 @@ impl Default for Residency {
     fn default() -> Self {
         let (_, rx) = mpsc::sync_channel(1);
         Self {
-            entries: HashMap::new(),
-            pending: HashMap::new(),
+            entries: FastMap::default(),
+            pending: FastMap::default(),
             bytes: 0,
             clock: 0,
             tx: None,
@@ -69,7 +70,7 @@ impl Default for Residency {
             edited_bytes: 0,
             edited_limit: 0,
             memory_pressure: false,
-            waiters: HashMap::new(),
+            waiters: FastMap::default(),
             ready: Vec::new(),
         }
     }
@@ -201,9 +202,12 @@ impl Residency {
                                 }
                                 self.bytes += bytes;
                                 if let Some(mut mask) = done.candidates {
-                                    for (&(x,y,z), _) in world.sandbox.cells.range((done.coord.x*32,i32::MIN,i32::MIN)..=(done.coord.x*32+31,i32::MAX,i32::MAX)) {
-                                        let p = IVec3::new(x,y,z);
-                                        if chunk_coord_from_world_block(p) == done.coord { let i=ChunkData::local_index(x,y,z); mask[i/64] |= 1u64 << (i%64); }
+                                    for &(x, y, z) in world.sandbox.cells.keys() {
+                                        let p = IVec3::new(x, y, z);
+                                        if chunk_coord_from_world_block(p) == done.coord {
+                                            let i = ChunkData::local_index(x, y, z);
+                                            mask[i / 64] |= 1u64 << (i % 64);
+                                        }
                                     }
                                     world.activity.restrict(done.coord, &mask);
                                 }
@@ -385,7 +389,11 @@ fn candidate_mask(data: &DiskChunk, c: IVec3) -> Box<crate::world::activity::Mas
     let mut mask = Box::new([0; 512]);
     let base = c * crate::world::CHUNK_SIZE;
     for (i, &b) in data.chunk.blocks.iter().enumerate() {
-        if !matches!(b, BlockId::Water | BlockId::Sand | BlockId::Gravel | BlockId::Ash | BlockId::RigidCore) && !super::thermal::active(b) {
+        if !matches!(
+            b,
+            BlockId::Water | BlockId::Sand | BlockId::Gravel | BlockId::Ash | BlockId::RigidCore
+        ) && !super::thermal::active(b)
+        {
             continue;
         }
         let p = base + IVec3::new((i % 32) as i32, (i / 1024) as i32, ((i / 32) % 32) as i32);
@@ -404,7 +412,9 @@ fn candidate_mask(data: &DiskChunk, c: IVec3) -> Box<crate::world::activity::Mas
             ))
         };
         let down = read(p - IVec3::Y);
-        let active = if super::thermal::active(b) || b == BlockId::RigidCore { true } else if b == BlockId::Water {
+        let active = if super::thermal::active(b) || b == BlockId::RigidCore {
+            true
+        } else if b == BlockId::Water {
             let volume = data.water.get(&p).copied().unwrap_or(8);
             down.is_none_or(|(b, v)| b == BlockId::Air || (b == BlockId::Water && v < 8))
                 || [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
@@ -413,18 +423,23 @@ fn candidate_mask(data: &DiskChunk, c: IVec3) -> Box<crate::world::activity::Mas
                         read(p + d).is_none_or(|(b, v)| {
                             matches!(b, BlockId::Air | BlockId::Water)
                                 && (volume.saturating_sub(v) > 1
-                                    || (volume == 1 && v == 0 && read(p + d - IVec3::Y)
-                                        .is_none_or(|(id, amount)| id == BlockId::Air
-                                            || (id == BlockId::Water && amount < 8))))
+                                    || (volume == 1
+                                        && v == 0
+                                        && read(p + d - IVec3::Y).is_none_or(|(id, amount)| {
+                                            id == BlockId::Air
+                                                || (id == BlockId::Water && amount < 8)
+                                        })))
                         })
                     })
         } else {
             down.is_none_or(|(b, _)| matches!(b, BlockId::Air | BlockId::Water))
-                || [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z].iter().any(|&d| {
-                    read(p + d).is_none_or(|(b, _)| matches!(b, BlockId::Air | BlockId::Water))
-                        && read(p + d - IVec3::Y)
-                            .is_none_or(|(b, _)| matches!(b, BlockId::Air | BlockId::Water))
-                })
+                || [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
+                    .iter()
+                    .any(|&d| {
+                        read(p + d).is_none_or(|(b, _)| matches!(b, BlockId::Air | BlockId::Water))
+                            && read(p + d - IVec3::Y)
+                                .is_none_or(|(b, _)| matches!(b, BlockId::Air | BlockId::Water))
+                    })
         };
         if active {
             mask[i / 64] |= 1u64 << (i % 64);

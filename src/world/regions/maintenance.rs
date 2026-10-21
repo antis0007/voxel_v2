@@ -277,7 +277,7 @@ impl World {
         let mut water: HashMap<IVec3, HashMap<IVec3, u8>> = HashMap::new();
         for &c in self.regions.dirty.keys() {
             if let Some(values) = self.water_levels.chunk(c) {
-                water.insert(c, values.clone());
+                water.insert(c, values.iter().map(|(&p, &v)| (p, v)).collect());
             }
         }
 

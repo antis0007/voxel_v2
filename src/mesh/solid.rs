@@ -141,9 +141,12 @@ impl SolidPlan {
                             } else {
                                 0
                             };
-                            masks[plane * N * N + v * N + u] = Some(
-                                FaceMaterial::from_block_with_water_bucket(b, world_p, water_bucket),
-                            );
+                            masks[plane * N * N + v * N + u] =
+                                Some(FaceMaterial::from_block_with_water_bucket(
+                                    b,
+                                    world_p,
+                                    water_bucket,
+                                ));
                         }
                     }
                 }
@@ -218,7 +221,7 @@ impl SolidPlan {
         Some(plan)
     }
     pub fn lod_invariant(&self) -> bool {
-        !self.torches
+        self.patches.is_empty() && !self.torches
     }
     pub fn build(&self, chunk: &GeneratedChunk, mut mesh: ChunkMesh, lod: u8) -> ChunkMesh {
         for p in &self.patches {

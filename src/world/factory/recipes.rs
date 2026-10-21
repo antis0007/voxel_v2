@@ -49,6 +49,20 @@ impl Kind {
                 "Coils: 2 copper + 1 fibre → 2 coils",
                 "Core: 1 crystal + 1 circuit + 1 essence → 1 arcane core",
             ],
+            Self::Pipe => &[
+                "Pipe in: pushes machine outputs into the next machine or container that accepts them",
+                "Pipe out: pulls from the adjacent chest, crate, barrel or machine output",
+                "Distributor: evens one stack at a time across every container on this line",
+            ],
+            Self::Storage => &[
+                "Crate: logistics box on the item bus. A filter dedicates it to one resource",
+                "Chest: 27-slot grid. Pipe in fills it; pipe out or a distributor empties it",
+                "Barrel: bulk storage for one item. The first item locks it until the barrel is empty",
+            ],
+            Self::Generator => &[
+                "Coal furnace: burns coal for 64 power/s",
+                "Arcane pile: burns arcane cores for 256 power/s. Needs coolant water or it melts down",
+            ],
             Self::Cultivator => &[
                 "Biomass: 1 reusable culture + 0.25 fibre → 2 biomass",
                 "Lumen: 2 biomass → 1 fibre",
@@ -59,8 +73,22 @@ impl Kind {
 }
 impl Node {
     pub fn accepts(&self, i: usize) -> bool {
+        if self.kind == Kind::Storage {
+            if self.mode == 2 {
+                let locked = self
+                    .filter
+                    .or_else(|| self.input.iter().position(|&n| n > 0));
+                if let Some(locked) = locked {
+                    return i == locked;
+                }
+            }
+            return self.filter.is_none_or(|filter| filter == i) && i < super::RESOURCE_COUNT;
+        }
         if self.filter.is_some_and(|filter| filter != i) {
             return false;
+        }
+        if self.kind == Kind::Generator {
+            return i == if self.mode == 1 { super::pile::FUEL } else { 3 };
         }
         if self.kind.modes().is_empty() {
             return self.kind.accepts(i);

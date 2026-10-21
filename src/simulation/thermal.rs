@@ -36,19 +36,49 @@ pub(super) fn step(
     chunks: &mut HashSet<IVec3>,
 ) -> usize {
     let Some((b, _)) = s.read(w, p) else { return 0 };
-    let mut positions = vec![p];
-    positions.extend(
-        DIRS.into_iter()
-            .map(|d| p + d)
-            .filter(|q| super::cellular::allowed(w, *q)),
-    );
+    if b == B::Fire {
+        w.sandbox.note_fire(p);
+    }
+    // Smoke and steam are visible but do not need a full neighbour solve at
+    // 30 Hz. Staggering them halves the gas cost while keeping the cloud
+    // moving; fire stays on every tick.
+    if matches!(b, B::Smoke | B::Steam | B::Lava)
+        && ((w.activity.tick as usize)
+            .wrapping_add(p.x as usize)
+            .wrapping_add(p.y as usize)
+            .wrapping_add(p.z as usize)
+            & 1)
+            != 0
+    {
+        w.activity.wake(p);
+        return 0;
+    }
+    // Small fixed array instead of a heap Vec: thermal::step is called for
+    // every active gas cell and allocation dominated the sparse update path.
+    let mut positions = [p; 7];
+    let mut position_count = 1usize;
+    for d in DIRS {
+        let q = p + d;
+        if super::cellular::allowed(w, q) {
+            positions[position_count] = q;
+            position_count += 1;
+        }
+    }
+    let positions = &positions[..position_count];
     let mut ready = true;
-    for &q in &positions {
+    for &q in positions {
         ready &= s.request_for(w, chunk(q), chunk(p));
     }
     if !ready || !w.sandbox.can_admit(&[p]) {
         w.activity.wake(p);
         return 0;
+    }
+    // Read the six-face neighbourhood once. The old path re-read the same
+    // source cells for heat exchange, ignition oxygen, wet contact and lava
+    // quenching, multiplying residence-map lookups for every burning cell.
+    let mut neighbours = [(B::Air, 0u8); 6];
+    for (slot, &q) in neighbours.iter_mut().zip(&positions[1..]) {
+        *slot = s.read(w, q).unwrap_or((B::Air, 0));
     }
     let mut c = w.sandbox.cell(p);
     if b == B::Steam && c.gas == 0 {
@@ -88,21 +118,29 @@ pub(super) fn step(
     w.sandbox.set(p, c);
     let mut count = 0;
     let mut replace = None;
+    let mut steam_at = None;
     if fuel(b) > 0.0 && c.temperature >= 260.0 {
         c.fuel = fuel(b);
         replace = Some(B::Fire);
     }
     if b == B::Fire {
-        let oxygen = positions[1..]
+        let oxygen = neighbours
             .iter()
-            .any(|&q| s.read(w, q).is_some_and(|(b, _)| b == B::Air));
-        let wet = positions[1..]
+            .take(position_count - 1)
+            .any(|(b, _)| *b == B::Air);
+        let wet = neighbours
             .iter()
-            .any(|&q| s.read(w, q).is_some_and(|(b, _)| b == B::Water));
+            .take(position_count - 1)
+            .any(|(b, _)| *b == B::Water);
         if wet || !oxygen {
             c.temperature = c.temperature.min(180.0);
             replace = Some(B::Ash);
             c.fuel = 0.0;
+            if wet {
+                // Quenching flashes the contact water to a short steam puff
+                // above the fire instead of silently deleting the flame.
+                steam_at = Some(p + IVec3::Y);
+            }
         } else {
             // Fuel supplies enough heat to overcome six-face diffusion and ignite neighbours.
             c.temperature = (c.temperature + 250.0).min(950.0);
@@ -136,7 +174,9 @@ pub(super) fn step(
         let water_neighbor = positions[1..]
             .iter()
             .copied()
-            .find(|&q| s.read(w, q).is_some_and(|(nb, _)| nb == B::Water));
+            .zip(neighbours.iter())
+            .find(|(_, (nb, _))| *nb == B::Water)
+            .map(|(q, _)| q);
         if let Some(wq) = water_neighbor {
             replace = Some(B::Basalt);
             c.temperature = 320.0;
@@ -168,6 +208,9 @@ pub(super) fn step(
     }
     if let Some(id) = replace {
         if s.prepare(w, &[p]) {
+            if b == B::Fire && id != B::Fire {
+                w.sandbox.clear_fire(p);
+            }
             if id == B::Water {
                 w.set_water_volume(p, c.gas.max(1));
                 c.gas = 0;
@@ -179,6 +222,26 @@ pub(super) fn step(
         } else {
             w.activity.wake(p);
             return count;
+        }
+    }
+    if let Some(q) = steam_at {
+        if admission(w, p, q)
+            && w.sandbox.can_admit(&[q])
+            && s.read(w, q).is_some_and(|(id, _)| id == B::Air)
+            && s.prepare(w, &[q])
+        {
+            w.set(q, B::Steam);
+            w.sandbox.set(
+                q,
+                ThermalCell {
+                    temperature: 160.0,
+                    fuel: 0.0,
+                    gas: 4,
+                },
+            );
+            visited.insert(q);
+            changed(q, blocks, chunks);
+            count += 1;
         }
     }
     w.sandbox.set(p, c);

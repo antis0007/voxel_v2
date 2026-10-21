@@ -20,7 +20,9 @@ pub fn player_aabb(
     )
 }
 
-pub fn collides_world(world: &World, min: Vec3, max: Vec3) -> bool { collides_world_local(world,min,max,IVec3::ZERO) }
+pub fn collides_world(world: &World, min: Vec3, max: Vec3) -> bool {
+    collides_world_local(world, min, max, IVec3::ZERO)
+}
 pub fn collides_world_local(world: &World, min: Vec3, max: Vec3, origin: IVec3) -> bool {
     let a = min.floor().as_ivec3();
     let b = (max - Vec3::splat(0.001)).floor().as_ivec3();
@@ -28,12 +30,67 @@ pub fn collides_world_local(world: &World, min: Vec3, max: Vec3, origin: IVec3) 
         for y in a.y..=b.y {
             for x in a.x..=b.x {
                 if world.solid(origin + IVec3::new(x, y, z)) {
-                    if let Some(bounds)=super::factory::conduit_bounds(world,origin+IVec3::new(x,y,z)) {
-                        if !bounds.iter().any(|&(a,b)|min.cmplt(b-origin.as_vec3()).all()&&max.cmpgt(a-origin.as_vec3()).all()){continue;}
+                    if let Some(bounds) =
+                        super::factory::conduit_bounds(world, origin + IVec3::new(x, y, z))
+                    {
+                        if !bounds.iter().any(|&(a, b)| {
+                            min.cmplt(b - origin.as_vec3()).all()
+                                && max.cmpgt(a - origin.as_vec3()).all()
+                        }) {
+                            continue;
+                        }
                     }
                     return true;
                 }
             }
+        }
+    }
+    false
+}
+
+/// Recover a body that is already inside solid voxels.
+///
+/// Streaming edits, growth, and saves made before foliage became solid can
+/// leave the player embedded. Resolving the smallest cardinal escape keeps a
+/// bad frame from becoming a permanently stuck camera (and a permanently
+/// see-through leaf block).
+pub fn resolve_penetration_local(
+    origin: IVec3,
+    world: &World,
+    player_scale: f32,
+    crouch_t: f32,
+    pos: &mut Vec3,
+) -> bool {
+    if !pos.is_finite() {
+        return false;
+    }
+    let scale = world.voxel_scale.meters().max(1e-6);
+    let (min, max) = player_aabb(*pos, world.voxel_scale, player_scale, crouch_t);
+    if !collides_world_local(world, min, max, origin) {
+        return false;
+    }
+
+    // Prefer lifting out of a canopy or shallow floor. Then try the sides,
+    // nearest first. Each candidate is a complete body test, never a per-axis
+    // teleport into another wall.
+    let mut candidates = Vec::with_capacity(64);
+    for step in 1..=16 {
+        candidates.push(Vec3::Y * (step as f32 * 0.25 / scale));
+    }
+    for step in 1..=8 {
+        let d = step as f32 * 0.5 / scale;
+        candidates.extend([Vec3::X * d, Vec3::NEG_X * d, Vec3::Z * d, Vec3::NEG_Z * d]);
+    }
+    for step in 1..=8 {
+        candidates.push(Vec3::NEG_Y * (step as f32 * 0.5 / scale));
+    }
+
+    for offset in candidates {
+        let candidate = *pos + offset;
+        let (min, max) = player_aabb(candidate, world.voxel_scale, player_scale, crouch_t);
+        if !collides_world_local(world, min, max, origin) {
+            *pos = candidate;
+            return true;
         }
     }
     false
@@ -147,13 +204,25 @@ pub fn try_step_up_local(
     true
 }
 
-pub fn raycast_block(world:&World, origin:Vec3, dir:Vec3, max_dist:f32)->Option<(IVec3,IVec3)> {
-    raycast_block_precise(world,origin.as_dvec3(),dir,max_dist)
+pub fn raycast_block(
+    world: &World,
+    origin: Vec3,
+    dir: Vec3,
+    max_dist: f32,
+) -> Option<(IVec3, IVec3)> {
+    raycast_block_precise(world, origin.as_dvec3(), dir, max_dist)
 }
-pub fn raycast_block_precise(world:&World, precise_origin:glam::DVec3, dir:Vec3, max_dist:f32)->Option<(IVec3,IVec3)> {
-    if !precise_origin.is_finite() { return None; }
-    let offset=precise_origin.floor().as_ivec3();
-    let origin=(precise_origin-offset.as_dvec3()).as_vec3();
+pub fn raycast_block_precise(
+    world: &World,
+    precise_origin: glam::DVec3,
+    dir: Vec3,
+    max_dist: f32,
+) -> Option<(IVec3, IVec3)> {
+    if !precise_origin.is_finite() {
+        return None;
+    }
+    let offset = precise_origin.floor().as_ivec3();
+    let origin = (precise_origin - offset.as_dvec3()).as_vec3();
     if !origin.is_finite()
         || !dir.is_finite()
         || !max_dist.is_finite()
@@ -221,9 +290,19 @@ pub fn raycast_block_precise(world:&World, precise_origin:glam::DVec3, dir:Vec3,
         .saturating_add(3)
         .min(65_536);
     for _ in 0..max_steps {
-        if world.get(cell+offset).is_ray_pickable() {
-            if super::factory::conduit_bounds(world,cell+offset).is_none_or(|bounds|bounds.into_iter().any(|(a,b)|super::factory::ray_box(origin,dir,a-offset.as_vec3(),b-offset.as_vec3(),max_dist))) {
-                return Some((cell+offset, prev+offset));
+        if world.get(cell + offset).is_ray_pickable() {
+            if super::factory::conduit_bounds(world, cell + offset).is_none_or(|bounds| {
+                bounds.into_iter().any(|(a, b)| {
+                    super::factory::ray_box(
+                        origin,
+                        dir,
+                        a - offset.as_vec3(),
+                        b - offset.as_vec3(),
+                        max_dist,
+                    )
+                })
+            }) {
+                return Some((cell + offset, prev + offset));
             }
         }
 
@@ -254,5 +333,17 @@ pub fn raycast_block_precise(world:&World, precise_origin:glam::DVec3, dir:Vec3,
     None
 }
 
-pub fn try_move(world:&World, scale:f32, crouch:f32, pos:&mut Vec3, delta:Vec3, ground:&mut bool, sneak:bool){try_move_local(IVec3::ZERO,world,scale,crouch,pos,delta,ground,sneak)}
-pub fn try_step_up(world:&World,scale:f32,crouch:f32,pos:&mut Vec3,delta:Vec3)->bool{try_step_up_local(IVec3::ZERO,world,scale,crouch,pos,delta)}
+pub fn try_move(
+    world: &World,
+    scale: f32,
+    crouch: f32,
+    pos: &mut Vec3,
+    delta: Vec3,
+    ground: &mut bool,
+    sneak: bool,
+) {
+    try_move_local(IVec3::ZERO, world, scale, crouch, pos, delta, ground, sneak)
+}
+pub fn try_step_up(world: &World, scale: f32, crouch: f32, pos: &mut Vec3, delta: Vec3) -> bool {
+    try_step_up_local(IVec3::ZERO, world, scale, crouch, pos, delta)
+}

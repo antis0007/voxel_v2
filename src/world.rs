@@ -6,22 +6,36 @@ use crate::fluid::VoxelScalePreset;
 pub use crate::material::BlockId;
 
 pub mod activity;
-mod water;
+pub mod adventure;
+mod architecture;
+mod cistern;
 mod collision;
-mod generation_cache;
-mod vegetation;
-mod trees;
-pub mod landscape;
-pub mod sites;
+mod dungeon;
 pub mod expedition;
 pub mod factory;
-pub mod adventure;
+mod generation_cache;
+pub mod interaction;
 pub mod inventory;
+pub mod landscape;
+pub mod mood;
 pub mod regions;
 mod sample_cache;
+pub mod sites;
 pub mod storage;
+mod surface;
+mod terrain_variety;
+pub(crate) mod trace;
+mod trees;
+pub mod undercrown;
+mod valley;
+mod vegetation;
+mod water;
 mod weather;
-pub use collision::{raycast_block_precise, collides_world_local, try_move_local, try_step_up_local, collides_world, player_aabb, raycast_block, try_move, try_step_up};
+pub mod zones;
+pub use collision::{
+    collides_world, collides_world_local, player_aabb, raycast_block, raycast_block_precise,
+    resolve_penetration_local, try_move, try_move_local, try_step_up, try_step_up_local,
+};
 
 #[allow(unused_imports)]
 pub use weather::{
@@ -29,10 +43,15 @@ pub use weather::{
     WEATHER_TEXTURE_RESOLUTION, WeatherClipmapUploadBatch, WeatherRuntimeState, WeatherUploadRect,
 };
 
+/// How deep inside a starlit cosmos chamber a point (in metres) is, 0..1.
+pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
+    dungeon::cosmos_at(cfg, p)
+}
+
 pub const CHUNK_SIZE: i32 = 32;
 /// New-world generator and maximum readable version. Keep historical version
 /// gates literal: bumping this must never change how an older save generates.
-pub const CURRENT_GENERATOR_VERSION: u32 = 13;
+pub const CURRENT_GENERATOR_VERSION: u32 = 22;
 pub const PLAYER_WIDTH: f32 = 0.6;
 pub const PLAYER_HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;
@@ -109,6 +128,7 @@ impl ChunkData {
     pub fn generate(cfg: &WorldSampleConfig, chunk_coord: IVec3) -> Self {
         let mut blocks = Box::new([BlockId::Air; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]);
         let chunk_origin = chunk_coord * CHUNK_SIZE;
+        let profiles = RegionProfiles::new(cfg, chunk_origin.x, chunk_origin.z, CHUNK_SIZE);
 
         for z in 0..CHUNK_SIZE {
             for x in 0..CHUNK_SIZE {
@@ -116,7 +136,7 @@ impl ChunkData {
                 for y in 0..CHUNK_SIZE {
                     let world_pos = chunk_origin + IVec3::new(x, y, z);
                     let index = Self::local_index(x, y, z);
-                    blocks[index] = sample_block_in_column(cfg, world_pos, column);
+                    blocks[index] = sample_block_with(cfg, world_pos, column, &profiles);
                 }
             }
         }
@@ -164,6 +184,16 @@ pub struct LightingState {
     pub saturation: f32,
     pub fog_height: f32,
     pub fog_falloff: f32,
+    /// x: cosmos chamber (fog becomes starfield), y: aurora, z: meteor shower,
+    /// w: rainbow. Zero unless `with_mood` or the camera says otherwise.
+    pub mood: [f32; 4],
+    /// Whole-frame colour grade for sky events: rgb multiplier, w: amount.
+    pub mood_tint: [f32; 4],
+    /// Seasonal multipliers for the meadow and canopy material families.
+    pub grass_tint: [f32; 3],
+    pub foliage_tint: [f32; 3],
+    /// Living air: fireflies, pollen, diamond dust, embers. Each 0..1.
+    pub ambience: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -253,8 +283,11 @@ impl LightingState {
         // ellipse (x scaled to 0.33) sped the sun up threefold at the horizon,
         // squeezing nearly all golden/coral lighting into a few game minutes.
         let solar_tilt = 0.24_f32.atan();
-        let sun_dir = Vec3::new(angle.cos() * solar_tilt.cos(),
-            angle.sin() * solar_tilt.cos(), solar_tilt.sin());
+        let sun_dir = Vec3::new(
+            angle.cos() * solar_tilt.cos(),
+            angle.sin() * solar_tilt.cos(),
+            solar_tilt.sin(),
+        );
         let moon_dir = -sun_dir;
         let sun_height = sun_dir.y;
         let moon_height = moon_dir.y;
@@ -356,8 +389,10 @@ impl LightingState {
         let sun_color = [1.00, 0.98, 0.95];
         let moon_color = [0.50, 0.58, 0.74];
 
-        let ambient_night = [0.040, 0.050, 0.080];
-        let ambient_day = [0.18, 0.22, 0.30];
+        let ambient_night = [0.105, 0.125, 0.185];
+        // Keep midday fill restrained so the sun still shapes slopes and ridges.
+        // The previous value flattened the terrain into a pale blue wash.
+        let ambient_day = [0.155, 0.195, 0.268];
         let mut ambient_color = lerp_color(ambient_night, ambient_day, daylight);
         ambient_color = lerp_color(
             ambient_color,
@@ -366,48 +401,114 @@ impl LightingState {
         );
         let overcast_ambient = [0.17, 0.19, 0.22];
         ambient_color = lerp_color(ambient_color, overcast_ambient, overcast * daylight * 0.48);
+        ambient_color = lerp_color(
+            ambient_color,
+            [0.065, 0.075, 0.095],
+            storminess * daylight * 0.62,
+        );
 
-        let mut sky_top = lerp_color([0.020, 0.040, 0.100], [0.09, 0.36, 0.92], daylight);
-        let mut sky_horizon = lerp_color([0.050, 0.085, 0.170], [0.44, 0.72, 1.00], daylight);
+        let (day_top, day_horizon, sunset_hue) = day_sky_palette(day_index, weather_seed);
+        let night_top = [0.012, 0.018, 0.048];
+        let night_horizon = [0.028, 0.040, 0.085];
+        let mut sky_top = lerp_color(night_top, day_top, daylight);
+        let mut sky_horizon = lerp_color(night_horizon, day_horizon, daylight);
 
-        let cloud_tint_top = [0.28, 0.40, 0.64];
-        let cloud_tint_horizon = [0.48, 0.62, 0.80];
+        // Weather classes move the whole dome. A single gray-blue mix made
+        // clear, marine, storm, and winter days look like the same peach sky.
+        let overcast_top = [0.30, 0.36, 0.44];
+        let overcast_horizon = [0.50, 0.56, 0.62];
         sky_top = lerp_color(
             sky_top,
-            cloud_tint_top,
-            saturate(overcast * 0.42 + cloud_grayness * 0.18),
+            lerp_color(night_top, overcast_top, daylight),
+            overcast * 0.86,
         );
         sky_horizon = lerp_color(
             sky_horizon,
-            cloud_tint_horizon,
-            saturate(overcast * 0.55 + cloud_grayness * 0.24),
+            lerp_color(night_horizon, overcast_horizon, daylight),
+            overcast * 0.90,
+        );
+        let storm_top = [0.07, 0.10, 0.15];
+        let storm_horizon = [0.15, 0.22, 0.23];
+        sky_top = lerp_color(
+            sky_top,
+            lerp_color(night_top, storm_top, daylight),
+            storminess * 0.92,
         );
         sky_horizon = lerp_color(
             sky_horizon,
-            [1.00, 0.58, 0.18],
-            twilight * (1.0 - overcast * 0.58) * 1.04,
+            lerp_color(night_horizon, storm_horizon, daylight),
+            storminess * 0.94,
         );
-        sky_top = lerp_color(sky_top, [0.66, 0.30, 0.22], twilight * 0.24);
+        let winter = saturate(
+            stratus * 0.55 + cirrus * 0.45 + altostratus * 0.25
+                - cumulus * 0.70
+                - cumulonimbus
+                - overcast * 0.55,
+        );
+        let winter_top = [0.42, 0.50, 0.62];
+        let winter_horizon = [0.72, 0.78, 0.86];
+        sky_top = lerp_color(
+            sky_top,
+            lerp_color(night_top, winter_top, daylight),
+            winter * 0.78,
+        );
+        sky_horizon = lerp_color(
+            sky_horizon,
+            lerp_color(night_horizon, winter_horizon, daylight),
+            winter * 0.82,
+        );
+        sky_horizon = lerp_color(
+            sky_horizon,
+            [0.80, 0.76, 0.66],
+            haze * daylight * (1.0 - storminess),
+        );
+        // Ozone lives in the zenith only. The saturated sunset is painted in
+        // the shader as an aureole and an antisolar belt; this horizon shift
+        // is just enough for the fog to warm with the sun.
+        let ozone = hash01(weather_seed ^ day_index.wrapping_mul(0x6C8E_9CF5));
+        sky_top = lerp_color(
+            sky_top,
+            [
+                sky_top[0] * 0.80,
+                sky_top[1] * 0.86,
+                (sky_top[2] * 1.14).min(1.0),
+            ],
+            ozone * daylight * (1.0 - overcast) * (1.0 - storminess) * 0.42,
+        );
+        let sunset_amt = (twilight
+            * (1.0 - overcast * 0.92)
+            * (1.0 - storminess * 0.78)
+            * (1.0 - winter * 0.40))
+            .clamp(0.0, 0.34);
+        sky_horizon = lerp_color(sky_horizon, sunset_hue, sunset_amt);
+        sky_top = lerp_color(
+            sky_top,
+            [
+                sunset_hue[0] * 0.22 + day_top[0] * 0.78,
+                sunset_hue[1] * 0.12 + day_top[1] * 0.88,
+                day_top[2],
+            ],
+            sunset_amt * sunset_amt * 0.12,
+        );
 
-        let fog_night = [0.050, 0.060, 0.100];
-        let fog_day = [0.50, 0.68, 0.96];
-        let mut fog_color = lerp_color(fog_night, fog_day, daylight);
-        fog_color = lerp_color(
-            fog_color,
-            [0.56, 0.66, 0.80],
-            saturate(overcast * 0.34 + haze * 0.14),
+        let mut fog_color = lerp_color([0.030, 0.040, 0.075], sky_horizon, daylight * 0.90);
+        fog_color = lerp_color(fog_color, sky_top, 0.22 + haze * 0.08);
+        // Shade takes the colour of this day's sky, so a cobalt noon and a
+        // dusty noon do not share the same grey shadows.
+        ambient_color = lerp_color(
+            ambient_color,
+            [
+                sky_top[0] * 0.40 + 0.045,
+                sky_top[1] * 0.34 + 0.050,
+                sky_top[2] * 0.46 + 0.030,
+            ],
+            daylight * (1.0 - overcast * 0.70) * (1.0 - storminess * 0.40) * 0.64,
         );
-        fog_color = lerp_color(
-            fog_color,
-            [1.00, 0.66, 0.30],
-            twilight * (1.0 - overcast * 0.54) * 0.44,
-        );
-        fog_color = lerp_color(fog_color, sky_horizon, 0.12 + haze * 0.16 + overcast * 0.08);
 
         let sun_elev = smoothstep(-0.08, 0.85, sun_height);
         let solar_extinction = 1.0 - smoothstep(-0.18, 0.10, sun_height);
         let mut sun_intensity =
-            daylight * (2.0 + 7.1 * sun_elev + twilight * 0.38) * (1.0 - solar_extinction * 0.30);
+            daylight * (2.1 + 7.9 * sun_elev + twilight * 0.38) * (1.0 - solar_extinction * 0.30);
 
         let sun_occlusion = saturate(
             low_cloudiness * 0.32
@@ -418,7 +519,7 @@ impl LightingState {
         );
         sun_intensity *= 1.0 - sun_occlusion * 0.65;
 
-        let moon_base = night * smoothstep(-0.16, 0.26, moon_height) * 0.32;
+        let moon_base = night * smoothstep(-0.16, 0.26, moon_height) * 0.62;
         let moon_occlusion = saturate(
             low_cloudiness * 0.28
                 + mid_cloudiness * 0.16
@@ -432,9 +533,9 @@ impl LightingState {
         let fog_end = (320.0 + daylight * 842.0) / fog_scale.powf(0.86);
 
         let exposure =
-            (0.28 + daylight * 0.66 + twilight * 0.24) * (1.0 - overcast * 0.08) + haze * 0.008;
-        let saturation = (0.74 + daylight * 0.18 + twilight * 0.08)
-            * (1.0 - overcast * 0.10 - stratus * 0.06 - altostratus * 0.04);
+            (0.465 + daylight * 0.400 + twilight * 0.22) * (1.0 - overcast * 0.08) + haze * 0.008;
+        let saturation =
+            (0.84 + daylight * 0.16) * (1.0 - overcast * 0.34 - storminess * 0.24 - stratus * 0.08);
 
         let fog_height = WATER_LEVEL_METERS + 14.0 + haze * 9.0 + low_base_factor * 4.0;
         let fog_falloff = 0.036 + night * 0.010 + cloud_mass * 0.008 + haze * 0.006;
@@ -455,9 +556,14 @@ impl LightingState {
             daylight,
             twilight,
             exposure,
-            saturation: saturation.clamp(0.52, 1.00),
+            saturation: saturation.clamp(0.40, 1.12),
             fog_height,
             fog_falloff,
+            mood: [0.0; 4],
+            mood_tint: [1.0, 1.0, 1.0, 0.0],
+            grass_tint: [1.0; 3],
+            foliage_tint: [1.0; 3],
+            ambience: [0.0; 4],
         }
     }
 }
@@ -587,6 +693,69 @@ fn hash_u32(mut x: u32) -> u32 {
 
 fn hash01(x: u32) -> f32 {
     hash_u32(x) as f32 / u32::MAX as f32
+}
+
+/// Noon zenith, noon horizon, and the low-sun hue for one calendar day.
+/// Neighbouring days share a family, then Rayleigh and aerosol shift that family
+/// so two cobalt days are not the same sky.
+fn day_sky_palette(day_index: u32, weather_seed: u32) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let hue = hash01(weather_seed ^ day_index.rotate_left(9) ^ 0x51A7_C3E1) * 6.0;
+    let index = (hue.floor() as usize) % 6;
+    let next = (index + 1) % 6;
+    let blend = {
+        let t = hue.fract();
+        t * t * (3.0 - 2.0 * t)
+    };
+    const PALETTES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+        (
+            [0.030, 0.140, 0.660],
+            [0.500, 0.720, 0.960],
+            [1.00, 0.46, 0.10],
+        ),
+        (
+            [0.050, 0.300, 0.780],
+            [0.580, 0.840, 0.980],
+            [1.00, 0.66, 0.32],
+        ),
+        (
+            [0.090, 0.240, 0.460],
+            [0.660, 0.760, 0.820],
+            [0.98, 0.40, 0.28],
+        ),
+        (
+            [0.200, 0.300, 0.450],
+            [0.860, 0.740, 0.520],
+            [1.00, 0.48, 0.14],
+        ),
+        (
+            [0.220, 0.380, 0.620],
+            [0.800, 0.880, 0.960],
+            [0.86, 0.50, 0.66],
+        ),
+        (
+            [0.015, 0.150, 0.820],
+            [0.300, 0.580, 0.990],
+            [0.96, 0.32, 0.44],
+        ),
+    ];
+    let mut top = lerp_color(PALETTES[index].0, PALETTES[next].0, blend * 0.55);
+    let mut horizon = lerp_color(PALETTES[index].1, PALETTES[next].1, blend * 0.55);
+    let sunset = lerp_color(PALETTES[index].2, PALETTES[next].2, blend * 0.55);
+    let rayleigh = hash01(weather_seed ^ day_index.wrapping_mul(0x27BB_2EE6));
+    let aerosol = hash01(weather_seed ^ day_index.wrapping_mul(0x1656_67B1));
+    top[0] *= 1.08 - rayleigh * 0.28;
+    top[1] *= 0.96 + rayleigh * 0.06;
+    top[2] = (top[2] * (0.86 + rayleigh * 0.32)).min(1.0);
+    horizon = lerp_color(
+        horizon,
+        [
+            (horizon[0] + 0.06).min(1.0),
+            horizon[1],
+            (horizon[2] * 0.82).max(0.05),
+        ],
+        (aerosol - 0.35).clamp(0.0, 1.0) * 0.55,
+    );
+    (top, horizon, sunset)
 }
 
 fn weather_profile_for_day(day_index: u32, weather_seed: u32) -> WeatherProfile {
@@ -997,6 +1166,25 @@ impl DayNightCycle {
             self.weather_seed,
             self.cloud_controls,
         )
+        .with_mood(self.weather_seed, self.day_index, self.time_of_day)
+    }
+
+    pub fn day_index(&self) -> u32 {
+        self.day_index
+    }
+
+    /// Review hook: jump to a calendar day (season, sky event, weather bucket).
+    pub fn set_day_index(&mut self, day: u32) {
+        self.day_index = day;
+    }
+
+    /// The sky event running right now, for the HUD announcement.
+    pub fn sky_event(&self) -> Option<mood::ActiveEvent> {
+        mood::active_event(self.weather_seed, self.day_index, self.time_of_day)
+    }
+
+    pub fn season_name(&self) -> &'static str {
+        mood::season_name(self.day_index, self.time_of_day)
     }
 }
 
@@ -1108,7 +1296,7 @@ pub struct WorldSnapshot {
     pub regions: regions::RegionView,
     pub water_levels: Arc<HashMap<IVec3, u8>>,
     pub cfg: WorldSampleConfig,
-    pub chunks: Arc<HashMap<IVec3, Arc<ChunkData>>>,
+    pub chunks: Arc<crate::fast_hash::FastMap<IVec3, Arc<ChunkData>>>,
 }
 
 impl WorldSnapshot {
@@ -1157,12 +1345,41 @@ impl WorldSnapshot {
     }
 }
 
+/// Column-constant terms of the cave field. Computing these once per column
+/// removes four 2D noise evaluations from every underground voxel.
+#[derive(Clone, Copy, Default)]
+struct CaveColumn {
+    height_above_water: f32,
+    ravine: f32,
+    ravine_center: f32,
+    ravine_half_h: f32,
+    mx: f32,
+    mz: f32,
+}
+
 #[derive(Clone, Copy)]
 struct ColumnSample {
     height: i32,
     surface: BlockId,
     filler: BlockId,
     vegetation_density: f32,
+    cave: CaveColumn,
+}
+
+fn cave_column(cfg: &WorldSampleConfig, x: i32, z: i32, height: i32) -> CaveColumn {
+    let seed = cfg.seed;
+    let mx = cfg.world_x(x);
+    let mz = cfg.world_z(z);
+    CaveColumn {
+        height_above_water: (height - cfg.water_level()) as f32 * cfg.voxel_meters(),
+        ravine: ridge(value_noise2(mx * 0.010, mz * 0.010, seed.wrapping_add(571))),
+        ravine_center: cfg.world_y(height)
+            - 16.0
+            - value_noise2(mx * 0.020, mz * 0.020, seed.wrapping_add(593)) * 10.0,
+        ravine_half_h: 4.0 + value_noise2(mx * 0.018, mz * 0.018, seed.wrapping_add(617)) * 4.5,
+        mx,
+        mz,
+    }
 }
 
 fn saturate(v: f32) -> f32 {
@@ -1547,6 +1764,7 @@ fn sample_column_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSamp
         vegetation_density: (weights.plains * 0.95 + weights.hills * 0.40 + weights.snow * 0.08)
             .clamp(0.0, 1.0)
             * (1.0 - weights.desert * 0.90),
+        cave: cave_column(cfg, x, z, height),
     }
 }
 
@@ -1569,17 +1787,17 @@ fn water_table(cfg: &WorldSampleConfig, x: i32, z: i32) -> i32 {
     .min(cfg.water_level())
 }
 
-fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column_height: i32) -> bool {
+fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column: &ColumnSample) -> bool {
     if matches!(cfg.world_type, WorldType::Superflat) {
         return false;
     }
-    if p.y > column_height || p.y <= cfg.min_world_y() + cfg.blocks_for_span(0.75) {
+    if p.y > column.height || p.y <= cfg.min_world_y() + cfg.blocks_for_span(0.75) {
         return false;
     }
 
     let seed = cfg.seed;
-    let depth = (column_height - p.y) as f32 * cfg.voxel_meters();
-    let height_above_water = (column_height - cfg.water_level()) as f32 * cfg.voxel_meters();
+    let depth = (column.height - p.y) as f32 * cfg.voxel_meters();
+    let height_above_water = column.cave.height_above_water;
     // Protect beaches, shorelines, and shallow lowland turf from surface-breaking
     // cave slits and flooded sinkholes; only high hills/mountains allow cave mouths.
     if height_above_water < 9.0 && depth < 5.5 {
@@ -1588,9 +1806,9 @@ fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column_height: i32) -> bool {
     if height_above_water < 18.0 && depth < 2.5 {
         return false;
     }
-    let mx = cfg.world_x(p.x);
+    let mx = column.cave.mx;
     let my = cfg.world_y(p.y);
-    let mz = cfg.world_z(p.z);
+    let mz = column.cave.mz;
     let spaghetti = value_noise3(mx * 0.060, my * 0.095, mz * 0.060, seed.wrapping_add(301));
     let cheese = value_noise3(mx * 0.028, my * 0.040, mz * 0.028, seed.wrapping_add(347));
     let pillar = ridge(value_noise3(
@@ -1599,11 +1817,9 @@ fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column_height: i32) -> bool {
         mz * 0.020,
         seed.wrapping_add(389),
     ));
-    let ravine = ridge(value_noise2(mx * 0.010, mz * 0.010, seed.wrapping_add(571)));
-    let ravine_center = cfg.world_y(column_height)
-        - 16.0
-        - value_noise2(mx * 0.020, mz * 0.020, seed.wrapping_add(593)) * 10.0;
-    let ravine_half_h = 4.0 + value_noise2(mx * 0.018, mz * 0.018, seed.wrapping_add(617)) * 4.5;
+    let ravine = column.cave.ravine;
+    let ravine_center = column.cave.ravine_center;
+    let ravine_half_h = column.cave.ravine_half_h;
     let bias = saturate(depth / 24.0) * 0.12;
     let surface_guard = saturate((10.0 - depth) / 10.0) * 0.16;
 
@@ -1622,6 +1838,7 @@ fn tree_profile_for_cell(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> O
 pub(crate) struct TreeVisual {
     pub base: Vec3,
     pub height: f32,
+    /// Outer leaf reach from the trunk, metres (see `trees::crown_reach`).
     pub radius: f32,
     pub crown_height: f32,
     pub conifer: bool,
@@ -1632,12 +1849,21 @@ pub(crate) fn tree_visual(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> 
     let tree = tree_profile_for_cell(cfg, cell_x, cell_z)?;
     let scale = cfg.voxel_meters();
     Some(TreeVisual {
-        base: Vec3::new(tree.anchor_x as f32, tree.ground_y as f32, tree.anchor_z as f32) * scale,
+        base: Vec3::new(
+            tree.anchor_x as f32,
+            tree.ground_y as f32,
+            tree.anchor_z as f32,
+        ) * scale,
         height: tree.trunk_h as f32 * scale,
-        radius: tree.canopy_radius as f32 * scale,
+        // True leaf footprint in metres, from the same limb math as `block()`.
+        // Lobes reach well past `canopy_radius`, so a proxy sized from the
+        // radius alone shrinks the tree when its LOD changes.
+        radius: trees::crown_reach(cfg, &tree),
         crown_height: tree.canopy_height as f32 * scale,
         conifer: tree.conifer,
-        seed: (cell_x as u32).wrapping_mul(73856093) ^ (cell_z as u32).wrapping_mul(19349663) ^ cfg.seed,
+        seed: (cell_x as u32).wrapping_mul(73856093)
+            ^ (cell_z as u32).wrapping_mul(19349663)
+            ^ cfg.seed,
     })
 }
 
@@ -1651,7 +1877,10 @@ fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> O
     let column = sample_column(cfg, anchor_x, anchor_z);
     let ground_y = column.height;
     let woodland_soil = cfg.generator_version >= 11
-        && matches!(column.surface, BlockId::Dirt | BlockId::Mud | BlockId::Gravel)
+        && matches!(
+            column.surface,
+            BlockId::Dirt | BlockId::Mud | BlockId::Gravel
+        )
         && column.vegetation_density > 0.20;
     if column.surface != BlockId::Grass
         && !(cfg.generator_version >= 2 && column.surface == BlockId::SnowGrass)
@@ -1681,7 +1910,9 @@ fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> O
         .max((h_px - ground_y).abs())
         .max((h_nz - ground_y).abs())
         .max((h_pz - ground_y).abs());
-    if slope > cfg.blocks_for_span(0.9) || ground_y <= cfg.water_level() + cfg.blocks_for_span(2.2).max(2) {
+    if slope > cfg.blocks_for_span(0.9)
+        || ground_y <= cfg.water_level() + cfg.blocks_for_span(2.2).max(2)
+    {
         return None;
     }
 
@@ -1828,7 +2059,8 @@ fn bush_contains(cfg: &WorldSampleConfig, bush: BushProfile, p: IVec3) -> bool {
         // Low spreading understorey with rounded shoulders and irregular tips.
         let r = bush.base_radius.max(1) as f32;
         let height = (bush.top_dy + 1) as f32;
-        let shape = (dx as f32 / r).powi(2) + (dz as f32 / (r * 0.84)).powi(2)
+        let shape = (dx as f32 / r).powi(2)
+            + (dz as f32 / (r * 0.84)).powi(2)
             + ((dy as f32 - height * 0.22) / (height * 0.80)).powi(2);
         return shape < 0.87 + trim * 0.23;
     }
@@ -1844,7 +2076,123 @@ fn bush_contains(cfg: &WorldSampleConfig, bush: BushProfile, p: IVec3) -> bool {
     }
 }
 
-fn structure_block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) -> BlockId {
+/// Where generation reads tree and bush profiles and river surfaces from.
+/// Single-voxel queries use the per-thread caches; whole chunks use
+/// `RegionProfiles`, which resolves each profile and column once.
+trait Profiles {
+    fn tree(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile>;
+    fn bush(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile>;
+    fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32>;
+}
+
+struct CachedProfiles;
+
+impl Profiles for CachedProfiles {
+    fn tree(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
+        tree_profile_for_cell(cfg, cell_x, cell_z)
+    }
+    fn bush(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
+        bush_profile_for_cell(cfg, cell_x, cell_z)
+    }
+    fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
+        valley::river_top(cfg, cfg.world_x(x), cfg.world_z(z))
+    }
+}
+
+/// Dense profile grids and river surfaces for a box of columns.
+///
+/// Every air voxel above ground checks 25 tree cells and 9 bush cells. Through
+/// the hashed thread-local cache that was ~19 ms per padded chunk, and the
+/// river surface (which depends only on x/z) was re-evaluated for every voxel
+/// of the column. Here each is computed once per chunk or column.
+struct RegionProfiles {
+    tree_min: (i32, i32),
+    tree_w: i32,
+    trees: Vec<Option<TreeProfile>>,
+    bush_min: (i32, i32),
+    bush_w: i32,
+    bushes: Vec<Option<BushProfile>>,
+    column_min: (i32, i32),
+    column_w: i32,
+    rivers: Vec<Option<f32>>,
+}
+
+impl RegionProfiles {
+    /// Covers columns `min_x..min_x + size` by `min_z..min_z + size`.
+    fn new(cfg: &WorldSampleConfig, min_x: i32, min_z: i32, size: i32) -> Self {
+        // Cell ranges match `structure_block`: trees +-2 cells, bushes +-1.
+        let grid = |cell: i32, reach: i32| {
+            let lo = (
+                floor_div(min_x, cell) - reach,
+                floor_div(min_z, cell) - reach,
+            );
+            let w = floor_div(min_x + size - 1, cell) + reach - lo.0 + 1;
+            let h = floor_div(min_z + size - 1, cell) + reach - lo.1 + 1;
+            (lo, w, h)
+        };
+        let (tree_min, tree_w, tree_h) = grid(cfg.blocks_for_span(12.0), 2);
+        let (bush_min, bush_w, bush_h) = grid(cfg.blocks_for_span(8.0), 1);
+        let structures = cfg.world_type != WorldType::Superflat;
+        let trees = (0..tree_w * tree_h)
+            .map(|i| {
+                structures
+                    .then(|| {
+                        tree_profile_for_cell(cfg, tree_min.0 + i % tree_w, tree_min.1 + i / tree_w)
+                    })
+                    .flatten()
+            })
+            .collect();
+        let bushes = (0..bush_w * bush_h)
+            .map(|i| {
+                structures
+                    .then(|| {
+                        bush_profile_for_cell(cfg, bush_min.0 + i % bush_w, bush_min.1 + i / bush_w)
+                    })
+                    .flatten()
+            })
+            .collect();
+        let rivers = if cfg.generator_version >= 14 {
+            (0..size * size)
+                .map(|i| CachedProfiles.river_top(cfg, min_x + i % size, min_z + i / size))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Self {
+            tree_min,
+            tree_w,
+            trees,
+            bush_min,
+            bush_w,
+            bushes,
+            column_min: (min_x, min_z),
+            column_w: size,
+            rivers,
+        }
+    }
+}
+
+impl Profiles for RegionProfiles {
+    fn tree(&self, _: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
+        let (x, z) = (cell_x - self.tree_min.0, cell_z - self.tree_min.1);
+        self.trees[(z * self.tree_w + x) as usize]
+    }
+    fn bush(&self, _: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
+        let (x, z) = (cell_x - self.bush_min.0, cell_z - self.bush_min.1);
+        self.bushes[(z * self.bush_w + x) as usize]
+    }
+    fn river_top(&self, _: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
+        let (x, z) = (x - self.column_min.0, z - self.column_min.1);
+        self.rivers[(z * self.column_w + x) as usize]
+    }
+}
+
+fn structure_block(
+    cfg: &WorldSampleConfig,
+    p: IVec3,
+    column: ColumnSample,
+    profiles: &impl Profiles,
+) -> BlockId {
     if p.y <= column.height || cfg.world_type == WorldType::Superflat {
         return BlockId::Air;
     }
@@ -1855,11 +2203,13 @@ fn structure_block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) -> B
 
     for cell_z in (base_cell_z - 2)..=(base_cell_z + 2) {
         for cell_x in (base_cell_x - 2)..=(base_cell_x + 2) {
-            let Some(tree) = tree_profile_for_cell(cfg, cell_x, cell_z) else {
+            let Some(tree) = profiles.tree(cfg, cell_x, cell_z) else {
                 continue;
             };
             let block = tree_block(cfg, tree, p);
-            if block != BlockId::Air {
+            if block != BlockId::Air
+                && !surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters())
+            {
                 return block;
             }
         }
@@ -1870,8 +2220,10 @@ fn structure_block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) -> B
     let bush_cell_z = floor_div(p.z, bush_cell_size);
     for cell_z in (bush_cell_z - 1)..=(bush_cell_z + 1) {
         for cell_x in (bush_cell_x - 1)..=(bush_cell_x + 1) {
-            if let Some(bush) = bush_profile_for_cell(cfg, cell_x, cell_z) {
-                if bush_contains(cfg, bush, p) {
+            if let Some(bush) = profiles.bush(cfg, cell_x, cell_z) {
+                if bush_contains(cfg, bush, p)
+                    && !surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters())
+                {
                     return BlockId::Bush;
                 }
             }
@@ -1888,6 +2240,10 @@ pub fn sample_block(cfg: &WorldSampleConfig, p: IVec3) -> BlockId {
     sample_block_in_column(cfg, p, sample_column(cfg, p.x, p.z))
 }
 
+fn sample_block_in_column(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) -> BlockId {
+    sample_block_with(cfg, p, column, &CachedProfiles)
+}
+
 pub fn generate_padded(
     cfg: &WorldSampleConfig,
     coord: IVec3,
@@ -1898,6 +2254,7 @@ pub fn generate_padded(
     let origin = coord * CHUNK_SIZE - IVec3::ONE;
     let mut blocks = vec![BlockId::Air; (size * size * size) as usize];
     let mut sky_ceiling = vec![0; (size * size) as usize];
+    let profiles = RegionProfiles::new(cfg, origin.x, origin.z, size);
     for z in 0..size {
         for x in 0..size {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1907,23 +2264,30 @@ pub fn generate_padded(
             sky_ceiling[(z * size + x) as usize] = column.height;
             for y in 0..size {
                 blocks[((y * size + z) * size + x) as usize] =
-                    sample_block_in_column(cfg, origin + IVec3::new(x, y, z), column);
+                    sample_block_with(cfg, origin + IVec3::new(x, y, z), column, &profiles);
             }
         }
     }
     let mut chunk = GeneratedChunk::new(coord, blocks);
     chunk.voxel_meters = cfg.voxel_meters();
-    for z in 0..size { for x in 0..size {
-        let i = (z * size + x) as usize;
-        if sky_ceiling[i] < origin.y + size {
-            sky_ceiling[i] = chunk.local_roof(x,z);
+    for z in 0..size {
+        for x in 0..size {
+            let i = (z * size + x) as usize;
+            if sky_ceiling[i] < origin.y + size {
+                sky_ceiling[i] = chunk.local_roof(x, z);
+            }
         }
-    } }
+    }
     chunk.sky_ceiling = sky_ceiling;
     Some(chunk)
 }
 
-fn sample_block_in_column(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) -> BlockId {
+fn sample_block_with(
+    cfg: &WorldSampleConfig,
+    p: IVec3,
+    column: ColumnSample,
+    profiles: &impl Profiles,
+) -> BlockId {
     if p.y < cfg.min_world_y() || p.y >= cfg.max_world_y() {
         return BlockId::Air;
     }
@@ -1932,28 +2296,56 @@ fn sample_block_in_column(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSampl
         // This patch belongs to generation, so rendering and collision agree.
         let m = p.as_vec3() * cfg.voxel_meters();
         if cfg.world_type != WorldType::Superflat && m.x.abs() < 10.0 && m.z.abs() < 10.0 {
-            if p.y > column.height { return BlockId::Air; }
+            if p.y > column.height {
+                return BlockId::Air;
+            }
             if p.y >= column.height - cfg.blocks_for_span(6.0) {
-                return if p.y == column.height {BlockId::Grass} else {BlockId::Dirt};
+                return if p.y == column.height {
+                    BlockId::Grass
+                } else {
+                    BlockId::Dirt
+                };
             }
         }
-        if let Some(block) = sites::block(cfg, p).or_else(|| sites::cavern(cfg, p, column.height)) {
+        if let Some(block) = undercrown::block(cfg, p, column.height)
+            .or_else(|| sites::block(cfg, p, column.height))
+            .or_else(|| sites::cavern(cfg, p, column.height))
+        {
             return block;
         }
     }
 
     if p.y > column.height {
-        let structure = structure_block(cfg, p, column);
+        let structure = structure_block(cfg, p, column, profiles);
         if structure != BlockId::Air {
             return structure;
         }
         if p.y <= cfg.water_level() {
             return BlockId::Water;
         }
+        if cfg.generator_version >= 14 {
+            if let Some(surface) = profiles.river_top(cfg, p.x, p.z) {
+                if cfg.world_y(p.y) < surface {
+                    return BlockId::Water;
+                }
+            }
+        }
         return BlockId::Air;
     }
 
-    if cave_carves(cfg, p, column.height) {
+    if cave_carves(cfg, p, &column) {
+        // Generator 17 leaves a wet floor instead of filling the gallery.
+        // Older worlds still drown every carve that dips under the aquifer.
+        if cfg.generator_version >= 17 {
+            let below = IVec3::new(p.x, p.y - 1, p.z);
+            if p.y <= water_table(cfg, p.x, p.z)
+                && p.y > cfg.min_world_y() + 1
+                && !cave_carves(cfg, below, &column)
+            {
+                return BlockId::Water;
+            }
+            return BlockId::Air;
+        }
         if p.y <= water_table(cfg, p.x, p.z) {
             return BlockId::Water;
         }
@@ -1961,7 +2353,13 @@ fn sample_block_in_column(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSampl
     }
 
     let depth = column.height - p.y;
-    if column.height <= cfg.water_level() + 1 {
+    // Generator 15 lets rocky, shingle and mud shores keep their own surface.
+    let sandy_shore = cfg.generator_version < 15
+        || matches!(
+            column.surface,
+            BlockId::Sand | BlockId::Grass | BlockId::Dirt
+        );
+    if column.height <= cfg.water_level() + 1 && sandy_shore {
         if depth == 0 {
             return BlockId::Sand;
         }
@@ -2022,8 +2420,8 @@ fn sample_block_in_column(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSampl
 pub fn suggested_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
     if cfg.generator_version >= 3 && cfg.world_type != WorldType::Superflat {
         // The generator reserves a dry 20 m clearing on connected inland terrain.
-        let ground = sample_column(cfg,0,0).height;
-        return Some(Vec3::new(0.5,ground as f32+1.0,0.5));
+        let ground = sample_column(cfg, 0, 0).height;
+        return Some(Vec3::new(0.5, ground as f32 + 1.0, 0.5));
     }
     let mut candidates = Vec::new();
     let probe_stride = cfg.blocks_for_span(6.0);
@@ -2074,6 +2472,7 @@ pub struct World {
     pub inventory: inventory::SurvivalInventory,
     pub sandbox: crate::simulation::sandbox::Sandbox,
     pub adventure: adventure::Adventure,
+    pub undercrown: undercrown::State,
     pub factory: factory::Factory,
     pub expedition: expedition::Expedition,
     pub regions: regions::RegionStream,
@@ -2084,7 +2483,7 @@ pub struct World {
     pub chunks: resident::ResidentEdits,
     snapshot_cache: WorldSnapshot,
     snapshot_revision: u64,
-    snapshot_range: Option<(IVec3,i32)>,
+    snapshot_range: Option<(IVec3, i32)>,
     full_snapshot_cache: Option<(u64, WorldSnapshot)>,
     pub world_type: WorldType,
     pub voxel_scale: VoxelScalePreset,
@@ -2101,11 +2500,16 @@ impl World {
         let regions = regions::RegionStream::new();
         let region_view = regions.view.clone();
         let mut world = Self {
-            inventory: { let mut inv = inventory::SurvivalInventory::default(); inv.voxel_m = voxel_scale.meters(); inv },
+            inventory: {
+                let mut inv = inventory::SurvivalInventory::default();
+                inv.voxel_m = voxel_scale.meters();
+                inv
+            },
             regions,
             expedition: expedition::Expedition::default(),
             factory: factory::Factory::default(),
             adventure: adventure::Adventure::default(),
+            undercrown: undercrown::State::default(),
             sandbox: Default::default(),
             generator_version: CURRENT_GENERATOR_VERSION,
             water_levels: water::WaterLevels::default(),
@@ -2121,7 +2525,7 @@ impl World {
                     world_type,
                     voxel_scale,
                 },
-                chunks: Arc::new(HashMap::new()),
+                chunks: Arc::default(),
             },
             snapshot_revision: u64::MAX,
             snapshot_range: None,
@@ -2132,7 +2536,25 @@ impl World {
             revision: 0,
         };
         world.sync_from_inventory();
+        // Noita starts the player with a wand. The old crafted/altar-only path
+        // left new players unarmed with no visible route to spellcasting.
+        world.ensure_starter_wand();
         world
+    }
+
+    /// Grants the first wand to a fresh world or to a pre-wand save. Later
+    /// chassis upgrades keep their existing altar/workbench progression.
+    /// Returns true only when a wand was actually added.
+    pub fn ensure_starter_wand(&mut self) -> bool {
+        if self.adventure.wand > 0 {
+            return false;
+        }
+        self.adventure.wand = 1;
+        let log = self.adventure.spell_log;
+        adventure::wands::seed_unlocked_slots_known(&mut self.adventure.loadout, 1, &|id| {
+            log.grants(id)
+        });
+        true
     }
 
     /// Synchronizes legacy resource/kit/ration/weapon fields from the authoritative survival inventory.
@@ -2144,13 +2566,18 @@ impl World {
             self.expedition.resources[i] = whole.saturating_mul(64).saturating_add(rem);
         }
         for kind in factory::Kind::ALL {
-            self.factory.kits[kind as usize] =
-                self.inventory.count_item(Item::Block(kind.block()));
+            self.factory.kits[kind as usize] = self.inventory.count_item(Item::Block(kind.block()));
         }
         self.adventure.rations = self
             .inventory
             .count_item(Item::Food(FoodKind::FungalRation));
-        self.adventure.weapons=(1..=4u8).fold(0,|mask,tier|mask|if self.inventory.count_item(Item::Weapon(tier))>0 {1<<(tier-1)}else{0});
+        self.adventure.weapons = (1..=5u8).fold(0, |mask, tier| {
+            mask | if self.inventory.count_item(Item::Weapon(tier)) > 0 {
+                1 << (tier - 1)
+            } else {
+                0
+            }
+        });
         if self.adventure.weapon != 0 && !self.adventure.owns_weapon(self.adventure.weapon) {
             self.adventure.weapon = 0;
         }
@@ -2180,7 +2607,9 @@ impl World {
                 self.expedition.resources[i] =
                     (current_whole + inserted).saturating_mul(64) + desired_rem;
             } else if desired_whole < current_whole {
-                let _ = self.inventory.remove_item(item, current_whole - desired_whole);
+                let _ = self
+                    .inventory
+                    .remove_item(item, current_whole - desired_whole);
             }
         }
 
@@ -2227,7 +2656,7 @@ impl World {
                 .remove_item(ration_item, current_rations - desired_rations);
         }
 
-        for tier in [1u8, 2u8, 3u8, 4u8] {
+        for tier in [1u8, 2u8, 3u8, 4u8, 5u8] {
             let item = Item::Weapon(tier);
             let owns = (self.adventure.weapons & (1 << (tier - 1))) != 0;
             let count = self.inventory.count_item(item);
@@ -2256,11 +2685,7 @@ impl World {
         self.sync_from_inventory();
     }
 
-    pub fn eat_food(
-        &mut self,
-        food: inventory::FoodKind,
-        preferred_hotbar: Option<usize>,
-    ) -> bool {
+    pub fn eat_food(&mut self, food: inventory::FoodKind, preferred_hotbar: Option<usize>) -> bool {
         let max_hp = self.adventure.max_health();
         if self.adventure.hunger >= 99.5 && self.adventure.health >= max_hp - 0.1 {
             self.expedition.message = "Already well-fed.".into();
@@ -2299,23 +2724,34 @@ impl World {
         }
     }
 
-    pub(super) fn invalidate_snapshot_at(&mut self,c:IVec3) {
+    pub(super) fn invalidate_snapshot_at(&mut self, c: IVec3) {
         self.full_snapshot_cache = None;
-        if self.snapshot_range.is_none_or(|(center,radius)| c.x.abs_diff(center.x).max(c.z.abs_diff(center.z))<=(radius+1) as u32) {self.snapshot_revision=u64::MAX;}
+        if self.snapshot_range.is_none_or(|(center, radius)| {
+            c.x.abs_diff(center.x).max(c.z.abs_diff(center.z)) <= (radius + 1) as u32
+        }) {
+            self.snapshot_revision = u64::MAX;
+        }
     }
     pub fn snapshot(&mut self) -> WorldSnapshot {
         // Horizon and nearby streaming request different views each frame.
         // Keep their maps separate rather than rebuilding both on every call.
         let cfg = self.sample_config();
-        if self.full_snapshot_cache.as_ref().is_none_or(|(revision, cached)|
-            *revision != self.revision || cached.cfg != cfg)
+        if self
+            .full_snapshot_cache
+            .as_ref()
+            .is_none_or(|(revision, cached)| *revision != self.revision || cached.cfg != cfg)
         {
-            self.full_snapshot_cache = Some((self.revision, WorldSnapshot {
-                regions: self.regions.view.clone(),
-                water_levels: Arc::new(self.water_levels.iter().map(|(&p,&v)|(p,v)).collect()),
-                cfg,
-                chunks: Arc::new(self.chunks.clone()),
-            }));
+            self.full_snapshot_cache = Some((
+                self.revision,
+                WorldSnapshot {
+                    regions: self.regions.view.clone(),
+                    water_levels: Arc::new(
+                        self.water_levels.iter().map(|(&p, &v)| (p, v)).collect(),
+                    ),
+                    cfg,
+                    chunks: Arc::new(self.chunks.clone()),
+                },
+            ));
         }
         let cached = &mut self.full_snapshot_cache.as_mut().unwrap().1;
         // Region publications can change without resident voxel mutations.
@@ -2356,6 +2792,7 @@ impl World {
             .copied()
             .or_else(|| {
                 let c = chunk_coord_from_world_block(p);
+
                 if self.chunks.contains_key(&c) {
                     None
                 } else {
@@ -2370,34 +2807,195 @@ impl World {
             .unwrap_or(8)
     }
 
+    fn write_water_cell(&mut self, p: IVec3, volume: u8) -> Option<IVec3> {
+        let cfg = self.sample_config();
+        if p.y < cfg.min_world_y()
+            || p.y >= cfg.max_world_y()
+            || self
+                .factory
+                .nodes
+                .contains_key(&factory::anchor(p, factory::step(self)))
+        {
+            return None;
+        }
+        let coord = chunk_coord_from_world_block(p);
+        if self.resident_edit(coord).is_err() {
+            return None;
+        }
+        let volume = volume.min(8);
+        let id = if volume == 0 {
+            BlockId::Air
+        } else {
+            BlockId::Water
+        };
+        let current = self.chunks.get(&coord).map_or(BlockId::Air, |chunk| {
+            chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
+        });
+        if current != id {
+            if let Some(mut chunk) = self.chunks.get_mut(&coord) {
+                Arc::make_mut(&mut chunk).blocks[ChunkData::local_index(p.x, p.y, p.z)] = id;
+            }
+            if current == BlockId::Fire {
+                self.sandbox.clear_fire(p);
+            }
+            self.water_levels.remove_velocity(&p);
+            if let Some(cell) = self
+                .sandbox
+                .cells
+                .get_mut(&crate::simulation::sandbox::key(p))
+            {
+                cell.fuel = 0.0;
+                cell.gas = 0;
+            }
+        }
+        if volume > 0 && volume < 8 {
+            self.water_levels.insert(p, volume);
+        } else {
+            self.water_levels.remove(&p);
+            if volume == 0 {
+                self.water_levels.remove_velocity(&p);
+            }
+            // Full water and air are not thermal carriers. Partial water keeps
+            // any temperature associated with the cell.
+            if let Some(cell) = self
+                .sandbox
+                .cells
+                .get_mut(&crate::simulation::sandbox::key(p))
+            {
+                cell.fuel = 0.0;
+                cell.gas = 0;
+            }
+        }
+        self.regions.mark_dirty(coord);
+        Some(coord)
+    }
+
+    /// Commit both halves of one conservative water transfer as a single
+    /// transaction. The cellular solver rewrites two cells per move; routing
+    /// each through `set_water_volume` duplicated revision bumps, snapshot
+    /// invalidation, sandbox cleanup and ten-chunk wake sweeps. Those costs
+    /// dominated wide or deep water scenes even though the rule work was tiny.
+    pub fn apply_water_pair(
+        &mut self,
+        from: IVec3,
+        from_volume: u8,
+        to: IVec3,
+        to_volume: u8,
+        moved: u8,
+    ) {
+        if from == to || moved == 0 {
+            return;
+        }
+        let from_chunk = chunk_coord_from_world_block(from);
+        let to_chunk = chunk_coord_from_world_block(to);
+        if from_chunk == to_chunk && self.chunks.contains_key(&from_chunk) {
+            // Most flow is intra-chunk. Commit both cells through one mutable
+            // chunk borrow, one dirty mark and one snapshot invalidation, all
+            // still under the same bounds/assembly admission as the general
+            // path.
+            let cfg = self.sample_config();
+            let step = factory::step(self);
+            let valid = [from, to].iter().all(|&p| {
+                p.y >= cfg.min_world_y()
+                    && p.y < cfg.max_world_y()
+                    && !self.factory.nodes.contains_key(&factory::anchor(p, step))
+            });
+            if !valid {
+                return;
+            }
+            let entries = [(from, from_volume.min(8)), (to, to_volume.min(8))];
+            let mut block_changed = [false; 2];
+            {
+                let mut chunk = self.chunks.get_mut(&from_chunk).unwrap();
+                let chunk = Arc::make_mut(&mut chunk);
+                for (i, &(p, volume)) in entries.iter().enumerate() {
+                    let id = if volume == 0 {
+                        BlockId::Air
+                    } else {
+                        BlockId::Water
+                    };
+                    let index = ChunkData::local_index(p.x, p.y, p.z);
+                    block_changed[i] = chunk.blocks[index] != id;
+                    chunk.blocks[index] = id;
+                }
+            }
+            for (i, &(p, volume)) in entries.iter().enumerate() {
+                if volume > 0 && volume < 8 {
+                    self.water_levels.insert(p, volume);
+                } else {
+                    self.water_levels.remove(&p);
+                    if volume == 0 {
+                        self.water_levels.remove_velocity(&p);
+                    }
+                }
+                if block_changed[i] {
+                    self.water_levels.remove_velocity(&p);
+                }
+                if block_changed[i] || volume == 0 || volume == 8 {
+                    if let Some(cell) = self
+                        .sandbox
+                        .cells
+                        .get_mut(&crate::simulation::sandbox::key(p))
+                    {
+                        cell.fuel = 0.0;
+                        cell.gas = 0;
+                    }
+                }
+            }
+            self.regions.mark_dirty(from_chunk);
+            self.activity.wake_neighbors(from);
+            self.activity.wake_neighbors(to);
+            self.invalidate_snapshot_at(from_chunk);
+            self.revision = self.revision.wrapping_add(1);
+            return;
+        }
+        let Some(from_chunk) = self.write_water_cell(from, from_volume) else {
+            return;
+        };
+        let Some(to_chunk) = self.write_water_cell(to, to_volume) else {
+            // The second half could be refused (missing/corrupt resident edit).
+            // Restore the first half to its pre-transfer volume.
+            self.write_water_cell(from, from_volume.saturating_add(moved));
+            return;
+        };
+        self.activity.wake_neighbors(from);
+        self.activity.wake_neighbors(to);
+        self.invalidate_snapshot_at(from_chunk);
+        if to_chunk != from_chunk {
+            self.invalidate_snapshot_at(to_chunk);
+        }
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Nearest exposed water surface to a metric point. Splash effects use the
+    /// voxel water volume rather than assuming a flat sea level, so contact
+    /// rings sit on partial cells and cave pools as well as the ocean.
+    pub(crate) fn water_surface_at(&self, point: Vec3) -> Option<Vec3> {
+        water::surface_at(self, point, self.voxel_scale.meters())
+    }
+
+    pub(crate) fn water_velocity(&self, p: IVec3) -> glam::Vec2 {
+        self.water_levels.velocity(p)
+    }
+
+    pub(crate) fn set_water_velocity(&mut self, p: IVec3, v: glam::Vec2) {
+        self.water_levels.set_velocity(p, v);
+    }
+
+    pub(crate) fn remove_water_velocity(&mut self, p: IVec3) {
+        self.water_levels.remove_velocity(&p);
+    }
+
     pub fn set_water_volume(&mut self, p: IVec3, volume: u8) {
-        let cfg=self.sample_config();
-        if p.y<cfg.min_world_y() || p.y>=cfg.max_world_y() || self.factory.nodes.contains_key(&factory::anchor(p,factory::step(self))) {return;}
         let volume = volume.min(8);
         if self.water_volume(p) == volume {
             return;
         }
-        let coord = chunk_coord_from_world_block(p);
-        if self.resident_edit(coord).is_err() {
+        let Some(coord) = self.write_water_cell(p, volume) else {
             return;
-        }
-        self.set(
-            p,
-            if volume == 0 {
-                BlockId::Air
-            } else {
-                BlockId::Water
-            },
-        );
-        if volume > 0 && volume < 8 {
-            self.water_levels.insert(p, volume);
-        } else {
-            if let Some(cell) = self.sandbox.cells.get_mut(&crate::simulation::sandbox::key(p)) { cell.fuel=0.0; cell.gas=0; }
-            self.water_levels.remove(&p);
-        }
-        self.regions.mark_dirty(chunk_coord_from_world_block(p));
+        };
         self.activity.wake_neighbors(p);
-        self.invalidate_snapshot_at(chunk_coord_from_world_block(p));
+        self.invalidate_snapshot_at(coord);
         self.revision = self.revision.wrapping_add(1);
     }
 
@@ -2406,7 +3004,11 @@ impl World {
         for &(p, id) in edits {
             // Assemblies are dismantled as one metre-sized object. Builder and
             // physics edits cannot silently orphan their inventories or networks.
-            if self.factory.nodes.contains_key(&factory::anchor(p, factory::step(self))) {
+            if self
+                .factory
+                .nodes
+                .contains_key(&factory::anchor(p, factory::step(self)))
+            {
                 continue;
             }
             let cfg = self.sample_config();
@@ -2423,8 +3025,20 @@ impl World {
                 // A missing/corrupt edited record must never become procedural data.
                 continue;
             }
-            if let Some(cell) = self.sandbox.cells.get_mut(&crate::simulation::sandbox::key(p)) { cell.fuel=0.0; cell.gas=0; }
+            self.sandbox.clear_fire(p);
+            if let Some(cell) = self
+                .sandbox
+                .cells
+                .get_mut(&crate::simulation::sandbox::key(p))
+            {
+                cell.fuel = 0.0;
+                cell.gas = 0;
+            }
             self.water_levels.remove(&p);
+            self.water_levels.remove_velocity(&p);
+            if id == BlockId::Fire {
+                self.sandbox.note_fire(p);
+            }
             self.regions.mark_dirty(chunk_coord);
 
             if let Some(mut chunk) = self.chunks.get_mut(&chunk_coord) {
@@ -2438,7 +3052,7 @@ impl World {
             }
 
             self.activity.wake_neighbors(p);
-        self.invalidate_snapshot_at(chunk_coord_from_world_block(p));
+            self.invalidate_snapshot_at(chunk_coord_from_world_block(p));
             if id.is_torch() {
                 propagate_light(self, p, 14);
             }
@@ -2451,6 +3065,12 @@ impl World {
     }
 
     pub fn solid(&self, p: IVec3) -> bool {
+        // Collision must not depend on a bottom chunk being streamed. Below the
+        // authored world floor the player meets an invisible bedrock plane
+        // instead of an infinite void.
+        if p.y <= self.sample_config().min_world_y() {
+            return true;
+        }
         self.get(p).is_solid()
     }
 
@@ -2568,6 +3188,392 @@ pub fn mark_chunk_and_neighbors_dirty(dirty: &mut HashSet<IVec3>, block: IVec3) 
                     dirty.insert(center + offset);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod undercrown_generation {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use glam::Vec3;
+
+    fn hash_blocks(cfg: &WorldSampleConfig) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for z in (-48..=48).step_by(8) {
+            for x in (-48..=48).step_by(8) {
+                for y in (-24..=48).step_by(4) {
+                    hash ^= sample_block(cfg, IVec3::new(x, y, z)).as_u32() as u64;
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        hash
+    }
+
+    #[test]
+    fn generator_19_authors_outside_the_locked_grid() {
+        let base = WorldSampleConfig {
+            generator_version: 18,
+            seed: 17,
+            world_type: WorldType::Hills,
+            voxel_scale: VoxelScalePreset::OneMeter,
+        };
+        let next = WorldSampleConfig {
+            generator_version: undercrown::FIRST_VERSION,
+            ..base
+        };
+        let locked = hash_blocks(&base);
+        assert_eq!(locked, hash_blocks(&base));
+        assert!(undercrown::plan(&base).is_empty());
+        let authored = undercrown::plan(&next);
+        assert!(!authored.is_empty());
+        assert!(!undercrown::reserved(&next, Vec3::ZERO));
+        assert!(undercrown::reserved(&next, authored.anchor));
+        assert!(authored.anchor.x > 48.0);
+    }
+
+    #[test]
+    fn fresh_world_starts_with_a_seeded_lumen_twig_and_can_upgrade_unarmed_saves() {
+        let mut world = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+        assert_eq!(world.adventure.wand, 1);
+        assert_ne!(world.adventure.loadout.slot(0), adventure::wands::EMPTY);
+        assert!(!world.ensure_starter_wand());
+
+        // A loaded pre-wand save reaches the same state through the explicit
+        // migration hook used by storage.
+        world.adventure.wand = 0;
+        world.adventure.loadout = Default::default();
+        assert!(world.ensure_starter_wand());
+        assert_eq!(world.adventure.wand, 1);
+        assert_ne!(world.adventure.loadout.slot(2), adventure::wands::EMPTY);
+        assert!(!world.ensure_starter_wand());
+    }
+
+    #[test]
+    fn collision_has_a_solid_floor_at_and_below_the_world_minimum() {
+        for scale in [
+            VoxelScalePreset::OneMeter,
+            VoxelScalePreset::HalfMeter,
+            VoxelScalePreset::QuarterMeter,
+        ] {
+            let world = World::with_seed(WorldType::Superflat, scale, 17);
+            let min = world.sample_config().min_world_y();
+            assert!(world.solid(IVec3::new(0, min, 0)));
+            assert!(world.solid(IVec3::new(-3, min - 1, 7)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod sky_variety {
+    use super::*;
+
+    fn color_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+        (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
+    }
+
+    fn luma(color: [f32; 3]) -> f32 {
+        color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722
+    }
+
+    #[test]
+    fn noon_sky_changes_with_the_day_and_the_weather() {
+        let clear = CloudControls {
+            coverage: 0.15,
+            density: 0.40,
+            cumulus: 0.45,
+            stratus: 0.02,
+            cumulonimbus: 0.0,
+            cirrus: 0.20,
+            altostratus: 0.03,
+            ..CloudControls::default()
+        };
+        let mut distinct = Vec::new();
+        for day in 0..24 {
+            let sky = LightingState::from_time_and_day(0.50, day, 0xA341_316C, clear).sky_top;
+            if distinct
+                .iter()
+                .all(|previous| color_distance(*previous, sky) > 0.06)
+            {
+                distinct.push(sky);
+            }
+            assert!(
+                sky[2] > sky[0] + 0.12,
+                "clear noon zenith should stay blue, got {sky:?}"
+            );
+        }
+        assert!(
+            distinct.len() >= 4,
+            "expected several day palettes, got {}",
+            distinct.len()
+        );
+
+        let storm = CloudControls {
+            coverage: 0.94,
+            density: 0.90,
+            cumulus: 0.50,
+            stratus: 0.30,
+            cumulonimbus: 0.82,
+            storm_thickness: 0.92,
+            anvil_spread: 0.72,
+            cirrus: 0.03,
+            ..clear
+        };
+        let overcast = CloudControls {
+            coverage: 0.92,
+            density: 0.82,
+            cumulus: 0.10,
+            stratus: 0.75,
+            cumulonimbus: 0.0,
+            altostratus: 0.45,
+            cirrus: 0.04,
+            ..clear
+        };
+        let winter = CloudControls {
+            coverage: 0.62,
+            density: 0.60,
+            cumulus: 0.10,
+            stratus: 0.52,
+            cumulonimbus: 0.0,
+            cirrus: 0.65,
+            altostratus: 0.38,
+            ..clear
+        };
+        let noon = LightingState::from_time_and_day(0.50, 0, 0xA341_316C, clear);
+        let storm_sky = LightingState::from_time_and_day(0.50, 0, 0xA341_316C, storm);
+        let overcast_sky = LightingState::from_time_and_day(0.50, 0, 0xA341_316C, overcast);
+        let winter_sky = LightingState::from_time_and_day(0.50, 0, 0xA341_316C, winter);
+        assert!(storm_sky.sky_top[2] + 0.12 < noon.sky_top[2]);
+        assert!(luma(storm_sky.sky_top) + 0.03 < luma(noon.sky_top));
+        assert!(color_distance(overcast_sky.sky_top, noon.sky_top) > 0.12);
+        assert!(color_distance(winter_sky.sky_top, storm_sky.sky_top) > 0.12);
+        assert!(color_distance(overcast_sky.sky_horizon, winter_sky.sky_horizon) > 0.08);
+
+        let dusk = LightingState::from_time_and_day(0.72, 0, 0xA341_316C, clear);
+        assert!(color_distance(dusk.sky_horizon, noon.sky_horizon) > 0.06);
+        assert!(
+            dusk.sky_top[2] > dusk.sky_top[0],
+            "sunset should leave the zenith blue, got {:?}",
+            dusk.sky_top
+        );
+    }
+}
+
+#[cfg(test)]
+mod generation_bench {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    #[ignore]
+    fn air_voxel_stage_costs() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        let origin = IVec3::new(64, 32, 64);
+        let mut voxels = Vec::new();
+        for z in 0..34 {
+            for x in 0..34 {
+                let column = sample_column(&cfg, origin.x + x, origin.z + z);
+                for y in 0..34 {
+                    voxels.push((origin + IVec3::new(x, y, z), column));
+                }
+            }
+        }
+        let time = |name: &str, f: &dyn Fn(IVec3, ColumnSample) -> u32| {
+            let mut acc = 0u32;
+            for &(p, c) in &voxels {
+                acc = acc.wrapping_add(f(p, c));
+            }
+            let start = std::time::Instant::now();
+            for &(p, c) in &voxels {
+                acc = acc.wrapping_add(f(p, c));
+            }
+            println!(
+                "{name:>12}: {:7.2} ms ({acc})",
+                start.elapsed().as_secs_f64() * 1e3
+            );
+        };
+        time("column", &|p, _| {
+            sample_column(&cfg, p.x, p.z).height as u32
+        });
+        time("undercrown", &|p, c| {
+            undercrown::block(&cfg, p, c.height).is_some() as u32
+        });
+        time("sites", &|p, c| {
+            sites::block(&cfg, p, c.height).is_some() as u32
+        });
+        time("cavern", &|p, c| {
+            sites::cavern(&cfg, p, c.height).is_some() as u32
+        });
+        time("structure", &|p, c| {
+            structure_block(&cfg, p, c, &CachedProfiles).as_u32()
+        });
+        time("river_top", &|p, _| {
+            valley::river_top(&cfg, cfg.world_x(p.x), cfg.world_z(p.z)).is_some() as u32
+        });
+        time("full", &|p, c| sample_block_in_column(&cfg, p, c).as_u32());
+    }
+
+    /// Chunk generation reads profiles from dense per-chunk grids; it must
+    /// produce exactly what single-voxel sampling through the caches does.
+    #[test]
+    fn region_profiles_match_single_voxel_sampling() {
+        let never = AtomicBool::new(false);
+        for (world_type, scale) in [
+            (WorldType::Hills, VoxelScalePreset::OneMeter),
+            (WorldType::Ridged, VoxelScalePreset::OneMeter),
+            (WorldType::Hills, VoxelScalePreset::QuarterMeter),
+        ] {
+            let cfg = World::with_seed(world_type, scale, 7).sample_config();
+            let mut structures = 0;
+            let crowns = (0..400)
+                .filter_map(|i| tree_visual(&cfg, i % 20 - 10, i / 20 - 10))
+                .take(3)
+                .map(|t| {
+                    ((t.base + Vec3::Y * t.height) / cfg.voxel_meters())
+                        .floor()
+                        .as_ivec3()
+                        .div_euclid(IVec3::splat(CHUNK_SIZE))
+                });
+            let fixed = [
+                IVec3::new(2, 1, -3),
+                IVec3::new(-5, 2, 4),
+                IVec3::new(0, 4, 1),
+            ];
+            for c in fixed.into_iter().chain(crowns) {
+                let chunk = generate_padded(&cfg, c, &never).unwrap();
+                let data = ChunkData::generate(&cfg, c);
+                for (i, &b) in chunk.blocks.iter().enumerate() {
+                    let i = i as i32;
+                    let n = crate::mesh::PADDED_CHUNK_SIZE;
+                    let p = chunk.origin() + IVec3::new(i % n, i / (n * n), (i / n) % n);
+                    assert_eq!(
+                        b,
+                        sample_block(&cfg, p),
+                        "{world_type:?} {scale:?} padded {p}"
+                    );
+                    structures += usize::from(matches!(
+                        b,
+                        BlockId::Leaves | BlockId::PineLeaves | BlockId::Log | BlockId::Bush
+                    ));
+                }
+                for (i, &b) in data.blocks.iter().enumerate() {
+                    let p = c * CHUNK_SIZE
+                        + IVec3::new(
+                            i as i32 % CHUNK_SIZE,
+                            i as i32 / (CHUNK_SIZE * CHUNK_SIZE),
+                            (i as i32 / CHUNK_SIZE) % CHUNK_SIZE,
+                        );
+                    assert_eq!(
+                        b,
+                        sample_block(&cfg, p),
+                        "{world_type:?} {scale:?} chunk {p}"
+                    );
+                }
+            }
+            println!("{world_type:?} {scale:?}: {structures} structure voxels compared");
+            assert!(structures > 200, "test chunks missed the tree crowns");
+        }
+    }
+
+    /// `cargo test --release generation_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn padded_chunk_generation_rate() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        let never = AtomicBool::new(false);
+        let coords: Vec<IVec3> = (-4..4)
+            .flat_map(|x| (-4..4).flat_map(move |z| (1..3).map(move |y| IVec3::new(x, y, z))))
+            .collect();
+        let start = std::time::Instant::now();
+        let mut solid = 0usize;
+        for &c in &coords {
+            let chunk = generate_padded(&cfg, c, &never).unwrap();
+            solid += chunk.blocks.iter().filter(|b| !b.is_empty()).count();
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "{} chunks in {:.1} ms ({:.2} ms/chunk, {solid} non-air)",
+            coords.len(),
+            elapsed.as_secs_f64() * 1e3,
+            elapsed.as_secs_f64() * 1e3 / coords.len() as f64
+        );
+    }
+}
+
+#[cfg(test)]
+mod tree_lod_accuracy {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+
+    /// `cargo test --release tree_lod_accuracy -- --ignored --nocapture`
+    /// Voxel crown extents against the LOD proxy's `TreeVisual` for the same tree.
+    #[test]
+    #[ignore]
+    fn voxel_trees_match_lod_proxy() {
+        for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::QuarterMeter] {
+            let cfg = World::with_seed(WorldType::Hills, scale, 7).sample_config();
+            let m = cfg.voxel_meters();
+            let (mut n, mut top_err, mut rad_err, mut base_err, mut rad_bias) = (0, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            let (mut ratio_c, mut ratio_b) = ((0.0f32, 0.0f32), (0.0f32, 0.0f32));
+            let mut under = 0;
+            let mut worst_under = 0.0f32;
+            let mut worst = (0.0f32, IVec3::ZERO);
+            for cz in -30..30 {
+                for cx in -30..30 {
+                    let Some(v) = tree_visual(&cfg, cx, cz) else { continue };
+                    let Some(profile) = tree_profile_for_cell(&cfg, cx, cz) else { continue };
+                    let anchor = (v.base / m).round().as_ivec3();
+                    let reach = (v.radius * 1.6 / m).ceil() as i32 + 2;
+                    let top_guess = ((v.base.y + v.height + v.crown_height) / m).ceil() as i32 + 3;
+                    let (mut top, mut max_r, mut low) = (i32::MIN, 0.0f32, i32::MAX);
+                    let mut trunk_base = i32::MAX;
+                    for y in anchor.y..=top_guess {
+                        for z in -reach..=reach {
+                            for x in -reach..=reach {
+                                let p = anchor + IVec3::new(x, y - anchor.y, z);
+                                // This tree alone: neighbours' crowns overlap at 12 m spacing.
+                                let b = tree_block(&cfg, profile, p);
+                                if matches!(b, BlockId::Leaves | BlockId::PineLeaves) {
+                                    top = top.max(y);
+                                    low = low.min(y);
+                                    max_r = max_r.max(glam::Vec2::new(x as f32, z as f32).length());
+                                } else if b == BlockId::Log {
+                                    trunk_base = trunk_base.min(y);
+                                }
+                            }
+                        }
+                    }
+                    if top == i32::MIN {
+                        continue;
+                    }
+                    n += 1;
+                    let true_top = (top + 1) as f32 * m;
+                    let proxy_top = v.base.y + v.height + v.crown_height;
+                    let terr = (proxy_top - true_top).abs();
+                    top_err += terr;
+                    if terr > worst.0 {
+                        worst = (terr, anchor);
+                    }
+                    let true_r = max_r * m + m;
+                    if true_r > v.radius + 0.01 {
+                        under += 1;
+                        worst_under = worst_under.max(true_r - v.radius);
+                    }
+                    rad_bias += true_r - v.radius;
+                    let ratio = (max_r * m + m) / v.radius.max(0.01);
+                    if v.conifer { ratio_c.0 += ratio; ratio_c.1 += 1.0; } else { ratio_b.0 += ratio; ratio_b.1 += 1.0; }
+                    rad_err += (max_r * m + m - v.radius).abs();
+                    if trunk_base != i32::MAX {
+                        base_err += (trunk_base as f32 * m - v.base.y).abs();
+                    }
+                }
+            }
+            println!("{scale:?}: under-covered {under}/{n}, worst short by {worst_under:.2} m");
+            println!(
+                "{scale:?}: {n} trees, mean |top| err {:.2} m, |radius| err {:.2} m (bias {:+.2}), |trunk base| err {:.2} m, worst top {:.2} m at {:?}",
+                top_err / n as f32, rad_err / n as f32, rad_bias / n as f32, base_err / n as f32, worst.0, worst.1
+            );
         }
     }
 }

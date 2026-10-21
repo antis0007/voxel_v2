@@ -1,8 +1,8 @@
 //! Resident edit allocations are accounted at mutation boundaries, not per frame.
 use super::ChunkData;
+use crate::fast_hash::FastMap;
 use glam::IVec3;
 use std::{
-    collections::HashMap,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -14,11 +14,11 @@ fn bytes(c: &ChunkData) -> usize {
 }
 #[derive(Default)]
 pub struct ResidentEdits {
-    chunks: HashMap<IVec3, Arc<ChunkData>>,
+    chunks: FastMap<IVec3, Arc<ChunkData>>,
     bytes: usize,
 }
 impl Deref for ResidentEdits {
-    type Target = HashMap<IVec3, Arc<ChunkData>>;
+    type Target = FastMap<IVec3, Arc<ChunkData>>;
     fn deref(&self) -> &Self::Target {
         &self.chunks
     }

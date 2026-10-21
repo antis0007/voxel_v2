@@ -5,7 +5,11 @@ use glam::Vec3Swizzles;
 pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
     let climate = landscape::sample(cfg, tree.anchor_x, tree.anchor_z);
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
-    let species = hash2(tree.cell_x.div_euclid(3), tree.cell_z.div_euclid(3), cfg.seed.wrapping_add(12037));
+    let species = hash2(
+        tree.cell_x.div_euclid(3),
+        tree.cell_z.div_euclid(3),
+        cfg.seed.wrapping_add(12037),
+    );
     let individual_form = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12073));
     tree.conifer = climate.temperature < 0.32 || (climate.moisture > 0.55 && species < 0.28);
     if cfg.generator_version >= 7 {
@@ -19,8 +23,18 @@ pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
         } else {
             // Columnar, spreading and irregular broadleaf forms occupy distinct
             // canopy proportions while keeping the existing low-cost branch loop.
-            let form_seed = if cfg.generator_version >= 8 { individual_form } else { species };
-            let form = if form_seed > 0.76 { 0 } else if form_seed < 0.27 { 1 } else { 2 };
+            let form_seed = if cfg.generator_version >= 8 {
+                individual_form
+            } else {
+                species
+            };
+            let form = if form_seed > 0.76 {
+                0
+            } else if form_seed < 0.27 {
+                1
+            } else {
+                2
+            };
             tree.trunk_h = cfg.blocks_for_span(match form {
                 0 => 10.0 + age * 8.0,
                 1 => 6.0 + age * 4.0,
@@ -78,7 +92,11 @@ pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
                 }
                 _ => {}
             }
-            let branch_fraction = if cfg.generator_version >= 11 && tree.conifer { 0.18 } else { 0.55 };
+            let branch_fraction = if cfg.generator_version >= 11 && tree.conifer {
+                0.18
+            } else {
+                0.55
+            };
             tree.branch_start_y = tree.ground_y + (tree.trunk_h as f32 * branch_fraction) as i32;
             tree.branch_len = (tree.canopy_radius as f32 * 0.76) as i32;
         }
@@ -92,7 +110,13 @@ pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
     } else {
         // Three stable broadleaf silhouettes: narrow, high crowns; spreading
         // crowns with a short trunk; and irregular, taller woodland crowns.
-        let form = if species > 0.72 { 0 } else if species < 0.30 { 1 } else { 2 };
+        let form = if species > 0.72 {
+            0
+        } else if species < 0.30 {
+            1
+        } else {
+            2
+        };
         tree.trunk_h = cfg.blocks_for_span(match form {
             0 => 8.0 + age * 6.0,
             1 => 5.0 + age * 3.5,
@@ -143,26 +167,39 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     if q.y <= wood_top && (q - trunk_center).xz().length_squared() <= trunk_r * trunk_r {
         return BlockId::Log;
     }
-    let rotation = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12049)) * std::f32::consts::TAU;
+    let rotation =
+        hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12049)) * std::f32::consts::TAU;
     // Keep saved v10 worlds stable; v11 opens the crown into branch groups.
     let open_crown = cfg.generator_version >= 11;
     if tree.conifer {
         let base = (tree.branch_start_y - tree.ground_y) as f32 * scale;
-        if q.y < base || q.y > height + scale { return BlockId::Air; }
+        if q.y < base || q.y > height + scale {
+            return BlockId::Air;
+        }
         let t = ((q.y - base) / (height + scale - base)).clamp(0.0, 1.0);
         let spacing = 1.55 + age * 0.45;
         let tier = (q.y - base) / spacing;
         let whorl = tier.floor() as i32;
-        let variation = hash3(tree.cell_x, whorl, tree.cell_z, cfg.seed.wrapping_add(12071));
+        let variation = hash3(
+            tree.cell_x,
+            whorl,
+            tree.cell_z,
+            cfg.seed.wrapping_add(12071),
+        );
         let shelf = (1.0 - tier.fract()).powf(0.65);
         let angle = q.z.atan2(q.x) + rotation + whorl as f32 * 0.83;
         let scallop = if open_crown {
             // Unequal branch fans break the lathed Christmas-tree silhouette.
             // The dense inner leader stays connected at every voxel scale.
             0.79 + (angle * 5.0).sin() * 0.14 + (angle * 3.0 + variation * 5.0).sin() * 0.10
-        } else { 0.92 + (angle * 5.0).sin() * 0.08 };
-        let r = radius * (1.0 - t).powf(0.78) * (0.62 + shelf * 0.38)
-            * (0.91 + variation * 0.16) * scallop;
+        } else {
+            0.92 + (angle * 5.0).sin() * 0.08
+        };
+        let r = radius
+            * (1.0 - t).powf(0.78)
+            * (0.62 + shelf * 0.38)
+            * (0.91 + variation * 0.16)
+            * scallop;
         if (q - trunk_center).xz().length() <= r.max(scale * 0.56) {
             return BlockId::PineLeaves;
         }
@@ -171,7 +208,13 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     let crown = Vec3::new(lean.x, height - 0.1, lean.z);
     let core_width = if open_crown { 0.46 } else { 0.70 };
     let core_height = if open_crown { 0.54 } else { 0.68 };
-    let mut field = ((q - crown) / Vec3::new(radius * core_width, crown_h * core_height, radius * core_width)).length_squared();
+    let mut field = ((q - crown)
+        / Vec3::new(
+            radius * core_width,
+            crown_h * core_height,
+            radius * core_width,
+        ))
+    .length_squared();
     for limb in 0..tree.branch_count {
         let variation = hash3(tree.cell_x, limb, tree.cell_z, cfg.seed.wrapping_add(12083));
         let angle = rotation + limb as f32 * 2.399963;
@@ -182,32 +225,100 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
         } else {
             0.0
         };
-        let start_y = (tree.branch_start_y - tree.ground_y) as f32 * scale
-            + branch_height + vertical_breakup;
+        let start_y =
+            (tree.branch_start_y - tree.ground_y) as f32 * scale + branch_height + vertical_breakup;
         let start = Vec3::new(lean.x, 0.0, lean.z) * (start_y / height).powi(2) + Vec3::Y * start_y;
-        let tip_height = if open_crown { (variation - 0.55) * crown_h * 0.95 }
-            else { (variation - 0.20) * crown_h * 0.48 };
+        let tip_height = if open_crown {
+            (variation - 0.55) * crown_h * 0.95
+        } else {
+            (variation - 0.20) * crown_h * 0.48
+        };
         let tip = crown + Vec3::new(angle.cos() * reach, tip_height, angle.sin() * reach);
         let (distance, along) = distance_to_segment(q, start, tip);
-        let wood_r = (stem * (0.65 - along * 0.40)).max(scale * if open_crown {0.53} else {0.73});
-        if distance <= wood_r { return BlockId::Log; }
+        let wood_r =
+            (stem * (0.65 - along * 0.40)).max(scale * if open_crown { 0.53 } else { 0.73 });
+        if distance <= wood_r {
+            return BlockId::Log;
+        }
         // Each woody endpoint sits inside a leafy lobe; no detached balls or
         // exposed radiating sticks. Unequal lobes give each crown a silhouette.
-        let lobe_variation = if cfg.generator_version >= 8 { 0.24 } else { 0.11 };
-        let lobe = if open_crown {
-            Vec3::new(radius * (0.32 + variation * 0.17),
-                crown_h * (0.31 + variation * 0.19), radius * (0.30 + variation * 0.20))
+        let lobe_variation = if cfg.generator_version >= 8 {
+            0.24
         } else {
-            Vec3::new(radius * (0.43 + variation * lobe_variation),
+            0.11
+        };
+        let lobe = if open_crown {
+            Vec3::new(
+                radius * (0.32 + variation * 0.17),
+                crown_h * (0.31 + variation * 0.19),
+                radius * (0.30 + variation * 0.20),
+            )
+        } else {
+            Vec3::new(
+                radius * (0.43 + variation * lobe_variation),
                 crown_h * (0.44 + variation * (lobe_variation + 0.03)),
-                radius * (0.40 + variation * (lobe_variation + 0.03)))
+                radius * (0.40 + variation * (lobe_variation + 0.03)),
+            )
         };
         field = field.min(((q - tip - Vec3::Y * crown_h * 0.12) / lobe).length_squared());
     }
     // Low-frequency edge breakup removes spherical surfaces without noisy
     // per-voxel holes throughout the canopy interior.
     let grain = cfg.blocks_for_span(0.85).max(1);
-    let edge = hash3(p.x.div_euclid(grain), p.y.div_euclid(grain), p.z.div_euclid(grain), cfg.seed.wrapping_add(12109));
-    let threshold = if open_crown { 0.83 + edge * 0.24 } else { 0.94 + edge * 0.12 };
-    if field < threshold { BlockId::Leaves } else { BlockId::Air }
+    let edge = hash3(
+        p.x.div_euclid(grain),
+        p.y.div_euclid(grain),
+        p.z.div_euclid(grain),
+        cfg.seed.wrapping_add(12109),
+    );
+    let threshold = if open_crown {
+        0.83 + edge * 0.24
+    } else {
+        0.94 + edge * 0.12
+    };
+    if field < threshold {
+        BlockId::Leaves
+    } else {
+        BlockId::Air
+    }
+}
+
+/// Horizontal distance (metres) from the anchor to the outermost leaf this tree
+/// can place. Mirrors `block()` limb by limb with the same hashes, so the LOD
+/// proxy can cover exactly the footprint the voxel crown occupies.
+pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
+    use glam::Vec2;
+    let scale = cfg.voxel_meters();
+    let radius = tree.canopy_radius as f32 * scale;
+    // `block()` offsets the crown by the lean in metres, not voxels.
+    let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
+    let lean = Vec2::new(tree.lean_x as f32, tree.lean_z as f32) * (0.3 + age * 0.45);
+    let lean_len = lean.length();
+    if tree.conifer {
+        // Whorl envelope: radius * (0.91..1.07) * scallop(<=1.03); bounded, not sampled.
+        return lean_len + radius * 1.10 + 0.5 * scale;
+    }
+    let open_crown = cfg.generator_version >= 11;
+    let core_width = if open_crown { 0.46 } else { 0.70 };
+    // Leaves are `field < threshold` on the ellipsoids, and the threshold reaches
+    // 0.83 + 0.24 (open crowns) or 0.94 + 0.12, so the surface sits at sqrt(1.07).
+    let threshold_reach = if open_crown { 1.07f32.sqrt() } else { 1.06f32.sqrt() };
+    let mut reach = lean_len + radius * core_width * threshold_reach;
+    let rotation =
+        hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12049)) * std::f32::consts::TAU;
+    for limb in 0..tree.branch_count {
+        let variation = hash3(tree.cell_x, limb, tree.cell_z, cfg.seed.wrapping_add(12083));
+        let angle = rotation + limb as f32 * 2.399963;
+        let limb_reach = radius * (0.48 + variation * 0.23);
+        let tip = lean + Vec2::new(angle.cos(), angle.sin()) * limb_reach;
+        let lobe = if open_crown {
+            Vec2::new(radius * (0.32 + variation * 0.17), radius * (0.30 + variation * 0.20))
+        } else {
+            Vec2::new(radius * (0.43 + variation * 0.24), radius * (0.40 + variation * 0.27))
+        };
+        reach = reach.max(tip.length() + lobe.x.max(lobe.y) * threshold_reach);
+    }
+    // One voxel of margin: a leaf's far edge sits up to a voxel beyond its centre,
+    // and the lobe bound is per axis rather than along each tip direction.
+    reach + scale
 }

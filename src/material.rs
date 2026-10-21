@@ -128,7 +128,9 @@ pub struct SurfaceDetail {
 }
 
 impl SurfaceDetail {
-    pub fn shader_key(self) -> f32 { (self.texture_kind + self.material_id * 64) as f32 }
+    pub fn shader_key(self) -> f32 {
+        (self.texture_kind + self.material_id * 64) as f32
+    }
     pub const fn new(
         roughness: f32,
         specular: f32,
@@ -496,7 +498,10 @@ define_materials! {
         color: ColorModel::flat([0.30, 0.43, 0.25]),
         surface: SurfaceDetail::new(0.92, 0.04, 0.24, 0.30),
         matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
+        // Broadleaf canopies are solid. A passable leaf volume let the camera
+        // enter a cube whose back faces are culled, producing a see-through
+        // "X-ray" view of the world behind the tree.
+        collision: CollisionKind::Solid,
         density: 120.0,
         hardness: 0.10,
         friction: 0.30,
@@ -520,7 +525,9 @@ define_materials! {
         ),
         surface: SurfaceDetail::new(0.90, 0.05, 0.30, 0.34),
         matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
+        // Same occluder rule as broadleaf leaves: a passable cutout block
+        // becomes an accidental camera-inside-the-cube X-ray.
+        collision: CollisionKind::Solid,
         density: 180.0,
         hardness: 0.08,
         friction: 0.34,
@@ -677,7 +684,7 @@ define_materials! {
         display: "Stone bricks",
         render_kind: RenderKind::Opaque,
         occludes: true,
-        color: ColorModel::flat([0.48, 0.50, 0.51]),
+        color: ColorModel::flat([0.56, 0.54, 0.50]),
         surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
         matter: MatterState::Solid,
         collision: CollisionKind::Solid,
@@ -1317,6 +1324,38 @@ define_materials! {
         matter: MatterState::Solid, collision: CollisionKind::Solid, density: 4500.0,
         hardness: 0.9, friction: 0.35, restitution: 0.12, fluid: FluidTraits::NONE,
         selectable: true, hotbar: None, heightmap: true, lod_decor: false
+    },
+    // Appended after Mithril so saved block ids keep their meaning.
+    // An illusion: renders exactly like cut masonry but has no collision.
+    MirageBrick {
+        display: "Mirage brick", render_kind: RenderKind::Opaque, occludes: true,
+        color: ColorModel::flat([0.56, 0.54, 0.50]), surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Passable, density: 2400.0,
+        hardness: 0.2, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: true, hotbar: None, heightmap: false, lod_decor: false
+    },
+    // Cosmos chambers: near-black stone that holds the starfield fog.
+    VoidStone {
+        display: "Void stone", render_kind: RenderKind::Opaque, occludes: true,
+        color: ColorModel::flat([0.035, 0.032, 0.062]), surface: SurfaceDetail::new(0.34, 0.5, 0.35, 0.4),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 3100.0,
+        hardness: 0.9, friction: 0.5, restitution: 0.05, fluid: FluidTraits::NONE,
+        selectable: true, hotbar: None, heightmap: true, lod_decor: false
+    },
+    StarGlass {
+        display: "Star glass", render_kind: RenderKind::Opaque, occludes: true,
+        color: ColorModel::flat([0.10, 0.12, 0.30]), surface: SurfaceDetail::new(0.10, 0.9, 0.5, 0.2),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2600.0,
+        hardness: 0.6, friction: 0.2, restitution: 0.1, fluid: FluidTraits::NONE,
+        selectable: true, hotbar: None, heightmap: true, lod_decor: false
+    },
+    // Void stone that is not there: the false wall of a cosmos chamber.
+    MirageVoid {
+        display: "Mirage void", render_kind: RenderKind::Opaque, occludes: true,
+        color: ColorModel::flat([0.035, 0.032, 0.062]), surface: SurfaceDetail::new(0.34, 0.5, 0.35, 0.4),
+        matter: MatterState::Solid, collision: CollisionKind::Passable, density: 3100.0,
+        hardness: 0.2, friction: 0.5, restitution: 0.05, fluid: FluidTraits::NONE,
+        selectable: true, hotbar: None, heightmap: false, lod_decor: false
     }
 }
 
@@ -1340,12 +1379,35 @@ impl BlockId {
         }
     }
 
-    pub fn torch_point_meters(self, cell: glam::Vec3, model_point: glam::Vec3, scale: f32) -> glam::Vec3 {
+    pub fn torch_point_meters(
+        self,
+        cell: glam::Vec3,
+        model_point: glam::Vec3,
+        scale: f32,
+    ) -> glam::Vec3 {
         let anchor = self.torch_anchor();
         (cell + anchor) * scale + model_point - anchor
     }
     pub fn is_model(self) -> bool {
-        matches!(self,Self::CoalGenerator|Self::Crusher|Self::ElectricFurnace|Self::FeedHopper|Self::StorageCrate|Self::ItemPipe|Self::PowerCable|Self::Bioreactor|Self::AlloyKiln|Self::Fabricator|Self::Cultivator|Self::MiningDrill|Self::WaterPump|Self::FluidPipe|Self::WaterTank|Self::OreWasher)
+        matches!(
+            self,
+            Self::CoalGenerator
+                | Self::Crusher
+                | Self::ElectricFurnace
+                | Self::FeedHopper
+                | Self::StorageCrate
+                | Self::ItemPipe
+                | Self::PowerCable
+                | Self::Bioreactor
+                | Self::AlloyKiln
+                | Self::Fabricator
+                | Self::Cultivator
+                | Self::MiningDrill
+                | Self::WaterPump
+                | Self::FluidPipe
+                | Self::WaterTank
+                | Self::OreWasher
+        )
     }
     pub const COUNT: usize = MATERIAL_TABLE.len();
 
@@ -1374,7 +1436,7 @@ impl BlockId {
 
     pub fn surface(self) -> SurfaceDetail {
         let mut surface = self.material().render.surface;
-        surface.material_id=self as u32+1;
+        surface.material_id = self as u32 + 1;
         surface.texture_kind = match self {
             Self::Fire => 42,
             Self::Smoke => 43,
@@ -1417,6 +1479,10 @@ impl BlockId {
             Self::GoldBlock => 49,
             Self::PlatinumBlock => 50,
             Self::MithrilBlock => 51,
+            Self::MirageBrick => 12,
+            Self::VoidStone => 52,
+            Self::StarGlass => 53,
+            Self::MirageVoid => 52,
             Self::PowerCable => 31,
             Self::Bioreactor => 32,
             Self::SurveyCache => 23,
@@ -1426,12 +1492,19 @@ impl BlockId {
         surface
     }
 
+    /// Illusion blocks: drawn as stone, but the body passes through them.
+    pub fn is_mirage(self) -> bool {
+        matches!(self, Self::MirageBrick | Self::MirageVoid)
+    }
+
     pub fn is_solid(self) -> bool {
         matches!(self.material().physics.collision, CollisionKind::Solid)
     }
 
     pub fn is_opaque(self) -> bool {
-        if self.is_model() { return false; }
+        if self.is_model() {
+            return false;
+        }
         self.material().render.occludes_light
     }
 
@@ -1464,7 +1537,8 @@ impl BlockId {
     }
 
     pub fn is_ray_pickable(self) -> bool {
-        self.is_solid() || self.is_torch()
+        // A mirage is an illusion for the body, not for the pickaxe.
+        self.is_solid() || self.is_torch() || self.is_mirage()
     }
 
     pub fn torch_support_offset(self) -> Option<IVec3> {
@@ -1524,6 +1598,22 @@ pub struct TerrainGenerationIds {
     pub block_ids0: [u32; 4],
     pub block_ids1: [u32; 4],
     pub block_ids2: [u32; 4],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leafy_occluders_are_solid_so_the_camera_cannot_enter_them() {
+        for block in [BlockId::Leaves, BlockId::Bush, BlockId::PineLeaves] {
+            assert!(
+                block.is_solid(),
+                "{} is an opaque/cutout occluder and must collide",
+                block.display_name()
+            );
+        }
+    }
 }
 
 pub const fn terrain_generation_ids() -> TerrainGenerationIds {

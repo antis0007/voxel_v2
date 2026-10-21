@@ -94,13 +94,28 @@ fn climate(x: f32, z: f32, seed: u32) -> (f32, f32) {
 
 /// Cheap far-field ecology, using the same climate as editable terrain.
 /// No erosion tiles are allocated to place visual vegetation.
-pub(crate) fn visual_ecology(cfg: &WorldSampleConfig, x: f32, z: f32, height: f32) -> (f32, f32, f32) {
+pub(crate) fn visual_ecology(
+    cfg: &WorldSampleConfig,
+    x: f32,
+    z: f32,
+    height: f32,
+) -> (f32, f32, f32) {
     let (mut heat, mut wet) = climate(x, z, cfg.seed);
     if cfg.generator_version >= 5 {
         heat = ((heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0);
         wet = ((wet - 0.5) * 1.4 + 0.5).clamp(0.0, 1.0);
     }
-    heat = (heat - (height - 30.0).max(0.0) * if cfg.generator_version >= 7 { 0.0018 } else { 0.0035 }).clamp(0.0, 1.0);
+    if cfg.generator_version >= 15 {
+        (heat, wet) = super::terrain_variety::climate(x, z, cfg.seed, heat, wet);
+    }
+    heat = (heat
+        - (height - 30.0).max(0.0)
+            * if cfg.generator_version >= 7 {
+                0.0018
+            } else {
+                0.0035
+            })
+    .clamp(0.0, 1.0);
     let grove = value_noise2(x / 270.0, z / 270.0, cfg.seed.wrapping_add(3127)) * 0.72
         + value_noise2(x / 87.0, z / 87.0, cfg.seed.wrapping_add(3157)) * 0.28;
     (heat, wet, grove)
@@ -149,7 +164,42 @@ pub struct TectonicSample {
     pub crust_age: f32,
 }
 
+/// Generator 15 stretches plates, belts and shelves by this factor so continents are
+/// several kilometres across instead of 500 m patchwork. All profile widths stretch with it.
+pub(crate) fn tectonic_zoom(generator_version: u32) -> f32 {
+    if generator_version >= 15 { 2.4 } else { 1.0 }
+}
+
 pub fn sample_tectonics(wx: f32, wz: f32, seed: u32) -> TectonicSample {
+    sample_tectonics_zoomed(wx, wz, seed, 1.0)
+}
+
+thread_local! {
+    // Tectonics depend only on XZ. Cave-column generation used to recompute the
+    // full plate solve for every solid voxel; this keeps it to once per column
+    // per worker while preserving exact results.
+    static TECTONIC_CACHE: std::cell::RefCell<HashMap<(u32, u32, u32, u32), TectonicSample>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
+pub fn sample_tectonics_zoomed(wx: f32, wz: f32, seed: u32, zoom: f32) -> TectonicSample {
+    let key = (wx.to_bits(), wz.to_bits(), seed, zoom.to_bits());
+    if let Some(hit) = TECTONIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let value = sample_tectonics_uncached(wx, wz, seed, zoom);
+    TECTONIC_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 32_768 {
+            cache.clear();
+        }
+        cache.insert(key, value);
+    });
+    value
+}
+
+fn sample_tectonics_uncached(wx: f32, wz: f32, seed: u32, zoom: f32) -> TectonicSample {
+    let (wx, wz) = (wx / zoom, wz / zoom);
     const PLATE_SCALE: f32 = 540.0;
     // Mantle convection plumes warp plate sutures into organic, curving arcs.
     let warp_x = (value_noise2(wx / 420.0, wz / 420.0, seed.wrapping_add(4101)) - 0.5) * 185.0
@@ -267,7 +317,11 @@ pub fn sample_tectonics(wx: f32, wz: f32, seed: u32) -> TectonicSample {
         0.78,
         value_noise2(wx / 68.0, wz / 68.0, seed.wrapping_add(4243)),
     );
-    let arc_volcanism = convergence * has_oceanic * (0.35 + 0.65 * on_overriding_plate) * arc_profile * (0.45 + 0.55 * cone_chain);
+    let arc_volcanism = convergence
+        * has_oceanic
+        * (0.35 + 0.65 * on_overriding_plate)
+        * arc_profile
+        * (0.45 + 0.55 * cone_chain);
     let rift_profile = (-(boundary_dist / 52.0).powi(2)).exp();
     let rift_volcanism = divergence * rift_profile * (0.35 + 0.65 * cone_chain);
     let volcanism = (arc_volcanism + rift_volcanism * 0.75).clamp(0.0, 1.0);
@@ -281,11 +335,30 @@ pub fn sample_tectonics(wx: f32, wz: f32, seed: u32) -> TectonicSample {
     let dip_coord = (wx * nx + wz * nz) / 74.0
         + (value_noise2(wx / 95.0, wz / 95.0, seed.wrapping_add(4271)) - 0.5) * 0.8;
     let fault_cell = dip_coord.fract().rem_euclid(1.0);
-    let fault_step = smoothstep(0.42, 0.58, fault_cell) - 0.5;
+    // Zoomed (generator 15) worlds get broader, along-strike irregular fault blocks,
+    // so a plate suture reads as a ragged scarp and not a ruled dashed line.
+    let modern = zoom > 1.0;
+    let fault_step = if modern {
+        smoothstep(0.30, 0.70, fault_cell) - 0.5
+    } else {
+        smoothstep(0.42, 0.58, fault_cell) - 0.5
+    };
     let fault_plane = (1.0 - ((fault_cell - 0.5).abs() * 14.0).min(1.0))
         * (boundary_proximity * 0.75 + transform_shear * 0.55).min(1.0);
-    let fault_activity = (boundary_proximity * (convergence + divergence * 0.85) + transform_shear * 0.9).min(1.2);
-    let fault_throw = fault_step * fault_activity * 9.5 + (strike_coord.sin() * transform_shear * 3.2);
+    let fault_activity =
+        (boundary_proximity * (convergence + divergence * 0.85) + transform_shear * 0.9).min(1.2);
+    let along_strike = if modern {
+        0.30 + 1.15
+            * value_noise2(
+                strike_coord * 0.7,
+                dip_coord * 0.12,
+                seed.wrapping_add(4281),
+            )
+    } else {
+        1.0
+    };
+    let fault_throw = fault_step * fault_activity * 9.5 * along_strike
+        + (strike_coord.sin() * transform_shear * 3.2);
 
     TectonicSample {
         continentalness,
@@ -364,13 +437,30 @@ fn mountain_ridged_multifractal(
 // V9+ combines deterministic seeded plate tectonics (oceans, continental shelves,
 // subduction trenches, volcanic island/cordilleran arcs, rift grabens, and
 // fold-and-thrust mountain belts) with connected, walkable valleys.
-fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
-    let tect = sample_tectonics(x, z, seed);
-    let ranges = value_noise2(x / 195.0, z / 195.0, seed.wrapping_add(97));
-    let massif_cluster = value_noise2(x / 360.0, z / 360.0, seed.wrapping_add(4349));
+fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32 {
+    let tect = sample_tectonics_zoomed(x, z, seed, tectonic_zoom(version));
+    // Generator 15: mountain ranges are larger and rarer, so most of a continent is
+    // plain, plateau and foothill and the relief is concentrated in real belts.
+    let (range_zoom, mask_lo, mask_hi) = if version >= 15 {
+        (2.2, if ridged { 0.38 } else { 0.48 }, 0.80)
+    } else {
+        (1.0, if ridged { 0.24 } else { 0.32 }, 0.70)
+    };
+    let ranges = value_noise2(
+        x / (195.0 * range_zoom),
+        z / (195.0 * range_zoom),
+        seed.wrapping_add(97),
+    );
+    let massif_cluster = value_noise2(
+        x / (360.0 * range_zoom),
+        z / (360.0 * range_zoom),
+        seed.wrapping_add(4349),
+    );
     let range_envelope = (ranges * 0.68 + massif_cluster * 0.32).clamp(0.0, 1.0);
-    let mountain_mask = smoothstep(if ridged { 0.24 } else { 0.32 }, 0.70, range_envelope);
-    let (primary_spine, spur_ridge, cirque_bowl) = mountain_ridged_multifractal(x, z, seed, &tect);
+    let mountain_mask = smoothstep(mask_lo, mask_hi, range_envelope);
+    let massif_scale = if version >= 15 { 1.8 } else { 1.0 };
+    let (primary_spine, spur_ridge, cirque_bowl) =
+        mountain_ridged_multifractal(x / massif_scale, z / massif_scale, seed, &tect);
     let hills = (fbm2(x / 65.0, z / 65.0, seed.wrapping_add(71)) - 0.5) * 16.0;
 
     // Hypsometric curve from abyssal oceanic crust (-18..+4m) across the continental
@@ -385,26 +475,38 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
 
     // 1. Orogenic fold-and-thrust mountain belts, pyramidal peaks, lateral spurs & cirques:
     // Asymmetric cuesta/thrust profile: steeper scarp toward the plate suture, longer dip slope behind.
-    let fold_asymmetry = 0.52 + 0.48 * (tect.fold_wave + 0.28 * (tect.fold_wave * 2.0).sin()).clamp(-1.0, 1.0);
+    let fold_asymmetry =
+        0.52 + 0.48 * (tect.fold_wave + 0.28 * (tect.fold_wave * 2.0).sin()).clamp(-1.0, 1.0);
     let arête_profile = primary_spine.powf(1.28) * (0.68 + 0.32 * spur_ridge);
     let pyramidal_horn = smoothstep(0.55, 0.92, primary_spine) * smoothstep(0.45, 0.88, spur_ridge);
     let massif_drive = (tect.orogeny * 1.25 + mountain_mask * craton_t * 0.88).clamp(0.0, 1.65);
 
     // Piedmont foothill apron rises smoothly into steep alpine massifs and horns:
     let piedmont_apron = massif_drive * (0.35 + 0.65 * fold_asymmetry) * 18.0 * shelf_t;
-    let cordillera_scale = if ridged { 132.0 } else { 106.0 };
+    // Generator 15 belts are wider and rarer, so the peaks inside them stand taller.
+    let cordillera_scale = match (ridged, version >= 15) {
+        (true, true) => 185.0,
+        (false, true) => 150.0,
+        (true, false) => 132.0,
+        (false, false) => 106.0,
+    };
     let mut orogenic_uplift = piedmont_apron
-        + massif_drive * (0.58 + 0.42 * fold_asymmetry) * (arête_profile * cordillera_scale + pyramidal_horn * 34.0);
+        + massif_drive
+            * (0.58 + 0.42 * fold_asymmetry)
+            * (arête_profile * cordillera_scale
+                + pyramidal_horn * if version >= 15 { 48.0 } else { 34.0 });
 
     // Glacial cirque & U-shaped valley scouring: scoops concave amphitheaters out of
     // mid-to-upper flanks while leaving knife-edge arêtes and horns standing tall above them.
-    let flank_zone = smoothstep(32.0, 78.0, orogenic_uplift) * (1.0 - smoothstep(0.76, 0.95, primary_spine));
+    let flank_zone =
+        smoothstep(32.0, 78.0, orogenic_uplift) * (1.0 - smoothstep(0.76, 0.95, primary_spine));
     let glacial_scour = cirque_bowl * flank_zone * 22.0;
     orogenic_uplift = (orogenic_uplift - glacial_scour).max(0.0);
     h += orogenic_uplift;
 
     // 2. Volcanic arcs & stratovolcano island chains (can breach sea level from oceanic plates!):
-    let volcano_cone = primary_spine.powf(1.45) * (0.65 + 0.35 * spur_ridge) * (0.55 + 0.45 * mountain_mask);
+    let volcano_cone =
+        primary_spine.powf(1.45) * (0.65 + 0.35 * spur_ridge) * (0.55 + 0.45 * mountain_mask);
     let volcanic_uplift = tect.volcanism * (28.0 + volcano_cone * 82.0);
     // High volcanic stratocones feature a sunken summit caldera crater rimmed by basalt cliffs.
     let caldera = smoothstep(0.74, 0.92, tect.volcanism * primary_spine) * 19.0;
@@ -414,8 +516,8 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
     h -= tect.trench * 18.5;
 
     // 4. Divergent continental rift graben & mid-ocean spreading ridge:
-    let horst_shoulders = (-((tect.boundary_dist - 64.0) / 34.0).powi(2)).exp()
-        * (-tect.boundary_stress).max(0.0);
+    let horst_shoulders =
+        (-((tect.boundary_dist - 64.0) / 34.0).powi(2)).exp() * (-tect.boundary_stress).max(0.0);
     if tect.continentalness > -0.05 {
         // Sunken rift valley (graben) often deep enough to host rift lakes or sea inlets,
         // bordered by uplifted horst fault-block escarpments.
@@ -431,7 +533,7 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool) -> f32 {
     h
 }
 
-fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32) -> f32 {
+fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32, footprint: f32) -> f32 {
     let (sx, sz) = if version >= 3 {
         (
             wx + (value_noise2(wx / 230.0, wz / 230.0, seed.wrapping_add(9001)) - 0.5) * 140.0,
@@ -441,7 +543,7 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32) -> f32 {
         (wx, wz)
     };
     let mut h = if version >= 9 {
-        compact_bedrock(wx, wz, seed, kind == WorldType::Ridged as u8)
+        compact_bedrock(wx, wz, seed, kind == WorldType::Ridged as u8, version)
     } else {
         bedrock(sx, sz, seed, kind == WorldType::Ridged as u8)
     };
@@ -454,42 +556,54 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32) -> f32 {
         let terrace = (h / 9.0).floor() * 9.0 + smoothstep(0.25, 0.85, (h / 9.0).fract()) * 9.0;
         h += (terrace - h) * mesa * 0.85;
     }
+    if version >= 15 {
+        h += super::terrain_variety::relief(wx, wz, seed, h, footprint, version);
+    }
     h
 }
 
 // Visual far-field samples do not need a 48-step erosion simulation per region.
 // Editable chunks and the inner backdrop rings retain the exact generator.
 pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, BlockId) {
+    preview_surface_lod(cfg, x, z, 8.0)
+}
+
+/// Visual far-field sample. `footprint` is the horizon ring spacing in metres: terrain
+/// detail finer than that is faded out instead of aliasing into spikes.
+pub(crate) fn preview_surface_lod(
+    cfg: &WorldSampleConfig,
+    x: i32,
+    z: i32,
+    footprint: f32,
+) -> (f32, BlockId) {
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
         return super::distant_surface(cfg, x, z);
     }
     let wx = cfg.world_x(x);
     let wz = cfg.world_z(z);
-    let h0 = base_height(
-        wx,
-        wz,
-        cfg.seed,
-        cfg.world_type as u8,
-        cfg.generator_version,
-    );
-    let hx = base_height(
-        wx + 8.0,
-        wz,
-        cfg.seed,
-        cfg.world_type as u8,
-        cfg.generator_version,
-    );
-    let hz = base_height(
-        wx,
-        wz + 8.0,
-        cfg.seed,
-        cfg.world_type as u8,
-        cfg.generator_version,
-    );
-    let slope0 = (((hx - h0) / 8.0).powi(2) + ((hz - h0) / 8.0).powi(2)).sqrt();
+    let probe = footprint.clamp(8.0, 96.0);
+    let height_at = |px: f32, pz: f32| {
+        base_height(
+            px,
+            pz,
+            cfg.seed,
+            cfg.world_type as u8,
+            cfg.generator_version,
+            footprint,
+        )
+    };
+    let h0 = height_at(wx, wz);
+    let hx = height_at(wx + probe, wz);
+    let hz = height_at(wx, wz + probe);
+    let slope0 = (((hx - h0) / probe).powi(2) + ((hz - h0) / probe).powi(2)).sqrt();
     let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25);
     let tect = if cfg.generator_version >= 9 {
-        Some(sample_tectonics(wx, wz, cfg.seed))
+        Some(sample_tectonics_zoomed(
+            wx,
+            wz,
+            cfg.seed,
+            tectonic_zoom(cfg.generator_version),
+        ))
     } else {
         None
     };
@@ -498,11 +612,28 @@ pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, 
         + smoothstep(104.0, 158.0, h) * 0.62
         + patch * 0.28
         - slope * 0.22;
-    let block = if h < 1.5 {
+    let far_override = if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
+        use super::terrain_variety as tv;
+        let shore = tv::shore(wx, wz, cfg.seed, temperature, moisture);
+        tv::shore_surface(wx, wz, cfg.seed, h, slope, shore, cfg.generator_version)
+            .or_else(|| {
+                tv::anomaly(wx, wz, cfg.seed)
+                    .filter(|_| h > 20.0)
+                    .and_then(|a| tv::anomaly_surface(&a, wx, wz, cfg.seed, h, slope))
+            })
+            .map(|(top, _)| top)
+    } else {
+        None
+    };
+    let block = if let Some(top) = far_override.filter(|_| h >= 1.5) {
+        top
+    } else if h < 1.5 {
         BlockId::Basalt
-    } else if h < 14.8 && slope < 0.42 {
+    } else if cfg.generator_version < 15 && h < 14.8 && slope < 0.42 {
         BlockId::Sand
-    } else if tect.is_some_and(|t| t.volcanism > 0.54 && (h > 38.0 || slope > 0.38)) && snow_score <= 0.68 {
+    } else if tect.is_some_and(|t| t.volcanism > 0.54 && (h > 38.0 || slope > 0.38))
+        && snow_score <= 0.68
+    {
         BlockId::Basalt
     } else if snow_score > 0.64 && slope < 0.74 && h > 88.0 {
         if h > 134.0 && slope < 0.34 && temperature < 0.22 && patch > 0.60 {
@@ -512,14 +643,23 @@ pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, 
         }
     } else if h > 112.0 || slope > 0.68 {
         if let Some(t) = tect {
-            sample_stratigraphic_bed(wx, h, wz, cfg.seed, &t)
+            sample_stratigraphic_bed(wx, h, wz, cfg.seed, &t, cfg.generator_version)
         } else {
             BlockId::Stone
         }
     } else if temperature > 0.63 && moisture < 0.38 {
-        BlockId::Sand
+        if cfg.generator_version >= 15 {
+            super::terrain_variety::desert_surface(wx, wz, cfg.seed, slope).0
+        } else {
+            BlockId::Sand
+        }
     } else {
         BlockId::Grass
+    };
+    let block = if cfg.generator_version >= 14 && super::valley::in_channel(cfg, wx, wz) {
+        BlockId::Sand
+    } else {
+        block
     };
     (
         cfg.clamp_height(cfg.blocks_for_height(h)) as f32 + 1.0,
@@ -540,7 +680,7 @@ fn build_tile(key: TileKey) -> Tile {
         for x in 0..EDGE {
             let wx = tx as f32 * REGION + x as f32 * SPACING - REGION;
             let wz = tz as f32 * REGION + z as f32 * SPACING - REGION;
-            let h = base_height(wx, wz, seed, kind, version);
+            let h = base_height(wx, wz, seed, kind, version, SPACING);
             height[z * EDGE + x] = h;
         }
     }
@@ -590,8 +730,13 @@ fn build_tile(key: TileKey) -> Tile {
                         .min_by(|&&a, &&b| height[a].total_cmp(&height[b]))
                         .unwrap();
                     let frost_boost = if height[i] > 68.0 { 1.35 } else { 1.0 };
-                    let angle_of_repose = if height[i] > 82.0 { SPACING * 0.62 } else { SPACING * 0.70 };
-                    let talus = ((height[i] - height[j] - angle_of_repose) * 0.085 * frost_boost).clamp(0.0, 0.30);
+                    let angle_of_repose = if height[i] > 82.0 {
+                        SPACING * 0.62
+                    } else {
+                        SPACING * 0.70
+                    };
+                    let talus = ((height[i] - height[j] - angle_of_repose) * 0.085 * frost_boost)
+                        .clamp(0.0, 0.30);
                     delta_h[i] -= talus;
                     delta_h[j] += talus;
                     deposit[j] += talus;
@@ -642,7 +787,7 @@ fn tile(key: TileKey) -> Arc<Tile> {
         } else {
             // Never evict an in-flight initialization: neighboring workers join
             // the same erosion calculation instead of rebuilding it in parallel.
-            if cache.entries.len() >= 256 {
+            if cache.entries.len() >= 1024 {
                 if let Some(i) = cache
                     .recent
                     .iter()
@@ -661,7 +806,7 @@ fn tile(key: TileKey) -> Arc<Tile> {
     let result = Arc::clone(cell.get_or_init(|| Arc::new(build_tile(key))));
     HOT_TILES.with(|hot| {
         let mut hot = hot.borrow_mut();
-        if hot.len() >= 8 {
+        if hot.len() >= 64 {
             hot.pop_front();
         }
         hot.push_back((key, Arc::clone(&result)));
@@ -726,6 +871,19 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
                 0.85
             }
     };
+    let v15 = cfg.generator_version >= 15;
+    let coastal = if v15 {
+        shoreline_biome(cfg, wx, wz, h, slope, temperature, moisture)
+    } else if h < 14.8 && slope < 0.42 {
+        Some(Biome::Coast)
+    } else {
+        None
+    };
+    let weird = if v15 && h > 20.0 && !alpine {
+        super::terrain_variety::anomaly(wx, wz, cfg.seed)
+    } else {
+        None
+    };
     let biome = if cfg.generator_version >= 3 && wx.hypot(wz) < 110.0 {
         if wx > 30.0 {
             Biome::Forest
@@ -734,8 +892,14 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
         }
     } else if h < 10.5 {
         Biome::Ocean
-    } else if h < 14.8 && slope < 0.42 {
-        Biome::Coast
+    } else if let Some(shore_biome) = coastal {
+        shore_biome
+    } else if weird.is_some_and(|a| {
+        a.strength * (a.weights[1] + a.weights[3])
+            > 0.25 + super::terrain_variety::ragged_edge(wx, wz, cfg.seed) * 0.4
+    }) {
+        // Mesas and canyons read as red-rock country whatever the climate says.
+        Biome::Badlands
     } else if alpine {
         // Keep alpine rock and snow on the high summits. Slope is handled as
         // exposed rock below; using it as a biome override erased forests from
@@ -753,7 +917,12 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
         } else {
             Biome::Desert
         }
-    } else if cfg.generator_version >= 10 && moisture > 0.78 && h >= 16.5 && h < 24.0 && slope < 0.14 {
+    } else if cfg.generator_version >= 10
+        && moisture > 0.78
+        && h >= 16.5
+        && h < 24.0
+        && slope < 0.14
+    {
         Biome::Fen
     } else if cfg.generator_version >= 10 && temperature > 0.56 && moisture > 0.68 {
         Biome::Rainforest
@@ -776,6 +945,43 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
     }
 }
 
+/// Generator 15 shoreline biome. Beach width follows the local coast character,
+/// rocky coasts get no beach biome at all, and wet flats become marsh.
+fn shoreline_biome(
+    cfg: &WorldSampleConfig,
+    wx: f32,
+    wz: f32,
+    h: f32,
+    slope: f32,
+    temperature: f32,
+    moisture: f32,
+) -> Option<Biome> {
+    use super::terrain_variety::{CoastKind, shore};
+    let d = h - super::WATER_LEVEL_METERS;
+    if !(-1.5..6.0).contains(&d) || slope > 0.5 {
+        return None;
+    }
+    let s = shore(wx, wz, cfg.seed, temperature, moisture);
+    if s.kind == CoastKind::Rocky {
+        return None;
+    }
+    if d < s.limit.max(0.5) {
+        return Some(if s.kind == CoastKind::Mudflat {
+            Biome::Marsh
+        } else {
+            Biome::Coast
+        });
+    }
+    // Low, wet, flat ground just behind the beach.
+    if d < 4.5 && slope < 0.14 && moisture > 0.58 {
+        let ragged = value_noise2(wx / 38.0, wz / 38.0, cfg.seed.wrapping_add(9531));
+        if ragged > 0.42 {
+            return Some(Biome::Marsh);
+        }
+    }
+    None
+}
+
 fn apply_macro_shaping(
     cfg: &WorldSampleConfig,
     wx: f32,
@@ -790,6 +996,9 @@ fn apply_macro_shaping(
         // reachable; interpolated climate noise otherwise favours green forest.
         temperature = ((temperature - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0);
         rain = ((rain - 0.5) * 1.4 + 0.5).clamp(0.0, 1.0);
+    }
+    if cfg.generator_version >= 15 {
+        (temperature, rain) = super::terrain_variety::climate(wx, wz, cfg.seed, temperature, rain);
     }
     // Generator 7 uses a gentler normalized lapse rate. The previous rate drove
     // the climate field to zero on ordinary highlands, making a single snowy
@@ -873,12 +1082,31 @@ fn apply_macro_shaping(
         let alpine_relief = smoothstep(52.0, 118.0, h);
         // Structural rock benches along tilted mountain strata:
         let bench_phase = ((h + wx * 0.04 - wz * 0.03) / 10.5).fract();
-        let rock_bench = (smoothstep(0.18, 0.82, bench_phase) - bench_phase) * 2.6 * alpine_relief;
-        let couloir_cut = (1.0 - chute_furrow) * 4.2 * alpine_relief * smoothstep(0.25, 0.78, slope);
+        let couloir_scale = if cfg.generator_version >= 17 {
+            6.6
+        } else {
+            4.2
+        };
+        let bench_scale = if cfg.generator_version >= 17 {
+            4.4
+        } else {
+            2.6
+        };
+        let rock_bench =
+            (smoothstep(0.18, 0.82, bench_phase) - bench_phase) * bench_scale * alpine_relief;
+        let couloir_cut =
+            (1.0 - chute_furrow) * couloir_scale * alpine_relief * smoothstep(0.25, 0.78, slope);
 
-        let broken = (rib - 0.35) * 9.0 + (b_eff - 0.5) * 4.0 + (c_eff - 0.5) * 1.3 + rock_bench - couloir_cut;
+        let broken = (rib - 0.35) * 9.0 + (b_eff - 0.5) * 4.0 + (c_eff - 0.5) * 1.3 + rock_bench
+            - couloir_cut;
         let hummock = (a - 0.5) * 3.0 + (b_eff - 0.5) * 1.5;
-        let dunes = (wx * 0.085 + wz * 0.032 + a * 4.0).sin() * 2.2;
+        let mut dunes = (wx * 0.085 + wz * 0.032 + a * 4.0).sin() * 2.2;
+        if cfg.generator_version >= 15 {
+            // Long swept megadunes carry the small ripples, like a real sand sea.
+            let phase = (wx * 0.021 - wz * 0.012 + a * 3.0) / std::f32::consts::TAU;
+            let saw = phase - phase.floor();
+            dunes += (saw.powf(1.7) - 0.4) * 9.0;
+        }
         let arid = smoothstep(0.55, 0.8, temperature) * (1.0 - smoothstep(0.2, 0.4, moisture));
         let residual = (hummock * (1.0 - arid) + dunes * arid) * (1.0 - exposed) + broken * exposed;
         let strength = smoothstep(20.0, 65.0, wx.hypot(wz)) * smoothstep(12.2, 19.0, h);
@@ -888,16 +1116,35 @@ fn apply_macro_shaping(
             1.0
         };
         h += residual * strength * mountain_scale;
-        slope += ((b_eff - 0.5).abs() * 0.25 + chute_furrow * alpine_relief * 0.14) * exposed * strength;
+        slope +=
+            ((b_eff - 0.5).abs() * 0.25 + chute_furrow * alpine_relief * 0.14) * exposed * strength;
     }
-    // Prevent shoreline heights from lingering in the 11.2..12.15m rounding band
-    // where 1m voxel quantization creates isolated 1-block water lines on beaches.
-    if channel < 0.48 && h > 11.15 && h < 12.25 {
+    if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
+        let tv = super::terrain_variety::anomaly(wx, wz, cfg.seed);
+        if let Some(a) = tv {
+            let (dh, ds) = super::terrain_variety::anomaly_shape(&a, wx, wz, cfg.seed, h);
+            h += dh;
+            slope += ds;
+        }
+        // Continuous beach profile. Heights keep their shoreline position but the
+        // beach face gets flatter and wider, with no step for the voxel grid to expose.
+        let shore = super::terrain_variety::shore(wx, wz, cfg.seed, temperature, moisture);
+        h = super::terrain_variety::reprofile(h, shore, cfg.generator_version);
+        if cfg.generator_version >= 17 {
+            h = super::terrain_variety::strand(h, shore, wx, wz, cfg.seed, cfg.generator_version);
+        }
+    } else if cfg.generator_version < 15 && channel < 0.48 && h > 11.15 && h < 12.25 {
+        // Prevent shoreline heights from lingering in the 11.2..12.15m rounding band
+        // where 1m voxel quantization creates isolated 1-block water lines on beaches.
+        // (Generator 14 and older only: the snap is a 1.2 m step.)
         h = if h >= 11.42 {
             12.28 + (h - 11.42) * 0.65
         } else {
             11.05 - (11.42 - h) * 0.40
         };
+    }
+    if cfg.generator_version >= 14 && cfg.world_type != WorldType::Superflat {
+        h = super::valley::carve(cfg, wx, wz, h);
     }
     (h, slope, temperature, moisture)
 }
@@ -909,12 +1156,22 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
             surface: BlockId::Grass,
             filler: BlockId::Dirt,
             vegetation_density: 0.0,
+            cave: super::CaveColumn::default(),
         };
     }
     let s = sample(cfg, x, z);
     let (mut surface, mut filler, mut vegetation) = match s.biome {
         Biome::Ocean | Biome::Coast => (BlockId::Sand, BlockId::Sandstone, 0.0),
         Biome::Marsh => (BlockId::Mud, BlockId::Clay, 0.25),
+        Biome::Desert if cfg.generator_version >= 15 => {
+            let (top, under) = super::terrain_variety::desert_surface(
+                cfg.world_x(x),
+                cfg.world_z(z),
+                cfg.seed,
+                s.slope,
+            );
+            (top, under, 0.0)
+        }
         Biome::Desert => (BlockId::Sand, BlockId::Sandstone, 0.0),
         Biome::Badlands => (BlockId::Clay, BlockId::Sandstone, 0.0),
         Biome::Alpine => (
@@ -974,7 +1231,12 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
         // where temperature crossed 0.24, regardless of the local snow patch.
         if matches!(
             s.biome,
-            Biome::Alpine | Biome::Tundra | Biome::Taiga | Biome::Forest | Biome::Meadow | Biome::Heathland
+            Biome::Alpine
+                | Biome::Tundra
+                | Biome::Taiga
+                | Biome::Forest
+                | Biome::Meadow
+                | Biome::Heathland
         ) {
             if cfg.generator_version >= 7 {
                 let cold = 1.0 - smoothstep(0.08, 0.52, s.temperature);
@@ -1036,7 +1298,9 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
             }
             // Coastal transition: gentle slopes near sea level blend sand and
             // coastal shingle into turf instead of dark mud stripes.
-            if s.height < 16.0 && s.slope < 0.36 {
+            if cfg.generator_version >= 15 {
+                // Generator 15 places beaches in the shore pass below.
+            } else if s.height < 16.0 && s.slope < 0.36 {
                 let dune = value_noise2(wx / 11.0, wz / 11.0, cfg.seed.wrapping_add(9371));
                 if s.height < 14.8 + dune * 1.1 {
                     surface = if dune > 0.76 && s.height > 14.2 {
@@ -1047,7 +1311,12 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
                     filler = BlockId::Sandstone;
                     vegetation = 0.0;
                 }
-            } else if s.moisture > 0.84 && s.height >= 17.5 && s.height < 23.0 && s.slope < 0.14 && patch > 0.68 {
+            } else if s.moisture > 0.84
+                && s.height >= 17.5
+                && s.height < 23.0
+                && s.slope < 0.14
+                && patch > 0.68
+            {
                 surface = BlockId::Mud;
                 filler = BlockId::Clay;
             }
@@ -1063,25 +1332,36 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
             match s.biome {
                 Biome::Savanna => {
                     vegetation *= 0.35 + smoothstep(0.35, 0.72, grove);
-                    if patch < 0.25 && s.slope < 0.35 { surface = BlockId::Dirt; }
+                    if patch < 0.25 && s.slope < 0.35 {
+                        surface = BlockId::Dirt;
+                    }
                 }
                 Biome::Rainforest => {
                     vegetation *= 0.65 + grove * 0.45;
-                    if patch > 0.72 && s.slope < 0.25 { surface = BlockId::Mud; }
+                    if patch > 0.72 && s.slope < 0.25 {
+                        surface = BlockId::Mud;
+                    }
                 }
                 Biome::Heathland => {
-                    if patch > 0.66 && s.slope > 0.22 { surface = BlockId::Gravel; }
+                    if patch > 0.66 && s.slope > 0.22 {
+                        surface = BlockId::Gravel;
+                    }
                 }
                 Biome::Fen => {
                     // Grass islands support trees; soft clay/mud fills hollows.
-                    if patch < 0.54 { surface = BlockId::Mud; vegetation = 0.0; }
-                    else { vegetation *= smoothstep(0.54, 0.82, patch); }
+                    if patch < 0.54 {
+                        surface = BlockId::Mud;
+                        vegetation = 0.0;
+                    } else {
+                        vegetation *= smoothstep(0.54, 0.82, patch);
+                    }
                 }
                 _ => {}
             }
         }
         if cfg.generator_version >= 9 && wx.hypot(wz) > 110.0 {
-            let tect = sample_tectonics(wx, wz, cfg.seed);
+            let tect =
+                sample_tectonics_zoomed(wx, wz, cfg.seed, tectonic_zoom(cfg.generator_version));
             if matches!(s.biome, Biome::Ocean) {
                 if s.height < 1.0 || tect.trench > 0.35 {
                     // Abyssal basaltic ocean floor & subduction trench ooze.
@@ -1113,9 +1393,18 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
                 }
                 filler = BlockId::Basalt;
                 vegetation *= 0.12;
-            } else if (s.slope > 0.68 || (tect.fault_plane > 0.62 && s.slope > 0.40)) && s.height > 15.0 {
+            } else if (s.slope > 0.68 || (tect.fault_plane > 0.62 && s.slope > 0.40))
+                && s.height > 15.0
+            {
                 // Steep cliff faces & fault scarps expose the tilted 3D stratigraphic bed.
-                let bed = sample_stratigraphic_bed(wx, s.height, wz, cfg.seed, &tect);
+                let bed = sample_stratigraphic_bed(
+                    wx,
+                    s.height,
+                    wz,
+                    cfg.seed,
+                    &tect,
+                    cfg.generator_version,
+                );
                 surface = if tect.fault_plane > 0.72 && patch > 0.55 {
                     BlockId::Gravel
                 } else {
@@ -1128,28 +1417,139 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
             vegetation *= timberline;
             if matches!(
                 surface,
-                BlockId::Stone | BlockId::Basalt | BlockId::Limestone | BlockId::Sandstone | BlockId::Ice
+                BlockId::Stone
+                    | BlockId::Basalt
+                    | BlockId::Limestone
+                    | BlockId::Sandstone
+                    | BlockId::Ice
             ) {
                 vegetation = 0.0;
             } else if surface == BlockId::Gravel {
                 vegetation *= 0.15;
             }
         }
+        if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
+            use super::terrain_variety as tv;
+            if let Some(a) = tv::anomaly(wx, wz, cfg.seed).filter(|_| s.height > 20.0) {
+                if let Some((top, under)) =
+                    tv::anomaly_surface(&a, wx, wz, cfg.seed, s.height, s.slope)
+                {
+                    if !matches!(surface, BlockId::SnowGrass | BlockId::Ice) {
+                        surface = top;
+                        filler = under;
+                    }
+                    vegetation *= match a.kind {
+                        tv::Landform::Karst => 0.5,
+                        tv::Landform::Crater => 0.3,
+                        tv::Landform::Mesa | tv::Landform::Canyon => 0.0,
+                    };
+                }
+            }
+            let shore = tv::shore(wx, wz, cfg.seed, s.temperature, s.moisture);
+            if let Some((top, under)) = tv::shore_surface(
+                wx,
+                wz,
+                cfg.seed,
+                s.height,
+                s.slope,
+                shore,
+                cfg.generator_version,
+            ) {
+                surface = top;
+                filler = under;
+                vegetation = 0.0;
+            }
+        }
         // Exposed rock has rock beneath it. A thin stone cap over dirt made
         // steep slopes a distracting brown/grey checkerboard at every step.
         if matches!(surface, BlockId::Stone | BlockId::Gravel) {
             filler = BlockId::Stone;
-        } else if matches!(surface, BlockId::Basalt | BlockId::Limestone | BlockId::Sandstone) {
+        } else if matches!(
+            surface,
+            BlockId::Basalt | BlockId::Limestone | BlockId::Sandstone
+        ) {
             filler = surface;
         } else if surface == BlockId::Ice {
             filler = BlockId::Ice;
         }
     }
+    if cfg.generator_version >= 14 {
+        let wx = cfg.world_x(x);
+        let wz = cfg.world_z(z);
+        if super::valley::in_channel(cfg, wx, wz) {
+            surface = BlockId::Sand;
+            filler = BlockId::Sand;
+            vegetation = 0.0;
+        } else if super::valley::built_up(cfg, wx, wz) {
+            vegetation = 0.0;
+        }
+    }
+    let height = cfg.clamp_height(cfg.blocks_for_height(s.height));
     ColumnSample {
-        height: cfg.clamp_height(cfg.blocks_for_height(s.height)),
+        height,
         surface,
         filler,
         vegetation_density: vegetation,
+        cave: super::cave_column(cfg, x, z, height),
+    }
+}
+
+/// Generator 15 bedrock. A mountain is mostly one rock; thick, wavy beds of a
+/// second rock show only now and then, and basalt appears only in volcanic
+/// provinces. The old 9.5-11 m cycle made every cliff a stack of zebra stripes.
+fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> BlockId {
+    let dip_coord = wx * tect.boundary_normal[0] + wz * tect.boundary_normal[1];
+    let tilt = (dip_coord * 0.012).sin() * (6.0 + tect.boundary_proximity * 10.0);
+    let fold = tect.fold_wave * (4.0 + tect.orogeny * 12.0);
+    // Low-frequency warp bends beds into long gentle waves instead of flat stripes.
+    let warp = (value_noise2(wx / 170.0, wz / 170.0, seed.wrapping_add(9947)) - 0.5) * 16.0;
+    let strat_y = wy + tilt + fold + warp + tect.fault_throw;
+    if tect.volcanism > 0.46 || tect.rift_graben > 0.5 {
+        let dike = (dip_coord * 0.07 + wy * 0.03 + warp * 0.1).sin().abs();
+        if dike < 0.07 + tect.volcanism * 0.10 {
+            return BlockId::Basalt;
+        }
+    }
+    let region = value_noise2(wx / 1100.0, wz / 1100.0, seed.wrapping_add(9951));
+    // Warm lowland-climate regions are sedimentary sandstone country; elsewhere a
+    // mountain is grey stone. The far-terrain shader tints rock by the same heat
+    // field, so near and distant slopes agree.
+    let (base_heat, _) = climate(wx, wz, seed);
+    let (heat, _) = super::terrain_variety::climate(
+        wx,
+        wz,
+        seed,
+        ((base_heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0),
+        0.5,
+    );
+    let dominant = if tect.volcanism > 0.40 {
+        BlockId::Basalt
+    } else if heat > 0.60 && region < 0.72 {
+        BlockId::Sandstone
+    } else if region > 0.78 && tect.continentalness < 0.45 {
+        BlockId::Limestone
+    } else {
+        BlockId::Stone
+    };
+    let period = 34.0 + 22.0 * value_noise2(wx / 1600.0, wz / 1600.0, seed.wrapping_add(9955));
+    let bed = (strat_y / period).floor();
+    let sheet = value_noise2(
+        bed * 3.17 + 0.5,
+        (wx * 0.6 + wz * 0.8) / 650.0,
+        seed.wrapping_add(9953),
+    );
+    if sheet > 0.80 && dominant != BlockId::Basalt {
+        if dominant == BlockId::Stone {
+            if region < 0.5 {
+                BlockId::Sandstone
+            } else {
+                BlockId::Limestone
+            }
+        } else {
+            BlockId::Stone
+        }
+    } else {
+        dominant
     }
 }
 
@@ -1159,7 +1559,11 @@ fn sample_stratigraphic_bed(
     wz: f32,
     seed: u32,
     tect: &TectonicSample,
+    version: u32,
 ) -> BlockId {
+    if version >= 15 {
+        return bedrock_v15(wx, wy, wz, seed, tect);
+    }
     // Paleostratigraphic coordinate tilted along plate dip, folded in orogenic belts,
     // and displaced vertically across fault planes.
     let dip_coord = wx * tect.boundary_normal[0] + wz * tect.boundary_normal[1];
@@ -1192,6 +1596,56 @@ fn sample_stratigraphic_bed(
     }
 }
 
+/// Generator 15 interior rock: thin patchy ore lenses inside thick, calm bedrock.
+fn stratum_v15(
+    cfg: &WorldSampleConfig,
+    tect: &TectonicSample,
+    meters: glam::Vec3,
+    below: f32,
+    vein: f32,
+    fleck: f32,
+) -> BlockId {
+    let _ = vein;
+    let seed = cfg.seed;
+    // Flat coal and ironstone lenses, rare enough that a cliff shows a few, not a barcode.
+    let lens = super::value_noise3(
+        meters.x * 0.035,
+        meters.y * 0.16,
+        meters.z * 0.035,
+        seed.wrapping_add(9961),
+    );
+    if lens > 0.80 && fleck > 0.30 {
+        return if tect.crust_age > 0.54 || meters.y < 6.0 {
+            BlockId::IronOre
+        } else {
+            BlockId::CoalOre
+        };
+    }
+    let seam = super::value_noise3(
+        meters.x * 0.09 + tect.fold_wave * 0.4,
+        meters.y * 0.15,
+        meters.z * 0.09,
+        seed.wrapping_add(1201),
+    );
+    if seam > 0.68 - (tect.orogeny * 0.05 + tect.volcanism * 0.06) && fleck > 0.25 {
+        return if meters.y > 0.0 {
+            BlockId::CopperOre
+        } else {
+            BlockId::TinOre
+        };
+    }
+    if below > 78.0 {
+        return BlockId::Basalt;
+    }
+    if below > 54.0 && fleck > 0.45 {
+        return BlockId::Ice;
+    }
+    if below > 30.0 && fleck > 0.62 {
+        return BlockId::FungalSoil;
+    }
+    bedrock_v15(meters.x, meters.y, meters.z, seed, tect)
+}
+
 pub(super) fn geological_stratum(
     cfg: &WorldSampleConfig,
     p: glam::IVec3,
@@ -1209,7 +1663,12 @@ pub(super) fn geological_stratum(
     let fleck = super::hash3(p.x, p.y, p.z, cfg.seed.wrapping_add(887));
 
     if cfg.generator_version >= 9 {
-        let tect = sample_tectonics(meters.x, meters.z, cfg.seed);
+        let tect = sample_tectonics_zoomed(
+            meters.x,
+            meters.z,
+            cfg.seed,
+            tectonic_zoom(cfg.generator_version),
+        );
         let dip_coord = meters.x * tect.boundary_normal[0] + meters.z * tect.boundary_normal[1];
         let strike_coord = -meters.x * tect.boundary_normal[1] + meters.z * tect.boundary_normal[0];
 
@@ -1225,11 +1684,22 @@ pub(super) fn geological_stratum(
 
         // 2. Active volcanic feeder pipes & basaltic dikes:
         if tect.volcanism > 0.38 || tect.rift_graben > 0.45 {
-            let pipe_nx = value_noise2(meters.x / 34.0, meters.z / 34.0, cfg.seed.wrapping_add(4513));
-            let pipe_nz = value_noise2(meters.x / 31.0, meters.z / 31.0, cfg.seed.wrapping_add(4523));
+            let pipe_nx = value_noise2(
+                meters.x / 34.0,
+                meters.z / 34.0,
+                cfg.seed.wrapping_add(4513),
+            );
+            let pipe_nz = value_noise2(
+                meters.x / 31.0,
+                meters.z / 31.0,
+                cfg.seed.wrapping_add(4523),
+            );
             let pipe_strength = pipe_nx * pipe_nz * (tect.volcanism + tect.rift_graben * 0.65);
             // Safely encased deep magma conduit core + surrounding basalt wall & porphyry ore halo:
-            if pipe_strength > 0.46 && below > 9.0 && meters.y < (column_height as f32 * cfg.voxel_meters() - 8.0) {
+            if pipe_strength > 0.46
+                && below > 9.0
+                && meters.y < (column_height as f32 * cfg.voxel_meters() - 8.0)
+            {
                 if pipe_strength > 0.56 && below > 14.0 {
                     return BlockId::Lava;
                 }
@@ -1261,10 +1731,14 @@ pub(super) fn geological_stratum(
             }
         }
 
+        if cfg.generator_version >= 15 {
+            return stratum_v15(cfg, &tect, meters, below, vein, fleck);
+        }
         // 4. 3D Tilted, Folded, and Fault-Offset Sedimentary & Metamorphic Stratigraphy:
         let dip_tilt = (dip_coord * 0.045).sin() * (4.0 + tect.boundary_proximity * 6.5);
         let fold_disp = tect.fold_wave * (5.0 + tect.orogeny * 13.5);
-        let strat_y = meters.y + dip_tilt + fold_disp + tect.fault_throw * 1.15 + (vein - 0.5) * 2.2;
+        let strat_y =
+            meters.y + dip_tilt + fold_disp + tect.fault_throw * 1.15 + (vein - 0.5) * 2.2;
         let bed_phase = (strat_y / 9.5).rem_euclid(1.0);
 
         // Bedded Carboniferous coal seams & ancient cratonic banded ironstone formations:
@@ -1296,7 +1770,11 @@ pub(super) fn geological_stratum(
         if bed_phase < 0.20 && (tect.continentalness < 0.24 || (-16.0..18.0).contains(&strat_y)) {
             return BlockId::Limestone;
         }
-        if (0.20..0.33).contains(&bed_phase) && strat_y > -6.0 && tect.crust_age > 0.38 && vein < 0.52 {
+        if (0.20..0.33).contains(&bed_phase)
+            && strat_y > -6.0
+            && tect.crust_age > 0.38
+            && vein < 0.52
+        {
             return BlockId::Sandstone;
         }
         if (0.72..0.79).contains(&bed_phase) && below < 22.0 && vein < 0.42 {
@@ -1352,7 +1830,8 @@ mod tectonics_and_oceans {
 
     #[test]
     fn seeded_tectonics_creates_oceans_coasts_mountain_belts_and_geological_strata() {
-        let world = crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+        let world =
+            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
         let cfg = world.sample_config();
 
         let mut ocean_columns = 0;
@@ -1369,8 +1848,17 @@ mod tectonics_and_oceans {
                 let x = gx * 96;
                 let z = gz * 96;
                 let s = sample(&cfg, x, z);
-                let tect = sample_tectonics(x as f32, z as f32, cfg.seed);
-                if tect.orogeny > 0.22 || tect.volcanism > 0.25 || tect.trench > 0.20 || tect.rift_graben > 0.20 {
+                let tect = sample_tectonics_zoomed(
+                    x as f32,
+                    z as f32,
+                    cfg.seed,
+                    tectonic_zoom(cfg.generator_version),
+                );
+                if tect.orogeny > 0.22
+                    || tect.volcanism > 0.25
+                    || tect.trench > 0.20
+                    || tect.rift_graben > 0.20
+                {
                     volcanic_or_orogenic += 1;
                 }
                 max_mountain_height = max_mountain_height.max(s.height);
@@ -1387,25 +1875,122 @@ mod tectonics_and_oceans {
                     mountain_surfaces.insert(col.surface);
                 }
                 for d in [4, 10, 18, 28, 42] {
-                    let b = geological_stratum(&cfg, glam::IVec3::new(x, col.height - d, z), col.height, d);
+                    let b = geological_stratum(
+                        &cfg,
+                        glam::IVec3::new(x, col.height - d, z),
+                        col.height,
+                        d,
+                    );
                     strata_blocks.insert(b);
                 }
             }
         }
 
-        assert!(ocean_columns >= 12, "expected true oceans across tectonic grid, got {ocean_columns}");
-        assert!(land_columns >= 40, "expected continents across tectonic grid, got {land_columns}");
-        assert!(volcanic_or_orogenic >= 10, "expected active tectonic boundaries, got {volcanic_or_orogenic}");
+        assert!(
+            ocean_columns >= 12,
+            "expected true oceans across tectonic grid, got {ocean_columns}"
+        );
+        assert!(
+            land_columns >= 40,
+            "expected continents across tectonic grid, got {land_columns}"
+        );
+        assert!(
+            volcanic_or_orogenic >= 10,
+            "expected active tectonic boundaries, got {volcanic_or_orogenic}"
+        );
         assert!(
             max_mountain_height > 115.0,
             "expected tectonic cordilleras to reach true alpine heights (>115m), got {max_mountain_height}"
         );
         assert!(
-            alpine_columns > 0 || mountain_surfaces.contains(&BlockId::SnowGrass) || mountain_surfaces.contains(&BlockId::Stone),
+            alpine_columns > 0
+                || mountain_surfaces.contains(&BlockId::SnowGrass)
+                || mountain_surfaces.contains(&BlockId::Stone),
             "expected alpine mountain zonation across high peaks"
         );
-        assert!(strata_blocks.contains(&BlockId::Limestone), "expected marine Limestone strata");
-        assert!(strata_blocks.contains(&BlockId::Basalt), "expected Basalt lithosphere/dikes");
-        assert!(strata_blocks.contains(&BlockId::Sandstone) || coast_columns > 0, "expected Sandstone strata or coastal shelves");
+        assert!(
+            strata_blocks.contains(&BlockId::Limestone),
+            "expected marine Limestone strata"
+        );
+        assert!(
+            strata_blocks.contains(&BlockId::Basalt),
+            "expected Basalt lithosphere/dikes"
+        );
+        assert!(
+            strata_blocks.contains(&BlockId::Sandstone) || coast_columns > 0,
+            "expected Sandstone strata or coastal shelves"
+        );
+    }
+
+    #[test]
+    fn generator_15_shores_are_continuous_and_world_has_variety() {
+        use super::super::terrain_variety as tv;
+        let world =
+            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+        let base = world.sample_config();
+        let measure = |version: u32| {
+            let mut cfg = base;
+            cfg.generator_version = version;
+            let (mut shore_cols, mut steps, mut width_sum, mut width_n) = (0, 0, 0.0f32, 0);
+            let mut kinds = std::collections::HashMap::new();
+            let mut biomes = std::collections::HashSet::new();
+            let mut weird = 0;
+            for gz in -60..=60 {
+                for gx in -60..=60 {
+                    let (x, z) = (gx * 29, gz * 29);
+                    let s = sample(&cfg, x, z);
+                    biomes.insert(format!("{:?}", s.biome));
+                    if version >= 15
+                        && tv::anomaly(x as f32, z as f32, cfg.seed)
+                            .is_some_and(|a| a.strength > 0.5)
+                    {
+                        weird += 1;
+                    }
+                    if (s.height - 12.0).abs() > 2.5 || (x as f32).hypot(z as f32) < 110.0 {
+                        continue;
+                    }
+                    shore_cols += 1;
+                    let h = |x, z| column(&cfg, x, z).height;
+                    let h0 = h(x, z);
+                    steps += i32::from((h(x + 1, z) - h0).abs().max((h(x, z + 1) - h0).abs()) >= 2);
+                    // March uphill along +x and -x until 4 m above sea: beach width.
+                    for dir in [-1, 1] {
+                        let mut run = None;
+                        for k in 1..=120 {
+                            let hh = column(&cfg, x + dir * k, z).height;
+                            if (hh as f32) > 15.0 {
+                                run = Some(k);
+                                break;
+                            }
+                        }
+                        if let Some(k) = run {
+                            width_sum += k as f32;
+                            width_n += 1;
+                        }
+                    }
+                    let sh = tv::shore(x as f32, z as f32, cfg.seed, s.temperature, s.moisture);
+                    *kinds.entry(format!("{:?}", sh.kind)).or_insert(0) += 1;
+                }
+            }
+            eprintln!(
+                "v{version}: shore_cols={shore_cols} step_cols={steps} avg_rise_run={:.1}m biomes={} {:?} weird={weird} kinds={:?}",
+                width_sum / width_n.max(1) as f32,
+                biomes.len(),
+                {
+                    let mut b: Vec<_> = biomes.iter().cloned().collect();
+                    b.sort();
+                    b
+                },
+                kinds
+            );
+            (shore_cols, steps)
+        };
+        let (_, old_steps) = measure(14);
+        let (cols, new_steps) = measure(15);
+        assert!(cols > 20, "need shoreline samples, got {cols}");
+        assert!(
+            new_steps <= old_steps,
+            "v15 must not add shoreline steps: {new_steps} vs {old_steps}"
+        );
     }
 }

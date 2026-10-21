@@ -4,7 +4,9 @@ use super::{BlockId as B, World, mark_chunk_and_neighbors_dirty};
 use glam::{IVec3, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
 mod extraction;
+pub mod pile;
 pub mod recipes;
+pub mod transit;
 pub(crate) use extraction::tick_world;
 
 pub const RESOURCE_COUNT: usize = 19;
@@ -130,7 +132,7 @@ impl Kind {
     }
     pub fn accepts(self, i: usize) -> bool {
         match self {
-            Self::Generator => i == 3,
+            Self::Generator => i == 3 || i == pile::FUEL,
             Self::Bioreactor => i == 13,
             Self::Crusher | Self::Washer => i < 3,
             Self::Furnace => (9..12).contains(&i),
@@ -149,7 +151,10 @@ impl Kind {
         self.processor() || matches!(self, Self::MiningDrill | Self::Pump)
     }
     pub fn water_port(self) -> bool {
-        matches!(self, Self::Pump | Self::Tank | Self::Washer)
+        matches!(
+            self,
+            Self::Pump | Self::Tank | Self::Washer | Self::Generator
+        )
     }
     fn generator(self) -> bool {
         matches!(self, Self::Generator | Self::Bioreactor)
@@ -204,7 +209,7 @@ impl Node {
 
 #[derive(Default)]
 pub struct Factory {
-    pub nodes: HashMap<IVec3, Node>,
+    pub nodes: crate::fast_hash::FastMap<IVec3, Node>,
     pub kits: [u32; 16],
     pub focus: Option<IVec3>,
     pub bench: Option<IVec3>,
@@ -214,6 +219,16 @@ pub struct Factory {
     items: Vec<Network>,
     fluids: Vec<Network>,
     cursor: usize,
+    /// Piles that melted down since the world last collected them.
+    meltdowns: Vec<IVec3>,
+    /// Items currently travelling through item pipes.
+    pub packets: Vec<transit::Packet>,
+    /// Amount in flight toward each (machine, resource); counts against capacity.
+    reserved: HashMap<(IVec3, usize), u32>,
+    /// Items that lost their route (pipe or machine removed) and go back to the player.
+    refunds: Vec<(usize, u32)>,
+    /// Item pipe cell -> index into `items`.
+    item_net: HashMap<IVec3, usize>,
 }
 
 #[derive(Clone, Default)]
@@ -233,6 +248,9 @@ pub enum Action {
     EatRation,
     Load(IVec3),
     Collect(IVec3),
+    /// Move `amount` units of a resource between a container and the pack.
+    /// `deposit` sends pack → container. `u32::MAX` means the whole compartment.
+    BufferMove(IVec3, usize, u32, bool),
     Toggle(IVec3),
     Upgrade,
     SetRecipe(IVec3, u32),
@@ -240,15 +258,32 @@ pub enum Action {
     UpgradeMachine(IVec3),
     Wand,
     SelectSpell(u32),
-    SetWandSlot(u32,u32),
-    SwapWandSlots(u32,u32),
+    SetWandSlot(u32, u32),
+    SwapWandSlots(u32, u32),
     SetWandMode(u32),
     Drain(IVec3),
+    /// Fit a material into a tool part. Parameters are `Part`, `Material`.
+    FitToolPart(u8, u8),
+    ToggleToolModifier(u8),
+    ClearToolParts,
 }
 
 struct Network {
     ports: Vec<IVec3>,
     conduits: Vec<IVec3>,
+    /// Built once with the network. Path searches borrow this instead of
+    /// allocating a new set for every ingot.
+    pipes: HashSet<IVec3>,
+}
+impl Network {
+    fn new(ports: Vec<IVec3>, conduits: Vec<IVec3>) -> Self {
+        let pipes = conduits.iter().copied().collect();
+        Self {
+            ports,
+            conduits,
+            pipes,
+        }
+    }
 }
 
 pub fn step(world: &World) -> i32 {
@@ -301,41 +336,145 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
         Action::CraftSword(tier) => {
             let owned = world.adventure.owns_weapon(tier);
             if !at_bench(world, player) {
-                world.expedition.say("Use a workbench to assemble a sword.");
-            } else if !(1..=2).contains(&tier) {
-                world.expedition.say("Unknown sword recipe.");
+                world
+                    .expedition
+                    .say("Use a workbench to assemble a weapon.");
+            } else if !matches!(tier, 1 | 2 | 5) {
+                world.expedition.say("Unknown weapon recipe.");
             } else if owned {
-                world.expedition.say("You already carry this sword.");
+                world.expedition.say("You already carry this weapon.");
             } else if world.expedition.pay(super::adventure::sword_recipe(tier)) {
                 world.adventure.add_weapon(tier);
                 world.adventure.select_weapon(tier);
-                world.expedition.say(format!("{} crafted and equipped.", super::adventure::sword_name(tier)));
+                world.expedition.say(format!(
+                    "{} crafted and equipped.",
+                    super::adventure::sword_name(tier)
+                ));
             } else {
-                world.expedition.say("Missing sword ingredients. Check the recipe in Crafting.");
+                world
+                    .expedition
+                    .say("Missing sword ingredients. Check the recipe in Crafting.");
             }
         }
         Action::SelectSword(tier) => {
             if world.adventure.select_weapon(tier) {
-                world.expedition.say(if tier == 0 { "Sword put away. Left-click still strikes." } else { "Sword equipped. Left-click to strike." });
+                world.expedition.say(if tier == 0 {
+                    "Sword put away. Left-click still strikes."
+                } else {
+                    "Sword equipped. Left-click to strike."
+                });
+            }
+        }
+        Action::FitToolPart(part, material) => {
+            use super::adventure::tinkering::{self, Material, Part};
+            let Some(part) = Part::from_u8(part) else {
+                world.expedition.say("Unknown tool part.");
+                return None;
+            };
+            let Some(material) = Material::from_u8(material) else {
+                world.expedition.say("Unknown fitting material.");
+                return None;
+            };
+            if !at_bench(world, player) {
+                world
+                    .expedition
+                    .say("Fit tool parts at a workbench. Press F at one first.");
+            } else if world.adventure.weapon == 0 {
+                world
+                    .expedition
+                    .say("Equip a melee weapon before fitting its parts.");
+            } else {
+                let current = match part {
+                    Part::Head => world.adventure.tool_head,
+                    Part::Binding => world.adventure.tool_bind,
+                    Part::Grip => world.adventure.tool_grip,
+                };
+                if current == material.as_u8() {
+                    world.expedition.say(format!(
+                        "{} is already fitted in the {}.",
+                        material.name(),
+                        part.label().to_lowercase()
+                    ));
+                } else if world.expedition.pay(tinkering::part_cost(part, material)) {
+                    world.adventure.fit_part(part, material);
+                    world.expedition.say(format!(
+                        "{} {} fitted. {}",
+                        material.name(),
+                        part.label().to_lowercase(),
+                        material.trait_detail()
+                    ));
+                } else {
+                    world
+                        .expedition
+                        .say("Missing fitting materials. Check the Forge costs.");
+                }
+            }
+        }
+        Action::ToggleToolModifier(bit) => {
+            use super::adventure::tinkering;
+            let Some(modifier) = tinkering::modifier(bit) else {
+                world.expedition.say("Unknown tool modifier.");
+                return None;
+            };
+            if !at_bench(world, player) {
+                world
+                    .expedition
+                    .say("Modify tools at a workbench. Press F at one first.");
+            } else if world.adventure.weapon == 0 {
+                world
+                    .expedition
+                    .say("Equip a melee weapon before modifying it.");
+            } else if world.adventure.has_modifier(bit) {
+                world.adventure.toggle_modifier(bit);
+                world
+                    .expedition
+                    .say(format!("{} modifier removed.", modifier.name));
+            } else if world.expedition.pay(modifier.cost) {
+                world.adventure.toggle_modifier(bit);
+                world
+                    .expedition
+                    .say(format!("{} installed. {}", modifier.name, modifier.detail));
+            } else {
+                world
+                    .expedition
+                    .say("Missing modifier materials. Check the Forge costs.");
+            }
+        }
+        Action::ClearToolParts => {
+            if !at_bench(world, player) {
+                world.expedition.say("Strip fittings at a workbench.");
+            } else {
+                world.adventure.clear_fittings();
+                world
+                    .expedition
+                    .say("Fittings stripped back to copper. Installed modifiers were kept.");
             }
         }
         Action::CookRations => {
             let recipe = super::adventure::ration_recipe();
             if !at_bench(world, player) {
-                world.expedition.say("Use a workbench to prepare fungal rations.");
+                world
+                    .expedition
+                    .say("Use a workbench to prepare fungal rations.");
             } else if world.adventure.rations > 65533 {
                 world.expedition.say("Ration pack is full.");
             } else if world.expedition.pay(recipe) {
                 world.adventure.rations += 2;
-                world.expedition.say("Prepared two fungal rations. Eat them from Pack to restore hunger and health.");
+                world.expedition.say(
+                    "Prepared two fungal rations. Eat them from Pack to restore hunger and health.",
+                );
             } else {
-                world.expedition.say("Need fungal biomass and lumen fibre to prepare rations.");
+                world
+                    .expedition
+                    .say("Need fungal biomass and lumen fibre to prepare rations.");
             }
         }
         Action::EatRation => {
             if !world.eat_food(super::inventory::FoodKind::FungalRation, None) {
                 if world.adventure.rations == 0 {
-                    world.expedition.say("No rations. Prepare them from fungal biomass and lumen fibre.");
+                    world
+                        .expedition
+                        .say("No rations. Prepare them from fungal biomass and lumen fibre.");
                 } else {
                     world.expedition.say("Hunger is already full.");
                 }
@@ -403,11 +542,21 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                 }
             }
         }
-        Action::SetWandSlot(slot,spell) => {world.adventure.set_wand_slot(slot,spell);}
-        Action::SwapWandSlots(a,b) => {world.adventure.swap_wand_slots(a,b);}
-        Action::SetWandMode(mode) => {if mode<=3 {world.adventure.loadout.mode=mode;}}
+        Action::SetWandSlot(slot, spell) => {
+            world.adventure.set_wand_slot(slot, spell);
+        }
+        Action::SwapWandSlots(a, b) => {
+            world.adventure.swap_wand_slots(a, b);
+        }
+        Action::SetWandMode(mode) => {
+            if mode <= 3 {
+                world.adventure.loadout.mode = mode;
+            }
+        }
         Action::SelectSpell(spell) => {
-            world.adventure.set_wand_slot(world.adventure.loadout.cursor as u32,spell);
+            world
+                .adventure
+                .set_wand_slot(world.adventure.loadout.cursor as u32, spell);
         }
         Action::Wand => {
             if at_bench(world, player)
@@ -417,6 +566,23 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                     .pay(super::adventure::wand_recipe(world.adventure.wand))
             {
                 world.adventure.wand += 1;
+                let tier = world.adventure.wand;
+                let learned = world.adventure.grant_upgrade_spells(tier);
+                let log = world.adventure.spell_log;
+                super::adventure::wands::seed_unlocked_slots_known(
+                    &mut world.adventure.loadout,
+                    tier,
+                    &|id| log.grants(id),
+                );
+                if !learned.is_empty() {
+                    let names: Vec<_> = learned
+                        .iter()
+                        .map(|&id| super::adventure::spell_name(id))
+                        .collect();
+                    world
+                        .expedition
+                        .say(format!("Spells discovered: {}.", names.join(", ")));
+                }
                 world.expedition.say("Wand ready. Arrange spells in Gear. Hold R to cast; T skips to the next slot. Upgrades add slots and shorten recharge.");
             } else {
                 world
@@ -426,6 +592,7 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
         }
         Action::Load(p)
         | Action::Collect(p)
+        | Action::BufferMove(p, _, _, _)
         | Action::Toggle(p)
         | Action::SetRecipe(p, _)
         | Action::SetFilter(p, _)
@@ -437,13 +604,62 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
             }
             if let Some(n) = world.factory.nodes.get_mut(&p) {
                 match action {
-                    Action::SetRecipe(_, mode) if (mode as usize) < n.kind.modes().len() => {
-                        n.mode = mode;
-                        n.recipe = None;
-                        n.progress = 0;
+                    Action::SetRecipe(_, mode)
+                        if (n.kind == Kind::Furnace && (9..12).contains(&mode))
+                            || (mode as usize) < n.kind.modes().len() =>
+                    {
+                        if n.kind == Kind::Furnace {
+                            n.recipe = Some(mode as usize);
+                        } else {
+                            n.mode = mode;
+                            n.recipe = None;
+                        }
+                        // A generator's progress is its heat; switching mode
+                        // must not be a free way to dump it.
+                        if n.kind != Kind::Generator {
+                            n.progress = 0;
+                        }
+                        if n.kind == Kind::Storage && n.mode == 2 && n.filter.is_none() {
+                            n.filter = n
+                                .input
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, count)| **count > 0)
+                                .max_by_key(|(_, count)| *count)
+                                .map(|(i, _)| i);
+                        }
+                    }
+                    Action::BufferMove(_, item, amount, deposit)
+                        if n.kind == Kind::Storage && item < RESOURCE_COUNT =>
+                    {
+                        if deposit {
+                            if n.accepts(item) {
+                                let room = CAPACITY.saturating_sub(n.input[item]);
+                                let moved =
+                                    amount.min(room).min(world.expedition.resources[item]);
+                                if moved > 0 && n.mode == 2 && n.filter.is_none() {
+                                    n.filter = Some(item);
+                                }
+                                world.expedition.resources[item] -= moved;
+                                n.input[item] += moved;
+                            } else {
+                                world
+                                    .expedition
+                                    .say("This container will not take that item.");
+                            }
+                        } else {
+                            let have = n.input[item];
+                            let moved = amount.min(have);
+                            n.input[item] -= moved;
+                            world.expedition.resources[item] =
+                                world.expedition.resources[item].saturating_add(moved);
+                            if n.mode == 2 && n.input.iter().all(|count| *count == 0) {
+                                n.filter = None;
+                            }
+                        }
                     }
                     Action::SetFilter(_, filter)
-                        if matches!(n.kind, Kind::Feeder | Kind::Storage)
+                        if matches!(n.kind, Kind::Feeder | Kind::Storage | Kind::Pipe)
                             && filter.is_none_or(|i| i < RESOURCE_COUNT) =>
                     {
                         n.filter = filter
@@ -635,8 +851,10 @@ impl Factory {
                 put(v as u32);
             }
             put(n.kind as u32);
-            for v in n.input {
-                put(v);
+            for (i, v) in n.input.into_iter().enumerate() {
+                // Items still in a pipe are saved as delivered: capacity was
+                // reserved at launch, so this always fits.
+                put(v + self.reserved.get(&(*p, i)).copied().unwrap_or(0));
             }
             for v in n.output {
                 put(v);
@@ -734,7 +952,7 @@ impl Factory {
                 );
                 ensure!(n.upgrade == 0 || n.kind.powered(), "Invalid drive upgrade");
                 ensure!(
-                    filter == 0 || matches!(n.kind, Kind::Feeder | Kind::Storage),
+                    filter == 0 || matches!(n.kind, Kind::Feeder | Kind::Storage | Kind::Pipe),
                     "Invalid machine filter"
                 );
                 n.filter = filter.checked_sub(1).map(|v| v as usize);
@@ -769,7 +987,7 @@ impl Factory {
             ensure!(
                 n.burn
                     <= if n.kind == Kind::Generator {
-                        400
+                        if n.mode == 1 { pile::CAPACITY } else { 400 }
                     } else if n.kind == Kind::MiningDrill {
                         (size * size * size) as u32
                     } else if n.kind == Kind::Bioreactor {
@@ -780,7 +998,10 @@ impl Factory {
                 "Invalid stored fuel"
             );
             ensure!(
-                enabled <= 1 && (recipe > 0 || n.progress == 0),
+                enabled <= 1
+                    && (recipe > 0
+                        || n.progress == 0
+                        || (n.kind == Kind::Generator && n.progress <= pile::MAX_HEAT)),
                 "Invalid machine state"
             );
             n.enabled = enabled != 0;
@@ -836,7 +1057,7 @@ impl Factory {
             }
             let mut ports: Vec<_> = ports.into_iter().collect();
             ports.sort_by_key(|p| (p.x, p.y, p.z));
-            nets.push(Network { ports, conduits });
+            nets.push(Network::new(ports, conduits));
         }
         nets
     }
@@ -847,6 +1068,7 @@ impl Factory {
             }
             n.activity = (n.activity - dt * 2.0).max(0.0);
         }
+        self.advance_packets(dt);
         self.accumulator += dt.clamp(0.0, 0.25);
         if self.accumulator < 0.25 {
             return;
@@ -856,11 +1078,32 @@ impl Factory {
             self.power = self.networks(Kind::Cable, size);
             self.items = self.networks(Kind::Pipe, size);
             self.fluids = self.networks(Kind::FluidPipe, size);
+            self.item_net.clear();
+            for (ni, net) in self.items.iter().enumerate() {
+                for c in &net.conduits {
+                    self.item_net.insert(*c, ni);
+                }
+            }
+            self.validate_packets();
             self.topology = true;
         }
-        for n in self.nodes.values_mut() {
+        for (&p, n) in self.nodes.iter_mut() {
             n.status = if n.enabled { "Idle" } else { "Paused" };
+            if n.kind == Kind::Generator && !pile::is_pile(n) {
+                pile::cool_idle(n);
+            }
             if !n.enabled || !n.kind.generator() {
+                if pile::is_pile(n) {
+                    pile::cool_idle(n);
+                }
+                continue;
+            }
+            if pile::is_pile(n) {
+                let outcome = pile::step(n);
+                n.status = outcome.status();
+                if outcome == pile::Outcome::Meltdown {
+                    self.meltdowns.push(p);
+                }
                 continue;
             }
             let (fuel, portion, capacity, rate) = if n.kind == Kind::Generator {
@@ -974,16 +1217,23 @@ impl Factory {
                 n.recipe = None;
             }
         }
+        self.run_extractors(size);
+        self.run_distributors(size);
         // Only outputs travel. Material filters make the processing graph acyclic:
         // feeder -> crusher -> furnace -> crate, and feeder -> generator.
         // One unit per source per tick; backpressure retains everything at source.
         let mut moved = HashSet::new();
+        // Reused for every launch. Storage sorts after processors, then by
+        // distance, so a bus feeds the nearest machine that can take the item
+        // instead of walking the whole port list and pathfinding each one.
+        let mut near: Vec<(u8, i32, i32, IVec3)> = Vec::new();
         for network in &self.items {
             let net = &network.ports;
             let mut flow = false;
             if net.is_empty() {
                 continue;
             }
+            let port_count = net.len() as i32;
             for k in 0..net.len() {
                 let p = net[(k + self.cursor) % net.len()];
                 if moved.contains(&p) || !self.nodes[&p].enabled {
@@ -999,24 +1249,51 @@ impl Factory {
                     if available == 0 {
                         continue;
                     }
-                    // Supply processors before storage so finished components can
-                    // continue through a shared bus without being intercepted.
-                    let mut destinations: Vec<_> = (0..net.len())
-                        .map(|offset| net[(offset + self.cursor) % net.len()])
-                        .collect();
-                    destinations.sort_by_key(|q| self.nodes[q].kind == Kind::Storage);
-                    for q in destinations {
+                    near.clear();
+                    for (offset, &q) in net.iter().enumerate() {
+                        if q == p {
+                            continue;
+                        }
                         let dest = &self.nodes[&q];
-                        if p == q || !dest.enabled || dest.kind == Kind::Feeder || !dest.accepts(i)
+                        if !dest.enabled || dest.kind == Kind::Feeder || !self.container_takes(q, i)
                         {
                             continue;
                         }
-                        let amount = available.min(CAPACITY - dest.input[i]);
+                        let reserved = self.reserved.get(&(q, i)).copied().unwrap_or(0);
+                        if dest.input[i].saturating_add(reserved) >= CAPACITY {
+                            continue;
+                        }
+                        let dist = (q.x - p.x).abs() + (q.y - p.y).abs() + (q.z - p.z).abs();
+                        let tie = (offset as i32 + self.cursor as i32) % port_count;
+                        let storage = u8::from(dest.kind == Kind::Storage);
+                        near.push((storage, dist, tie, q));
+                    }
+                    near.sort_unstable_by_key(|row| (row.0, row.1, row.2));
+                    for &(_, _, _, q) in &near {
+                        let room = CAPACITY.saturating_sub(
+                            self.nodes[&q].input[i]
+                                + self.reserved.get(&(q, i)).copied().unwrap_or(0),
+                        );
+                        let amount = available.min(room);
                         if amount == 0 {
                             continue;
                         }
+                        if self.packets.len() >= transit::MAX_PACKETS {
+                            break 'items;
+                        }
+                        let Some(path) = transit::find_path(network, p, q, size, None) else {
+                            continue;
+                        };
                         self.nodes.get_mut(&p).unwrap().output[i] -= amount;
-                        self.nodes.get_mut(&q).unwrap().input[i] += amount;
+                        *self.reserved.entry((q, i)).or_insert(0) += amount;
+                        self.packets.push(transit::Packet {
+                            item: i,
+                            amount,
+                            src: p,
+                            dst: q,
+                            path,
+                            progress: 0.0,
+                        });
                         flow = true;
                         moved.insert(p);
                         break 'items;
@@ -1089,4 +1366,321 @@ pub fn ray_box(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3, max: f32) -> bool {
         }
     }
     high >= low
+}
+
+impl Factory {
+    /// Positions of piles that melted down since the last call.
+    pub fn take_meltdowns(&mut self) -> Vec<IVec3> {
+        std::mem::take(&mut self.meltdowns)
+    }
+}
+
+/// Review and test fixtures: place a machine without a kit or a player.
+pub fn fixture_place(world: &mut World, cell: IVec3, kind: Kind) -> Option<&mut Node> {
+    let size = step(world);
+    let p = anchor(cell, size);
+    let edits: Vec<_> = cells(p, size)
+        .into_iter()
+        .map(|c| (c, kind.block()))
+        .collect();
+    world.set_many(&edits);
+    world.factory.nodes.insert(p, Node::new(kind));
+    world.factory.topology = false;
+    world.factory.nodes.get_mut(&p)
+}
+
+/// Display colour of a resource, shared by pipe traffic and machine models.
+pub fn resource_color(i: usize) -> [f32; 3] {
+    match i {
+        0 => [0.74, 0.45, 0.22],
+        1 => [0.62, 0.70, 0.74],
+        2 => [0.62, 0.34, 0.24],
+        3 => [0.16, 0.16, 0.18],
+        4 => [0.80, 0.92, 0.36],
+        5 => [0.72, 0.46, 1.00],
+        6 => [0.95, 0.55, 0.25],
+        7 => [0.80, 0.86, 0.90],
+        8 => [0.72, 0.74, 0.78],
+        9 => [0.70, 0.42, 0.22],
+        10 => [0.58, 0.64, 0.68],
+        11 => [0.52, 0.30, 0.24],
+        12 => [0.25, 0.85, 0.72],
+        13 => [0.45, 0.82, 0.32],
+        14 => [0.78, 0.56, 0.24],
+        15 => [0.55, 0.62, 0.72],
+        16 => [1.00, 0.62, 0.30],
+        17 => [0.40, 0.95, 1.00],
+        _ => [0.90, 0.90, 0.90],
+    }
+}
+
+impl Factory {
+    /// Items that lost their route since the last call.
+    pub fn take_refunds(&mut self) -> Vec<(usize, u32)> {
+        std::mem::take(&mut self.refunds)
+    }
+
+    fn release(&mut self, dst: IVec3, item: usize, amount: u32) {
+        if let Some(r) = self.reserved.get_mut(&(dst, item)) {
+            *r = r.saturating_sub(amount);
+            if *r == 0 {
+                self.reserved.remove(&(dst, item));
+            }
+        }
+    }
+
+    fn advance_packets(&mut self, dt: f32) {
+        if self.packets.is_empty() {
+            return;
+        }
+        let travel = transit::SPEED * dt.clamp(0.0, 0.25);
+        let mut i = 0;
+        while i < self.packets.len() {
+            self.packets[i].progress += travel;
+            if self.packets[i].arrived() {
+                let packet = self.packets.swap_remove(i);
+                self.deliver(packet);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn deliver(&mut self, packet: transit::Packet) {
+        self.release(packet.dst, packet.item, packet.amount);
+        let leftover = match self.nodes.get_mut(&packet.dst) {
+            Some(n) if n.accepts(packet.item) => {
+                if n.kind == Kind::Storage && n.mode == 2 && n.filter.is_none() {
+                    n.filter = Some(packet.item);
+                }
+                let room = CAPACITY.saturating_sub(n.input[packet.item]);
+                let take = packet.amount.min(room);
+                n.input[packet.item] += take;
+                packet.amount - take
+            }
+            _ => packet.amount,
+        };
+        if leftover > 0 {
+            self.refunds.push((packet.item, leftover));
+        }
+    }
+
+    /// Drop packets whose route no longer exists and return their items.
+    fn validate_packets(&mut self) {
+        let pipes: HashSet<IVec3> = self
+            .items
+            .iter()
+            .flat_map(|n| n.conduits.iter().copied())
+            .collect();
+        let packets = std::mem::take(&mut self.packets);
+        for packet in packets {
+            let inner = &packet.path[1..packet.path.len().saturating_sub(1)];
+            let alive =
+                self.nodes.contains_key(&packet.dst) && inner.iter().all(|c| pipes.contains(c));
+            if alive {
+                self.packets.push(packet);
+            } else {
+                self.release(packet.dst, packet.item, packet.amount);
+                self.refunds.push((packet.item, packet.amount));
+            }
+        }
+    }
+
+    /// A barrel with nothing stored yet will take the first shipment only.
+    /// A second resource already on the way does not sneak in behind it.
+    fn container_takes(&self, cell: IVec3, item: usize) -> bool {
+        let Some(dest) = self.nodes.get(&cell) else {
+            return false;
+        };
+        if !dest.accepts(item) {
+            return false;
+        }
+        if dest.kind == Kind::Storage && dest.mode == 2 && dest.filter.is_none() {
+            let empty = dest.input.iter().all(|n| *n == 0);
+            if empty && self.packets.iter().any(|p| p.dst == cell && p.item != item) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Extractor pipes pull from adjacent crates and machine outputs.
+    fn run_extractors(&mut self, size: i32) {
+        let mut extractors: Vec<IVec3> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.kind == Kind::Pipe && n.mode == 1 && n.enabled)
+            .map(|(p, _)| *p)
+            .collect();
+        extractors.sort_by_key(|p| (p.x, p.y, p.z));
+        for p in extractors {
+            if self.packets.len() >= transit::MAX_PACKETS {
+                return;
+            }
+            let Some(&ni) = self.item_net.get(&p) else {
+                continue;
+            };
+            let network = &self.items[ni];
+            let filter = self.nodes[&p].filter;
+            'pull: for d in DIRS {
+                let s = p + d * size;
+                let Some(src) = self.nodes.get(&s) else {
+                    continue;
+                };
+                if matches!(
+                    src.kind,
+                    Kind::Pipe | Kind::Cable | Kind::FluidPipe | Kind::Feeder
+                ) {
+                    continue;
+                }
+                let from_crate = src.kind == Kind::Storage;
+                for i in 0..RESOURCE_COUNT {
+                    if filter.is_some_and(|f| f != i) {
+                        continue;
+                    }
+                    let have = if from_crate {
+                        src.input[i]
+                    } else {
+                        src.output[i]
+                    };
+                    let available = have.min(64);
+                    if available == 0 {
+                        continue;
+                    }
+                    let mut destinations: Vec<_> = (0..network.ports.len())
+                        .map(|k| network.ports[(k + self.cursor) % network.ports.len()])
+                        .filter(|q| *q != s)
+                        .collect();
+                    destinations.sort_by_key(|q| self.nodes[q].kind == Kind::Storage);
+                    for q in destinations {
+                        let dest = &self.nodes[&q];
+                        if !dest.enabled || dest.kind == Kind::Feeder || !self.container_takes(q, i)
+                        {
+                            continue;
+                        }
+                        let room = CAPACITY.saturating_sub(
+                            dest.input[i] + self.reserved.get(&(q, i)).copied().unwrap_or(0),
+                        );
+                        let amount = available.min(room);
+                        if amount == 0 {
+                            continue;
+                        }
+                        let Some(path) = transit::find_path(network, s, q, size, Some(p)) else {
+                            continue;
+                        };
+                        let source = self.nodes.get_mut(&s).unwrap();
+                        if from_crate {
+                            source.input[i] -= amount;
+                        } else {
+                            source.output[i] -= amount;
+                        }
+                        *self.reserved.entry((q, i)).or_insert(0) += amount;
+                        self.packets.push(transit::Packet {
+                            item: i,
+                            amount,
+                            src: s,
+                            dst: q,
+                            path,
+                            progress: 0.0,
+                        });
+                        self.nodes.get_mut(&p).unwrap().activity = 1.0;
+                        break 'pull;
+                    }
+                }
+            }
+        }
+    }
+
+    /// One distributor pipe per item network moves a single stack from the
+    /// fullest container to the emptiest one that will accept it.
+    fn run_distributors(&mut self, size: i32) {
+        let mut pipes: Vec<IVec3> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.kind == Kind::Pipe && n.mode == 2 && n.enabled)
+            .map(|(p, _)| *p)
+            .collect();
+        pipes.sort_by_key(|p| (p.x, p.y, p.z));
+        let mut served = HashSet::new();
+        for pipe in pipes {
+            if self.packets.len() >= transit::MAX_PACKETS {
+                return;
+            }
+            let Some(&ni) = self.item_net.get(&pipe) else {
+                continue;
+            };
+            if !served.insert(ni) {
+                continue;
+            }
+            let filter = self.nodes[&pipe].filter;
+            let storages: Vec<IVec3> = self.items[ni]
+                .ports
+                .iter()
+                .copied()
+                .filter(|q| {
+                    self.nodes
+                        .get(q)
+                        .is_some_and(|n| n.kind == Kind::Storage && n.enabled)
+                })
+                .collect();
+            if storages.len() < 2 {
+                continue;
+            }
+            let mut choice: Option<(usize, IVec3, IVec3, u32)> = None;
+            for item in 0..RESOURCE_COUNT {
+                if filter.is_some_and(|f| f != item) {
+                    continue;
+                }
+                let mut fullest: Option<(IVec3, u32)> = None;
+                let mut emptiest: Option<(IVec3, u32)> = None;
+                for &q in &storages {
+                    let node = &self.nodes[&q];
+                    let incoming = self.reserved.get(&(q, item)).copied().unwrap_or(0);
+                    let present = node.input[item] + incoming;
+                    if node.input[item] > 0 && fullest.is_none_or(|(_, n)| node.input[item] > n) {
+                        fullest = Some((q, node.input[item]));
+                    }
+                    if node.accepts(item) && emptiest.is_none_or(|(_, n)| present < n) {
+                        emptiest = Some((q, present));
+                    }
+                }
+                let (Some((src, have)), Some((dst, there))) = (fullest, emptiest) else {
+                    continue;
+                };
+                if src == dst || have <= there {
+                    continue;
+                }
+                let gap = have - there;
+                if choice.is_none_or(|(_, _, _, best)| gap > best) {
+                    choice = Some((item, src, dst, gap));
+                }
+            }
+            let Some((item, src, dst, gap)) = choice else {
+                continue;
+            };
+            let incoming = self.reserved.get(&(dst, item)).copied().unwrap_or(0);
+            let room = CAPACITY.saturating_sub(self.nodes[&dst].input[item] + incoming);
+            let have = self.nodes[&src].input[item];
+            let amount = gap.min(64).min(have).min(room);
+            if amount == 0 {
+                continue;
+            }
+            let Some(path) = transit::find_path(&self.items[ni], src, dst, size, None) else {
+                continue;
+            };
+            self.nodes.get_mut(&src).unwrap().input[item] -= amount;
+            *self.reserved.entry((dst, item)).or_insert(0) += amount;
+            self.packets.push(transit::Packet {
+                item,
+                amount,
+                src,
+                dst,
+                path,
+                progress: 0.0,
+            });
+            let pipe_node = self.nodes.get_mut(&pipe).unwrap();
+            pipe_node.activity = 1.0;
+            pipe_node.status = "Balancing";
+        }
+    }
 }

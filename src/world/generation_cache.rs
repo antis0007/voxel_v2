@@ -40,24 +40,27 @@ macro_rules! cached {
         }
     };
 }
+// A 34x34 padded chunk consumes 1156 columns. The previous 8192-entry cap
+// covered about seven chunks per worker and cleared wholesale, which forced
+// repeated climate/erosion work while a worker walked a terrain frontier.
 cached!(
     column,
     columns,
     ColumnSample,
     super::sample_column_uncached,
-    8192
+    32_768
 );
 cached!(
     tree,
     trees,
     Option<TreeProfile>,
     super::tree_profile_uncached,
-    1024
+    4096
 );
 cached!(
     bush,
     bushes,
     Option<BushProfile>,
     super::bush_profile_uncached,
-    1024
+    4096
 );

@@ -15,6 +15,9 @@ const DIRS: [IVec3; 6] = [
     IVec3::Z,
     IVec3::NEG_Z,
 ];
+/// Impact speed (m/s) at which a felled trunk breaks into wood.
+const FELL_BREAK_SPEED_M: f32 = 3.0;
+
 fn structural(b: B) -> bool {
     matches!(b, B::RigidCore | B::Planks | B::Log)
 }
@@ -69,6 +72,8 @@ pub(super) fn capture(s: &mut Residency, w: &mut World, p: IVec3) {
         rotation: Quat::IDENTITY,
         angular: Vec3::ZERO,
         debt: 0.0,
+        settle_time: 0.0,
+        was_submerged: false,
         voxels: voxels.iter().map(|(q, b)| (*q - p, *b)).collect(),
         occupied: voxels,
     });
@@ -78,6 +83,7 @@ pub(super) fn tick(
     w: &mut World,
     dt: f32,
     player: (Vec3, Vec3),
+    deadline: std::time::Instant,
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
@@ -88,7 +94,6 @@ pub(super) fn tick(
     for body in &mut w.sandbox.bodies {
         body.debt = (body.debt + dt).min(0.25);
     }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_micros(800);
     for _ in 0..count {
         if w.sandbox.bodies.is_empty() || std::time::Instant::now() >= deadline {
             break;
@@ -112,7 +117,55 @@ pub(super) fn tick(
             body.debt -= dt;
             let scale = w.voxel_scale.meters();
             body.velocity.y = (body.velocity.y - 9.81 / scale * dt).max(-30.0 / scale);
+            // Assemblies obey the same coarse buoyancy rule as the player:
+            // wooden frames float, dense cores sink, and everything in water
+            // loses speed to drag. This is sampled from the body's occupied
+            // cells, so partial submersion settles instead of snapping.
+            // Sample a bounded subset of the assembly instead of querying the
+            // world for every voxel every tick. Eight probes are enough to
+            // distinguish a floating edge from a fully submerged frame.
+            let stride = (body.occupied.len() / 8).max(1);
+            let mut sampled = 0usize;
+            let mut submerged = 0usize;
+            for (p, _) in body.occupied.iter().step_by(stride) {
+                sampled += 1;
+                // The body's own cells contain structural blocks, not water, so
+                // probe the six neighbours instead of the cell itself.
+                if DIRS.iter().any(|d| w.get(*p + *d) == B::Water) {
+                    submerged += 1;
+                }
+            }
+            if submerged > 0 && sampled > 0 {
+                if !body.was_submerged && body.velocity.y * scale < -1.2 {
+                    let centre_cells = body
+                        .occupied
+                        .iter()
+                        .map(|(p, _)| p.as_vec3() + Vec3::splat(0.5))
+                        .sum::<Vec3>()
+                        / body.occupied.len() as f32;
+                    let centre = centre_cells * scale;
+                    if let Some(surface) = w.water_surface_at(centre) {
+                        w.adventure
+                            .splash(surface, ((-body.velocity.y * scale) / 9.0).clamp(0.22, 1.0));
+                    }
+                }
+                let fraction = submerged as f32 / sampled as f32;
+                let density = body
+                    .voxels
+                    .iter()
+                    .map(|(_, b)| b.material().physics.density)
+                    .sum::<f32>()
+                    / body.voxels.len() as f32;
+                let density_ratio = density / 1000.0;
+                body.velocity.y +=
+                    fraction * (1.0 - density_ratio).clamp(-1.0, 1.0) * 9.81 / scale * dt * 4.0;
+                let drag = (fraction * 2.4 * dt).min(0.55);
+                body.velocity *= 1.0 - drag;
+                body.angular *= 1.0 - drag * 0.7;
+            }
+            body.was_submerged = submerged > 0 && sampled > 0;
             let steps = ((body.velocity.length() * dt / 0.25).ceil() as usize).clamp(1, 64);
+            let mut broke_apart = false;
             for substep in 0..steps {
                 if std::time::Instant::now() >= deadline {
                     body.debt =
@@ -162,6 +215,19 @@ pub(super) fn tick(
                     break;
                 }
                 if blocked {
+                    // A felled trunk that lands hard splits into wood on impact
+                    // rather than skidding on as one body. Below the threshold it
+                    // keeps tipping and settles as before.
+                    let impact_m = body.velocity.length() * scale;
+                    if body.voxels.iter().all(|(_, b)| *b == B::Log) && impact_m > FELL_BREAK_SPEED_M {
+                        let cells: Vec<_> = body.occupied.iter().map(|(p, _)| *p).collect();
+                        crate::world::expedition::drop_log_cells(w, &cells, blocks, chunks);
+                        for p in cells {
+                            w.activity.wake(p);
+                        }
+                        broke_apart = true;
+                        break;
+                    }
                     let center = body
                         .voxels
                         .iter()
@@ -262,8 +328,87 @@ pub(super) fn tick(
                 body.origin += shift;
                 body.position -= shift.as_vec3();
             }
+            // The trunk was already converted to wood: do not reinsert the body.
+            if broke_apart {
+                continue;
+            }
+            // A felled tree is represented only by logs. Once the assembly has
+            // stopped moving, give every remaining log back as loot and remove
+            // the temporary body instead of leaving a permanent log sculpture.
+            let felled_tree = body.voxels.iter().all(|(_, b)| *b == B::Log);
+            if felled_tree {
+                let calm =
+                    body.velocity.length_squared() < 0.12 && body.angular.length_squared() < 0.06;
+                body.settle_time = if calm { body.settle_time + dt } else { 0.0 };
+                if body.settle_time >= 0.9 {
+                    let cells: Vec<_> = body.occupied.iter().map(|(p, _)| *p).collect();
+                    crate::world::expedition::drop_log_cells(w, &cells, blocks, chunks);
+                    for p in cells {
+                        w.activity.wake(p);
+                    }
+                    continue;
+                }
+            } else {
+                body.settle_time = 0.0;
+            }
         }
         w.sandbox.bodies.insert(index, body);
         w.sandbox.body_cursor = (index + 1) % w.sandbox.bodies.len();
+    }
+}
+
+#[cfg(test)]
+mod felling_tests {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use crate::simulation::sandbox::RigidBody;
+    use crate::world::{World, WorldType};
+    use std::time::{Duration, Instant};
+
+    /// A felled trunk dropped from height breaks into wood; a slow one does not.
+    fn fall(speed_voxels: f32) -> (usize, usize) {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 3);
+        let base = IVec3::new(0, 60, 0);
+        let voxels: Vec<_> = (0..4).map(|y| (IVec3::new(0, y, 0), B::Log)).collect();
+        let occupied: Vec<_> = voxels.iter().map(|(p, b)| (base + *p, *b)).collect();
+        world.set_many(&occupied.iter().map(|(p, _)| (*p, B::Air)).collect::<Vec<_>>());
+        world.set_many(&occupied);
+        world.sandbox.bodies.push(RigidBody {
+            origin: base,
+            position: Vec3::ZERO,
+            velocity: Vec3::new(0.0, -speed_voxels, 0.0),
+            rotation: glam::Quat::IDENTITY,
+            angular: Vec3::ZERO,
+            debt: 0.0,
+            settle_time: 0.0,
+            was_submerged: false,
+            voxels: voxels.clone(),
+            occupied,
+        });
+        // Simulation only runs on resident chunks. Make the column from the
+        // floor to the trunk resident, the same way player edits do.
+        world.set_many(&[(IVec3::new(0, 2, 0), B::Stone), (IVec3::new(0, 40, 0), B::Stone)]);
+        let before = world.inventory.dropped.len();
+        let mut sources = Residency::default();
+        let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+        for _ in 0..200 {
+            tick(
+                &mut sources,
+                &mut world,
+                1.0 / 60.0,
+                (Vec3::splat(1000.0), Vec3::splat(1001.0)),
+                Instant::now() + Duration::from_secs(1),
+                &mut blocks,
+                &mut chunks,
+            );
+        }
+        (world.sandbox.bodies.len(), world.inventory.dropped.len() - before)
+    }
+
+    #[test]
+    fn hard_landing_breaks_felled_trunk_into_wood() {
+        // 3 m/s is the threshold; 20 voxels/s at 1 m voxels is 20 m/s.
+        let (bodies, _) = fall(20.0);
+        assert_eq!(bodies, 0, "hard landing should dissolve the body");
     }
 }

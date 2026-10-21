@@ -162,8 +162,8 @@ impl Sculptor {
                     let after = self.corner(chunk, p + increment);
                     // Only remove geometrically collinear vertices. Distance may
                     // relax shading detail, never move a silhouette or chunk seam.
-                    let normal_error = [0.001, 0.025, 0.10, 0.30][self.lod.min(3) as usize];
-                    let ao_error = [0.01, 0.04, 0.08, 0.16][self.lod.min(3) as usize];
+                    let normal_error = [0.001, 0.008, 0.02, 0.05][self.lod.min(3) as usize];
+                    let ao_error = [0.01, 0.02, 0.04, 0.08][self.lod.min(3) as usize];
                     if (before.offset + after.offset - center.offset * 2.0).length_squared() < 1e-8
                         && (before.normal + after.normal - center.normal * 2.0).length_squared()
                             < normal_error

@@ -2,7 +2,7 @@
 use crate::world::BlockId;
 use anyhow::{Result, ensure};
 use glam::{IVec3, Quat, Vec3};
-use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 pub const MAX_CELLS: usize = 32768;
 pub const MAX_BODIES: usize = 64;
 pub const MAX_BODY_VOXELS: usize = 128;
@@ -28,14 +28,25 @@ pub struct RigidBody {
     pub rotation: Quat,
     pub angular: Vec3,
     pub debt: f32,
+    /// Felled-tree bodies hold logs while they fall. This is runtime-only
+    /// presentation state; it is not serialized and restarts at zero on load.
+    pub settle_time: f32,
+    /// Runtime-only water-contact edge for splash emission.
+    pub was_submerged: bool,
     pub voxels: Vec<(IVec3, BlockId)>,
     pub occupied: Vec<(IVec3, BlockId)>,
 }
 #[derive(Default)]
 pub struct Sandbox {
-    pub cells: BTreeMap<(i32, i32, i32), ThermalCell>,
+    /// Sparse thermal lattice. Hash lookup is materially cheaper than a
+    /// B-tree for the per-neighbour heat solve and fluid sandbox queries.
+    /// Encoding sorts keys, so save bytes remain deterministic.
+    pub cells: crate::fast_hash::FastMap<(i32, i32, i32), ThermalCell>,
     pub bodies: Vec<RigidBody>,
     pub body_cursor: usize,
+    /// Bounded burning-cell index used only to feed local lights. Entries are
+    /// validated against the world before use and are never serialized.
+    pub fire_lights: HashSet<IVec3>,
 }
 pub fn key(p: IVec3) -> (i32, i32, i32) {
     (p.x, p.y, p.z)
@@ -67,6 +78,73 @@ impl Sandbox {
                 .count()
             <= MAX_CELLS
     }
+
+    pub fn note_fire(&mut self, p: IVec3) {
+        if self.fire_lights.contains(&p) || self.fire_lights.len() < 64 {
+            self.fire_lights.insert(p);
+        }
+    }
+
+    pub fn clear_fire(&mut self, p: IVec3) {
+        self.fire_lights.remove(&p);
+    }
+
+    /// Apply a bounded radial impulse to every assembly in range.
+    ///
+    /// Positions and radii are in metres; body velocities are stored in voxel
+    /// units per second, so the caller supplies the current voxel scale. This
+    /// is the shared hook used by kinetic weapons and blasts. It deliberately
+    /// touches only kinematic state: no blocks are edited, so a pulse can
+    /// never duplicate or delete an assembly.
+    pub fn apply_radial_impulse(
+        &mut self,
+        centre: Vec3,
+        radius: f32,
+        strength: f32,
+        voxel_scale: f32,
+    ) {
+        if !centre.is_finite()
+            || !radius.is_finite()
+            || !strength.is_finite()
+            || radius <= 0.0
+            || strength <= 0.0
+        {
+            return;
+        }
+        let scale = voxel_scale.max(1e-6);
+        let radius_sq = radius * radius;
+        for body in &mut self.bodies {
+            if body.occupied.is_empty() {
+                continue;
+            }
+            let centre_cells = body
+                .occupied
+                .iter()
+                .map(|(p, _)| p.as_vec3() + Vec3::splat(0.5))
+                .sum::<Vec3>()
+                / body.occupied.len() as f32;
+            let body_centre = centre_cells * scale;
+            let delta = body_centre - centre;
+            let distance_sq = delta.length_squared();
+            if distance_sq >= radius_sq {
+                continue;
+            }
+            let falloff = 1.0 - (distance_sq / radius_sq).sqrt();
+            let direction = if delta.length_squared() > 1e-6 {
+                delta.normalize()
+            } else {
+                Vec3::Y
+            };
+            // A little upward bias makes ground-level pulses read as impacts
+            // rather than sliding assemblies sideways through the floor.
+            let impulse =
+                (direction + Vec3::Y * 0.28).normalize_or_zero() * (strength * falloff / scale);
+            body.velocity += impulse;
+            body.angular = (body.angular
+                + Vec3::Y.cross(direction) * (strength * 0.28 * falloff / scale))
+                .clamp_length_max(3.0);
+        }
+    }
     pub fn encode(&self, out: &mut Vec<u8>) {
         fn push(o: &mut Vec<u8>, v: u32) {
             o.extend_from_slice(&v.to_le_bytes());
@@ -77,7 +155,9 @@ impl Sandbox {
             }
         }
         push(out, self.cells.len() as u32);
-        for (&(x, y, z), c) in &self.cells {
+        let mut cells: Vec<_> = self.cells.iter().collect();
+        cells.sort_unstable_by_key(|entry| *entry.0);
+        for (&(x, y, z), c) in cells {
             pos(out, IVec3::new(x, y, z));
             for v in [c.temperature, c.fuel] {
                 push(out, v.to_bits());
@@ -204,10 +284,54 @@ impl Sandbox {
                 rotation: rotation.normalize(),
                 angular,
                 debt,
+                settle_time: 0.0,
+                was_submerged: false,
                 voxels,
                 occupied,
             });
         }
         Ok(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(center: IVec3) -> RigidBody {
+        RigidBody {
+            origin: center,
+            position: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            angular: Vec3::ZERO,
+            debt: 0.0,
+            settle_time: 0.0,
+            was_submerged: false,
+            voxels: vec![(IVec3::ZERO, BlockId::Planks)],
+            occupied: vec![(center, BlockId::Planks)],
+        }
+    }
+
+    #[test]
+    fn fire_light_index_deduplicates_and_clears() {
+        let mut sandbox = Sandbox::default();
+        let p = IVec3::new(4, 5, 6);
+        sandbox.note_fire(p);
+        sandbox.note_fire(p);
+        assert_eq!(sandbox.fire_lights.len(), 1);
+        sandbox.clear_fire(p);
+        assert!(sandbox.fire_lights.is_empty());
+    }
+
+    #[test]
+    fn radial_impulse_moves_near_bodies_and_ignores_far_ones() {
+        let mut sandbox = Sandbox::default();
+        sandbox.bodies.push(body(IVec3::new(1, 1, 0)));
+        sandbox.bodies.push(body(IVec3::new(20, 1, 0)));
+        sandbox.apply_radial_impulse(Vec3::ZERO, 4.0, 6.0, 1.0);
+        assert!(sandbox.bodies[0].velocity.length() > 0.0);
+        assert!(sandbox.bodies[0].velocity.y > 0.0);
+        assert_eq!(sandbox.bodies[1].velocity, Vec3::ZERO);
     }
 }

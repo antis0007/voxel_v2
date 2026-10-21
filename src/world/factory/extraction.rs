@@ -7,6 +7,11 @@ use std::time::Instant;
 
 pub const WATER_CAPACITY: u32 = 8192;
 
+/// Machines that consume piped water: washers, and piles for coolant.
+fn wants_coolant(n: &super::Node) -> bool {
+    n.kind == Kind::Washer || super::pile::is_pile(n)
+}
+
 pub(super) fn route_water(factory: &mut Factory) {
     // A source has one rate allowance across all of its attached networks.
     let mut moved = HashSet::new();
@@ -25,7 +30,7 @@ pub(super) fn route_water(factory: &mut Factory) {
             let mut targets = network.ports.clone();
             targets.sort_by_key(|q| {
                 (
-                    if factory.nodes[q].kind == Kind::Washer {
+                    if wants_coolant(&factory.nodes[q]) {
                         0
                     } else if factory.nodes[q].kind == Kind::Tank {
                         1
@@ -39,7 +44,7 @@ pub(super) fn route_water(factory: &mut Factory) {
                 // Rotate within each class without moving tanks ahead of washers.
                 let washer_count = targets
                     .iter()
-                    .filter(|q| factory.nodes[q].kind == Kind::Washer)
+                    .filter(|q| wants_coolant(&factory.nodes[q]))
                     .count();
                 if washer_count > 0 {
                     targets[..washer_count].rotate_left(factory.cursor % washer_count);
@@ -49,7 +54,7 @@ pub(super) fn route_water(factory: &mut Factory) {
                 let dest = &factory.nodes[&q];
                 if p == q
                     || !dest.enabled
-                    || !(dest.kind == Kind::Washer
+                    || !(wants_coolant(dest)
                         || (dest.kind == Kind::Tank && source_kind == Kind::Pump))
                 {
                     continue;

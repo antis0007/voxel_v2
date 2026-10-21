@@ -122,7 +122,10 @@ pub enum Item {
 
 impl Item {
     pub fn canonical_block(block: BlockId) -> Option<BlockId> {
-        if block == BlockId::Air || block.is_liquid() || matches!(block, BlockId::Fire | BlockId::Smoke | BlockId::Steam) {
+        if block == BlockId::Air
+            || block.is_liquid()
+            || matches!(block, BlockId::Fire | BlockId::Smoke | BlockId::Steam)
+        {
             return None;
         }
         if block.is_torch() {
@@ -171,6 +174,7 @@ impl Item {
             Self::Weapon(2) => "Steel sword",
             Self::Weapon(3) => "Cinderbrand",
             Self::Weapon(4) => "Winterglass",
+            Self::Weapon(5) => "Kinetic maul",
             Self::Weapon(_) => "Blade",
             Self::Armor(EquipSlot::Head, ArmorTier::Copper) => "Copper helm",
             Self::Armor(EquipSlot::Chest, ArmorTier::Copper) => "Copper cuirass",
@@ -230,6 +234,7 @@ impl Item {
             Self::Weapon(1) => "22 DMG · Melee",
             Self::Weapon(3) => "38 DMG · Flame cleave finisher · +8 MP",
             Self::Weapon(4) => "28 DMG · Chill, shatter & freezing shards",
+            Self::Weapon(5) => "44 DMG · Finisher launches rigid assemblies",
             Self::Weapon(_) => "32 DMG · Cleave",
             Self::Armor(EquipSlot::Head, ArmorTier::Lumen) => "+12% DEF · Lantern beam",
             Self::Armor(_, ArmorTier::Lumen) => "+12% DEF",
@@ -292,7 +297,10 @@ impl Item {
                 Self::Food(food)
             }
             4 => {
-                ensure!((1..=4).contains(&payload), "Invalid weapon tier in survival inventory");
+                ensure!(
+                    (1..=5).contains(&payload),
+                    "Invalid weapon tier in survival inventory"
+                );
                 Self::Weapon(payload as u8)
             }
             5 => {
@@ -306,7 +314,10 @@ impl Item {
                 Self::Armor(slot, tier)
             }
             6 => {
-                ensure!((1..=5).contains(&payload), "Invalid tool item in survival inventory");
+                ensure!(
+                    (1..=5).contains(&payload),
+                    "Invalid tool item in survival inventory"
+                );
                 Self::Tool(payload as u8)
             }
             _ => anyhow::bail!("Unknown survival item kind {kind}"),
@@ -440,6 +451,30 @@ pub const HAND_RECIPES: &[CraftingRecipe] = &[
         description: "Compact loose sand into load-bearing sandstone.",
     },
     CraftingRecipe {
+        name: "Mirage bricks",
+        output: ItemStack {
+            item: Item::Block(BlockId::MirageBrick),
+            count: 4,
+        },
+        ingredients: &[
+            (Item::Block(BlockId::StoneBricks), 2),
+            (Item::Block(BlockId::Crystal), 1),
+        ],
+        description: "Illusion masonry. Looks like stone bricks; you walk straight through it.",
+    },
+    CraftingRecipe {
+        name: "Star glass",
+        output: ItemStack {
+            item: Item::Block(BlockId::StarGlass),
+            count: 2,
+        },
+        ingredients: &[
+            (Item::Block(BlockId::Crystal), 1),
+            (Item::Block(BlockId::Basalt), 2),
+        ],
+        description: "Dark glass with a captive night sky. Glitters under its own light.",
+    },
+    CraftingRecipe {
         name: "Fungal rations",
         output: ItemStack {
             item: Item::Food(FoodKind::FungalRation),
@@ -474,6 +509,28 @@ pub const HAND_RECIPES: &[CraftingRecipe] = &[
         },
         ingredients: &[(Item::Resource(6), 2), (Item::Resource(4), 1)],
         description: "Balanced melee blade (22 base damage).",
+    },
+    CraftingRecipe {
+        name: "Kinetic maul",
+        output: ItemStack {
+            item: Item::Weapon(5),
+            count: 1,
+        },
+        ingredients: &[
+            (Item::Resource(15), 3),
+            (Item::Resource(16), 1),
+            (Item::Resource(17), 1),
+        ],
+        description: "Heavy impact weapon. Third strike launches loose rigid assemblies.",
+    },
+    CraftingRecipe {
+        name: "Rigid assembly core",
+        output: ItemStack {
+            item: Item::Block(BlockId::RigidCore),
+            count: 1,
+        },
+        ingredients: &[(Item::Resource(15), 2), (Item::Resource(16), 1)],
+        description: "Place beside planks or logs. The connected frame becomes a physical assembly.",
     },
     CraftingRecipe {
         name: "Copper helm",
@@ -572,7 +629,10 @@ pub const HAND_RECIPES: &[CraftingRecipe] = &[
 ];
 
 #[derive(Clone, Debug)]
-pub struct DroppedStack { pub pos: glam::Vec3, pub stack: ItemStack }
+pub struct DroppedStack {
+    pub pos: glam::Vec3,
+    pub stack: ItemStack,
+}
 #[derive(Clone, Debug)]
 pub struct SurvivalInventory {
     pub dropped: Vec<DroppedStack>,
@@ -594,23 +654,91 @@ impl Default for SurvivalInventory {
     }
 }
 
+/// What a left-button release should do with the carried stack.
+///
+/// A press picks a stack up immediately. Releasing on that same slot leaves it
+/// on the cursor. Releasing on one other slot places the whole stack. Dragging
+/// across several slots while already carrying a stack splits it evenly.
+/// Releasing away from every slot throws the carried stack into the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerRelease {
+    Keep,
+    Place(SlotAddr),
+    Distribute,
+    /// The pointer left the slot grid with a stack in hand. The UI only turns
+    /// this into a world drop when the release is outside the inventory panel,
+    /// so clicking the recipe book or a tab cannot accidentally discard items.
+    Drop,
+}
+
+pub fn pointer_release(
+    spreading: bool,
+    picked_from: Option<SlotAddr>,
+    pointer: Option<SlotAddr>,
+    visited_len: usize,
+) -> PointerRelease {
+    if spreading {
+        if visited_len > 1 {
+            PointerRelease::Distribute
+        } else if let Some(addr) = pointer {
+            PointerRelease::Place(addr)
+        } else if visited_len == 0 && picked_from.is_some() {
+            PointerRelease::Drop
+        } else {
+            // The player already distributed part of the stack. Keep the rest
+            // on the cursor rather than silently throwing it on release.
+            PointerRelease::Keep
+        }
+    } else if let (Some(from), Some(addr)) = (picked_from, pointer) {
+        if from != addr {
+            PointerRelease::Place(addr)
+        } else {
+            PointerRelease::Keep
+        }
+    } else if picked_from.is_some() {
+        PointerRelease::Drop
+    } else {
+        PointerRelease::Keep
+    }
+}
+
 impl SurvivalInventory {
     pub fn retrieve_nearby(&mut self, pos: glam::Vec3) -> bool {
-        let Some(index) = self.dropped.iter().position(|d| d.pos.distance(pos) < 3.0) else { return false; };
+        let Some(index) = self.dropped.iter().position(|d| d.pos.distance(pos) < 3.0) else {
+            return false;
+        };
         let stack = self.dropped[index].stack;
         let (inserted, remaining) = self.try_insert(stack);
-        if std::env::var_os("VOXEL_TOOL_REVIEW").is_some() { eprintln!("[tool-review] retrieved {:?} inserted={} remaining={} stack_limit={}",stack.item,inserted,remaining,self.stack_limit(stack.item)); }
-        if remaining == 0 { self.dropped.remove(index); }
-        else { self.dropped[index].stack.count = remaining; }
-        if inserted > 0 { self.notify_pickup(stack.item, inserted); }
-        else { self.notify_overflow(stack.item); }
+        if std::env::var_os("VOXEL_TOOL_REVIEW").is_some() {
+            eprintln!(
+                "[tool-review] retrieved {:?} inserted={} remaining={} stack_limit={}",
+                stack.item,
+                inserted,
+                remaining,
+                self.stack_limit(stack.item)
+            );
+        }
+        if remaining == 0 {
+            self.dropped.remove(index);
+        } else {
+            self.dropped[index].stack.count = remaining;
+        }
+        if inserted > 0 {
+            self.notify_pickup(stack.item, inserted);
+        } else {
+            self.notify_overflow(stack.item);
+        }
         true
     }
-    pub fn stack_limit(&self, item: Item) -> u32 { Self::limit_at_scale(item, self.voxel_m) }
+    pub fn stack_limit(&self, item: Item) -> u32 {
+        Self::limit_at_scale(item, self.voxel_m)
+    }
     fn limit_at_scale(item: Item, voxel_m: f32) -> u32 {
         let multiplier = if matches!(item, Item::Block(b) if !b.is_model()) {
             (1.0 / voxel_m.clamp(0.25, 1.0).powi(3)).round() as u32
-        } else { 1 };
+        } else {
+            1
+        };
         item.max_stack().saturating_mul(multiplier)
     }
 
@@ -1009,7 +1137,8 @@ impl SurvivalInventory {
                 }
             }
             (Some(mut cursor_stack), Some(mut slot_stack)) => {
-                if cursor_stack.item == slot_stack.item && slot_stack.count < self.stack_limit(slot_stack.item)
+                if cursor_stack.item == slot_stack.item
+                    && slot_stack.count < self.stack_limit(slot_stack.item)
                 {
                     slot_stack.count += 1;
                     cursor_stack.count -= 1;
@@ -1405,25 +1534,151 @@ impl SurvivalInventory {
         self.sort_pack();
     }
 
+    fn stash_stack(&mut self, stack: ItemStack) -> Option<ItemStack> {
+        let (_, rem) = self.try_insert(stack);
+        (rem > 0).then_some(ItemStack {
+            item: stack.item,
+            count: rem,
+        })
+    }
+
+    /// Ctrl + Left-Click (or Ctrl + Shift + Click): Quick-transfers EVERY matching stack of the
+    /// item in `addr` across that entire inventory region (Hotbar <-> Pack) in one action.
+    pub fn ctrl_click_slot(&mut self, addr: SlotAddr) -> bool {
+        let Some(target_stack) = self.slot(addr) else {
+            return false;
+        };
+        let target_item = target_stack.item;
+        let mut any_moved = self.shift_click_slot(addr);
+        match addr {
+            SlotAddr::Hotbar(_) => {
+                for i in 0..HOTBAR_SLOTS {
+                    if self.hotbar[i].is_some_and(|s| s.item == target_item) {
+                        any_moved |= self.shift_click_slot(SlotAddr::Hotbar(i));
+                    }
+                }
+            }
+            SlotAddr::Pack(_) => {
+                for i in 0..PACK_SLOTS {
+                    if self.pack[i].is_some_and(|s| s.item == target_item) {
+                        any_moved |= self.shift_click_slot(SlotAddr::Pack(i));
+                    }
+                }
+            }
+            SlotAddr::CraftGrid(_) => {
+                for i in 0..CRAFT_SLOTS {
+                    if self.craft_grid[i].is_some_and(|s| s.item == target_item) {
+                        any_moved |= self.shift_click_slot(SlotAddr::CraftGrid(i));
+                    }
+                }
+            }
+            SlotAddr::Equipment(_) => {}
+        }
+        any_moved
+    }
+
+    /// Middle-click (clone / pick full stack): if cursor is empty and `addr` has an item,
+    /// gathers a full stack of that item into `self.cursor`.
+    pub fn middle_click_slot(&mut self, addr: SlotAddr) {
+        if self.cursor.is_none() && self.slot(addr).is_some() {
+            self.gather_to_cursor(addr);
+        }
+    }
+
+    /// Left-click-drag even distribution (Vanilla Minecraft / Mouse Tweaks):
+    /// Splits `origin_stack` evenly across `visited_slots` and leaves any remainder on `self.cursor`.
+    pub fn distribute_even_across(&mut self, origin: Option<ItemStack>, visited: &[SlotAddr]) {
+        let Some(origin_stack) = origin else {
+            return;
+        };
+        if visited.len() <= 1 {
+            return;
+        }
+        // Filter to valid destination slots that are either empty or hold the same item below max_stack
+        let max = self.stack_limit(origin_stack.item);
+        let valid: Vec<SlotAddr> = visited
+            .iter()
+            .copied()
+            .filter(|&addr| {
+                self.slot_accepts(addr, origin_stack.item)
+                    && self
+                        .slot(addr)
+                        .is_none_or(|s| s.item == origin_stack.item && s.count < max)
+            })
+            .collect();
+        if valid.len() <= 1 {
+            return;
+        }
+        let per_slot = (origin_stack.count / valid.len() as u32).max(1);
+        let mut remaining = origin_stack.count;
+        for addr in valid {
+            if remaining == 0 {
+                break;
+            }
+            let current = self.slot(addr).map_or(0, |s| s.count);
+            let add = per_slot.min(remaining).min(max.saturating_sub(current));
+            if add > 0 {
+                if let Some(slot) = self.slot_mut(addr) {
+                    *slot = Some(ItemStack {
+                        item: origin_stack.item,
+                        count: current + add,
+                    });
+                }
+                remaining -= add;
+            }
+        }
+        self.cursor = if remaining > 0 {
+            Some(ItemStack {
+                item: origin_stack.item,
+                count: remaining,
+            })
+        } else {
+            None
+        };
+    }
+
+    /// Extracts either 1 item (`full_stack == false`) or the entire stack (`full_stack == true`)
+    /// from `addr` so it can be dropped into the world.
+    pub fn take_for_drop(&mut self, addr: SlotAddr, full_stack: bool) -> Option<ItemStack> {
+        let mut stack = self.slot(addr)?;
+        if full_stack || stack.count <= 1 {
+            if let Some(slot) = self.slot_mut(addr) {
+                *slot = None;
+            }
+            Some(stack)
+        } else {
+            stack.count -= 1;
+            if let Some(slot) = self.slot_mut(addr) {
+                *slot = Some(stack);
+            }
+            Some(ItemStack {
+                item: stack.item,
+                count: 1,
+            })
+        }
+    }
+
     /// Returns any held cursor stack or 2×2 crafting grid stacks back into the pack/hotbar when closing UI.
     /// If pack/hotbar are full, keeps remainder in `craft_grid` or `cursor` so zero items are ever lost.
     pub fn return_transient_to_pack(&mut self) {
+        let mut leftover: Vec<ItemStack> = Vec::new();
         if let Some(cursor) = self.cursor.take() {
-            let (_, rem) = self.try_insert(cursor);
-            if rem > 0 {
-                for slot in &mut self.craft_grid {
-                    if slot.is_none() {
-                        *slot = Some(ItemStack {
-                            item: cursor.item,
-                            count: rem,
-                        });
-                        return;
-                    }
-                }
-                self.cursor = Some(ItemStack {
-                    item: cursor.item,
-                    count: rem,
-                });
+            if let Some(rest) = self.stash_stack(cursor) {
+                leftover.push(rest);
+            }
+        }
+        let grid = std::mem::take(&mut self.craft_grid);
+        for stack in grid.into_iter().flatten() {
+            if let Some(rest) = self.stash_stack(stack) {
+                leftover.push(rest);
+            }
+        }
+        for rest in leftover {
+            if let Some(slot) = self.craft_grid.iter_mut().find(|s| s.is_none()) {
+                *slot = Some(rest);
+            } else {
+                self.cursor = Some(rest);
+                break;
             }
         }
     }
@@ -1626,27 +1881,31 @@ impl SurvivalInventory {
     pub fn decode(read: &mut impl FnMut() -> anyhow::Result<u32>) -> anyhow::Result<Self> {
         Self::decode_at_scale(read, 1.0)
     }
-    pub fn decode_at_scale(read: &mut impl FnMut() -> anyhow::Result<u32>, voxel_m: f32) -> anyhow::Result<Self> {
+    pub fn decode_at_scale(
+        read: &mut impl FnMut() -> anyhow::Result<u32>,
+        voxel_m: f32,
+    ) -> anyhow::Result<Self> {
         use anyhow::ensure;
         let mut inv = Self::empty();
         inv.voxel_m = voxel_m;
-        let decode_slot = |read: &mut dyn FnMut() -> anyhow::Result<u32>| -> anyhow::Result<Option<ItemStack>> {
-            let kind = read()?;
-            let payload = read()?;
-            let count = read()?;
-            if kind == 0 {
-                ensure!(payload == 0 && count == 0, "Non-zero empty survival slot");
-                return Ok(None);
-            }
-            let item = Item::decode_u32(kind, payload)?;
-            ensure!(
-                (1..=Self::limit_at_scale(item, voxel_m)).contains(&count),
-                "Survival stack count {count} exceeds limit {} for {:?}",
-                item.max_stack(),
-                item
-            );
-            Ok(Some(ItemStack { item, count }))
-        };
+        let decode_slot =
+            |read: &mut dyn FnMut() -> anyhow::Result<u32>| -> anyhow::Result<Option<ItemStack>> {
+                let kind = read()?;
+                let payload = read()?;
+                let count = read()?;
+                if kind == 0 {
+                    ensure!(payload == 0 && count == 0, "Non-zero empty survival slot");
+                    return Ok(None);
+                }
+                let item = Item::decode_u32(kind, payload)?;
+                ensure!(
+                    (1..=Self::limit_at_scale(item, voxel_m)).contains(&count),
+                    "Survival stack count {count} exceeds limit {} for {:?}",
+                    item.max_stack(),
+                    item
+                );
+                Ok(Some(ItemStack { item, count }))
+            };
 
         for slot in &mut inv.hotbar {
             *slot = decode_slot(read)?;
@@ -1684,25 +1943,43 @@ mod tests {
     #[test]
     fn scaled_stacks_survive_transfers_save_and_retrieval() {
         let item = Item::Block(BlockId::Stone);
-        for (voxel_m, capacity) in [(1.0,64), (0.5,512), (0.25,4096)] {
+        for (voxel_m, capacity) in [(1.0, 64), (0.5, 512), (0.25, 4096)] {
             let mut inv = SurvivalInventory::empty();
             inv.voxel_m = voxel_m;
             assert_eq!(inv.stack_limit(item), capacity);
-            assert_eq!(inv.try_insert(ItemStack {item,count:capacity}), (capacity,0));
+            assert_eq!(
+                inv.try_insert(ItemStack {
+                    item,
+                    count: capacity
+                }),
+                (capacity, 0)
+            );
             assert_eq!(inv.hotbar.iter().flatten().count(), 1);
             inv.shift_click_slot(SlotAddr::Hotbar(0));
-            assert_eq!(inv.pack[0].unwrap().count,capacity);
+            assert_eq!(inv.pack[0].unwrap().count, capacity);
             inv.right_click_slot(SlotAddr::Pack(0));
             inv.click_slot(SlotAddr::Pack(0));
-            assert_eq!(inv.pack[0].unwrap().count,capacity);
-            let mut bytes=Vec::new(); inv.encode(&mut bytes);
-            let mut words=bytes.chunks_exact(4);
-            let mut restored=SurvivalInventory::decode_at_scale(&mut || Ok(u32::from_le_bytes(words.next().unwrap().try_into().unwrap())),voxel_m).unwrap();
-            let stack=restored.pack[0].take().unwrap();
-            restored.dropped.push(DroppedStack {pos:glam::Vec3::ZERO, stack});
+            assert_eq!(inv.pack[0].unwrap().count, capacity);
+            let mut bytes = Vec::new();
+            inv.encode(&mut bytes);
+            let mut words = bytes.chunks_exact(4);
+            let mut restored = SurvivalInventory::decode_at_scale(
+                &mut || {
+                    Ok(u32::from_le_bytes(
+                        words.next().unwrap().try_into().unwrap(),
+                    ))
+                },
+                voxel_m,
+            )
+            .unwrap();
+            let stack = restored.pack[0].take().unwrap();
+            restored.dropped.push(DroppedStack {
+                pos: glam::Vec3::ZERO,
+                stack,
+            });
             assert!(!restored.retrieve_nearby(glam::Vec3::splat(5.0)));
             assert!(restored.retrieve_nearby(glam::Vec3::ZERO));
-            assert_eq!(restored.count_item(item),capacity);
+            assert_eq!(restored.count_item(item), capacity);
             assert!(restored.dropped.is_empty());
         }
     }
@@ -1768,7 +2045,9 @@ mod tests {
         assert_eq!(recipe.output.item, Item::Block(BlockId::Planks));
         assert_eq!(batches, 2);
 
-        let crafted = inv.craft_from_grid(false).expect("Should craft 1 batch to cursor");
+        let crafted = inv
+            .craft_from_grid(false)
+            .expect("Should craft 1 batch to cursor");
         assert_eq!(crafted.count, 4);
         assert_eq!(inv.cursor.unwrap().count, 4);
         assert_eq!(inv.craft_grid[0].unwrap().count, 1);
@@ -1839,5 +2118,67 @@ mod tests {
         inv.quick_stack_to_hotbar();
         assert_eq!(inv.hotbar[2], Some(ItemStack::new(stone, 50)));
         assert_eq!(inv.count_item(stone), 50);
+
+        // Ctrl-click transfers all matching stacks across regions at once
+        inv.hotbar[3] = Some(ItemStack::new(stone, 14));
+        assert!(inv.ctrl_click_slot(SlotAddr::Hotbar(2)));
+        assert!(inv.hotbar[2].is_none());
+        assert!(inv.hotbar[3].is_none());
+        assert_eq!(inv.count_item(stone), 64);
+
+        // Middle-click gathers a full stack & left-drag splits evenly across visited slots
+        let stone_slot = inv
+            .pack
+            .iter()
+            .position(|s| s.map_or(false, |st| st.item == stone))
+            .unwrap();
+        inv.middle_click_slot(SlotAddr::Pack(stone_slot));
+        assert_eq!(inv.cursor, Some(ItemStack::new(stone, 64)));
+        let origin = inv.cursor.take();
+        inv.distribute_even_across(
+            origin,
+            &[
+                SlotAddr::Hotbar(0),
+                SlotAddr::Hotbar(1),
+                SlotAddr::Hotbar(2),
+            ],
+        );
+        assert_eq!(inv.hotbar[0], Some(ItemStack::new(stone, 21)));
+        assert_eq!(inv.hotbar[1], Some(ItemStack::new(stone, 21)));
+        assert_eq!(inv.hotbar[2], Some(ItemStack::new(stone, 21)));
+        assert_eq!(inv.cursor, Some(ItemStack::new(stone, 1)));
+
+        let hotbar = SlotAddr::Hotbar(0);
+        let pack = SlotAddr::Pack(0);
+        assert_eq!(
+            pointer_release(false, Some(hotbar), Some(hotbar), 0),
+            PointerRelease::Keep
+        );
+        assert_eq!(
+            pointer_release(false, Some(hotbar), Some(pack), 0),
+            PointerRelease::Place(pack)
+        );
+        assert_eq!(
+            pointer_release(false, Some(hotbar), None, 0),
+            PointerRelease::Drop
+        );
+        assert_eq!(
+            pointer_release(true, Some(hotbar), Some(hotbar), 1),
+            PointerRelease::Place(hotbar)
+        );
+        assert_eq!(
+            pointer_release(true, Some(hotbar), Some(pack), 3),
+            PointerRelease::Distribute
+        );
+        // Releasing an untouched drag away from the grid throws the stack.
+        assert_eq!(
+            pointer_release(true, Some(hotbar), None, 0),
+            PointerRelease::Drop
+        );
+        // After partially distributing, an off-grid release keeps the remainder.
+        assert_eq!(
+            pointer_release(true, Some(hotbar), None, 1),
+            PointerRelease::Keep
+        );
     }
 }

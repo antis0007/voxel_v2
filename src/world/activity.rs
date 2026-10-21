@@ -12,9 +12,16 @@ pub const WORDS: usize = 512;
 // Cells whose rules can depend on an edit: face neighbours and grains one
 // level above a diagonal landing cell. Admission and wakeup use the same set.
 pub(crate) const WAKE_NEIGHBORS: [IVec3; 10] = [
-    IVec3::X, IVec3::NEG_X, IVec3::Y, IVec3::NEG_Y, IVec3::Z, IVec3::NEG_Z,
-    IVec3::new(1, 1, 0), IVec3::new(-1, 1, 0),
-    IVec3::new(0, 1, 1), IVec3::new(0, 1, -1),
+    IVec3::X,
+    IVec3::NEG_X,
+    IVec3::Y,
+    IVec3::NEG_Y,
+    IVec3::Z,
+    IVec3::NEG_Z,
+    IVec3::new(1, 1, 0),
+    IVec3::new(-1, 1, 0),
+    IVec3::new(0, 1, 1),
+    IVec3::new(0, 1, -1),
 ];
 const MAX_DEFERRED_REGIONS: usize = 8192;
 #[derive(Clone, Copy)]
@@ -53,10 +60,10 @@ struct Work {
 }
 #[derive(Default)]
 pub struct Activity {
-    work: HashMap<IVec3, Work>,
+    work: crate::fast_hash::FastMap<IVec3, Work>,
     fair: VecDeque<IVec3>,
     pending: usize,
-    deferred: HashMap<IVec3, [u64; 8]>,
+    deferred: crate::fast_hash::FastMap<IVec3, [u64; 8]>,
     sweep: Option<Sweep>,
     pub tick: u64,
     /// Full admission coalesces external edits into a durable rescan request.

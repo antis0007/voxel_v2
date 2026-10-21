@@ -1,9 +1,9 @@
 //! Bounded fixed-step simulation. Wall-clock rendering never controls physics step size.
 mod cellular;
+pub(crate) mod residency;
+mod rigid;
 pub(crate) mod sandbox;
 mod thermal;
-mod rigid;
-pub(crate) mod residency;
 mod world;
 pub use world::WorldSimulation;
 pub(crate) use world::discover;
