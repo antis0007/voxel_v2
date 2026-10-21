@@ -293,3 +293,54 @@ fn flow_front_reaches_the_far_side_within_bounded_sweeps() {
     assert!(sweeps <= 30, "front took {sweeps} sweeps to cover 6 cells");
     assert_eq!(mass(&world), before, "water mass must be conserved");
 }
+
+/// Front speed through the real scheduler: `WorldSimulation::update` at 60 Hz,
+/// the same call the game makes each frame. The column is released at t=0 and
+/// the test records when the front first reaches each x. One cell per 80 ms
+/// tick is the ceiling. Before the wake filter and the whole-chunk snapshot,
+/// 2.8k inert edit neighbours queued ahead of the front and it reached x=15
+/// only after 1.8 s.
+#[test]
+fn scheduler_front_keeps_pace_without_backlog_stall() {
+    use crate::{fluid::VoxelScalePreset as Scale, player::Player};
+    let mut world = chamber();
+    let mut air = Vec::new();
+    for y in 101..115 {
+        for z in 5..12 {
+            for x in 5..16 {
+                air.push((IVec3::new(x, y, z), B::Air));
+            }
+        }
+    }
+    world.set_many(&air);
+    for z in 5..12 {
+        for x in 5..7 {
+            world.set_water_volume(IVec3::new(x, 101, z), 8);
+        }
+    }
+    let mut sim = super::super::WorldSimulation::new();
+    sim.reset_for_world(Scale::OneMeter);
+    let mut player = Player::new();
+    player.pos = Vec3::new(-20.0, 100.0, 8.0);
+    let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+    let dt = 1.0 / 60.0;
+    let mut reached = [None::<f32>; 16];
+    let mut t = 0.0f32;
+    for _frame in 0..(6.0 / dt) as usize {
+        sim.update(&mut world, &player, dt, &mut blocks, &mut chunks);
+        t += dt;
+        for x in 6..16 {
+            if reached[x].is_none() && world.water_volume(IVec3::new(x as i32, 101, 8)) > 0 {
+                reached[x] = Some(t);
+            }
+        }
+    }
+    for x in 6..16 {
+        match reached[x] {
+            Some(s) => println!("[scheduler-front] x={x} reached at {s:.3} s"),
+            None => println!("[scheduler-front] x={x} not reached"),
+        }
+    }
+    let far = reached[15].expect("front never reached x=15 within 6 s");
+    assert!(far <= 1.2, "front reached x=15 at {far:.3} s; backlog is stalling it");
+}

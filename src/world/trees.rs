@@ -322,3 +322,39 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     // and the lobe bound is per axis rather than along each tip direction.
     reach + scale
 }
+
+/// Highest leaf, metres above the tree's ground voxel, mirroring `block()`:
+/// the trunk top, then each crown lobe's vertical extent at its tip. Replaces
+/// the `height + canopy_height` bound, which overshoots by about a voxel.
+pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
+    let scale = cfg.voxel_meters();
+    let height = tree.trunk_h as f32 * scale;
+    let crown_h = tree.canopy_height as f32 * scale;
+    if tree.conifer {
+        // Whorls stop at height + one voxel; leaves fill the top cell.
+        return height + scale;
+    }
+    let open_crown = cfg.generator_version >= 11;
+    let core_height = if open_crown { 0.54 } else { 0.68 };
+    let threshold_reach = if open_crown { 1.07f32.sqrt() } else { 1.06f32.sqrt() };
+    let crown_y = height - 0.1;
+    let mut top = crown_y + crown_h * core_height * threshold_reach;
+    for limb in 0..tree.branch_count {
+        let variation = hash3(tree.cell_x, limb, tree.cell_z, cfg.seed.wrapping_add(12083));
+        let tip_height = if open_crown {
+            (variation - 0.55) * crown_h * 0.95
+        } else {
+            (variation - 0.20) * crown_h * 0.48
+        };
+        let lobe_y = if open_crown {
+            crown_h * (0.31 + variation * 0.19)
+        } else {
+            crown_h * (0.44 + variation * 0.27)
+        };
+        // Lobes sit 0.12 crown heights below their tip.
+        let lobe_top = crown_y + tip_height - crown_h * 0.12 + lobe_y * threshold_reach;
+        top = top.max(lobe_top);
+    }
+    // One voxel of margin for the top face, as in `crown_reach`.
+    top.min(height + crown_h) + 0.5 * scale
+}

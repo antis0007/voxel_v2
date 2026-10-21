@@ -190,12 +190,6 @@ impl Activity {
         }
         true
     }
-    pub fn wake_neighbors(&mut self, p: IVec3) {
-        self.wake(p);
-        for d in WAKE_NEIGHBORS {
-            self.wake(p + d);
-        }
-    }
     pub fn merge(&mut self, c: IVec3, bits: &Mask) -> bool {
         if bits.iter().all(|&b| b == 0) {
             return true;

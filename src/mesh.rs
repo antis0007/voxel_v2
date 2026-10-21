@@ -509,6 +509,51 @@ fn coarse_vegetation(block: BlockId) -> bool {
 /// a real share of the cell, and wood needs about one voxel column, so trees keep
 /// their silhouette instead of inflating by a whole cell in every direction.
 /// Voxels outside the padded halo are unknown and excluded from the shares.
+/// Chunk-local height (exclusive top) of the highest opaque terrain voxel in
+/// each column, or `i32::MIN` when the column has none.
+fn column_tops(chunk: &GeneratedChunk) -> Vec<i32> {
+    let mut tops = vec![i32::MIN; (CHUNK_SIZE * CHUNK_SIZE) as usize];
+    for z in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
+            let origin = chunk.chunk * CHUNK_SIZE;
+            for y in (0..CHUNK_SIZE).rev() {
+                let b = chunk.get_world(origin + IVec3::new(x, y, z));
+                if b.is_opaque() && !coarse_vegetation(b) {
+                    tops[(z * CHUNK_SIZE + x) as usize] = y + 1;
+                    break;
+                }
+            }
+        }
+    }
+    tops
+}
+
+/// Terrain in a coarse cell is solid when the cell's centre lies under the median
+/// surface of its columns. "Any voxel solid" lifted every coarse surface to its
+/// cell top, which read as stair-stepped terraces. The median keeps thin shells:
+/// a surface one voxel thick still stands in the cells beneath it.
+fn terrain_reaches(tops: &[i32], x0: i32, z0: i32, step: i32, bottom: i32) -> bool {
+    let mut seen: Vec<i32> = Vec::with_capacity((step * step) as usize);
+    for dz in 0..step {
+        for dx in 0..step {
+            let (x, z) = (x0 + dx, z0 + dz);
+            if (0..CHUNK_SIZE).contains(&x) && (0..CHUNK_SIZE).contains(&z) {
+                let top = tops[(z * CHUNK_SIZE + x) as usize];
+                if top != i32::MIN {
+                    seen.push(top);
+                }
+            }
+        }
+    }
+    if seen.is_empty() {
+        return true;
+    }
+    seen.sort_unstable();
+    // The cell centre decides. A bottom test rounds every surface up to the next
+    // cell boundary, which is the same bias as before, one cell tall.
+    2 * bottom + step < 2 * seen[seen.len() / 2]
+}
+
 fn coarse_cell(chunk: &GeneratedChunk, min: IVec3, step: i32) -> Option<BlockId> {
     let padded = chunk.origin();
     let (mut terrain, mut liquid) = (None, None);
@@ -566,12 +611,17 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
     let index = |x: i32, y: i32, z: i32| ((y * n + z) * n + x) as usize;
     let mut solid = vec![false; cells];
     let mut block = vec![BlockId::Air; cells];
+    let tops = column_tops(chunk);
     for cz in 0..n {
         for cx in 0..n {
             for cy in 0..n {
-                if let Some(chosen) =
-                    coarse_cell(chunk, origin + IVec3::new(cx, cy, cz) * step, step)
-                {
+                let chosen = coarse_cell(chunk, origin + IVec3::new(cx, cy, cz) * step, step)
+                    .filter(|b| {
+                        b.is_liquid()
+                            || coarse_vegetation(*b)
+                            || terrain_reaches(&tops, cx * step, cz * step, step, cy * step)
+                    });
+                if let Some(chosen) = chosen {
                     let id = index(cx, cy, cz);
                     solid[id] = true;
                     block[id] = chosen;
@@ -877,33 +927,6 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
         }
     }
     mesh
-}
-
-fn push_double_sided_face(
-    vertices: &mut Vec<Vertex3>,
-    indices: &mut Vec<u32>,
-    quad: [[f32; 3]; 4],
-    color: [f32; 3],
-    surface: crate::material::SurfaceDetail,
-) {
-    push_face(
-        vertices,
-        indices,
-        quad,
-        color,
-        normal_from_quad(quad),
-        surface,
-        [1.0; 4],
-    );
-    push_face(
-        vertices,
-        indices,
-        [quad[3], quad[2], quad[1], quad[0]],
-        color,
-        normal_from_quad([quad[3], quad[2], quad[1], quad[0]]),
-        surface,
-        [1.0; 4],
-    );
 }
 
 fn emit_oriented_box(
@@ -1229,7 +1252,39 @@ fn scale_torch_vertices(
     }
 }
 
+/// Level of a free water surface at voxel `p`: water with air directly above.
+/// Submerged water (water above) returns `None`; its surface is the one above it.
+fn free_water_level(chunk: &GeneratedChunk, p: IVec3) -> Option<f32> {
+    (chunk.get_world(p) == BlockId::Water && chunk.get_world(p + IVec3::Y) != BlockId::Water)
+        .then(|| {
+            chunk.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0
+                * (1.0 - WATER_SURFACE_INSET)
+        })
+}
+
+/// Surface height above row `row`'s floor at lattice corner `(x, z)`: the mean
+/// level of the free surfaces in the four voxel columns that touch the corner.
+/// Every face sharing the corner computes the same value, so neighbouring
+/// columns of different volume slope into each other instead of stepping in
+/// 1/8 m terraces. Halo columns count, so chunks agree on their border corners.
+fn water_corner_height(chunk: &GeneratedChunk, x: i32, z: i32, row: i32) -> f32 {
+    let (mut sum, mut count) = (0.0, 0u32);
+    for (cx, cz) in [(x - 1, z - 1), (x, z - 1), (x - 1, z), (x, z)] {
+        if let Some(level) = free_water_level(chunk, IVec3::new(cx, row, cz)) {
+            sum += level;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        sum / count as f32
+    }
+}
+
 fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
+    // Height above the voxel floor for a water voxel: 1.0 when water sits
+    // above it, otherwise its own free level.
     let volume = |p: IVec3| -> f32 {
         if chunk.get_world(p) != BlockId::Water {
             return 0.0;
@@ -1240,6 +1295,8 @@ fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
         (chunk.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0)
             * (1.0 - WATER_SURFACE_INSET)
     };
+    // Corners of a unit cell in the order the top quad is emitted.
+    const CELLS: [(i32, i32); 4] = [(0, 0), (0, 1), (1, 1), (1, 0)];
     for y in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
             for x in 0..CHUNK_SIZE {
@@ -1248,57 +1305,90 @@ fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
                     continue;
                 }
                 let h = volume(p);
+                // Surface height at a lattice corner. Submerged water is full height.
+                let top_at = |cx: i32, cz: i32| {
+                    if h >= 1.0 {
+                        1.0
+                    } else {
+                        water_corner_height(chunk, cx, cz, p.y)
+                    }
+                };
                 let base = p.as_vec3();
                 for axis in 0..3 {
                     for positive in [false, true] {
                         let mut offset = IVec3::ZERO;
                         offset[axis] = if positive { 1 } else { -1 };
                         let neighbor = chunk.get_world(p + offset);
-                        let mut low = 0.0;
-                        if axis == 1 {
-                            if positive && h >= 1.0 && neighbor == BlockId::Water {
-                                continue;
-                            }
-                            if !positive && !neighbor.is_empty() {
-                                continue;
-                            }
-                            if positive && neighbor.is_opaque() && h >= 1.0 {
-                                continue;
+                        let rel: [Vec3; 4] = if axis == 1 {
+                            if positive {
+                                // Water above: this voxel has no free surface.
+                                if h >= 1.0 {
+                                    continue;
+                                }
+                                CELLS.map(|(i, j)| {
+                                    Vec3::new(i as f32, top_at(p.x + i, p.z + j), j as f32)
+                                })
+                            } else {
+                                if !neighbor.is_empty() {
+                                    continue;
+                                }
+                                CELLS.map(|(i, j)| Vec3::new(i as f32, 0.0, j as f32))
                             }
                         } else {
                             if neighbor.is_opaque() {
                                 continue;
                             }
-                            low = volume(p + offset);
-                            if low >= h {
+                            // The wall's foot is the neighbour's surface at the shared
+                            // corners: its free level if it has one, the full voxel if
+                            // water sits above it, and the floor if it is dry.
+                            let floor_at = |cx: i32, cz: i32| match neighbor {
+                                BlockId::Water
+                                    if chunk.get_world(p + offset + IVec3::Y)
+                                        != BlockId::Water =>
+                                {
+                                    water_corner_height(chunk, cx, cz, p.y)
+                                }
+                                BlockId::Water => 1.0,
+                                _ => 0.0,
+                            };
+                            let plane = if positive { 1 } else { 0 };
+                            let (e0, e1) = if axis == 0 {
+                                ((p.x + plane, p.z), (p.x + plane, p.z + 1))
+                            } else {
+                                ((p.x, p.z + plane), (p.x + 1, p.z + plane))
+                            };
+                            let (b0, b1) = (floor_at(e0.0, e0.1), floor_at(e1.0, e1.1));
+                            let (t0, t1) = (top_at(e0.0, e0.1), top_at(e1.0, e1.1));
+                            if t0 <= b0 && t1 <= b1 {
+                                // Shared surface on both sides: no wall.
                                 continue;
                             }
-                        }
-                        let u = (axis + 1) % 3;
-                        let v = (axis + 2) % 3;
-                        let mut a = Vec3::ZERO;
-                        a[axis] = if positive {
-                            if axis == 1 { h } else { 1.0 }
-                        } else {
-                            0.0
+                            let pl = plane as f32;
+                            if axis == 0 {
+                                [
+                                    Vec3::new(pl, b0, 0.0),
+                                    Vec3::new(pl, t0, 0.0),
+                                    Vec3::new(pl, t1, 1.0),
+                                    Vec3::new(pl, b1, 1.0),
+                                ]
+                            } else {
+                                [
+                                    Vec3::new(0.0, b0, pl),
+                                    Vec3::new(1.0, b1, pl),
+                                    Vec3::new(1.0, t1, pl),
+                                    Vec3::new(0.0, t0, pl),
+                                ]
+                            }
                         };
-                        if axis != 1 {
-                            a.y = low;
-                        }
-                        let mut du = Vec3::ZERO;
-                        du[u] = if u == 1 { h - low } else { 1.0 };
-                        let mut dv = Vec3::ZERO;
-                        dv[v] = if v == 1 { h - low } else { 1.0 };
-                        let corners = [base + a, base + a + du, base + a + du + dv, base + a + dv];
                         let quad = if positive {
-                            corners
+                            rel
                         } else {
-                            [corners[3], corners[2], corners[1], corners[0]]
+                            [rel[3], rel[2], rel[1], rel[0]]
                         };
                         push_face(
                             &mut mesh.vertices,
                             &mut mesh.indices,
-                            quad.map(|p| p.to_array()),
+                            quad.map(|c| (base + c).to_array()),
                             BlockId::Water.color(p),
                             face_normal_from_axis(axis, positive),
                             BlockId::Water.surface(),
@@ -1345,360 +1435,6 @@ pub fn build_outline_vertices(block: IVec3, color: [f32; 4], expand: f32) -> Vec
         out.push(LineVertex { pos: p[a], color });
         out.push(LineVertex { pos: p[b], color });
     }
-    out
-}
-
-pub fn build_outline_vertices_many(
-    blocks: &[IVec3],
-    color: [f32; 4],
-    expand: f32,
-) -> Vec<LineVertex> {
-    let mut out = Vec::with_capacity(blocks.len() * 24);
-    for &block in blocks {
-        out.extend(build_outline_vertices(block, color, expand));
-    }
-    out
-}
-
-fn rect(x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 3], out: &mut Vec<UiVertex>) {
-    out.extend_from_slice(&[
-        UiVertex {
-            pos: [x0, y0],
-            color,
-        },
-        UiVertex {
-            pos: [x1, y0],
-            color,
-        },
-        UiVertex {
-            pos: [x1, y1],
-            color,
-        },
-        UiVertex {
-            pos: [x0, y0],
-            color,
-        },
-        UiVertex {
-            pos: [x1, y1],
-            color,
-        },
-        UiVertex {
-            pos: [x0, y1],
-            color,
-        },
-    ]);
-}
-
-fn glyph_bits(c: char) -> [u8; 7] {
-    match c {
-        'A' => [
-            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ],
-        'B' => [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
-        ],
-        'C' => [
-            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
-        ],
-        'D' => [
-            0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100,
-        ],
-        'E' => [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
-        ],
-        'F' => [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
-        ],
-        'G' => [
-            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110,
-        ],
-        'H' => [
-            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ],
-        'I' => [
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
-        ],
-        'J' => [
-            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
-        ],
-        'K' => [
-            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
-        ],
-        'L' => [
-            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
-        ],
-        'M' => [
-            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
-        ],
-        'N' => [
-            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
-        ],
-        'O' => [
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ],
-        'P' => [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
-        ],
-        'Q' => [
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
-        ],
-        'R' => [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
-        ],
-        'S' => [
-            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
-        ],
-        'T' => [
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
-        ],
-        'U' => [
-            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ],
-        'V' => [
-            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
-        ],
-        'W' => [
-            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
-        ],
-        'X' => [
-            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
-        ],
-        'Y' => [
-            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
-        ],
-        'Z' => [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
-        ],
-        '0' => [
-            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
-        ],
-        '1' => [
-            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
-        ],
-        '2' => [
-            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
-        ],
-        '3' => [
-            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
-        ],
-        '4' => [
-            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
-        ],
-        '5' => [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
-        ],
-        '6' => [
-            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
-        ],
-        '7' => [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
-        ],
-        '8' => [
-            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
-        ],
-        '9' => [
-            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
-        ],
-        ':' => [
-            0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000,
-        ],
-        '-' => [
-            0b00000, 0b00000, 0b00000, 0b01110, 0b00000, 0b00000, 0b00000,
-        ],
-        ' ' => [0, 0, 0, 0, 0, 0, 0],
-        _ => [0, 0, 0, 0, 0, 0, 0],
-    }
-}
-
-fn draw_text(mut x: f32, y: f32, scale: f32, text: &str, color: [f32; 3], out: &mut Vec<UiVertex>) {
-    let px = 0.010 * scale;
-    for ch in text.chars() {
-        let rows = glyph_bits(ch);
-        for (row_i, row) in rows.iter().enumerate() {
-            for col in 0..5 {
-                if (row >> (4 - col)) & 1 == 1 {
-                    let x0 = x + col as f32 * px;
-                    let y0 = y - row_i as f32 * px;
-                    rect(x0, y0, x0 + px, y0 - px, color, out);
-                }
-            }
-        }
-        x += px * 6.0;
-    }
-}
-
-pub fn build_crosshair() -> Vec<UiVertex> {
-    let mut out = Vec::new();
-    rect(-0.014, -0.0015, 0.014, 0.0015, [0.95, 0.95, 0.95], &mut out);
-    rect(-0.0015, -0.022, 0.0015, 0.022, [0.95, 0.95, 0.95], &mut out);
-    rect(-0.010, -0.0008, 0.010, 0.0008, [0.15, 0.15, 0.15], &mut out);
-    rect(-0.0008, -0.016, 0.0008, 0.016, [0.15, 0.15, 0.15], &mut out);
-    out
-}
-
-pub fn build_hotbar(selected: BlockId) -> Vec<UiVertex> {
-    let mut out = Vec::new();
-    let y0 = -0.95;
-    let y1 = -0.78;
-    let blocks = BlockId::hotbar_defaults();
-    let slot_w = 0.20;
-    let slot_gap = 0.05;
-    let total_w = slot_w * blocks.len() as f32 + slot_gap * blocks.len().saturating_sub(1) as f32;
-    let start_x = -total_w * 0.5;
-
-    for (i, block) in blocks.iter().enumerate() {
-        let x0 = start_x + i as f32 * (slot_w + slot_gap);
-        let x1 = x0 + slot_w;
-        let frame = if *block == selected {
-            [0.96, 0.92, 0.60]
-        } else {
-            [0.20, 0.20, 0.22]
-        };
-        rect(x0, y0, x1, y1, frame, &mut out);
-        rect(
-            x0 + 0.012,
-            y0 + 0.012,
-            x1 - 0.012,
-            y1 - 0.012,
-            block.color(IVec3::ZERO),
-            &mut out,
-        );
-        draw_text(
-            x0 + 0.05,
-            y0 + 0.09,
-            0.7,
-            &format!("{}", i + 1),
-            [0.0, 0.0, 0.0],
-            &mut out,
-        );
-    }
-
-    out
-}
-
-pub fn build_fps_overlay(fps: u32) -> Vec<UiVertex> {
-    let mut out = Vec::new();
-    draw_text(
-        -0.94,
-        0.93,
-        0.9,
-        &format!("FPS {}", fps),
-        [1.0, 1.0, 0.55],
-        &mut out,
-    );
-    out
-}
-
-pub fn build_pause_overlay() -> Vec<UiVertex> {
-    let mut out = Vec::new();
-    rect(-0.58, 0.34, 0.58, -0.34, [0.08, 0.08, 0.10], &mut out);
-    rect(-0.56, 0.32, 0.56, -0.32, [0.20, 0.20, 0.24], &mut out);
-    draw_text(-0.22, 0.28, 1.5, "PAUSED", [0.95, 0.95, 0.95], &mut out);
-    draw_text(
-        -0.37,
-        0.10,
-        0.8,
-        "LEFT CLICK TO RESUME",
-        [0.90, 0.90, 0.85],
-        &mut out,
-    );
-    draw_text(
-        -0.31,
-        -0.02,
-        0.8,
-        "ESC TO TOGGLE MENU",
-        [0.90, 0.90, 0.85],
-        &mut out,
-    );
-    draw_text(
-        -0.24,
-        -0.14,
-        0.8,
-        "DOUBLE TAP JUMP: FLY",
-        [0.75, 0.95, 1.0],
-        &mut out,
-    );
-    out
-}
-
-pub fn build_world_select_overlay(selected: crate::world::WorldType) -> Vec<UiVertex> {
-    let mut out = Vec::new();
-    rect(-1.0, 1.0, 1.0, -1.0, [0.05, 0.08, 0.12], &mut out);
-    rect(-0.72, 0.72, 0.72, -0.72, [0.08, 0.10, 0.14], &mut out);
-    rect(-0.68, 0.68, 0.68, -0.68, [0.16, 0.19, 0.24], &mut out);
-    draw_text(
-        -0.40,
-        0.62,
-        1.6,
-        "VOXEL FRONTIER",
-        [0.92, 0.95, 1.0],
-        &mut out,
-    );
-    draw_text(
-        -0.35,
-        0.48,
-        1.0,
-        "SELECT WORLD TYPE",
-        [0.98, 0.98, 0.90],
-        &mut out,
-    );
-
-    let options = [
-        (crate::world::WorldType::Superflat, "1 SUPERFLAT CALM"),
-        (crate::world::WorldType::Hills, "2 HILLS BALANCED"),
-        (crate::world::WorldType::Ridged, "3 RIDGED HARSH"),
-    ];
-
-    for (i, (ty, label)) in options.iter().enumerate() {
-        let y_top = 0.30 - i as f32 * 0.18;
-        let frame = if *ty == selected {
-            [0.97, 0.90, 0.56]
-        } else {
-            [0.24, 0.28, 0.34]
-        };
-        rect(-0.50, y_top, 0.50, y_top - 0.11, frame, &mut out);
-        rect(
-            -0.485,
-            y_top - 0.01,
-            0.485,
-            y_top - 0.10,
-            [0.12, 0.14, 0.18],
-            &mut out,
-        );
-        draw_text(
-            -0.46,
-            y_top - 0.03,
-            1.0,
-            label,
-            [0.95, 0.95, 0.95],
-            &mut out,
-        );
-    }
-
-    draw_text(
-        -0.52,
-        -0.20,
-        0.8,
-        "ARROW KEYS OR W S TO PICK",
-        [0.82, 0.90, 1.0],
-        &mut out,
-    );
-    draw_text(
-        -0.52,
-        -0.32,
-        0.8,
-        "PRESS ENTER OR LEFT CLICK TO START",
-        [0.95, 0.92, 0.75],
-        &mut out,
-    );
-    draw_text(
-        -0.52,
-        -0.44,
-        0.8,
-        "PRESS ESC TO QUIT",
-        [0.90, 0.86, 0.80],
-        &mut out,
-    );
     out
 }
 
@@ -1833,6 +1569,76 @@ mod lod_speed {
             }
             let ms = start.elapsed().as_secs_f64() * 1e3 / chunks.len() as f64;
             println!("lod {lod}: {ms:.2} ms/chunk, {} tris/chunk", tris / chunks.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod terrace_metric {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use crate::world::{World, WorldType};
+    use std::sync::atomic::AtomicBool;
+
+    /// `cargo test --release terrace_metric -- --ignored --nocapture`
+    /// How far each LOD column's top sits from the true surface, in voxels.
+    /// Stair-stepping shows up as a large mean and a bias above zero.
+    #[test]
+    #[ignore]
+    fn lod_surface_error() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        let never = AtomicBool::new(false);
+        for lod in 1..=3u8 {
+            let step = 1i32 << lod;
+            let (mut sum, mut abs_sum, mut n) = (0.0f32, 0.0f32, 0usize);
+            for cz in -4..4 {
+                for cx in -4..4 {
+                for cy in 0..2 {
+                    let chunk = crate::world::generate_padded(&cfg, IVec3::new(cx, cy, cz), &never).unwrap();
+                    let origin = chunk.chunk * CHUNK_SIZE;
+                    for z in 0..CHUNK_SIZE {
+                        for x in 0..CHUNK_SIZE {
+                            // True surface: highest opaque terrain voxel in this column.
+                            let mut true_top = None;
+                            for y in (0..CHUNK_SIZE).rev() {
+                                let b = chunk.get_world(origin + IVec3::new(x, y, z));
+                                if b.is_opaque() && !coarse_vegetation(b) {
+                                    true_top = Some(y + 1);
+                                    break;
+                                }
+                            }
+                            // Surfaces on the chunk floor are owned by the chunk below.
+                            let Some(true_top) = true_top.filter(|&t| t > 4) else { continue };
+                            // Coarse surface: top of the highest solid coarse cell.
+                            let cx0 = x / step;
+                            let cz0 = z / step;
+                            let mut coarse_top = None;
+                            for cy in (0..CHUNK_SIZE / step).rev() {
+                                let min = origin + IVec3::new(cx0 * step, cy * step, cz0 * step);
+                                let tops = column_tops(&chunk);
+                                if coarse_cell(&chunk, min, step)
+                                    .filter(|b| b.is_liquid() || coarse_vegetation(*b) || terrain_reaches(&tops, cx0 * step, cz0 * step, step, cy * step))
+                                    .is_some_and(|b| !coarse_vegetation(b))
+                                {
+                                    coarse_top = Some((cy + 1) * step);
+                                    break;
+                                }
+                            }
+                            let Some(coarse_top) = coarse_top else { continue };
+                            let err = (coarse_top - true_top) as f32;
+                            sum += err;
+                            abs_sum += err.abs();
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            }
+            println!(
+                "lod {lod}: {n} columns, bias {:+.2} vox, mean |err| {:.2} vox",
+                sum / n as f32,
+                abs_sum / n as f32
+            );
         }
     }
 }

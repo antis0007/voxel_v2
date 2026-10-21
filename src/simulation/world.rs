@@ -59,6 +59,8 @@ pub struct WorldSimulation {
     machine_cursor: usize,
     visited: HashSet<IVec3>,
     touched: HashSet<IVec3>,
+    // Reused per-chunk snapshot of pending cells; avoids a fresh allocation each tick.
+    batch: Vec<IVec3>,
     pub status: Option<String>,
 }
 impl WorldSimulation {
@@ -80,6 +82,7 @@ impl WorldSimulation {
             machine_cursor: 0,
             visited: HashSet::with_capacity(MAX_CELLS),
             touched: HashSet::with_capacity(128),
+            batch: Vec::with_capacity(256),
         }
     }
     pub fn reset_for_world(&mut self, scale: VoxelScalePreset) {
@@ -315,7 +318,19 @@ impl WorldSimulation {
                     if !self.sources.request_for(world, c, c) {
                         continue;
                     }
-                    let batch = world.activity.take(c, 256.min(MAX_CELLS - cells));
+                    // Snapshot the chunk's whole pending set before stepping any of
+                    // it. Cells woken by this tick's transfers wait for the next
+                    // tick, so a front still advances one cell per tick, while a
+                    // backlog drains in one pass instead of 256 cells per tick.
+                    let mut batch = std::mem::take(&mut self.batch);
+                    batch.clear();
+                    while cells + batch.len() < MAX_CELLS {
+                        let part = world.activity.take(c, MAX_CELLS - cells - batch.len());
+                        if part.is_empty() {
+                            break;
+                        }
+                        batch.extend_from_slice(&part);
+                    }
                     for (i, &p) in batch.iter().enumerate() {
                         if Instant::now() >= water_end {
                             for &p in &batch[i..] {
@@ -338,10 +353,12 @@ impl WorldSimulation {
                             chunks,
                         );
                     }
+                    self.batch = batch;
                     self.queue_ready(world, c);
                 }
                 self.stats.simulated_chunks_last_step += self.touched.len();
             }
+            world.advance_ripples(dt);
         }
         self.stats.active_chunks = world.activity.chunks();
         self.stats.pending_updates = world.activity.pending();
