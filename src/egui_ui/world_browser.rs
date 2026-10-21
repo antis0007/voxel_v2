@@ -86,11 +86,7 @@ fn card(ui: &mut egui::Ui, e: &WorldEntry, selected: bool) -> egui::Response {
         presentation::PAPER,
         width,
     );
-    p.galley(
-        egui::pos2(x, r.top() + 10.0),
-        name,
-        presentation::PAPER,
-    );
+    p.galley(egui::pos2(x, r.top() + 10.0), name, presentation::PAPER);
     p.text(
         egui::pos2(x, r.bottom() - 20.0),
         Align2::LEFT_CENTER,

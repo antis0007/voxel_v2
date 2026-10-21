@@ -51,24 +51,54 @@ pub(super) fn home(
             owner.library_loading,
         ),
         HomePage::Preferences => {
-            egui::CentralPanel::default().frame(egui::Frame::NONE).show(&ctx,|ui| {
-                egui::ScrollArea::vertical().show(ui,|ui| {
-                    ui.add_space(20.0);ui.vertical_centered(|ui| {
-                        ui.set_max_width((ui.available_width()-32.0).clamp(220.0,720.0));
-                        surface().show(ui,|ui| {
-                            heading(ui,"Settings","Display, controls and autosave.");
-                            settings::graphics_settings(ui,render,scale.meters());
-                            ui.add(egui::Slider::new(&mut owner.fov_degrees,50.0..=110.0).text("Field of view"));
-                            ui.add(egui::Slider::new(&mut owner.mouse_sensitivity,0.0005..=0.006).logarithmic(true).text("Mouse sensitivity"));
-                            ui.checkbox(&mut owner.invert_mouse,"Invert vertical look");ui.checkbox(&mut owner.show_hud,"Show the in-game HUD");
-                            settings::saving_settings(ui);
-                            settings::audio_settings(ui);
-                            if let Some(status)=&owner.preferences_status {ui.label(RichText::new(status).small());}
-                            else {ui.small("Changes save automatically.");}
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(&ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.add_space(20.0);
+                        ui.vertical_centered(|ui| {
+                            ui.set_max_width((ui.available_width() - 32.0).clamp(220.0, 720.0));
+                            surface().show(ui, |ui| {
+                                heading(ui, "Settings", "Display, controls and autosave.");
+                                settings::graphics_settings(ui, render, scale.meters());
+                                ui.add(
+                                    egui::Slider::new(&mut owner.fov_degrees, 50.0..=110.0)
+                                        .text("Field of view"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut owner.mouse_sensitivity, 0.0005..=0.006)
+                                        .logarithmic(true)
+                                        .text("Mouse sensitivity"),
+                                );
+                                ui.checkbox(&mut owner.invert_mouse, "Invert vertical look");
+                                ui.checkbox(&mut owner.show_hud, "Show the in-game HUD");
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::Slider::new(
+                                            &mut owner.ui_scale,
+                                            0.75..=1.75,
+                                        )
+                                        .step_by(0.05)
+                                        .text("UI scale"),
+                                    );
+                                    if ui.small_button("Reset").clicked() {
+                                        owner.ui_scale = 1.0;
+                                    }
+                                });
+                                ui.small(
+                                    "Scales menus, HUD text and the inventory without changing the world.",
+                                );
+                                settings::saving_settings(ui);
+                                settings::audio_settings(ui);
+                                if let Some(status) = &owner.preferences_status {
+                                    ui.label(RichText::new(status).small());
+                                } else {
+                                    ui.small("Changes save automatically.");
+                                }
+                            });
                         });
                     });
                 });
-            });
             UiAction::None
         }
     };
@@ -130,14 +160,38 @@ pub(super) fn action(ui: &mut egui::Ui, text: &str, primary: bool) -> Response {
     };
     ui.painter().rect_filled(rect, 0, fill);
     // A shallow stone bevel gives controls a consistent raised/pressed state.
-    let light_edge = if pressed { INK } else { Color32::from_rgb(137, 113, 85) };
-    let dark_edge = if pressed { Color32::from_rgb(137, 113, 85) } else { INK };
-    ui.painter().line_segment([rect.left_bottom(), rect.left_top()], Stroke::new(2.0, light_edge));
-    ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, light_edge));
-    ui.painter().line_segment([rect.right_top(), rect.right_bottom()], Stroke::new(2.0, dark_edge));
-    ui.painter().line_segment([rect.right_bottom(), rect.left_bottom()], Stroke::new(2.0, dark_edge));
+    let light_edge = if pressed {
+        INK
+    } else {
+        Color32::from_rgb(137, 113, 85)
+    };
+    let dark_edge = if pressed {
+        Color32::from_rgb(137, 113, 85)
+    } else {
+        INK
+    };
+    ui.painter().line_segment(
+        [rect.left_bottom(), rect.left_top()],
+        Stroke::new(2.0, light_edge),
+    );
+    ui.painter().line_segment(
+        [rect.left_top(), rect.right_top()],
+        Stroke::new(2.0, light_edge),
+    );
+    ui.painter().line_segment(
+        [rect.right_top(), rect.right_bottom()],
+        Stroke::new(2.0, dark_edge),
+    );
+    ui.painter().line_segment(
+        [rect.right_bottom(), rect.left_bottom()],
+        Stroke::new(2.0, dark_edge),
+    );
     if primary {
-        ui.painter().rect_filled(Rect::from_min_size(rect.min + vec2(6.0, 10.0), vec2(3.0, rect.height() - 20.0)), 0, GOLD);
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.min + vec2(6.0, 10.0), vec2(3.0, rect.height() - 20.0)),
+            0,
+            GOLD,
+        );
     }
     if active {
         ui.painter().rect_stroke(
@@ -147,11 +201,7 @@ pub(super) fn action(ui: &mut egui::Ui, text: &str, primary: bool) -> Response {
             StrokeKind::Inside,
         );
     }
-    let color = if !ui.is_enabled() {
-        MUTED
-    } else {
-        PAPER
-    };
+    let color = if !ui.is_enabled() { MUTED } else { PAPER };
     let font = FontId::proportional(16.0);
     let label = ui
         .painter()
@@ -186,45 +236,89 @@ fn pause_surface() -> egui::Frame {
         .inner_margin(egui::Margin::same(18))
 }
 pub(super) fn landscape(p: &egui::Painter, r: Rect, seed: u32, kind: WorldType) {
-    let tile=(r.width()/144.0).min(r.height()/81.0).floor().max(1.0);
-    let top=Color32::from_rgb(66,86,105);
-    let mid=Color32::from_rgb(104,112,116);
-    p.rect_filled(r,0,top);
+    let tile = (r.width() / 144.0).min(r.height() / 81.0).floor().max(1.0);
+    let top = Color32::from_rgb(66, 86, 105);
+    let mid = Color32::from_rgb(104, 112, 116);
+    p.rect_filled(r, 0, top);
     for band in 0..12 {
-        let y=r.top()+tile*band as f32;
-        p.rect_filled(Rect::from_min_size(pos2(r.left(),y),vec2(r.width(),tile)),0,
-            if band%3==0 {mid}else{top});
+        let y = r.top() + tile * band as f32;
+        p.rect_filled(
+            Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), tile)),
+            0,
+            if band % 3 == 0 { mid } else { top },
+        );
     }
-    let sun=pos2(r.left()+r.width()*0.76,r.top()+r.height()*0.24);
-    p.rect_filled(Rect::from_center_size(sun,vec2(tile*8.0,tile*8.0)),0,Color32::from_rgb(237,188,116));
-    p.rect_filled(Rect::from_center_size(sun,vec2(tile*10.0,tile*4.0)),0,Color32::from_rgb(250,220,158));
-    p.rect_filled(Rect::from_center_size(sun,vec2(tile*4.0,tile*10.0)),0,Color32::from_rgb(250,220,158));
-    let layers=[Color32::from_rgb(101,107,92),Color32::from_rgb(76,82,65),Color32::from_rgb(49,58,48),Color32::from_rgb(37,43,39)];
-    for (layer,color) in layers.into_iter().enumerate() {
-        let step=tile*2.0;
-        let columns=(r.width()/step).ceil() as usize;
-        let baseline=r.height()*(0.53+layer as f32*0.105);
+    let sun = pos2(r.left() + r.width() * 0.76, r.top() + r.height() * 0.24);
+    p.rect_filled(
+        Rect::from_center_size(sun, vec2(tile * 8.0, tile * 8.0)),
+        0,
+        Color32::from_rgb(237, 188, 116),
+    );
+    p.rect_filled(
+        Rect::from_center_size(sun, vec2(tile * 10.0, tile * 4.0)),
+        0,
+        Color32::from_rgb(250, 220, 158),
+    );
+    p.rect_filled(
+        Rect::from_center_size(sun, vec2(tile * 4.0, tile * 10.0)),
+        0,
+        Color32::from_rgb(250, 220, 158),
+    );
+    let layers = [
+        Color32::from_rgb(101, 107, 92),
+        Color32::from_rgb(76, 82, 65),
+        Color32::from_rgb(49, 58, 48),
+        Color32::from_rgb(37, 43, 39),
+    ];
+    for (layer, color) in layers.into_iter().enumerate() {
+        let step = tile * 2.0;
+        let columns = (r.width() / step).ceil() as usize;
+        let baseline = r.height() * (0.53 + layer as f32 * 0.105);
         for x in 0..columns {
-            let segment=x/8;
-            let frac=(x%8) as f32/8.0;
-            let hash=|n:usize| {
-                let mut h=seed.wrapping_add((layer as u32+1).wrapping_mul(0x9E37_79B9))
+            let segment = x / 8;
+            let frac = (x % 8) as f32 / 8.0;
+            let hash = |n: usize| {
+                let mut h = seed
+                    .wrapping_add((layer as u32 + 1).wrapping_mul(0x9E37_79B9))
                     .wrapping_add((n as u32).wrapping_mul(0x85EB_CA6B));
-                h^=h>>16;h=h.wrapping_mul(0x7FEB_352D);h^=h>>15;
-                (h as f32/u32::MAX as f32-0.5)*r.height()*0.085
+                h ^= h >> 16;
+                h = h.wrapping_mul(0x7FEB_352D);
+                h ^= h >> 15;
+                (h as f32 / u32::MAX as f32 - 0.5) * r.height() * 0.085
             };
-            let mut height=baseline+hash(segment)*(1.0-frac)+hash(segment+1)*frac;
-            if kind==WorldType::Ridged { height-=height.rem_euclid(tile*3.0)*0.28; }
-            if kind==WorldType::Superflat { height=baseline; }
-            height=(height/tile).round()*tile;
-            let left=r.left()+x as f32*step;
-            let y=(r.top()+height).clamp(r.top()+r.height()*0.34,r.bottom());
-            p.rect_filled(Rect::from_min_max(pos2(left,y),pos2((left+step).min(r.right()),r.bottom())),0,color);
+            let mut height = baseline + hash(segment) * (1.0 - frac) + hash(segment + 1) * frac;
+            if kind == WorldType::Ridged {
+                height -= height.rem_euclid(tile * 3.0) * 0.28;
+            }
+            if kind == WorldType::Superflat {
+                height = baseline;
+            }
+            height = (height / tile).round() * tile;
+            let left = r.left() + x as f32 * step;
+            let y = (r.top() + height).clamp(r.top() + r.height() * 0.34, r.bottom());
+            p.rect_filled(
+                Rect::from_min_max(
+                    pos2(left, y),
+                    pos2((left + step).min(r.right()), r.bottom()),
+                ),
+                0,
+                color,
+            );
             // A few blocky treetops anchor the near ridge in voxel terrain.
-            if layer==3 && x%13==5 && y<r.bottom()-tile*7.0 {
-                let trunk=Rect::from_min_size(pos2(left+tile*0.8,y-tile*2.0),vec2(tile*0.6,tile*2.0));
-                p.rect_filled(trunk,0,Color32::from_rgb(93,66,49));
-                p.rect_filled(Rect::from_min_max(pos2(left-tile,y-tile*5.0),pos2(left+tile*3.0,y-tile)),0,Color32::from_rgb(89,105,67));
+            if layer == 3 && x % 13 == 5 && y < r.bottom() - tile * 7.0 {
+                let trunk = Rect::from_min_size(
+                    pos2(left + tile * 0.8, y - tile * 2.0),
+                    vec2(tile * 0.6, tile * 2.0),
+                );
+                p.rect_filled(trunk, 0, Color32::from_rgb(93, 66, 49));
+                p.rect_filled(
+                    Rect::from_min_max(
+                        pos2(left - tile, y - tile * 5.0),
+                        pos2(left + tile * 3.0, y - tile),
+                    ),
+                    0,
+                    Color32::from_rgb(89, 105, 67),
+                );
             }
         }
     }
@@ -378,16 +472,12 @@ pub(super) fn journal(
     expedition: Option<&crate::world::expedition::Expedition>,
     adventure: &crate::world::adventure::View,
 ) {
-    heading(
-        ui,
-        "Field journal",
-        "Objectives, equipment and supplies.",
-    );
+    heading(ui, "Field journal", "Objectives, equipment and supplies.");
     let Some(e) = expedition else {
         ui.label("No world loaded.");
         return;
     };
-    super::relics::expedition_goal(ui,adventure);
+    super::relics::expedition_goal(ui, adventure);
     caption(ui, "WORKSHOP PREPARATION");
     ui.label(RichText::new(e.objective()).size(17.0).color(MINT));
     ui.add_space(12.0);
@@ -547,6 +637,19 @@ pub(super) fn pause(
                                 egui::Slider::new(&mut owner.fov_degrees, 50.0..=110.0)
                                     .text("Field of view"),
                             );
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Slider::new(&mut owner.ui_scale, 0.75..=1.75)
+                                        .step_by(0.05)
+                                        .text("UI scale"),
+                                );
+                                if ui.small_button("Reset").clicked() {
+                                    owner.ui_scale = 1.0;
+                                }
+                            });
+                            ui.small(
+                                "Scales menus, HUD text and the inventory without changing the world.",
+                            );
                             if let Some(status) = &owner.region_status {
                                 ui.collapsing("Storage diagnostics", |ui| {
                                     ui.small(status);
@@ -623,12 +726,13 @@ pub(super) fn journey_hud(
     // Objectives belong in the journal. Only new interaction feedback needs
     // screen space during play.
     if e.message_seconds > 0.0 && !e.message.is_empty() {
-        let width = (ctx.content_rect().width()-56.0).clamp(100.0,480.0);
-        let left = ctx.content_rect().center().x-width*0.5-10.0;
-        let top = reserved.filter(|r| r.right()+8.0>left)
-            .map_or(ctx.content_rect().top()+20.0, |r| r.bottom()+8.0);
+        let width = (ctx.content_rect().width() - 56.0).clamp(100.0, 480.0);
+        let left = ctx.content_rect().center().x - width * 0.5 - 10.0;
+        let top = reserved
+            .filter(|r| r.right() + 8.0 > left)
+            .map_or(ctx.content_rect().top() + 76.0, |r| r.bottom() + 8.0);
         let notice = egui::Area::new("journey_notification".into())
-            .anchor(Align2::CENTER_TOP, [0.0, top-ctx.content_rect().top()])
+            .anchor(Align2::CENTER_TOP, [0.0, top - ctx.content_rect().top()])
             .interactable(false)
             .show(ctx, |ui| {
                 presentation::hud_frame().show(ui, |ui| {

@@ -14,23 +14,27 @@ use winit::{
 
 mod audio;
 mod creative;
-mod tool_effects;
 mod egui_ui;
+mod fast_hash;
 mod fluid;
 mod material;
+mod material_studio;
 mod mesh;
 mod perf;
 mod player;
+mod preferences;
+mod reference_environment;
 mod render;
+mod sandbox_review;
 mod shader_sources;
 mod simulation;
-mod preferences;
+mod tool_effects;
 mod torch_review;
-mod reference_environment;
-mod material_studio;
-mod water_review;
-mod sandbox_review;
+#[cfg(test)]
+mod shader_contract_tests;
 mod wand_review;
+mod wand_style;
+mod water_review;
 mod world;
 
 use creative::CreativeState;
@@ -38,7 +42,6 @@ use egui_ui::{
     EguiUi, LoadingUiState, PhysicsUiState, RenderUiState, TimeUiState, UiAction, UiMode,
 };
 use fluid::VoxelScalePreset;
-use simulation::WorldSimulation;
 use mesh::build_outline_vertices;
 use perf::{
     CpuFrameStats, FrameCounters, PerfSample, PerfSnapshot, PerfTracker, snapshot_from_samples,
@@ -49,6 +52,7 @@ use render::{
     RenderDebugView, TorchLight, build_draw_list, render_distance_settings,
     set_render_distance_settings,
 };
+use simulation::WorldSimulation;
 use world::{
     BlockId, DEFAULT_DAY_LENGTH_SECONDS, DEFAULT_START_TIME_OF_DAY, DayNightCycle, WeatherPreset,
     WeatherRuntimeState, World, WorldType, chunk_coord_from_world_block,
@@ -107,6 +111,8 @@ struct BenchmarkConfig {
     review_start_seconds: f32,
     review_time_of_day: Option<f32>,
     review_time_end: Option<f32>,
+    /// Calendar day for reviews of seasons and sky events.
+    review_day: Option<u32>,
     terrain_camera: Option<[f32; 5]>,
     terrain_sweep: bool,
     horizon_sweep: bool,
@@ -159,6 +165,7 @@ impl Default for BenchmarkConfig {
             review_start_seconds: 0.0,
             review_time_of_day: None,
             review_time_end: None,
+            review_day: None,
             terrain_camera: None,
             terrain_sweep: false,
             horizon_sweep: false,
@@ -249,9 +256,13 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             continue;
         }
         if arg == "--benchmark-reference-review" {
-            config.enabled=true; config.reference_review=true;
-            config.world_type=WorldType::Superflat; config.view_distance_chunks=Some(8);
-            config.warmup_seconds=1.0; config.duration_seconds=66.0; continue;
+            config.enabled = true;
+            config.reference_review = true;
+            config.world_type = WorldType::Superflat;
+            config.view_distance_chunks = Some(8);
+            config.warmup_seconds = 1.0;
+            config.duration_seconds = 66.0;
+            continue;
         }
         if arg == "--benchmark-torch-review" {
             config.enabled = true;
@@ -263,9 +274,14 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             continue;
         }
         if arg == "--benchmark-sandbox-review" {
-            config.enabled=true;config.sandbox_review=true;config.profile_physics=true;
-            config.world_type=WorldType::Superflat;config.view_distance_chunks=Some(4);
-            config.warmup_seconds=3.0;config.duration_seconds=65.0;continue;
+            config.enabled = true;
+            config.sandbox_review = true;
+            config.profile_physics = true;
+            config.world_type = WorldType::Superflat;
+            config.view_distance_chunks = Some(4);
+            config.warmup_seconds = 3.0;
+            config.duration_seconds = 65.0;
+            continue;
         }
         if arg == "--benchmark-water-review" {
             config.enabled = true;
@@ -276,9 +292,21 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             config.duration_seconds = 24.0;
             continue;
         }
-        if let Some(value)=arg.strip_prefix("--benchmark-cpu-mib="){config.cpu_mib=value.parse().ok();config.enabled=true;continue;}
-        if let Some(value)=arg.strip_prefix("--benchmark-gpu-mib="){config.gpu_mib=value.parse().ok();config.enabled=true;continue;}
-        if arg=="--benchmark-physics" {config.profile_physics=true;config.enabled=true;continue;}
+        if let Some(value) = arg.strip_prefix("--benchmark-cpu-mib=") {
+            config.cpu_mib = value.parse().ok();
+            config.enabled = true;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--benchmark-gpu-mib=") {
+            config.gpu_mib = value.parse().ok();
+            config.enabled = true;
+            continue;
+        }
+        if arg == "--benchmark-physics" {
+            config.profile_physics = true;
+            config.enabled = true;
+            continue;
+        }
         if arg == "--benchmark-horizon-sweep" {
             config.enabled = true;
             config.horizon_sweep = true;
@@ -294,19 +322,32 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             continue;
         }
         if let Some(value) = arg.strip_prefix("--benchmark-terrain-camera=") {
-            let values: Vec<f32> = value.split(',').filter_map(|v| v.parse::<f32>().ok()).collect();
+            let values: Vec<f32> = value
+                .split(',')
+                .filter_map(|v| v.parse::<f32>().ok())
+                .collect();
             if values.len() == 5 && values.iter().all(|v| v.is_finite()) {
-                config.terrain_camera = Some([values[0], values[1], values[2], values[3], values[4]]);
+                config.terrain_camera =
+                    Some([values[0], values[1], values[2], values[3], values[4]]);
             }
             continue;
         }
         if let Some(value) = arg.strip_prefix("--benchmark-review-time-end=") {
-            config.review_time_end = value.parse::<f32>().ok()
-                .filter(|time| time.is_finite()).map(|time| time.rem_euclid(1.0));
+            config.review_time_end = value
+                .parse::<f32>()
+                .ok()
+                .filter(|time| time.is_finite())
+                .map(|time| time.rem_euclid(1.0));
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--benchmark-review-day=") {
+            config.review_day = value.parse::<u32>().ok();
             continue;
         }
         if let Some(value) = arg.strip_prefix("--benchmark-review-time=") {
-            config.review_time_of_day = value.parse::<f32>().ok()
+            config.review_time_of_day = value
+                .parse::<f32>()
+                .ok()
                 .filter(|time| time.is_finite())
                 .map(|time| time.rem_euclid(1.0));
             continue;
@@ -424,9 +465,26 @@ fn parse_benchmark_config() -> BenchmarkConfig {
     config
 }
 
+/// Height in metres of the water surface above a submerged eye (eye in voxel units).
+fn water_surface_above_m(world: &World, eye: Vec3) -> f32 {
+    let mut cell = eye.floor().as_ivec3();
+    for _ in 0..256 {
+        let above = cell + glam::IVec3::Y;
+        if world.water_volume(above) == 0 {
+            break;
+        }
+        cell = above;
+    }
+    let fill = (world.water_volume(cell) as f32 / 8.0).clamp(0.0, 1.0);
+    (cell.y as f32 + fill) * world.voxel_scale.meters()
+}
+
 fn benchmark_motion_active(benchmark: Option<&BenchmarkState>) -> bool {
     benchmark.is_some_and(|state| {
-        state.auto_started && (state.config.torch_review || !matches!(state.config.motion, BenchmarkMotionMode::Static))
+        state.auto_started
+            && (state.config.torch_review
+                || state.config.terrain_camera.is_some()
+                || !matches!(state.config.motion, BenchmarkMotionMode::Static))
     })
 }
 
@@ -489,20 +547,43 @@ fn apply_benchmark_camera_motion(
     terrain: world::WorldSampleConfig,
 ) {
     if state.config.torch_review {
-        torch_review::motion_camera(player, terrain.voxel_meters(), state.motion_started_at.elapsed().as_secs_f32());
+        torch_review::motion_camera(
+            player,
+            terrain.voxel_meters(),
+            state.motion_started_at.elapsed().as_secs_f32(),
+        );
         return;
     }
     if let Some([x, z, clearance, yaw, pitch]) = state.config.terrain_camera {
         let scale = terrain.voxel_scale.meters();
-        let ground = world::terrain_height(&terrain, (x / scale).floor() as i32, (z / scale).floor() as i32) as f32;
-        player.pos = Vec3::new(x / scale, ground + clearance / scale, z / scale);
+        let ground = world::terrain_height(
+            &terrain,
+            (x / scale).floor() as i32,
+            (z / scale).floor() as i32,
+        ) as f32;
+        // A clearance at or below -500 is an absolute eye height in metres,
+        // -(clearance + 500), for rooms whose floor is not under the local surface.
+        let eye_y = if clearance <= -500.0 {
+            -(clearance + 500.0) / scale
+        } else {
+            ground + clearance / scale
+        };
+        player.pos = Vec3::new(x / scale, eye_y, z / scale);
         player.yaw = yaw;
         player.pitch = pitch;
+        // Physics does not step in benchmark reviews, so derive the submerged flag directly.
+        player.underwater =
+            world::sample_block(&terrain, player.eye(terrain.voxel_scale).floor().as_ivec3())
+                == BlockId::Water;
         if state.config.horizon_sweep {
             let t = (state.motion_started_at.elapsed().as_secs_f32() - 20.0).max(0.0);
             player.pos.x += t * 12.0 / scale;
             player.pos.z += (t * 0.1).sin() * 32.0 / scale;
-            let ground = world::terrain_height(&terrain, player.pos.x.floor() as i32, player.pos.z.floor() as i32) as f32;
+            let ground = world::terrain_height(
+                &terrain,
+                player.pos.x.floor() as i32,
+                player.pos.z.floor() as i32,
+            ) as f32;
             player.pos.y = ground + clearance / scale;
             player.yaw += t * std::f32::consts::TAU / 60.0;
         } else if state.config.terrain_sweep {
@@ -514,7 +595,11 @@ fn apply_benchmark_camera_motion(
             // every direction; exterior review retains its wider travel path.
             player.pos.x += (if clearance < 0.0 { 3.0 } else { 24.0 }) * wave / scale;
             player.pos.z += (if clearance < 0.0 { 3.0 } else { 8.0 }) * wave / scale;
-            player.yaw += if clearance < 0.0 { t * std::f32::consts::TAU / 24.0 } else { 0.65 * wave };
+            player.yaw += if clearance < 0.0 {
+                t * std::f32::consts::TAU / 24.0
+            } else {
+                0.65 * wave
+            };
             player.pitch += 0.10 * wave;
         }
         player.vel = Vec3::ZERO;
@@ -529,7 +614,8 @@ fn apply_benchmark_camera_motion(
     }
 
     let inv_scale = terrain.voxel_scale.meters().recip().max(1e-6);
-    let elapsed = state.motion_started_at.elapsed().as_secs_f32() + state.config.review_start_seconds
+    let elapsed = state.motion_started_at.elapsed().as_secs_f32()
+        + state.config.review_start_seconds
         + if state.config.motion == BenchmarkMotionMode::CloudReviewFar {
             90.0
         } else {
@@ -737,9 +823,9 @@ fn reset_gameplay_input(
     *pending_tool_action = None;
 }
 
-const TORCH_LIGHT_RADIUS: f32 = 13.5;
+const TORCH_LIGHT_RADIUS: f32 = 18.0;
 const TORCH_LIGHT_COLOR: [f32; 3] = [1.00, 0.48, 0.20];
-const TORCH_LIGHT_STRENGTH: f32 = 2.10;
+const TORCH_LIGHT_STRENGTH: f32 = 4.40;
 
 fn held_torch_light(
     player: &Player,
@@ -760,9 +846,39 @@ fn held_torch_light(
             + (forward * 0.42 + right * 0.18 + Vec3::new(0.0, -0.28, 0.0)) * inv_world_scale)
             * world_scale,
         radius: TORCH_LIGHT_RADIUS,
-        color: if lumen_lantern {[0.30,0.90,0.74]} else {TORCH_LIGHT_COLOR},
+        color: if lumen_lantern {
+            [0.30, 0.90, 0.74]
+        } else {
+            TORCH_LIGHT_COLOR
+        },
         strength: TORCH_LIGHT_STRENGTH,
     })
+}
+
+fn push_cast_light(
+    world: &world::World,
+    player: &Player,
+    forward: Vec3,
+    world_scale: f32,
+    lights: &mut Vec<TorchLight>,
+) {
+    if let Some((position, radius, color, strength)) = world
+        .adventure
+        .cast_light(player.eye(world.voxel_scale) * world_scale, forward)
+    {
+        if lights.len() >= MAX_TORCH_LIGHTS {
+            lights.pop();
+        }
+        lights.insert(
+            0,
+            TorchLight {
+                position,
+                radius,
+                color,
+                strength,
+            },
+        );
+    }
 }
 
 fn collect_nearby_torches(
@@ -775,20 +891,24 @@ fn collect_nearby_torches(
     // Match visible terrain range, with a bounded light-selection budget. Iterate
     // indexed sources instead of probing a large cube of empty chunk coordinates.
     let max_distance = (render::render_distance_settings().view_distance_chunks as f32
-        * world::CHUNK_SIZE as f32 * world_scale).clamp(64.0, 192.0);
+        * world::CHUNK_SIZE as f32
+        * world_scale)
+        .clamp(64.0, 192.0);
     let max_radius_blocks = max_distance / world_scale.max(1e-6);
     let max_radius_sq = max_radius_blocks * max_radius_blocks;
     let chunk_radius =
         ((max_radius_blocks.ceil() as i32) + world::CHUNK_SIZE - 1) / world::CHUNK_SIZE;
     let mut torches = Vec::new();
     for (coord, chunk) in snapshot.chunks.iter() {
-                if (*coord - center_chunk).abs().max_element() > chunk_radius { continue; }
-                for &pos in &chunk.torches {
-                    let dist_sq = (pos.as_vec3() + Vec3::splat(0.5) - player_pos).length_squared();
-                    if dist_sq <= max_radius_sq {
-                        torches.push((dist_sq, pos));
-                    }
-                }
+        if (*coord - center_chunk).abs().max_element() > chunk_radius {
+            continue;
+        }
+        for &pos in &chunk.torches {
+            let dist_sq = (pos.as_vec3() + Vec3::splat(0.5) - player_pos).length_squared();
+            if dist_sq <= max_radius_sq {
+                torches.push((dist_sq, pos));
+            }
+        }
     }
     torches.sort_by(|a, b| {
         a.0.total_cmp(&b.0)
@@ -796,8 +916,10 @@ fn collect_nearby_torches(
     });
     // Fade out at the budget boundary as well as the distance boundary. Sources
     // exchanging the final slot therefore enter with zero intensity.
-    let fade_end = torches.get(MAX_TORCH_LIGHTS)
-        .map_or(max_distance, |t| t.0.sqrt() * world_scale).min(max_distance);
+    let fade_end = torches
+        .get(MAX_TORCH_LIGHTS)
+        .map_or(max_distance, |t| t.0.sqrt() * world_scale)
+        .min(max_distance);
     torches.truncate(MAX_TORCH_LIGHTS);
     torches
         .into_iter()
@@ -805,10 +927,10 @@ fn collect_nearby_torches(
             let block = snapshot.get(pos);
             let light_offset = match block {
                 BlockId::Torch => Vec3::new(0.50, 0.82, 0.50),
-                BlockId::TorchWallNorth => Vec3::new(0.50, 0.84, 0.34),
-                BlockId::TorchWallSouth => Vec3::new(0.50, 0.84, 0.66),
-                BlockId::TorchWallWest => Vec3::new(0.34, 0.84, 0.50),
-                BlockId::TorchWallEast => Vec3::new(0.66, 0.84, 0.50),
+                BlockId::TorchWallNorth => Vec3::new(0.50, 0.74, 0.56),
+                BlockId::TorchWallSouth => Vec3::new(0.50, 0.74, 0.44),
+                BlockId::TorchWallWest => Vec3::new(0.56, 0.74, 0.50),
+                BlockId::TorchWallEast => Vec3::new(0.44, 0.74, 0.50),
                 _ => Vec3::new(0.50, 0.82, 0.50),
             };
             TorchLight {
@@ -818,12 +940,75 @@ fn collect_nearby_torches(
                 strength: {
                     let distance = distance_sq.sqrt() * world_scale;
                     let fade_start = (fade_end * 0.8).max(fade_end - 24.0);
-                    let t = ((fade_end - distance) / (fade_end - fade_start).max(0.001)).clamp(0.0, 1.0);
+                    let t = ((fade_end - distance) / (fade_end - fade_start).max(0.001))
+                        .clamp(0.0, 1.0);
                     TORCH_LIGHT_STRENGTH * t * t * (3.0 - 2.0 * t)
                 },
             }
         })
         .collect()
+}
+
+/// Fire used to be emissive but did not illuminate the cave wall beside it.
+/// Burn cells maintain a tiny bounded index in the sandbox, so this costs at
+/// most 64 validation probes per frame instead of a world scan.
+fn append_fire_lights(
+    world: &World,
+    player_pos: Vec3,
+    world_scale: f32,
+    lights: &mut Vec<TorchLight>,
+) {
+    let eye = player_pos * world_scale;
+    let mut fires = Vec::with_capacity(world.sandbox.fire_lights.len());
+    for &cell in &world.sandbox.fire_lights {
+        if world.get(cell) != BlockId::Fire {
+            continue;
+        }
+        let position = (cell.as_vec3() + Vec3::new(0.5, 0.55, 0.5)) * world_scale;
+        let distance_sq = (position - eye).length_squared();
+        if distance_sq < 26.0 * 26.0 {
+            fires.push((distance_sq, position));
+        }
+    }
+    fires.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (distance_sq, position) in fires {
+        if lights.len() >= MAX_TORCH_LIGHTS {
+            break;
+        }
+        let fade = (1.0 - distance_sq.sqrt() / 26.0).clamp(0.0, 1.0);
+        let flicker = 0.88 + 0.12 * (position.x * 3.7 + position.z * 2.3).sin();
+        lights.insert(
+            0,
+            TorchLight {
+                position,
+                radius: 7.0,
+                color: [1.0, 0.43, 0.12],
+                strength: 2.2 * fade * fade * flicker,
+            },
+        );
+    }
+}
+
+fn rescue_from_void(world: &mut World, player: &mut Player, last_safe: glam::Vec3) -> bool {
+    let min_y = world.sample_config().min_world_y() as f32;
+    if !player.pos.is_finite() || player.pos.y >= min_y + 2.0 {
+        return false;
+    }
+    let mut target = last_safe;
+    if !target.is_finite() || target.y <= min_y + 8.0 {
+        // suggested_spawn is in block units, like player.pos.
+        target = world.suggested_spawn();
+    }
+    player.pos = target;
+    player.precise_pos = target.as_dvec3();
+    player.vel = Vec3::ZERO;
+    player.on_ground = false;
+    player.jump_was_down = false;
+    player.jump_tap_timer = 0.0;
+    world
+        .expedition
+        .say("You fell out of the world. Returned to solid ground.");
+    true
 }
 
 fn resolve_placement_block(selected: BlockId, support_normal: glam::IVec3) -> Option<BlockId> {
@@ -881,8 +1066,13 @@ fn start_world(
     grabbed: &mut bool,
     focused: bool,
     last: &mut Instant,
+    last_safe: &mut glam::Vec3,
 ) {
+    // A new world invalidates any grounded position from the previous one.
+    *last_safe = glam::Vec3::splat(f32::NAN);
     let mut new_world = World::with_seed(selected_world, selected_voxel_scale, selected_seed);
+    // A fresh adventure starts with only the starter spells found.
+    new_world.adventure.begin_journey();
     *player = Player::new();
     day_night.reset(DEFAULT_START_TIME_OF_DAY);
     day_night.set_day_length_seconds(DEFAULT_DAY_LENGTH_SECONDS);
@@ -907,6 +1097,11 @@ fn start_world(
 
     dirty_blocks.clear();
     dirty_chunks.clear();
+    if new_world.adventure.wand > 0 {
+        new_world.expedition.say(
+            "Lumen Twig in hand. Hold R to cast, T cycles spells, and E → Gear arranges the deck.",
+        );
+    }
     *world = Some(new_world);
     *mode = AppMode::Playing;
     capture_mouse(window, grabbed, false, focused);
@@ -1064,15 +1259,27 @@ fn main() -> Result<()> {
     // Find reproducible visual-review locations without opening a window or
     // touching saves. Uses the same generator as streamed gameplay chunks.
     if std::env::args().any(|arg| arg == "--terrain-survey") {
-        let review_world = World::with_seed(benchmark_config.world_type, benchmark_config.voxel_scale, benchmark_config.seed);
+        let review_world = World::with_seed(
+            benchmark_config.world_type,
+            benchmark_config.voxel_scale,
+            benchmark_config.seed,
+        );
         let cfg = review_world.sample_config();
         let mut locations = std::collections::BTreeMap::new();
         for z in (-3072..=3072).step_by(192) {
             for x in (-3072..=3072).step_by(192) {
-                let s = world::landscape::sample(&cfg, cfg.blocks_for_height(x as f32), cfg.blocks_for_height(z as f32));
+                let s = world::landscape::sample(
+                    &cfg,
+                    cfg.blocks_for_height(x as f32),
+                    cfg.blocks_for_height(z as f32),
+                );
                 let distance = x * x + z * z;
-                let entry = locations.entry(s.biome.label()).or_insert((i32::MAX, x, z, s.height));
-                if distance < entry.0 { *entry = (distance, x, z, s.height); }
+                let entry = locations
+                    .entry(s.biome.label())
+                    .or_insert((i32::MAX, x, z, s.height));
+                if distance < entry.0 {
+                    *entry = (distance, x, z, s.height);
+                }
             }
         }
         for (biome, (_, x, z, height)) in locations {
@@ -1081,10 +1288,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let mut preferences = preferences::PreferenceStore::new(!benchmark_config.enabled);
-    if !benchmark_config.enabled {preferences.loaded.apply_globals();}
+    if !benchmark_config.enabled {
+        preferences.loaded.apply_globals();
+    }
     let mut preferences_render_applied = false;
-    let mut windowed_size = (preferences.loaded.width,preferences.loaded.height);
-    let mut combat_audio=audio::Audio::new();
+    let mut windowed_size = (preferences.loaded.width, preferences.loaded.height);
+    let mut combat_audio = audio::Audio::new();
     let event_loop = EventLoop::new()?;
     let mut window: Option<Arc<Window>> = None;
 
@@ -1111,6 +1320,9 @@ fn main() -> Result<()> {
 
     let mut world: Option<World> = None;
     let mut player = Player::new();
+    // Invalid until the player first stands on ground; the void rescue falls
+    // back to suggested_spawn rather than teleporting to world origin.
+    let mut last_safe_player_pos = glam::Vec3::splat(f32::NAN);
     let mut day_night = DayNightCycle::new(DEFAULT_START_TIME_OF_DAY, DEFAULT_DAY_LENGTH_SECONDS);
     let mut cloud_weather = WeatherRuntimeState::new(selected_seed);
     let mut freeze_time = false;
@@ -1133,6 +1345,13 @@ fn main() -> Result<()> {
     let mut last = Instant::now();
     let mut simulation_clock = simulation::SimulationClock::default();
     let mut sky_time = 0.0f32;
+    // Eased 0..1 'inside a cosmos chamber', and the last sky event announced.
+    let mut cosmos_smooth = 0.0f32;
+    let mut last_sky_event: Option<world::mood::SkyEvent> = None;
+    let mut last_zone_key: Option<(u32, world::zones::Archetype)> = None;
+    let mut star_timer = 20.0f32;
+    let mut ambience_smooth = [0.0f32; 4];
+    let mut star_count = 0u32;
 
     let mut chunk_cache = ChunkCache::new(glam::IVec3::ZERO);
     chunk_cache.reset(glam::IVec3::ZERO);
@@ -1150,9 +1369,13 @@ fn main() -> Result<()> {
     let live_profile = std::env::var_os("VOXEL_LIVE_PROFILE").is_some();
     let mut last_live_profile = Instant::now();
     let mut benchmark_hitch_reports = 0u32;
-    let mut sandbox_review = benchmark_config.sandbox_review.then(sandbox_review::SandboxReview::default);
+    let mut sandbox_review = benchmark_config
+        .sandbox_review
+        .then(sandbox_review::SandboxReview::default);
     let mut wand_review = wand_review::Review::from_env(benchmark_config.enabled);
-    let mut water_review = benchmark_config.water_review.then(water_review::WaterReview::default);
+    let mut water_review = benchmark_config
+        .water_review
+        .then(water_review::WaterReview::default);
     let mut benchmark = benchmark_config.enabled.then(|| BenchmarkState {
         config: benchmark_config,
         auto_started: false,
@@ -1385,6 +1608,16 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 creative.close_panels(); creative.show_palette = open; input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(
+                                    window,
+                                    &mut grabbed,
+                                    focused,
+                                    &mode,
+                                    &creative,
+                                );
+                            }
+                            PhysicalKey::Code(KeyCode::KeyU) if fresh_press && !creative.show_palette => {
+                                let open = !creative.show_wand_atelier; creative.close_panels(); creative.show_wand_atelier = open; input.clear(); player.jump_tap_timer = 0.0;
                                 sync_creative_ui_cursor(
                                     window,
                                     &mut grabbed,
@@ -1775,6 +2008,7 @@ fn main() -> Result<()> {
                                         &mut grabbed,
                                         focused && !benchmark_config.enabled,
                                         &mut last,
+                                        &mut last_safe_player_pos,
                                     );
                                     release_mouse(window, &mut grabbed);
                                     if let (Some(review),Some(w))=(wand_review.as_mut(),world.as_mut()) {
@@ -1950,6 +2184,67 @@ fn main() -> Result<()> {
                                     }
                                 }
                             }
+                            if let Some(review) = benchmark.as_mut().filter(|b| b.auto_started
+                                && b.config.capture_frames
+                                && b.config.terrain_camera.is_some()
+                                && !b.config.horizon_sweep
+                                && matches!(b.config.motion, BenchmarkMotionMode::Static))
+                            {
+                                // Fixed-pose review: cosmos chambers, mazes, seasons, sky events.
+                                if let Some(t) = review.config.review_time_of_day {
+                                    day_night.set_time_of_day(t);
+                                    freeze_time = true;
+                                }
+                                if let Some(day) = review.config.review_day {
+                                    day_night.set_day_index(day);
+                                }
+                                if let (Some(w), Some(tier)) = (world.as_mut(), std::env::var("VOXEL_REVIEW_WAND").ok().and_then(|v| v.parse::<u32>().ok())) {
+                                    w.adventure.wand = tier.min(3);
+                                }
+                                // VOXEL_REVIEW_CRYSTAL=<metres ahead>: one crystal slab in front
+                                // of the fixed camera, for judging gem glints in a capture.
+                                static CRYSTAL_PLACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                if let (Some(w), Some(metres)) = (world.as_mut(), std::env::var("VOXEL_REVIEW_CRYSTAL").ok().and_then(|v| v.parse::<f32>().ok())) {
+                                    if !CRYSTAL_PLACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                        let scale = w.voxel_scale.meters();
+                                        let eye = player.eye(w.voxel_scale);
+                                        let fwd = player.flat_forward();
+                                        let side = glam::Vec3::new(-fwd.z, 0.0, fwd.x);
+                                        let centre = eye + fwd * (metres / scale);
+                                        let (half_w, below, above) = ((2.5 / scale) as i32, (2.0 / scale) as i32, (2.5 / scale) as i32);
+                                        let mut edits = Vec::new();
+                                        for u in -half_w..=half_w {
+                                            for dy in -below..=above {
+                                                for depth in 0..2 {
+                                                    let p = centre + side * u as f32 + fwd * depth as f32 + glam::Vec3::Y * dy as f32;
+                                                    edits.push((p.floor().as_ivec3(), BlockId::Crystal));
+                                                }
+                                            }
+                                        }
+                                        w.set_many(&edits);
+                                    }
+                                }
+                                if let Ok(spec) = std::env::var("VOXEL_REVIEW_STYLE") {
+                                    let n: Vec<u8> = spec.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                                    if n.len() == 6 {
+                                        wand_style::preview(wand_style::WandStyle { shaft: n[0], head: n[1], trail: n[2], grip: n[3], glow: n[4], runes: n[5] });
+                                    }
+                                }
+                                let missing = chunk_cache.visible.iter()
+                                    .filter(|key| !chunk_cache.gpu_meshes.contains_key(&key.coord))
+                                    .count();
+                                let elapsed = review.motion_started_at.elapsed().as_secs_f32();
+                                if review.last_capture_key == usize::MAX
+                                    && elapsed >= review.config.warmup_seconds + review.config.duration_seconds - 1.0
+                                    && chunk_cache.fully_expanded && missing == 0
+                                {
+                                    let root = std::env::var_os("VOXEL_CAPTURE_DIR").map(std::path::PathBuf::from)
+                                        .unwrap_or_else(|| "target/camera-review".into());
+                                    gpu.request_capture(root.join("camera.png"));
+                                    println!("[camera-review] captured camera_m={:?}", player.pos * world.as_ref().map_or(1.0, |w| w.voxel_scale.meters()));
+                                    review.last_capture_key = 0;
+                                }
+                            }
                             if let Some(review) = benchmark.as_mut().filter(|b| b.auto_started && b.config.torch_review) {
                                 let elapsed = review.motion_started_at.elapsed().as_secs_f32();
                                 let mode = torch_review::mode();
@@ -1959,7 +2254,8 @@ fn main() -> Result<()> {
                                     (elapsed / 12.0) as usize
                                 };
                                 torch_review::motion_camera(&mut player, selected_voxel_scale.meters(), elapsed);
-                                day_night.set_time_of_day(if mode == "survival" { 0.35 } else if phase == 1 || !mode.is_empty() { 0.0 } else { 0.5 });
+                                day_night.set_time_of_day(if mode == "survival" { 0.35 } else if mode == "factory" { 0.5 } else if phase == 1 || !mode.is_empty() { 0.0 } else { 0.5 });
+                                if mode == "factory" { egui_ui.show_hud = false; }
                                 freeze_time = true;
                                 if mode == "survival" {
                                     if let Some(w) = world.as_mut() {
@@ -2055,7 +2351,16 @@ fn main() -> Result<()> {
                             }
                             egui_ui.expedition = world.as_ref().map(|w|w.expedition.clone());
                             egui_ui.factory = world.as_ref().map(|w|world::factory::view(w,player.pos)).unwrap_or_default();
-                            egui_ui.adventure = world.as_ref().map(|w|w.adventure.view()).unwrap_or_default();
+                            egui_ui.adventure = world
+                                .as_ref()
+                                .map(|w| {
+                                    let origin = player.pos * w.voxel_scale.meters();
+                                    let mut view = w.adventure.view();
+                                    view.quest =
+                                        w.adventure.quest_marker(&w.sample_config(), origin);
+                                    view
+                                })
+                                .unwrap_or_default();
                             if let Some(w) = world.as_ref() {
                                 egui_ui.survival = w.inventory.clone();
                                 egui_ui.survival_eat_timer = w.inventory.eat_timer;
@@ -2152,18 +2457,48 @@ fn main() -> Result<()> {
                                                 let scale = w.voxel_scale.meters();
                                                 let origin = player.eye(w.voxel_scale);
                                                 let dir = player.forward_dir();
+                                                // A drag-out throw lands to the side of the
+                                                // aim ray, so the stack visibly leaves the
+                                                // hand instead of appearing under the feet.
+                                                let toss = (dir + player.right_dir() * 0.45).normalize_or_zero();
                                                 let mut pos = origin * scale;
                                                 for i in 1..=8 {
-                                                    let candidate = origin * scale + dir * (i as f32 * 0.2);
+                                                    let candidate = origin * scale + toss * (i as f32 * 0.2);
                                                     if !w.get((candidate / scale).floor().as_ivec3()).is_empty() { break; }
                                                     pos = candidate;
                                                 }
                                                 if std::env::var_os("VOXEL_TOOL_REVIEW").is_some() { eprintln!("[tool-review] dropped {:?} count={} at={:?}",stack.item,stack.count,pos); }
                                                 w.inventory.dropped.push(world::inventory::DroppedStack { pos, stack });
                                                 w.sync_from_inventory();
-                                                w.expedition.say("Stack dropped. Aim nearby and press F to retrieve.");
+                                                w.expedition.say("Stack thrown aside. Aim nearby and press F to retrieve.");
                                             }
                                         } else { w.expedition.say("Retrieve some dropped stacks first."); }
+                                    }
+                                }
+                                UiAction::GiveItem(item,count) => {
+                                    if let Some(w) = world.as_mut() {
+                                        let limit = w.inventory.stack_limit(item);
+                                        let stack = world::inventory::ItemStack::new(
+                                            item,
+                                            count.clamp(1, limit.max(1)),
+                                        );
+                                        let (inserted, remaining) = w.inventory.try_insert_pack_first(stack);
+                                        w.sync_from_inventory();
+                                        if let world::inventory::Item::Weapon(tier) = item {
+                                            if inserted > 0 {
+                                                let _ = w.adventure.select_weapon(tier as u32);
+                                            }
+                                        }
+                                        if inserted > 0 {
+                                            w.expedition.say(format!(
+                                                "Creative catalogue: {} ×{} added to your pack.",
+                                                item.name(),
+                                                inserted
+                                            ));
+                                        }
+                                        if remaining > 0 {
+                                            w.expedition.say("Pack full. Clear a slot and take the item again.");
+                                        }
                                     }
                                 }
                                 UiAction::Factory(action) => {
@@ -2216,6 +2551,7 @@ fn main() -> Result<()> {
                                         &mut grabbed,
                                         focused,
                                         &mut last,
+                                        &mut last_safe_player_pos,
                                     );
                                     if reference {
                                         if let Some(w)=world.as_mut() {
@@ -2374,6 +2710,13 @@ fn main() -> Result<()> {
                                         }
                                     }
                                 }
+                                if player.on_ground
+                                    && player.pos.y
+                                        > world.sample_config().min_world_y() as f32 + 8.0
+                                {
+                                    last_safe_player_pos = player.pos;
+                                }
+                                rescue_from_void(world, &mut player, last_safe_player_pos);
                                 if let Some(review)=wand_review.as_mut() {
                                     review.input(world,&mut player,&mut creative,&mut active_input,&mut dirty_blocks,&mut dirty_chunks);
                                 }
@@ -2474,7 +2817,18 @@ fn main() -> Result<()> {
                                             break_edit=false;place_edit=false;
                                         } else if world::adventure::reliquaries::interact(world,&player) {
                                             break_edit=false;place_edit=false;
-                                        } else if let Some((cell,_))=hit {
+                                        } else {
+                                            let outcome = world::undercrown::interact(world, &player);
+                                            if outcome.used {
+                                                for &cell in &outcome.changed {
+                                                    dirty_blocks.insert(cell);
+                                                    mark_chunk_and_neighbors_dirty(&mut dirty_chunks, cell);
+                                                }
+                                                if let Some(message) = outcome.message {
+                                                    world.expedition.say(message);
+                                                }
+                                                break_edit=false;place_edit=false;
+                                            } else if let Some((cell,_))=hit {
                                             if (cell.as_vec3()-eye).length()*world.voxel_scale.meters()<=6.0 {
                                                 let target = world.get(cell);
                                                 world::expedition::interact(world,cell,player.pos,&mut dirty_blocks,&mut dirty_chunks);
@@ -2493,6 +2847,7 @@ fn main() -> Result<()> {
                                             } else {
                                                 world.expedition.say("Move within 6 metres to use or collect this.");
                                             }
+                                        }
                                         }
                                     }
                                     input.interact=false;
@@ -2677,11 +3032,12 @@ fn main() -> Result<()> {
                                     if creative.pending_cells()==0 {
                                         if let Some((point,radius))=world.adventure.take_terrain_blast() {
                                             let cells=creative::spell_blast_targets(world.voxel_scale.meters(),point,radius);
-                                            creative.queue_blast(world,cells,None);
+                                            creative.queue_spell_blast(world,cells);
                                         }
                                     }
                                     let edit_started=Instant::now();
                                     let explosive_edit=creative.pending_explosive();
+                                    let spell_blast=creative.pending_spell_blast();
                                     let mut emitted_tool_burst = false;
                                     let cfg=world.sample_config();
                                     let (body_min,body_max)=world::player_aabb(player.pos,world.voxel_scale,player.scale,player.crouch_t);
@@ -2701,7 +3057,8 @@ fn main() -> Result<()> {
                                                 if world.get(cell) == BlockId::Air {
                                                     continue;
                                                 }
-                                                if explosive_edit {world::expedition::blast_harvest(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
+                                                if spell_blast {world::expedition::spell_blast(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
+                                                else if explosive_edit {world::expedition::blast_harvest(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
                                                 else {world::expedition::harvest(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
                                                 dirty_blocks.insert(cell);
                                                 mark_chunk_and_neighbors_dirty(
@@ -2773,7 +3130,7 @@ fn main() -> Result<()> {
                                             emitted_tool_burst = true;
                                         }
                                                                         }
-                                    if explosive_edit {world.sync_from_inventory();}
+                                    if explosive_edit && !spell_blast {world.sync_from_inventory();}
                                 }
                                 if let Some(review)=sandbox_review.as_ref(){fluid_sim.set_enabled(review.running());}
                                 fluid_sim.update(
@@ -2862,7 +3219,12 @@ fn main() -> Result<()> {
                                     .max(640.0);
                                 let far_plane_world = (far_plane_voxels * world_scale).max(render::HORIZON_FAR_PLANE);
                                 let render_eye = eye * world_scale;
-                                gpu.update_horizon(world, render_eye);
+                                let backdrop_coverage = chunk_cache.backdrop_coverage_meters(
+                                    render_eye,
+                                    render_settings.view_distance_chunks,
+                                    world_scale,
+                                );
+                                gpu.update_horizon(world, render_eye, backdrop_coverage);
                                 let cull_view = Mat4::look_to_rh(eye, forward, Vec3::Y);
                                 let proj = Mat4::perspective_rh(
                                     egui_ui.fov_degrees.to_radians(),
@@ -2885,6 +3247,7 @@ fn main() -> Result<()> {
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, player.pos, world_scale);
+                                append_fire_lights(world, player.pos, world_scale, &mut nearby_torches);
                                 for blast in world.adventure.blasts.iter().filter(|b| b.age<0.28).take(4) {
                                     if nearby_torches.len()>=MAX_TORCH_LIGHTS {nearby_torches.pop();}
                                     nearby_torches.insert(0,TorchLight {
@@ -2907,8 +3270,22 @@ fn main() -> Result<()> {
                                         },
                                     );
                                 }
+                                if let Some((pos, color, strength)) = mesh::models::wand_tip_light(world, &player, world_scale) {
+                                    if nearby_torches.len() >= MAX_TORCH_LIGHTS {
+                                        nearby_torches.pop();
+                                    }
+                                    nearby_torches.insert(0, TorchLight { position: pos, radius: 6.5, color, strength });
+                                }
                                 cpu_stats.torch_ms =
                                     torch_start.elapsed().as_secs_f32() * 1000.0;
+                                push_cast_light(
+                                    world,
+                                    &player,
+                                    forward,
+                                    world_scale,
+                                    &mut nearby_torches,
+                                );
+
                                 nearby_torch_count = nearby_torches.len();
 
                                 let weather_start = Instant::now();
@@ -2933,8 +3310,71 @@ fn main() -> Result<()> {
                                 cpu_stats.weather_ms =
                                     weather_start.elapsed().as_secs_f32() * 1000.0;
                                 let uniform_start = Instant::now();
+                                let eye_m = (player.precise_eye(world.voxel_scale) * world_scale as f64).as_vec3();
+                                let cosmos_target = world::cosmos_at(&world.sample_config(), eye_m);
+                                cosmos_smooth += (cosmos_target - cosmos_smooth)
+                                    * (1.0 - (-gameplay_dt.max(0.0) * 3.5).exp());
+                                let mut scene_lighting = day_night.lighting();
+                                scene_lighting.mood[0] = if cosmos_smooth > 0.002 { cosmos_smooth } else { 0.0 };
+                                // Living air and the sky-event grade only exist above ground.
+                                let ground_m = world.terrain_height_at(
+                                    (eye_m.x / world_scale).floor() as i32,
+                                    (eye_m.z / world_scale).floor() as i32,
+                                ) as f32 * world_scale;
+                                let underground = eye_m.y < ground_m - 3.0;
+                                let amb_target = if underground {
+                                    [0.0; 4]
+                                } else {
+                                    world::mood::ambience(&world.sample_config(), eye_m, &scene_lighting, day_night.sky_event())
+                                };
+                                let amb_k = 1.0 - (-gameplay_dt.max(0.0) * 1.2).exp();
+                                for (cur, target) in ambience_smooth.iter_mut().zip(amb_target) {
+                                    *cur += (target - *cur) * amb_k;
+                                }
+                                scene_lighting.ambience = ambience_smooth;
+                                if underground {
+                                    scene_lighting.mood_tint = [1.0, 1.0, 1.0, 0.0];
+                                }
+                                if cosmos_smooth > 0.5 {
+                                    // Underground there is no sky to announce.
+                                    scene_lighting.mood[1] = 0.0;
+                                    scene_lighting.mood[2] = 0.0;
+                                    scene_lighting.mood[3] = 0.0;
+                                }
+                                let sky_event = day_night.sky_event().filter(|e| e.intensity > 0.35).map(|e| e.kind);
+                                if sky_event != last_sky_event {
+                                    if let Some(kind) = sky_event {
+                                        egui_ui.announce_sky(kind.name(), kind.announcement());
+                                    }
+                                    last_sky_event = sky_event;
+                                }
+                                // A meteor shower leaves real stars on the ground to go and find.
+                                if sky_event == Some(world::mood::SkyEvent::MeteorShower)
+                                    && day_night.sky_event().is_some_and(|e| e.intensity > 0.5)
+                                    && cosmos_smooth < 0.05
+                                {
+                                    star_timer -= gameplay_dt.max(0.0);
+                                    if star_timer <= 0.0 {
+                                        star_timer = 38.0 + 30.0 * ((star_count * 7 + 3) % 10) as f32 / 10.0;
+                                        let (dx, dz) = world::mood::star_landing(day_night.weather_seed(), star_count);
+                                        star_count = star_count.wrapping_add(1);
+                                        let bx = (player.pos.x + dx / world_scale).floor() as i32;
+                                        let bz = (player.pos.z + dz / world_scale).floor() as i32;
+                                        let ground = world.terrain_height_at(bx, bz);
+                                        let sea = world.sample_config().water_level();
+                                        if ground > sea {
+                                            // A scorched dimple with a crystal in it.
+                                            let mut edits = vec![(glam::IVec3::new(bx, ground + 1, bz), BlockId::Crystal)];
+                                            for (ox, oz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                                                edits.push((glam::IVec3::new(bx + ox, ground, bz + oz), BlockId::Basalt));
+                                            }
+                                            world.set_many(&edits);
+                                            egui_ui.announce_sky("Fallen star", world::mood::compass_line(dx, dz));
+                                        }
+                                    }
+                                }
                                 gpu.upload_lighting(
-                                    &day_night.lighting(),
+                                    &scene_lighting,
                                     &day_night.cloud_controls(),
                                     sky_time,
                                     held_torch,
@@ -2944,7 +3384,11 @@ fn main() -> Result<()> {
                                     atmosphere_mode,
                                 );
                                 gpu.underwater = player.underwater;
-                                gpu.upload_camera(player.precise_eye(world.voxel_scale) * world_scale as f64, world_scale, forward, proj, world.seed, world.generator_version);
+                                if player.underwater {
+                                    gpu.water_surface_m = water_surface_above_m(&world, player.precise_eye(world.voxel_scale).as_vec3());
+                                }
+                                gpu.water_level_m = world.sample_config().water_level() as f32 * world.voxel_scale.meters();
+                                gpu.upload_camera(player.precise_eye(world.voxel_scale) * world_scale as f64, world_scale, forward, proj, world.seed, world.generator_version, backdrop_coverage);
                                 cpu_stats.uniform_ms =
                                     uniform_start.elapsed().as_secs_f32() * 1000.0;
                             } else if render_world {
@@ -2982,7 +3426,12 @@ fn main() -> Result<()> {
                                     .max(640.0);
                                 let far_plane_world = (far_plane_voxels * world_scale).max(render::HORIZON_FAR_PLANE);
                                 let render_eye = eye * world_scale;
-                                gpu.update_horizon(world, render_eye);
+                                let backdrop_coverage = chunk_cache.backdrop_coverage_meters(
+                                    render_eye,
+                                    render_settings.view_distance_chunks,
+                                    world_scale,
+                                );
+                                gpu.update_horizon(world, render_eye, backdrop_coverage);
                                 let cull_view = Mat4::look_to_rh(eye, forward, Vec3::Y);
                                 let proj = Mat4::perspective_rh(
                                     egui_ui.fov_degrees.to_radians(),
@@ -3005,6 +3454,7 @@ fn main() -> Result<()> {
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, player.pos, world_scale);
+                                append_fire_lights(world, player.pos, world_scale, &mut nearby_torches);
                                 for (pos, radius, color, strength) in world.adventure.spell_lights() {
                                     if nearby_torches.len() >= MAX_TORCH_LIGHTS {
                                         nearby_torches.pop();
@@ -3019,8 +3469,22 @@ fn main() -> Result<()> {
                                         },
                                     );
                                 }
+                                if let Some((pos, color, strength)) = mesh::models::wand_tip_light(world, &player, world_scale) {
+                                    if nearby_torches.len() >= MAX_TORCH_LIGHTS {
+                                        nearby_torches.pop();
+                                    }
+                                    nearby_torches.insert(0, TorchLight { position: pos, radius: 6.5, color, strength });
+                                }
                                 cpu_stats.torch_ms =
                                     torch_start.elapsed().as_secs_f32() * 1000.0;
+                                push_cast_light(
+                                    world,
+                                    &player,
+                                    forward,
+                                    world_scale,
+                                    &mut nearby_torches,
+                                );
+
                                 nearby_torch_count = nearby_torches.len();
                                 let weather_start = Instant::now();
                                 let abs_player_world_xz_m: DVec2 = (player.pos.xz() * world_scale).as_dvec2();
@@ -3036,8 +3500,71 @@ fn main() -> Result<()> {
                                 cpu_stats.weather_ms =
                                     weather_start.elapsed().as_secs_f32() * 1000.0;
                                 let uniform_start = Instant::now();
+                                let eye_m = (player.precise_eye(world.voxel_scale) * world_scale as f64).as_vec3();
+                                let cosmos_target = world::cosmos_at(&world.sample_config(), eye_m);
+                                cosmos_smooth += (cosmos_target - cosmos_smooth)
+                                    * (1.0 - (-gameplay_dt.max(0.0) * 3.5).exp());
+                                let mut scene_lighting = day_night.lighting();
+                                scene_lighting.mood[0] = if cosmos_smooth > 0.002 { cosmos_smooth } else { 0.0 };
+                                // Living air and the sky-event grade only exist above ground.
+                                let ground_m = world.terrain_height_at(
+                                    (eye_m.x / world_scale).floor() as i32,
+                                    (eye_m.z / world_scale).floor() as i32,
+                                ) as f32 * world_scale;
+                                let underground = eye_m.y < ground_m - 3.0;
+                                let amb_target = if underground {
+                                    [0.0; 4]
+                                } else {
+                                    world::mood::ambience(&world.sample_config(), eye_m, &scene_lighting, day_night.sky_event())
+                                };
+                                let amb_k = 1.0 - (-gameplay_dt.max(0.0) * 1.2).exp();
+                                for (cur, target) in ambience_smooth.iter_mut().zip(amb_target) {
+                                    *cur += (target - *cur) * amb_k;
+                                }
+                                scene_lighting.ambience = ambience_smooth;
+                                if underground {
+                                    scene_lighting.mood_tint = [1.0, 1.0, 1.0, 0.0];
+                                }
+                                if cosmos_smooth > 0.5 {
+                                    // Underground there is no sky to announce.
+                                    scene_lighting.mood[1] = 0.0;
+                                    scene_lighting.mood[2] = 0.0;
+                                    scene_lighting.mood[3] = 0.0;
+                                }
+                                let sky_event = day_night.sky_event().filter(|e| e.intensity > 0.35).map(|e| e.kind);
+                                if sky_event != last_sky_event {
+                                    if let Some(kind) = sky_event {
+                                        egui_ui.announce_sky(kind.name(), kind.announcement());
+                                    }
+                                    last_sky_event = sky_event;
+                                }
+                                // A meteor shower leaves real stars on the ground to go and find.
+                                if sky_event == Some(world::mood::SkyEvent::MeteorShower)
+                                    && day_night.sky_event().is_some_and(|e| e.intensity > 0.5)
+                                    && cosmos_smooth < 0.05
+                                {
+                                    star_timer -= gameplay_dt.max(0.0);
+                                    if star_timer <= 0.0 {
+                                        star_timer = 38.0 + 30.0 * ((star_count * 7 + 3) % 10) as f32 / 10.0;
+                                        let (dx, dz) = world::mood::star_landing(day_night.weather_seed(), star_count);
+                                        star_count = star_count.wrapping_add(1);
+                                        let bx = (player.pos.x + dx / world_scale).floor() as i32;
+                                        let bz = (player.pos.z + dz / world_scale).floor() as i32;
+                                        let ground = world.terrain_height_at(bx, bz);
+                                        let sea = world.sample_config().water_level();
+                                        if ground > sea {
+                                            // A scorched dimple with a crystal in it.
+                                            let mut edits = vec![(glam::IVec3::new(bx, ground + 1, bz), BlockId::Crystal)];
+                                            for (ox, oz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                                                edits.push((glam::IVec3::new(bx + ox, ground, bz + oz), BlockId::Basalt));
+                                            }
+                                            world.set_many(&edits);
+                                            egui_ui.announce_sky("Fallen star", world::mood::compass_line(dx, dz));
+                                        }
+                                    }
+                                }
                                 gpu.upload_lighting(
-                                    &day_night.lighting(),
+                                    &scene_lighting,
                                     &day_night.cloud_controls(),
                                     sky_time,
                                     held_torch,
@@ -3047,7 +3574,11 @@ fn main() -> Result<()> {
                                     atmosphere_mode,
                                 );
                                 gpu.underwater = player.underwater;
-                                gpu.upload_camera(player.precise_eye(world.voxel_scale) * world_scale as f64, world_scale, forward, proj, world.seed, world.generator_version);
+                                if player.underwater {
+                                    gpu.water_surface_m = water_surface_above_m(&world, player.precise_eye(world.voxel_scale).as_vec3());
+                                }
+                                gpu.water_level_m = world.sample_config().water_level() as f32 * world.voxel_scale.meters();
+                                gpu.upload_camera(player.precise_eye(world.voxel_scale) * world_scale as f64, world_scale, forward, proj, world.seed, world.generator_version, backdrop_coverage);
                                 cpu_stats.uniform_ms =
                                     uniform_start.elapsed().as_secs_f32() * 1000.0;
                             } else {
@@ -3063,7 +3594,7 @@ fn main() -> Result<()> {
                                     atmosphere_mode,
                                 );
                                 gpu.underwater = false;
-                                gpu.upload_camera(glam::DVec3::ZERO, 1.0, Vec3::NEG_Z, Mat4::IDENTITY, 0, 0);
+                                gpu.upload_camera(glam::DVec3::ZERO, 1.0, Vec3::NEG_Z, Mat4::IDENTITY, 0, 0, -1.0);
                                 cpu_stats.uniform_ms =
                                     uniform_start.elapsed().as_secs_f32() * 1000.0;
                             }
@@ -3071,6 +3602,40 @@ fn main() -> Result<()> {
                             let render_start = Instant::now();
                             let scene=world.as_ref().map(|w|mesh::models::build(w,&player)).unwrap_or_default();
                             gpu.upload_scene(&scene);
+                            let zone = world.as_ref().and_then(|w| {
+                                // player.pos is in voxel units; zones work in metres.
+                                let cfg = w.sample_config();
+                                let metres = player.pos * cfg.voxel_meters();
+                                let surface = cfg.world_y(
+                                    w.terrain_height_at(
+                                        player.pos.x.floor() as i32,
+                                        player.pos.z.floor() as i32,
+                                    ),
+                                );
+                                world::zones::sample(cfg.seed, metres.x, metres.z, surface - metres.y)
+                            });
+                            let (magic_intensity, magic_color) = world
+                                .as_ref()
+                                .map(|w| w.adventure.screen_magic())
+                                .unwrap_or((0.0, [0.0, 0.0, 0.0]));
+                            gpu.set_screen_magic(
+                                magic_intensity,
+                                world::zones::tint_spell(magic_color, zone.as_ref()),
+                            );
+                            gpu.set_zone_grade(world::zones::grade(zone.as_ref()));
+                            if let Some(w) = world.as_mut() {
+                                w.adventure.zone_fx = world::zones::effects(zone.as_ref());
+                            }
+                            let zone_key = zone
+                                .as_ref()
+                                .filter(|z| z.depth_weight > 0.85)
+                                .map(|z| (z.layer.index, z.layer.archetype));
+                            if zone_key != last_zone_key {
+                                if let Some((_, archetype)) = zone_key {
+                                    egui_ui.announce_sky(archetype.name(), archetype.entry_line());
+                                }
+                                last_zone_key = zone_key;
+                            }
                             match gpu.render_cached_with_overlay(
                                 &chunk_cache,
                                 &draw_list,
@@ -3172,6 +3737,20 @@ fn main() -> Result<()> {
 
                                         if benchmark_state.measuring {
                                             benchmark_state.measured_samples.push(sample);
+                                            // `--benchmark-capture-frames`: one PNG every 5 s of measuring,
+                                            // into VOXEL_CAPTURE_DIR (default target/benchmark-frames).
+                                            if benchmark_state.config.capture_frames {
+                                                let shot = (benchmark_state.phase_started_at.elapsed().as_secs_f32() / 5.0) as usize;
+                                                let root = std::env::var_os("VOXEL_CAPTURE_DIR")
+                                                    .map(std::path::PathBuf::from)
+                                                    .unwrap_or_else(|| "target/benchmark-frames".into());
+                                                let path = root.join(format!("bench-{shot:03}.png"));
+                                                eprintln!("[bench-shot] {shot} {}", path.display());
+                                                if !path.exists() && benchmark_state.last_capture_key != shot {
+                                                    benchmark_state.last_capture_key = shot;
+                                                    gpu.request_capture(path);
+                                                }
+                                            }
                                             if benchmark_state.phase_started_at.elapsed().as_secs_f32()
                                                 >= benchmark_state.config.duration_seconds
                                             {
@@ -3289,4 +3868,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-

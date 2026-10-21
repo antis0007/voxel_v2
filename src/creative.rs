@@ -110,6 +110,7 @@ pub struct CreativeState {
     pub show_palette: bool,
     pub show_material_editor: bool,
     pub show_quick_select: bool,
+    pub show_wand_atelier: bool,
     pub tool: ToolKind,
     pub brush_shape: BrushShape,
     pub brush_radius: i32,
@@ -142,6 +143,7 @@ impl Default for CreativeState {
             show_palette: false,
             show_material_editor: false,
             show_quick_select: false,
+            show_wand_atelier: false,
             tool: ToolKind::Hand,
             brush_shape: BrushShape::Cube,
             brush_radius: 0,
@@ -167,6 +169,9 @@ struct EditStroke {
     block: BlockId,
     cells: VecDeque<IVec3>,
     explosive: bool,
+    /// Spell craters skip the mining/harvest pipeline; the player explosive
+    /// wand keeps its recoverable rubble path.
+    spell_blast: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreviewKey {
@@ -181,8 +186,8 @@ impl CreativeState {
             return;
         }
         self.active_voxel_m = metres;
-        self.hand_size_m = ((self.hand_size_m / metres).round().max(1.0) * metres)
-            .min(self.hand_width_limit());
+        self.hand_size_m =
+            ((self.hand_size_m / metres).round().max(1.0) * metres).min(self.hand_width_limit());
         self.brush_radius = self.brush_radius.min(self.radius_limit());
         self.area_tool.radius = self.area_tool.radius.min(self.radius_limit());
         self.explosion_radius = self.explosion_radius.min(self.radius_limit());
@@ -225,18 +230,53 @@ impl CreativeState {
     pub fn pending_cells(&self) -> usize {
         self.pending.as_ref().map_or(0, |e| e.cells.len())
     }
-    pub fn pending_mode(&self) -> Option<BrushMode> { self.pending.as_ref().map(|e|e.mode) }
-    pub fn pending_explosive(&self) -> bool {self.pending.as_ref().is_some_and(|e|e.explosive)}
-    pub fn blast_ready(&self)->bool {self.pending_cells()==0 && self.blast_preview.is_none()}
-    pub fn update_feedback(&mut self, dt:f32) {
-        if let Some((_,time))=&mut self.blast_preview {*time-=dt;}
-        if self.pending_cells()==0 && self.blast_preview.as_ref().is_some_and(|(_,t)|*t<=0.0) {self.blast_preview=None;}
+    pub fn pending_mode(&self) -> Option<BrushMode> {
+        self.pending.as_ref().map(|e| e.mode)
     }
-    pub fn queue_blast(&mut self, world:&World, cells:Vec<IVec3>, preview:Option<PreviewResult>) {
-        if self.pending_cells()>0 {return;}
-        self.queue_edit(world,BrushMode::Erase,BlockId::Air,cells);
-        if let Some(e)=&mut self.pending {e.explosive=true;}
-        self.blast_preview=preview.map(|p|(p,0.45));
+    pub fn pending_explosive(&self) -> bool {
+        self.pending.as_ref().is_some_and(|e| e.explosive)
+    }
+    pub fn pending_spell_blast(&self) -> bool {
+        self.pending.as_ref().is_some_and(|e| e.spell_blast)
+    }
+    pub fn blast_ready(&self) -> bool {
+        self.pending_cells() == 0 && self.blast_preview.is_none()
+    }
+    pub fn update_feedback(&mut self, dt: f32) {
+        if let Some((_, time)) = &mut self.blast_preview {
+            *time -= dt;
+        }
+        if self.pending_cells() == 0 && self.blast_preview.as_ref().is_some_and(|(_, t)| *t <= 0.0)
+        {
+            self.blast_preview = None;
+        }
+    }
+    pub fn queue_blast(
+        &mut self,
+        world: &World,
+        cells: Vec<IVec3>,
+        preview: Option<PreviewResult>,
+    ) {
+        if self.pending_cells() > 0 {
+            return;
+        }
+        self.queue_edit(world, BrushMode::Erase, BlockId::Air, cells);
+        if let Some(e) = &mut self.pending {
+            e.explosive = true;
+        }
+        self.blast_preview = preview.map(|p| (p, 0.45));
+    }
+
+    pub fn queue_spell_blast(&mut self, world: &World, cells: Vec<IVec3>) {
+        if self.pending_cells() > 0 {
+            return;
+        }
+        self.queue_edit(world, BrushMode::Erase, BlockId::Air, cells);
+        if let Some(e) = &mut self.pending {
+            e.explosive = true;
+            e.spell_blast = true;
+        }
+        self.blast_preview = None;
     }
     pub fn queue_edit(
         &mut self,
@@ -252,6 +292,7 @@ impl CreativeState {
                 block,
                 cells: cells.into(),
                 explosive: false,
+                spell_blast: false,
             });
         }
     }
@@ -280,8 +321,13 @@ impl CreativeState {
         self.show_palette = false;
         self.show_material_editor = false;
         self.show_quick_select = false;
+        self.show_wand_atelier = false;
     }
-    pub fn cancel_edits(&mut self) {self.pending=None;self.blast_preview=None;*self.preview_cache.borrow_mut()=None;}
+    pub fn cancel_edits(&mut self) {
+        self.pending = None;
+        self.blast_preview = None;
+        *self.preview_cache.borrow_mut() = None;
+    }
 
     pub fn pick_block(&mut self, block: BlockId) -> BlockId {
         let block = if block.is_torch() {
@@ -336,7 +382,11 @@ impl CreativeState {
     }
 
     pub fn any_ui_open(&self) -> bool {
-        self.show_panel || self.show_palette || self.show_quick_select || self.show_material_editor
+        self.show_panel
+            || self.show_palette
+            || self.show_quick_select
+            || self.show_material_editor
+            || self.show_wand_atelier
     }
 
     pub fn reach_distance_blocks(&self, voxel_scale: VoxelScalePreset) -> f32 {
@@ -374,8 +424,9 @@ impl CreativeState {
                     (self.area_tool.radius + delta).clamp(0, self.radius_limit());
             }
             ToolKind::BuildersWand | ToolKind::DestructorWand => {
-                self.wand_max_blocks =
-                    (self.wand_max_blocks as i32 + delta * if self.wand_max_blocks <= 16 { 1 } else { 8 }).clamp(1, 512) as usize;
+                self.wand_max_blocks = (self.wand_max_blocks as i32
+                    + delta * if self.wand_max_blocks <= 16 { 1 } else { 8 })
+                .clamp(1, 512) as usize;
             }
             ToolKind::ExplosiveWand => {
                 self.explosion_radius =
@@ -465,7 +516,7 @@ impl From<Option<(IVec3, IVec3)>> for RaycastTarget {
 #[derive(Clone, Debug)]
 pub struct PreviewResult {
     pub blocks: Vec<IVec3>,
-    pub segments: Vec<[Vec3;2]>,
+    pub segments: Vec<[Vec3; 2]>,
     pub total_cells: usize,
     pub color: [f32; 4],
     pub invert_blend: bool,
@@ -481,12 +532,21 @@ pub fn get_preview(
     preview_pressed: bool,
     is_executing: bool,
 ) -> PreviewResult {
-    if creative.tool==ToolKind::ExplosiveWand {
-        if let Some((preview,_))=&creative.blast_preview {return preview.clone();}
+    if creative.tool == ToolKind::ExplosiveWand {
+        if let Some((preview, _)) = &creative.blast_preview {
+            return preview.clone();
+        }
     }
     let key = PreviewKey {
         cfg: world.sample_config(),
-        revision: if matches!(creative.tool,ToolKind::BuildersWand|ToolKind::DestructorWand|ToolKind::Hand) {world.revision()} else {0},
+        revision: if matches!(
+            creative.tool,
+            ToolKind::BuildersWand | ToolKind::DestructorWand | ToolKind::Hand
+        ) {
+            world.revision()
+        } else {
+            0
+        },
         target: raycast,
         settings: [
             creative.tool as u64,
@@ -537,8 +597,13 @@ fn generate_preview(
 ) -> PreviewResult {
     let mode = creative.preview_mode(place_pressed, break_pressed, preview_pressed);
     let show_placement = mode == BrushMode::Place;
-    if limit_preview && matches!(creative.tool,ToolKind::Brush|ToolKind::AreaTool|ToolKind::ExplosiveWand) {
-        return preview::volume(creative,world.voxel_scale,raycast,mode,show_placement);
+    if limit_preview
+        && matches!(
+            creative.tool,
+            ToolKind::Brush | ToolKind::AreaTool | ToolKind::ExplosiveWand
+        )
+    {
+        return preview::volume(creative, world.voxel_scale, raycast, mode, show_placement);
     }
 
     let (mut blocks, color, invert_blend, center_block) = match creative.tool {
@@ -704,13 +769,14 @@ fn generate_preview(
         }
     };
 
-    let segments = if limit_preview { preview::boundary(creative,world.voxel_scale,raycast,&blocks) } else {Vec::new()};
+    let segments = if limit_preview {
+        preview::boundary(creative, world.voxel_scale, raycast, &blocks)
+    } else {
+        Vec::new()
+    };
     let total_cells = blocks.len();
     if limit_preview {
-        blocks = cap_blocks(
-            blocks,
-            creative.preview_cap,
-        );
+        blocks = cap_blocks(blocks, creative.preview_cap);
     }
     PreviewResult {
         blocks,
@@ -723,18 +789,28 @@ fn generate_preview(
 }
 
 pub fn blast_targets(c: &CreativeState, w: &World, ray: RaycastTarget) -> Vec<IVec3> {
-    let mut cells=generate_preview(c, w, ray, false, true, false, true, false).blocks;
-    if let Some(center)=ray.hit {cells.sort_unstable_by_key(|p|(*p-center).length_squared());}
+    let mut cells = generate_preview(c, w, ray, false, true, false, true, false).blocks;
+    if let Some(center) = ray.hit {
+        cells.sort_unstable_by_key(|p| (*p - center).length_squared());
+    }
     cells
 }
 
-pub fn spell_blast_targets(scale:f32,point:Vec3,radius:f32)->Vec<IVec3> {
-    let center=(point/scale).floor().as_ivec3();let radius=(radius/scale).ceil().clamp(1.0,32.0) as i32;
-    let mut cells=Vec::new();
-    for z in -radius..=radius {for y in -radius..=radius {for x in -radius..=radius {
-        if x*x+y*y+z*z<=radius*radius {cells.push(center+IVec3::new(x,y,z));}
-    }}}
-    cells.sort_unstable_by_key(|p|(*p-center).length_squared());cells
+pub fn spell_blast_targets(scale: f32, point: Vec3, radius: f32) -> Vec<IVec3> {
+    let center = (point / scale).floor().as_ivec3();
+    let radius = (radius / scale).ceil().clamp(1.0, 32.0) as i32;
+    let mut cells = Vec::new();
+    for z in -radius..=radius {
+        for y in -radius..=radius {
+            for x in -radius..=radius {
+                if x * x + y * y + z * z <= radius * radius {
+                    cells.push(center + IVec3::new(x, y, z));
+                }
+            }
+        }
+    }
+    cells.sort_unstable_by_key(|p| (*p - center).length_squared());
+    cells
 }
 
 pub fn edit_blocks(
@@ -797,8 +873,8 @@ fn wand_targets(c: &CreativeState, world: &World, ray: RaycastTarget, build: boo
     } else {
         1.0
     };
-    let count = ((c.wand_max_blocks as f32 * area_scale) as usize)
-        .min(MAX_TOOL_CELLS / thickness as usize);
+    let count =
+        ((c.wand_max_blocks as f32 * area_scale) as usize).min(MAX_TOOL_CELLS / thickness as usize);
     let normal = match (ray.hit, ray.place) {
         (Some(h), Some(p)) => p - h,
         _ => return Vec::new(),
@@ -860,8 +936,11 @@ fn preview_wand_blocks(
 
         let target = if build_mode { p + normal } else { p };
         let target_block = world.get(target);
-        let exposed = world.get(p+normal).is_empty() || world.get(p+normal).is_liquid();
-        if exposed && ((build_mode && (target_block.is_empty() || target_block.is_liquid())) || !build_mode) {
+        let exposed = world.get(p + normal).is_empty() || world.get(p + normal).is_liquid();
+        if exposed
+            && ((build_mode && (target_block.is_empty() || target_block.is_liquid()))
+                || !build_mode)
+        {
             out.push(target);
         }
 

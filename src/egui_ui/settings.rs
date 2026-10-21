@@ -4,6 +4,73 @@ use super::{
 };
 use crate::render::{AtmosphereMode, RenderDebugView, RenderDistanceSettings};
 
+/// Terrain presets in metres, with chunk floors. Chunks are 32 voxels, so a
+/// metre-only preset collapsed to 4 chunks at 1 m voxels and put 4 m LOD cells
+/// 96 m from the camera. "Performance" now saves frame time on clouds and
+/// bounce lighting instead of turning nearby trees into blocks.
+struct TerrainPreset {
+    name: &'static str,
+    hint: &'static str,
+    view_m: f32,
+    full_detail_m: f32,
+    min_view_chunks: i32,
+    min_full_chunks: i32,
+    lod_levels: u8,
+    cloud_scale: u32,
+    indirect: bool,
+}
+
+impl TerrainPreset {
+    fn settings(&self, chunk_meters: f32) -> RenderDistanceSettings {
+        let view = ((self.view_m / chunk_meters).round() as i32)
+            .max(self.min_view_chunks)
+            .clamp(4, 64);
+        RenderDistanceSettings {
+            view_distance_chunks: view,
+            lod_start_chunks: ((self.full_detail_m / chunk_meters).round() as i32)
+                .max(self.min_full_chunks)
+                .clamp(2, view - 1),
+            lod_levels: self.lod_levels,
+        }
+    }
+}
+
+const TERRAIN_PRESETS: [TerrainPreset; 3] = [
+    TerrainPreset {
+        name: "Performance",
+        hint: "Short view, sharp nearby terrain, cheaper clouds, no bounce lighting.",
+        view_m: 256.0,
+        full_detail_m: 128.0,
+        min_view_chunks: 8,
+        min_full_chunks: 4,
+        lod_levels: 2,
+        cloud_scale: 4,
+        indirect: false,
+    },
+    TerrainPreset {
+        name: "Balanced",
+        hint: "Default view distance and lighting.",
+        view_m: 896.0,
+        full_detail_m: 320.0,
+        min_view_chunks: 16,
+        min_full_chunks: 6,
+        lod_levels: 4,
+        cloud_scale: 3,
+        indirect: true,
+    },
+    TerrainPreset {
+        name: "Far view",
+        hint: "Maximum terrain radius. Needs memory and a fast GPU.",
+        view_m: 2048.0,
+        full_detail_m: 384.0,
+        min_view_chunks: 32,
+        min_full_chunks: 8,
+        lod_levels: 4,
+        cloud_scale: 3,
+        indirect: true,
+    },
+];
+
 pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, voxel_meters: f32) {
     let chunk_meters = 32.0 * voxel_meters;
     ui.checkbox(&mut state.fxaa_enabled, "Smooth edges (FXAA)");
@@ -17,49 +84,56 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
     let mut clouds = crate::render::cloud_render_scale();
     egui::ComboBox::from_label("Cloud detail")
         .selected_text(match clouds {
-            2 => "High",
-            4 => "Fast",
-            _ => "Balanced",
+            2 => "Ultra",
+            4 => "Balanced",
+            _ => "High",
         })
         .show_ui(ui, |ui| {
-            for (scale, label) in [(2, "High"), (3, "Balanced"), (4, "Fast")] {
+            for (scale, label) in [(2, "Ultra"), (3, "High"), (4, "Balanced")] {
                 ui.selectable_value(&mut clouds, scale, label);
             }
         });
     crate::render::set_cloud_render_scale(clouds);
-    ui.small("Lower cloud detail improves frame rate; terrain and UI stay sharp.");
+    ui.small("High is the default. Cloud images keep at least 360 rows; Ultra ray-marches the most pixels.");
     ui.label("Terrain detail");
     ui.horizontal_wrapped(|ui| {
-        for (name, distance, lod_start) in [
-            ("Performance", 128.0, 48.0),
-            ("Balanced", 512.0, 96.0),
-            ("Far view", 2048.0, 128.0),
-        ] {
-            if ui.button(name).clicked() {
-                state.settings = RenderDistanceSettings {
-                    view_distance_chunks: ((distance / chunk_meters).round() as i32).clamp(4, 64),
-                    lod_start_chunks: ((lod_start / chunk_meters).round() as i32).max(2),
-                    lod_levels: 3,
-                };
+        for preset in TERRAIN_PRESETS {
+            if ui.button(preset.name).on_hover_text(preset.hint).clicked() {
+                state.settings = preset.settings(chunk_meters);
+                crate::render::set_cloud_render_scale(preset.cloud_scale);
+                crate::render::set_indirect_lighting_enabled(preset.indirect);
             }
         }
     });
-    let mut meters = state.settings.view_distance_chunks as f32 * chunk_meters;
-    if ui
-        .add(
-            egui::Slider::new(&mut meters, chunk_meters * 4.0..=chunk_meters * 64.0)
-                .step_by(chunk_meters as f64)
-                .text("View radius (m)"),
-        )
-        .changed()
-    {
-        state.settings.view_distance_chunks = (meters / chunk_meters).round() as i32;
-    }
-    ui.label(format!(
-        "Terrain radius: {:.0} m",
-        state.settings.view_distance_chunks as f32 * 32.0 * voxel_meters
+    // Radii are whole chunks; the sliders work in chunks and label metres so
+    // every stop is a real setting at any voxel scale.
+    let s = &mut state.settings;
+    ui.add(
+        egui::Slider::new(&mut s.view_distance_chunks, 4..=64)
+            .custom_formatter(|v, _| format!("{:.0} m", v * chunk_meters as f64))
+            .text("View radius"),
+    );
+    let full_limit = (s.view_distance_chunks - 1).max(2);
+    s.lod_start_chunks = s.lod_start_chunks.clamp(2, full_limit);
+    ui.add(
+        egui::Slider::new(&mut s.lod_start_chunks, 2..=full_limit)
+            .custom_formatter(|v, _| format!("{:.0} m", v * chunk_meters as f64))
+            .text("Full detail radius"),
+    )
+    .on_hover_text("Inside this radius terrain and trees are meshed voxel for voxel.");
+    ui.add(egui::Slider::new(&mut s.lod_levels, 1..=4).text("Detail levels"))
+        .on_hover_text(
+            "Beyond full detail, distant terrain uses 2, 4 and 8 voxel cells. \
+             Fewer levels look sharper and cost more triangles.",
+        );
+    let side = (2 * s.view_distance_chunks + 1) as usize;
+    let full_side = (2 * s.lod_start_chunks + 1) as usize;
+    ui.small(format!(
+        "{} terrain columns, {} at full detail",
+        side * side,
+        full_side * full_side
     ));
-    if state.settings.view_distance_chunks > 16 {
+    if s.view_distance_chunks > 16 {
         ui.label("Long distances increase terrain memory and loading cost substantially.");
     }
     ui.collapsing("Advanced rendering", |ui| {
@@ -90,13 +164,6 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
         let mut edited = crate::world::regions::edited_budget_mib();
         if ui.add(egui::Slider::new(&mut edited,16..=1024).logarithmic(true).text("Edited chunk cache target (MiB)")).changed() {crate::world::regions::set_edited_budget_mib(edited);}
         ui.small("Mesh memory is reserved before construction. Edited chunks are paged only after durable writeback; I/O failures retain unsaved data.");
-        let limit = state.settings.view_distance_chunks - 1;
-        state.settings.lod_start_chunks = state.settings.lod_start_chunks.clamp(2, limit);
-        ui.add(
-            egui::Slider::new(&mut state.settings.lod_start_chunks, 2..=limit)
-                .text("Full detail radius"),
-        );
-        ui.add(egui::Slider::new(&mut state.settings.lod_levels, 1..=4).text("Detail levels"));
         egui::ComboBox::from_label("Atmosphere")
             .selected_text(state.atmosphere_mode.label())
             .show_ui(ui, |ui| {

@@ -47,7 +47,7 @@ pub(super) fn reward(ctx: &egui::Context, view: &View) {
     let left = ctx.content_rect().center().x - width * 0.5 - 10.0;
     let top = reserved
         .filter(|r| r.right() + 8.0 > left)
-        .map_or(ctx.content_rect().top() + 20.0, |r| r.bottom() + 8.0);
+        .map_or(ctx.content_rect().top() + 78.0, |r| r.bottom() + 8.0);
     egui::Area::new("sanctum_reward".into())
         .anchor(Align2::CENTER_TOP, [0.0, top - ctx.content_rect().top()])
         .interactable(false)
@@ -217,7 +217,7 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
 pub(super) fn encounter(ctx: &egui::Context, view: &View) {
     if let Some(boss) = &view.boss {
         egui::Area::new("guardian_health".into())
-            .anchor(Align2::CENTER_TOP, [0.0, 22.0])
+            .anchor(Align2::CENTER_TOP, [0.0, 78.0])
             .interactable(false)
             .show(ctx, |ui| {
                 style::hud_frame().show(ui, |ui| {
@@ -253,7 +253,7 @@ pub(super) fn encounter(ctx: &egui::Context, view: &View) {
                 });
             });
     }
-    if let Some(focus) = &view.relic_focus {
+    if let Some(focus) = view.relic_focus.as_ref().or(view.undercrown_focus.as_ref()) {
         egui::Area::new("reliquary_prompt".into())
             .anchor(Align2::CENTER_CENTER, [0.0, 74.0])
             .interactable(false)

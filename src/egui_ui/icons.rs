@@ -1,9 +1,12 @@
 //! Small original pixel illustrations. Solid mesh pixels have no AA seams.
+//! The shared six-role palette lives in `pixel_art`; icons only supply an
+//! accent colour plus native-pixel glyphs.
+use super::pixel_art::{self, GOLD as PALETTE_GOLD, PAPER as PALETTE_PAPER, TEAL as PALETTE_TEAL};
 use crate::world::factory::Kind;
 use egui::{Color32 as C, Rect, Vec2, vec2};
-pub const GOLD: C = C::from_rgb(218, 173, 96);
-pub const PAPER: C = C::from_rgb(235, 225, 197);
-pub const TEAL: C = C::from_rgb(101, 183, 175);
+pub const GOLD: C = PALETTE_GOLD;
+pub const PAPER: C = PALETTE_PAPER;
+pub const TEAL: C = PALETTE_TEAL;
 
 #[derive(Clone, Copy)]
 pub enum Icon {
@@ -29,20 +32,23 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
         "      33      ",
     ][..];
     match icon {
-        Icon::Torch => (&[
-            "       6     ",
-            "   6  656    ",
-            "  6566556    ",
-            "   655456    ",
-            "    65456    ",
-            "    33333    ",
-            "     313     ",
-            "     333     ",
-            "     323     ",
-            "     333     ",
-            "     323     ",
-            "     333     ",
-        ][..], C::from_rgb(150,109,73)),
+        Icon::Torch => (
+            &[
+                "       6     ",
+                "   6  656    ",
+                "  6566556    ",
+                "   655456    ",
+                "    65456    ",
+                "    33333    ",
+                "     313     ",
+                "     333     ",
+                "     323     ",
+                "     333     ",
+                "     323     ",
+                "     333     ",
+            ][..],
+            C::from_rgb(150, 109, 73),
+        ),
         Icon::Heart => (
             &[
                 "  333   333  ",
@@ -111,10 +117,57 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             ],
             C::from_rgb(117, 208, 237),
         ),
-        Icon::Spell(4) => (&[" 333333333 "," 322222223 "," 321333123 "," 321323123 "," 321333123 ","  3211123  ","   32123   ","    333    "],C::from_rgb(141,224,245)),
-        Icon::Spell(5) => (&["   3   3   "," 3  333  3 ","   32223   ","  3222223  "," 322122123 ","33333333333","    323    ","   33333   "],C::from_rgb(163,219,83)),
-        Icon::Spell(6) => (&["  333333  "," 32222223 ","322333223","323   323","323   323","322333223"," 3222223 ","  33333  "],C::from_rgb(175,102,244)),
-        Icon::Spell(7) => (&["333    333"," 323  323 ","  322223  ","   3223   ","  322223  "," 323  323 ","333    333"],C::from_rgb(121,221,246)),
+        Icon::Spell(4) => (
+            &[
+                " 333333333 ",
+                " 322222223 ",
+                " 321333123 ",
+                " 321323123 ",
+                " 321333123 ",
+                "  3211123  ",
+                "   32123   ",
+                "    333    ",
+            ],
+            C::from_rgb(141, 224, 245),
+        ),
+        Icon::Spell(5) => (
+            &[
+                "   3   3   ",
+                " 3  333  3 ",
+                "   32223   ",
+                "  3222223  ",
+                " 322122123 ",
+                "33333333333",
+                "    323    ",
+                "   33333   ",
+            ],
+            C::from_rgb(163, 219, 83),
+        ),
+        Icon::Spell(6) => (
+            &[
+                "  333333  ",
+                " 32222223 ",
+                "322333223",
+                "323   323",
+                "323   323",
+                "322333223",
+                " 3222223 ",
+                "  33333  ",
+            ],
+            C::from_rgb(175, 102, 244),
+        ),
+        Icon::Spell(7) => (
+            &[
+                "333    333",
+                " 323  323 ",
+                "  322223  ",
+                "   3223   ",
+                "  322223  ",
+                " 323  323 ",
+                "333    333",
+            ],
+            C::from_rgb(121, 221, 246),
+        ),
         Icon::Spell(9) => (
             &[
                 "        333",
@@ -305,7 +358,54 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             ],
             C::from_rgb(255, 138, 228),
         ),
-        Icon::Spell(_) => (gem, C::from_rgb(177, 127, 224)),
+        Icon::Spell(id) if super::icons_spells::art(id).is_some() => {
+            super::icons_spells::art(id).expect("checked above")
+        }
+        Icon::Spell(id) => {
+            let shape: &[&str] = match id % 4 {
+                0 => &[
+                    "      33      ",
+                    "     3223     ",
+                    "    322113    ",
+                    "   32211113   ",
+                    "    321113    ",
+                    "     3113     ",
+                    "      33      ",
+                ],
+                1 => &[
+                    "  3       3  ",
+                    "   3     3   ",
+                    "    32223    ",
+                    "   3222223   ",
+                    "    32223    ",
+                    "   3     3   ",
+                    "  3       3  ",
+                ],
+                2 => &[
+                    "     333     ",
+                    "    32223    ",
+                    "   3222223   ",
+                    "  322222223  ",
+                    "   3222223   ",
+                    "    32223    ",
+                    "     333     ",
+                ],
+                _ => &[
+                    "   3333333   ",
+                    "   3222223   ",
+                    "   3211123   ",
+                    "   3211123   ",
+                    "   3222223   ",
+                    "   3333333   ",
+                ],
+            };
+            let color = C::from_rgb(
+                (70 + (id * 37) % 170) as u8,
+                (60 + (id * 19) % 160) as u8,
+                (80 + (id * 53) % 150) as u8,
+            );
+            (shape, color)
+        }
         Icon::Sword(tier) => {
             let shape = &[
                 "            333",
@@ -322,7 +422,13 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
                 " 333223          ",
                 "  333            ",
             ][..];
-            let color = match tier {3=>C::from_rgb(246,129,57),4=>C::from_rgb(111,216,237),2=>C::from_rgb(180,197,199),_=>C::from_rgb(208,139,75)};
+            let color = match tier {
+                3 => C::from_rgb(246, 129, 57),
+                4 => C::from_rgb(111, 216, 237),
+                5 => C::from_rgb(136, 222, 198),
+                2 => C::from_rgb(180, 197, 199),
+                _ => C::from_rgb(208, 139, 75),
+            };
             (shape, color)
         }
         Icon::Resource(i) => {
@@ -595,24 +701,29 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
     }
 }
 pub fn paint(p: &egui::Painter, r: Rect, icon: Icon) {
-    let (rows, color) = art(icon);
+    paint_tinted(p, r, icon, None);
+}
+
+/// Paints an icon with an optional accent for its body colour. Tool fittings
+/// use this to make the held weapon read as steel, cinder, rime or polymer
+/// without duplicating every sprite.
+pub fn paint_tinted(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>) {
+    let (rows, base) = art(icon);
+    let color = accent.unwrap_or(base);
     let width = rows.iter().map(|row| row.len()).max().unwrap_or(1) as f32;
     let extent = width.max(rows.len() as f32);
     let dpi = p.ctx().pixels_per_point();
     let unit = ((r.width().min(r.height()) * dpi / extent).floor().max(1.0)) / dpi;
     let raw_origin = r.center() - vec2(width, rows.len() as f32) * unit * 0.5;
-    let origin = egui::pos2((raw_origin.x*dpi).round()/dpi, (raw_origin.y*dpi).round()/dpi);
+    let origin = egui::pos2(
+        (raw_origin.x * dpi).round() / dpi,
+        (raw_origin.y * dpi).round() / dpi,
+    );
     let mut mesh = egui::Mesh::default();
     for (y, row) in rows.iter().enumerate() {
         for (x, ch) in row.bytes().enumerate() {
-            let tint = match ch {
-                b'1' => color.gamma_multiply(0.66),
-                b'2' => color,
-                b'3' => C::from_rgb(29, 31, 34),
-                b'4' => C::from_rgb(247,228,159),
-                b'5' => C::from_rgb(232,176,76),
-                b'6' => C::from_rgb(193,102,49),
-                _ => continue,
+            let Some(tint) = pixel_art::glyph(ch, color) else {
+                continue;
             };
             let q =
                 Rect::from_min_size(origin + vec2(x as f32, y as f32) * unit, Vec2::splat(unit));
@@ -627,17 +738,30 @@ pub fn paint(p: &egui::Painter, r: Rect, icon: Icon) {
             }
             mesh.add_triangle(base, base + 1, base + 2);
             mesh.add_triangle(base, base + 2, base + 3);
-            // Light exposed top edges, rather than scattering unrelated gold
-            // specks across every material. Keep the highlight on native pixels.
-            let above = if y==0 { b' ' } else { rows[y-1].as_bytes().get(x).copied().unwrap_or(b' ') };
+            // Light exposed top edges and shade exposed bottom edges on the
+            // native pixel grid. The ramp comes from the shared palette, so
+            // every item, machine and spell sprite reads with the same
+            // top-left key light.
+            let above = if y == 0 {
+                b' '
+            } else {
+                rows[y - 1].as_bytes().get(x).copied().unwrap_or(b' ')
+            };
             if ch == b'2' && above != b'2' && above != b'1' {
-                let h = Rect::from_min_size(q.min, vec2(unit, 1.0/dpi));
-                let highlight = C::from_rgb(
-                    (color.r() as f32*0.8+235.0*0.2) as u8,
-                    (color.g() as f32*0.8+225.0*0.2) as u8,
-                    (color.b() as f32*0.8+197.0*0.2) as u8,
+                let h = Rect::from_min_size(q.min, vec2(unit, 1.0 / dpi));
+                mesh.add_colored_rect(h, pixel_art::top_light(color));
+            }
+            let below = rows
+                .get(y + 1)
+                .and_then(|row| row.as_bytes().get(x))
+                .copied()
+                .unwrap_or(b' ');
+            if ch == b'2' && below != b'2' && below != b'1' {
+                let h = Rect::from_min_size(
+                    egui::pos2(q.left(), q.bottom() - 1.0 / dpi),
+                    vec2(unit, 1.0 / dpi),
                 );
-                mesh.add_colored_rect(h, highlight);
+                mesh.add_colored_rect(h, pixel_art::bottom_shadow(color));
             }
         }
     }
@@ -645,14 +769,35 @@ pub fn paint(p: &egui::Painter, r: Rect, icon: Icon) {
 }
 pub fn frame(p: &egui::Painter, r: Rect, selected: bool) {
     use super::presentation as style;
-    p.rect_filled(r,0,style::INK);
-    p.rect_stroke(r,0,egui::Stroke::new(2.0,if selected {style::PAPER}else{style::EDGE}),egui::StrokeKind::Inside);
-    let inner=r.shrink(2.0);
-    p.rect_filled(inner,0,C::from_rgb(49,42,42));
-    p.line_segment([inner.left_bottom(),inner.left_top()],egui::Stroke::new(2.0,C::from_rgb(20,17,23)));
-    p.line_segment([inner.left_top(),inner.right_top()],egui::Stroke::new(2.0,C::from_rgb(20,17,23)));
-    p.line_segment([inner.left_bottom(),inner.right_bottom()],egui::Stroke::new(1.0,C::from_rgb(126,103,80)));
-    if selected { p.rect_stroke(r.shrink(1.0),0,egui::Stroke::new(1.0,style::AMBER),egui::StrokeKind::Inside); }
+    p.rect_filled(r, 0, style::INK);
+    p.rect_stroke(
+        r,
+        0,
+        egui::Stroke::new(2.0, if selected { style::PAPER } else { style::EDGE }),
+        egui::StrokeKind::Inside,
+    );
+    let inner = r.shrink(2.0);
+    p.rect_filled(inner, 0, C::from_rgb(49, 42, 42));
+    p.line_segment(
+        [inner.left_bottom(), inner.left_top()],
+        egui::Stroke::new(2.0, C::from_rgb(20, 17, 23)),
+    );
+    p.line_segment(
+        [inner.left_top(), inner.right_top()],
+        egui::Stroke::new(2.0, C::from_rgb(20, 17, 23)),
+    );
+    p.line_segment(
+        [inner.left_bottom(), inner.right_bottom()],
+        egui::Stroke::new(1.0, C::from_rgb(126, 103, 80)),
+    );
+    if selected {
+        p.rect_stroke(
+            r.shrink(1.0),
+            0,
+            egui::Stroke::new(1.0, style::AMBER),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 pub fn slot(
     ui: &mut egui::Ui,
@@ -698,4 +843,45 @@ pub fn gauge(ui: &mut egui::Ui, value: f32, color: C, label: &str) {
         color,
     );
     res.on_hover_text(label);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_sprite(label: &str, icon: Icon) {
+        let (rows, _) = art(icon);
+        assert!(!rows.is_empty(), "{label} is empty");
+        assert!(rows.len() <= 16, "{label} is taller than a 16px sprite");
+        assert!(
+            rows.iter().all(|row| row.len() <= 16),
+            "{label} is wider than a 16px sprite"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains('2')),
+            "{label} has no body role"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains('3')),
+            "{label} has no outline role"
+        );
+        for row in rows {
+            for ch in row.bytes() {
+                assert!(
+                    ch == b' ' || pixel_art::glyph(ch, PAPER).is_some(),
+                    "{label} contains unknown glyph {ch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_spell_and_resource_sprite_obeys_the_pixel_grid() {
+        for id in 0..=crate::world::adventure::MAX_SPELL_ID {
+            assert_sprite(&format!("spell {id}"), Icon::Spell(id));
+        }
+        for id in 0..=18 {
+            assert_sprite(&format!("resource {id}"), Icon::Resource(id));
+        }
+    }
 }

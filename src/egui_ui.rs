@@ -1,15 +1,21 @@
 use egui::{Align2, Color32, RichText};
-mod presentation;
-mod front_end;
-mod world_browser;
-mod factory;
-mod inventory;
 mod adventure;
-mod relics;
-mod wands;
+mod factory;
+mod front_end;
 mod icons;
+mod icons_spells;
+mod inventory;
+mod look_at;
+pub(crate) mod pixel_art;
+mod presentation;
+mod relics;
 mod settings;
+mod tinkering;
 mod tool_hud;
+mod wand_atelier;
+mod wand_xmb;
+mod wands;
+mod world_browser;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use glam::Vec3Swizzles;
 use glam::{IVec3, Mat4, Quat, Vec3};
@@ -35,6 +41,8 @@ pub enum UiMode {
 pub enum UiAction {
     None,
     Factory(crate::world::factory::Action),
+    /// Creative catalogue grant: item and requested count.
+    GiveItem(crate::world::inventory::Item, u32),
     DropInventory(usize),
     StartWorld {
         name: String,
@@ -50,8 +58,14 @@ pub enum UiAction {
     SaveWorld,
     OpenWorld(String),
     RefreshWorlds,
-    RenameWorld { id: String, name: String },
-    FavoriteWorld { id: String, favorite: bool },
+    RenameWorld {
+        id: String,
+        name: String,
+    },
+    FavoriteWorld {
+        id: String,
+        favorite: bool,
+    },
     Quit,
 }
 
@@ -415,8 +429,13 @@ fn creative_tools_ui_plain(
 ) {
     ui.horizontal_wrapped(|ui| {
         for tool in ToolKind::ALL {
-            if ui.selectable_label(creative_state.tool == tool,
-                format!("{} {}", tool_shortcut_label(tool), tool.label())).clicked() {
+            if ui
+                .selectable_label(
+                    creative_state.tool == tool,
+                    format!("{} {}", tool_shortcut_label(tool), tool.label()),
+                )
+                .clicked()
+            {
                 creative_state.tool = tool;
             }
         }
@@ -488,7 +507,13 @@ struct HeldToolPoseState {
 }
 
 impl HeldToolPoseState {
-    fn update(&mut self, tool: ToolKind, action: Option<ToolUseAction>, move_speed_mps: f32, dt: f32) {
+    fn update(
+        &mut self,
+        tool: ToolKind,
+        action: Option<ToolUseAction>,
+        move_speed_mps: f32,
+        dt: f32,
+    ) {
         if self.last_tool != Some(tool) {
             self.last_tool = Some(tool);
             self.equip_phase = 1.0;
@@ -499,7 +524,11 @@ impl HeldToolPoseState {
             self.action_kind = action;
         }
         self.last_action = action;
-        let duration = if self.action_kind == Some(ToolUseAction::Place) { 0.26 } else { 0.34 };
+        let duration = if self.action_kind == Some(ToolUseAction::Place) {
+            0.26
+        } else {
+            0.34
+        };
         self.action_phase = (self.action_phase - dt / duration).max(0.0);
         if self.action_phase <= 0.0 {
             self.action_kind = None;
@@ -622,13 +651,19 @@ fn draw_held_tool_overlay(
 
     let mut faces = Vec::new();
 
-
     // Smooth anticipation, a short committed stroke, then a slower recovery.
     // No full-axis spins: the wrist stays attached to the forearm.
-    let smooth = |t: f32| { let t = t.clamp(0.0, 1.0); t*t*(3.0-2.0*t) };
-    let stroke = if swing_t < 0.28 { -0.18 * smooth(swing_t / 0.28) }
-        else if swing_t < 0.48 { -0.18 + 1.18 * smooth((swing_t - 0.28) / 0.20) }
-        else { 1.0 - smooth((swing_t - 0.48) / 0.52) };
+    let smooth = |t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let stroke = if swing_t < 0.28 {
+        -0.18 * smooth(swing_t / 0.28)
+    } else if swing_t < 0.48 {
+        -0.18 + 1.18 * smooth((swing_t - 0.28) / 0.20)
+    } else {
+        1.0 - smooth((swing_t - 0.48) / 0.52)
+    };
     let placing = pose.action_kind == Some(ToolUseAction::Place);
     let swing_g = stroke;
     let swing_f = stroke;
@@ -638,14 +673,22 @@ fn draw_held_tool_overlay(
         // Compact expedition glove: articulated knuckles, stitched leather cuff
         // and a mineral-teal sleeve. Keep its silhouette below the sight line.
         let mat = base_mat
-            * Mat4::from_translation(Vec3::new(0.82 - swing_g * if placing { 0.025 } else { 0.09 },
+            * Mat4::from_translation(Vec3::new(
+                0.82 - swing_g * if placing { 0.025 } else { 0.09 },
                 -0.69 + swing_f * if placing { 0.035 } else { -0.035 } + equip_y,
-                -1.26 - swing_f * if placing { 0.19 } else { 0.12 }))
-            * Mat4::from_rotation_z((-10.0 - swing_g * if placing { 3.0 } else { 9.0 }).to_radians())
-            * Mat4::from_rotation_x((-24.0 + swing_f * if placing { -6.0 } else { 10.0 }).to_radians())
+                -1.26 - swing_f * if placing { 0.19 } else { 0.12 },
+            ))
+            * Mat4::from_rotation_z(
+                (-10.0 - swing_g * if placing { 3.0 } else { 9.0 }).to_radians(),
+            )
+            * Mat4::from_rotation_x(
+                (-24.0 + swing_f * if placing { -6.0 } else { 10.0 }).to_radians(),
+            )
             * Mat4::from_rotation_y(-22.0_f32.to_radians())
             * Mat4::from_scale(Vec3::splat(0.85));
-        let sun_height = ((time_of_day - 0.25) * std::f32::consts::TAU).sin().max(0.0);
+        let sun_height = ((time_of_day - 0.25) * std::f32::consts::TAU)
+            .sin()
+            .max(0.0);
         let illumination = 0.30 + 0.70 * sun_height.sqrt();
         let leather = shade_color(Color32::from_rgb(111, 83, 57), illumination);
         let seam = shade_color(Color32::from_rgb(155, 125, 82), illumination);
@@ -653,31 +696,91 @@ fn draw_held_tool_overlay(
         let dark = shade_color(Color32::from_rgb(65, 52, 41), illumination);
         let copper = shade_color(Color32::from_rgb(162, 113, 62), illumination);
         for (center, size, color) in [
-            (Vec3::new(0.0,-0.34,0.0), Vec3::new(0.22,0.53,0.22), cloth),
-            (Vec3::new(0.0,-0.12,0.0), Vec3::new(0.23,0.14,0.23), dark),
-            (Vec3::new(0.0,-0.05,0.0), Vec3::new(0.235,0.025,0.235), seam),
-            (Vec3::new(0.0,0.095,0.0), Vec3::new(0.185,0.25,0.19), leather),
-            (Vec3::new(0.018,0.08,0.099), Vec3::new(0.10,0.13,0.012), dark),
-            (Vec3::new(0.018,0.09,0.108), Vec3::new(0.08,0.10,0.010), leather),
-            (Vec3::new(-0.108,0.055,0.015), Vec3::new(0.065,0.13,0.12), leather),
-            (Vec3::new(0.0,-0.12,0.123), Vec3::new(0.065,0.065,0.018), copper),
-            (Vec3::new(0.0,-0.12,0.135), Vec3::new(0.035,0.035,0.01), dark),
+            (
+                Vec3::new(0.0, -0.34, 0.0),
+                Vec3::new(0.22, 0.53, 0.22),
+                cloth,
+            ),
+            (
+                Vec3::new(0.0, -0.12, 0.0),
+                Vec3::new(0.23, 0.14, 0.23),
+                dark,
+            ),
+            (
+                Vec3::new(0.0, -0.05, 0.0),
+                Vec3::new(0.235, 0.025, 0.235),
+                seam,
+            ),
+            (
+                Vec3::new(0.0, 0.095, 0.0),
+                Vec3::new(0.185, 0.25, 0.19),
+                leather,
+            ),
+            (
+                Vec3::new(0.018, 0.08, 0.099),
+                Vec3::new(0.10, 0.13, 0.012),
+                dark,
+            ),
+            (
+                Vec3::new(0.018, 0.09, 0.108),
+                Vec3::new(0.08, 0.10, 0.010),
+                leather,
+            ),
+            (
+                Vec3::new(-0.108, 0.055, 0.015),
+                Vec3::new(0.065, 0.13, 0.12),
+                leather,
+            ),
+            (
+                Vec3::new(0.0, -0.12, 0.123),
+                Vec3::new(0.065, 0.065, 0.018),
+                copper,
+            ),
+            (
+                Vec3::new(0.0, -0.12, 0.135),
+                Vec3::new(0.035, 0.035, 0.01),
+                dark,
+            ),
         ] {
             add_3d_box(&mut faces, mat, proj, rect, center, size, color);
         }
         for finger in 0..4 {
             let x = -0.069 + finger as f32 * 0.046;
-            let lift = if finger == 1 || finger == 2 { 0.012 } else { 0.0 };
+            let lift = if finger == 1 || finger == 2 {
+                0.012
+            } else {
+                0.0
+            };
             let open = if placing { stroke.max(0.0) } else { 0.0 };
-            add_3d_box(&mut faces, mat, proj, rect, Vec3::new(x,0.23+lift+open*0.025,-open*0.035),
-                Vec3::new(0.039,0.065+open*0.035,0.15), leather);
-            add_3d_box(&mut faces, mat, proj, rect, Vec3::new(x,0.16,0.099),
-                Vec3::new(0.024,0.045,0.012), seam);
+            add_3d_box(
+                &mut faces,
+                mat,
+                proj,
+                rect,
+                Vec3::new(x, 0.23 + lift + open * 0.025, -open * 0.035),
+                Vec3::new(0.039, 0.065 + open * 0.035, 0.15),
+                leather,
+            );
+            add_3d_box(
+                &mut faces,
+                mat,
+                proj,
+                rect,
+                Vec3::new(x, 0.16, 0.099),
+                Vec3::new(0.024, 0.045, 0.012),
+                seam,
+            );
         }
         for stitch in 0..5 {
-            add_3d_box(&mut faces, mat, proj, rect,
-                Vec3::new(-0.078 + stitch as f32 * 0.039,-0.025,0.104),
-                Vec3::new(0.012,0.018,0.012), seam);
+            add_3d_box(
+                &mut faces,
+                mat,
+                proj,
+                rect,
+                Vec3::new(-0.078 + stitch as f32 * 0.039, -0.025, 0.104),
+                Vec3::new(0.012, 0.018, 0.012),
+                seam,
+            );
         }
     } else {
         // Solid, camera-relative wand with a quiet wrist pivot instead of a spinning sprite.
@@ -687,23 +790,65 @@ fn draw_held_tool_overlay(
             ToolKind::ExplosiveWand => Color32::from_rgb(236, 176, 76),
             _ => Color32::from_rgb(161, 164, 216),
         };
-        let mat = base_mat * Mat4::from_translation(Vec3::new(
-            0.65 - stroke * 0.045, -0.48 + equip_y - stroke * 0.025, -1.3 - stroke * 0.14))
+        let mat = base_mat
+            * Mat4::from_translation(Vec3::new(
+                0.65 - stroke * 0.045,
+                -0.48 + equip_y - stroke * 0.025,
+                -1.3 - stroke * 0.14,
+            ))
             * Mat4::from_rotation_z((-12.0 - stroke * 7.0).to_radians())
             * Mat4::from_rotation_x((-14.0 + stroke * 10.0).to_radians());
         let wood = Color32::from_rgb(89, 65, 48);
         let metal = Color32::from_rgb(159, 129, 80);
         for (center, size, color) in [
-            (Vec3::new(0.0,-0.21,0.0), Vec3::new(0.055,0.58,0.055),wood),
-            (Vec3::new(0.0,-0.09,0.0), Vec3::new(0.075,0.14,0.075),Color32::from_rgb(61,47,42)),
-            (Vec3::new(0.0,0.06,0.0), Vec3::new(0.09,0.045,0.09),metal),
-            (Vec3::new(0.0,0.15,0.0), Vec3::new(0.085,0.13,0.085),accent),
-            (Vec3::new(0.0,0.23,0.0), Vec3::new(0.045,0.04,0.045),accent),
-            (Vec3::new(-0.05,0.13,0.0), Vec3::new(0.018,0.13,0.06),metal),
-            (Vec3::new(0.05,0.13,0.0), Vec3::new(0.018,0.13,0.06),metal),
-            (Vec3::new(0.035,-0.13,0.045), Vec3::new(0.13,0.15,0.12),Color32::from_rgb(111,83,57)),
-            (Vec3::new(0.06,-0.35,0.055), Vec3::new(0.15,0.29,0.15),Color32::from_rgb(49,73,66)),
-        ] { add_3d_box(&mut faces, mat, proj, rect, center, size, color); }
+            (
+                Vec3::new(0.0, -0.21, 0.0),
+                Vec3::new(0.055, 0.58, 0.055),
+                wood,
+            ),
+            (
+                Vec3::new(0.0, -0.09, 0.0),
+                Vec3::new(0.075, 0.14, 0.075),
+                Color32::from_rgb(61, 47, 42),
+            ),
+            (
+                Vec3::new(0.0, 0.06, 0.0),
+                Vec3::new(0.09, 0.045, 0.09),
+                metal,
+            ),
+            (
+                Vec3::new(0.0, 0.15, 0.0),
+                Vec3::new(0.085, 0.13, 0.085),
+                accent,
+            ),
+            (
+                Vec3::new(0.0, 0.23, 0.0),
+                Vec3::new(0.045, 0.04, 0.045),
+                accent,
+            ),
+            (
+                Vec3::new(-0.05, 0.13, 0.0),
+                Vec3::new(0.018, 0.13, 0.06),
+                metal,
+            ),
+            (
+                Vec3::new(0.05, 0.13, 0.0),
+                Vec3::new(0.018, 0.13, 0.06),
+                metal,
+            ),
+            (
+                Vec3::new(0.035, -0.13, 0.045),
+                Vec3::new(0.13, 0.15, 0.12),
+                Color32::from_rgb(111, 83, 57),
+            ),
+            (
+                Vec3::new(0.06, -0.35, 0.055),
+                Vec3::new(0.15, 0.29, 0.15),
+                Color32::from_rgb(49, 73, 66),
+            ),
+        ] {
+            add_3d_box(&mut faces, mat, proj, rect, center, size, color);
+        }
     }
     // True Depth sorting (Painter's Algorithm) guarantees perfect face overlapping
     faces.sort_by(|a, b| {
@@ -736,16 +881,35 @@ fn draw_held_tool_overlay(
     }
 }
 
-fn draw_held_weapon_overlay(ctx: &egui::Context, tier: u32, pose: &HeldToolPoseState) {
-    if tier == 0 { return; }
-    let screen=ctx.content_rect();
-    let attack=if pose.action_phase>0.0 { (1.0-pose.action_phase).clamp(0.0,1.0) } else { 0.0 };
-    let swing=(attack*std::f32::consts::PI).sin();
-    let size=egui::vec2(84.0,84.0);
-    let origin=screen.right_bottom()-egui::vec2(size.x+18.0, size.y+88.0)+egui::vec2(-swing*26.0,swing*18.0);
-    let rect=egui::Rect::from_min_size(origin,size);
-    let painter=ctx.layer_painter(egui::LayerId::new(egui::Order::Background,egui::Id::new("held_pixel_sword")));
-    icons::paint(&painter,rect,icons::Icon::Sword(tier));
+fn draw_held_weapon_overlay(
+    ctx: &egui::Context,
+    tier: u32,
+    head_material: u8,
+    pose: &HeldToolPoseState,
+) {
+    if tier == 0 {
+        return;
+    }
+    let screen = ctx.content_rect();
+    let attack = if pose.action_phase > 0.0 {
+        (1.0 - pose.action_phase).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let swing = (attack * std::f32::consts::PI).sin();
+    let size = egui::vec2(84.0, 84.0);
+    let origin = screen.right_bottom() - egui::vec2(size.x + 18.0, size.y + 88.0)
+        + egui::vec2(-swing * 26.0, swing * 18.0);
+    let rect = egui::Rect::from_min_size(origin, size);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("held_pixel_sword"),
+    ));
+    let accent = (head_material != 0).then(|| {
+        let [r, g, b] = crate::world::adventure::tinkering::material_color(head_material);
+        Color32::from_rgb(r, g, b)
+    });
+    icons::paint_tinted(&painter, rect, icons::Icon::Sword(tier), accent);
 }
 
 fn add_3d_box(
@@ -1236,13 +1400,23 @@ fn tool_description(tool: ToolKind) -> &'static str {
         ToolKind::BuildersWand => "Flood-style placement that grows from the target surface.",
         ToolKind::DestructorWand => "Flood-style removal for stripping large connected regions.",
         ToolKind::AreaTool => "Footprint-based bulk edits for discs, pads, and layered cuts.",
-        ToolKind::ExplosiveWand => "Detonate the highlighted sphere, clearing blocks and shifting nearby terrain.",
+        ToolKind::ExplosiveWand => {
+            "Detonate the highlighted sphere, clearing blocks and shifting nearby terrain."
+        }
     }
 }
 
 fn tool_detail_summary(creative_state: &CreativeState, tool: ToolKind) -> String {
     match tool {
-        ToolKind::Hand => format!("{:.2}m width · {:.1}m reach",if creative_state.size_in_metres {creative_state.hand_size_m} else {creative_state.active_voxel_m},creative_state.placement_distance),
+        ToolKind::Hand => format!(
+            "{:.2}m width · {:.1}m reach",
+            if creative_state.size_in_metres {
+                creative_state.hand_size_m
+            } else {
+                creative_state.active_voxel_m
+            },
+            creative_state.placement_distance
+        ),
         ToolKind::Brush => format!(
             "{} radius {} @ {:.1}m",
             creative_state.brush_shape.label(),
@@ -1271,14 +1445,19 @@ fn tool_detail_summary(creative_state: &CreativeState, tool: ToolKind) -> String
     }
 }
 
-fn tool_scale_ui(ui:&mut egui::Ui,c:&mut CreativeState) {
+fn tool_scale_ui(ui: &mut egui::Ui, c: &mut CreativeState) {
     ui.horizontal_wrapped(|ui| {
         ui.label("Tool sizes");
-        ui.selectable_value(&mut c.size_in_metres,true,"World metres");
-        ui.selectable_value(&mut c.size_in_metres,false,"Voxel units");
+        ui.selectable_value(&mut c.size_in_metres, true, "World metres");
+        ui.selectable_value(&mut c.size_in_metres, false, "Voxel units");
     });
-    ui.small(format!("Voxel size: {:.2} m. Reach stays in metres.",c.active_voxel_m));
-    if c.pending_cells()>0 {ui.label(format!("Working: {} voxels remaining",c.pending_cells()));}
+    ui.small(format!(
+        "Voxel size: {:.2} m. Reach stays in metres.",
+        c.active_voxel_m
+    ));
+    if c.pending_cells() > 0 {
+        ui.label(format!("Working: {} voxels remaining", c.pending_cells()));
+    }
 }
 fn tool_settings_ui(
     ui: &mut egui::Ui,
@@ -1290,28 +1469,43 @@ fn tool_settings_ui(
     *hovered_area_shape = None;
 
     ui.label(RichText::new("Reach").strong());
-    ui.add(egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
-        .step_by(0.5).suffix(" m").text("Maximum distance"));
+    ui.add(
+        egui::Slider::new(&mut creative_state.placement_distance, 2.0..=24.0)
+            .step_by(0.5)
+            .suffix(" m")
+            .text("Maximum distance"),
+    );
     ui.horizontal(|ui| {
         for metres in [3.0, 5.0, 10.0, 16.0, 24.0] {
-            if ui.selectable_label((creative_state.placement_distance - metres).abs() < 0.01,
-                format!("{metres:.0} m")).clicked() {
+            if ui
+                .selectable_label(
+                    (creative_state.placement_distance - metres).abs() < 0.01,
+                    format!("{metres:.0} m"),
+                )
+                .clicked()
+            {
                 creative_state.placement_distance = metres;
             }
         }
     });
     ui.small("While aiming: Ctrl + wheel or [ / ]. Alt + wheel changes size.");
     ui.separator();
-    tool_scale_ui(ui,creative_state);
-    let radius_limit=creative_state.radius_limit();
-    let units=creative_state.size_unit();
+    tool_scale_ui(ui, creative_state);
+    let radius_limit = creative_state.radius_limit();
+    let units = creative_state.size_unit();
     match creative_state.tool {
         ToolKind::Hand => {
             ui.label("Snap-aligned mining and building");
             let max_width = creative_state.hand_width_limit();
-            ui.add_enabled(creative_state.size_in_metres,
-                egui::Slider::new(&mut creative_state.hand_size_m, creative_state.active_voxel_m..=max_width)
-                    .step_by(creative_state.active_voxel_m as f64).text("Width (m)"));
+            ui.add_enabled(
+                creative_state.size_in_metres,
+                egui::Slider::new(
+                    &mut creative_state.hand_size_m,
+                    creative_state.active_voxel_m..=max_width,
+                )
+                .step_by(creative_state.active_voxel_m as f64)
+                .text("Width (m)"),
+            );
         }
         ToolKind::Brush => {
             ui.label("Brush shape");
@@ -1327,8 +1521,10 @@ fn tool_settings_ui(
                     }
                 }
             });
-            ui.add(egui::Slider::new(&mut creative_state.brush_radius, 0..=radius_limit).text(format!("Radius ({units})")));
-
+            ui.add(
+                egui::Slider::new(&mut creative_state.brush_radius, 0..=radius_limit)
+                    .text(format!("Radius ({units})")),
+            );
         }
         ToolKind::BuildersWand | ToolKind::DestructorWand => {
             let cap_label = if matches!(creative_state.tool, ToolKind::BuildersWand) {
@@ -1337,16 +1533,26 @@ fn tool_settings_ui(
                 "Removal cap"
             };
             ui.small("Follows connected matching material on the aimed face.");
-            ui.add(egui::Slider::new(&mut creative_state.wand_max_blocks, 1..=512)
-                .text(format!("{cap_label} ({})", if creative_state.size_in_metres { "m²" } else { "faces" })));
+            ui.add(
+                egui::Slider::new(&mut creative_state.wand_max_blocks, 1..=512).text(format!(
+                    "{cap_label} ({})",
+                    if creative_state.size_in_metres {
+                        "m²"
+                    } else {
+                        "faces"
+                    }
+                )),
+            );
             ui.horizontal(|ui| {
                 for cap in [1, 4, 8, 16, 64, 256] {
-                    if ui.selectable_label(creative_state.wand_max_blocks == cap, cap.to_string()).clicked() {
+                    if ui
+                        .selectable_label(creative_state.wand_max_blocks == cap, cap.to_string())
+                        .clicked()
+                    {
                         creative_state.wand_max_blocks = cap;
                     }
                 }
             });
-
         }
         ToolKind::AreaTool => {
             ui.label("Footprint");
@@ -1362,16 +1568,24 @@ fn tool_settings_ui(
                     }
                 }
             });
-            ui.add(egui::Slider::new(&mut creative_state.area_tool.radius, 0..=radius_limit).text(format!("Radius ({units})")));
             ui.add(
-                egui::Slider::new(&mut creative_state.area_tool.thickness, 1..=8).text(format!("Depth ({units})")),
+                egui::Slider::new(&mut creative_state.area_tool.radius, 0..=radius_limit)
+                    .text(format!("Radius ({units})")),
             );
-
+            ui.add(
+                egui::Slider::new(&mut creative_state.area_tool.thickness, 1..=8)
+                    .text(format!("Depth ({units})")),
+            );
         }
         ToolKind::ExplosiveWand => {
             ui.label("Blast size");
-            ui.add(egui::Slider::new(&mut creative_state.explosion_radius, 1..=radius_limit).text(format!("Blast radius ({units})")));
-            ui.small("Left click detonates. Nearby sand and gravel fall; water flows into the opening.");
+            ui.add(
+                egui::Slider::new(&mut creative_state.explosion_radius, 1..=radius_limit)
+                    .text(format!("Blast radius ({units})")),
+            );
+            ui.small(
+                "Left click detonates. Nearby sand and gravel fall; water flows into the opening.",
+            );
         }
     }
 }
@@ -1389,37 +1603,68 @@ fn draw_block_icon_face(
             let hash = ((x * 13 + y * 7 + block.as_u32() * 3) % 11) as f32;
             let mut tint = shade_color(color, 0.96 + hash * 0.008);
             match block {
-                BlockId::Grass | BlockId::SnowGrass if !top && y > 1 + (x%3==0) as u32 => {
+                BlockId::Grass | BlockId::SnowGrass if !top && y > 1 + (x % 3 == 0) as u32 => {
                     tint = shade_color(material_color32(BlockId::Dirt), 0.78 + hash * 0.012);
                 }
                 BlockId::Log if top => {
                     tint = shade_color(
                         material_color32(BlockId::Planks),
-                        if ((x as f32-3.5).hypot(y as f32-3.5) as u32)%2==0 { 1.02 } else { 0.85 },
+                        if ((x as f32 - 3.5).hypot(y as f32 - 3.5) as u32) % 2 == 0 {
+                            1.02
+                        } else {
+                            0.85
+                        },
                     );
                 }
-                BlockId::Log => tint = shade_color(color, if (x+y/4)%4==0 {0.69}else{0.99}),
+                BlockId::Log => {
+                    tint = shade_color(color, if (x + y / 4) % 4 == 0 { 0.69 } else { 0.99 })
+                }
                 BlockId::Planks if y % 3 == 2 => tint = shade_color(color, 0.66),
-                BlockId::StoneBricks | BlockId::WeatheredBricks if y % 4 == 3 || (x + y / 4 * 4) % 8 == 0 => {
+                BlockId::StoneBricks | BlockId::WeatheredBricks
+                    if y % 4 == 3 || (x + y / 4 * 4) % 8 == 0 =>
+                {
                     tint = shade_color(color, 0.58)
                 }
                 BlockId::Leaves | BlockId::PineLeaves | BlockId::Bush => {
-                    tint = shade_color(color, match (x%3,y%3) {(0,0)=>1.18,(2,2)=>0.76,_=>0.96});
+                    tint = shade_color(
+                        color,
+                        match (x % 3, y % 3) {
+                            (0, 0) => 1.18,
+                            (2, 2) => 0.76,
+                            _ => 0.96,
+                        },
+                    );
                 }
-                BlockId::Sand | BlockId::Sandstone => tint = shade_color(color,0.96+(y%3) as f32*0.025),
-                BlockId::CoalOre if (x/2+y/3)%3==1 && hash<7.0 => tint = Color32::from_rgb(47, 54, 56),
-                BlockId::IronOre if (x/2+y/3)%3==1 && hash<7.0 => tint = Color32::from_rgb(164, 112, 77),
-                BlockId::CopperOre if (x/2+y/3)%3==1 && hash<7.0 => tint = Color32::from_rgb(178, 128, 78),
+                BlockId::Sand | BlockId::Sandstone => {
+                    tint = shade_color(color, 0.96 + (y % 3) as f32 * 0.025)
+                }
+                BlockId::CoalOre if (x / 2 + y / 3) % 3 == 1 && hash < 7.0 => {
+                    tint = Color32::from_rgb(47, 54, 56)
+                }
+                BlockId::IronOre if (x / 2 + y / 3) % 3 == 1 && hash < 7.0 => {
+                    tint = Color32::from_rgb(164, 112, 77)
+                }
+                BlockId::CopperOre if (x / 2 + y / 3) % 3 == 1 && hash < 7.0 => {
+                    tint = Color32::from_rgb(178, 128, 78)
+                }
                 BlockId::Stone | BlockId::Basalt | BlockId::Limestone => {
-                    tint = shade_color(color, 0.89+((x/3+y/2)%3) as f32*0.065);
+                    tint = shade_color(color, 0.89 + ((x / 3 + y / 2) % 3) as f32 * 0.065);
                 }
                 _ => {}
             }
             let u = x as f32 / 8.0;
             let v = y as f32 / 8.0;
-            let mut mesh=egui::Mesh::default();
-            for p in [point(u,v),point(u+0.125,v),point(u+0.125,v+0.125),point(u,v+0.125)] {mesh.colored_vertex(p,tint);}
-            mesh.add_triangle(0,1,2);mesh.add_triangle(0,2,3);
+            let mut mesh = egui::Mesh::default();
+            for p in [
+                point(u, v),
+                point(u + 0.125, v),
+                point(u + 0.125, v + 0.125),
+                point(u, v + 0.125),
+            ] {
+                mesh.colored_vertex(p, tint);
+            }
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
             painter.add(egui::Shape::mesh(mesh));
         }
     }
@@ -1430,8 +1675,9 @@ fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
         icons::paint(painter, rect, icons::Icon::Torch);
         return;
     }
-    if let Some(kind)=crate::world::factory::Kind::from_block(block) {
-        icons::paint(painter,rect,icons::Icon::Machine(kind)); return;
+    if let Some(kind) = crate::world::factory::Kind::from_block(block) {
+        icons::paint(painter, rect, icons::Icon::Machine(kind));
+        return;
     }
     let base = material_color32(block);
     let top = shade_color(base, 1.18);
@@ -1493,7 +1739,13 @@ fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
 fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId) -> egui::Response {
     let desired = egui::vec2(size[0], size[1]);
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
-    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,ui.is_enabled(),block.display_name()));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            block.display_name(),
+        )
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -1505,14 +1757,21 @@ fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId)
         rounding,
         if response.hovered() || response.has_focus() {
             Color32::from_rgb(78, 62, 46)
-        } else { Color32::from_rgb(42, 35, 33) },
+        } else {
+            Color32::from_rgb(42, 35, 33)
+        },
     );
     painter.rect_stroke(
         rect,
         rounding,
-        egui::Stroke::new(1.0, if response.hovered() || response.has_focus() {
-            presentation::AMBER
-        } else { presentation::EDGE }),
+        egui::Stroke::new(
+            1.0,
+            if response.hovered() || response.has_focus() {
+                presentation::AMBER
+            } else {
+                presentation::EDGE
+            },
+        ),
         egui::StrokeKind::Outside,
     );
 
@@ -1522,10 +1781,17 @@ fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId)
     );
     draw_voxel_icon(painter, icon_rect, block);
 
-    let name = painter.layout(block.display_name().to_owned(),
-        egui::FontId::proportional(12.0), presentation::PAPER, rect.width()-8.0);
+    let name = painter.layout(
+        block.display_name().to_owned(),
+        egui::FontId::proportional(12.0),
+        presentation::PAPER,
+        rect.width() - 8.0,
+    );
     painter.with_clip_rect(rect.shrink(3.0)).galley(
-        egui::pos2(rect.center().x-name.size().x*0.5, rect.bottom()-25.0), name, Color32::WHITE);
+        egui::pos2(rect.center().x - name.size().x * 0.5, rect.bottom() - 25.0),
+        name,
+        Color32::WHITE,
+    );
     response.on_hover_text(block.display_name())
 }
 
@@ -1539,11 +1805,15 @@ fn draw_hotbar_slot_button(
     drag_targeted: bool,
 ) -> egui::Response {
     let viewport = ui.ctx().content_rect();
-    let size = ((viewport.width()-32.0)/9.0-2.0).clamp(10.0,38.0)
-        .min((viewport.height()*0.10).clamp(20.0,38.0));
+    let size = ((viewport.width() - 32.0) / 9.0 - 2.0)
+        .clamp(10.0, 38.0)
+        .min((viewport.height() * 0.10).clamp(20.0, 38.0));
     let remaining = 9 - slot;
-    let size = size.min(((ui.available_width() - ui.spacing().item_spacing.x * (remaining-1) as f32)
-        / remaining as f32).max(10.0));
+    let size = size.min(
+        ((ui.available_width() - ui.spacing().item_spacing.x * (remaining - 1) as f32)
+            / remaining as f32)
+            .max(10.0),
+    );
     let desired = egui::vec2(size, size);
     let hover_label = if use_survival {
         survival_stack.map_or_else(
@@ -1554,7 +1824,9 @@ fn draw_hotbar_slot_button(
         format!("Slot {}: {}", slot + 1, block.display_name())
     };
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
-    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,ui.is_enabled(),&hover_label));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &hover_label)
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -1562,8 +1834,15 @@ fn draw_hotbar_slot_button(
     let painter = ui.painter();
     let rounding = egui::CornerRadius::same(0);
 
-    icons::frame(painter,rect,selected);
-    if drag_targeted { painter.rect_stroke(rect,rounding,egui::Stroke::new(2.0,presentation::AMBER),egui::StrokeKind::Inside); }
+    icons::frame(painter, rect, selected);
+    if drag_targeted {
+        painter.rect_stroke(
+            rect,
+            rounding,
+            egui::Stroke::new(2.0, presentation::AMBER),
+            egui::StrokeKind::Inside,
+        );
+    }
 
     // Number indicator
     painter.text(
@@ -1596,7 +1875,13 @@ fn draw_hotbar_slot_button(
                     font.clone(),
                     presentation::INK,
                 );
-                painter.text(pos, Align2::RIGHT_BOTTOM, count_str, font, presentation::PAPER);
+                painter.text(
+                    pos,
+                    Align2::RIGHT_BOTTOM,
+                    count_str,
+                    font,
+                    presentation::PAPER,
+                );
             }
         }
     } else if block != BlockId::Air {
@@ -1637,7 +1922,9 @@ fn draw_hotbar_row(
         );
         if response.clicked() {
             creative_state.select_slot(slot);
-            if creative_state.show_palette { creative_state.tool = ToolKind::Hand; }
+            if creative_state.show_palette {
+                creative_state.tool = ToolKind::Hand;
+            }
             if use_survival {
                 if let Some(crate::world::inventory::ItemStack {
                     item: crate::world::inventory::Item::Block(b),
@@ -1654,11 +1941,17 @@ fn draw_hotbar_row(
             *drag_source = Some(DragSource::Hotbar(slot));
         }
         if crate::torch_review::mode() == "drag" {
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("review_hotbar", slot)), response.rect));
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new(("review_hotbar", slot)), response.rect));
         }
         if drag_source.is_some() && response.contains_pointer() {
             *drag_target_slot = Some(slot);
-            ui.painter().rect_stroke(response.rect, 0, egui::Stroke::new(2.0, presentation::AMBER), egui::StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                response.rect,
+                0,
+                egui::Stroke::new(2.0, presentation::AMBER),
+                egui::StrokeKind::Inside,
+            );
         }
     }
 }
@@ -1842,15 +2135,28 @@ fn quick_tool_ui_plain(
     *hovered_area_shape = None;
     egui::Window::new("Choose tool")
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .collapsible(false).resizable(false)
+        .collapsible(false)
+        .resizable(false)
         .show(ctx, |ui| {
             ui.set_width(320.0);
             ui.horizontal_wrapped(|ui| {
                 for tool in ToolKind::ALL {
-                    let response = ui.add(egui::Button::new(format!("{}  {}",tool_shortcut_label(tool),tool.label()))
-                        .selected(creative_state.tool == tool).min_size(egui::vec2(150.0,32.0)));
-                    if response.hovered() { *hovered_tool = Some(tool); }
-                    if response.clicked() { creative_state.tool=tool; creative_state.show_quick_select=false; }
+                    let response = ui.add(
+                        egui::Button::new(format!(
+                            "{}  {}",
+                            tool_shortcut_label(tool),
+                            tool.label()
+                        ))
+                        .selected(creative_state.tool == tool)
+                        .min_size(egui::vec2(150.0, 32.0)),
+                    );
+                    if response.hovered() {
+                        *hovered_tool = Some(tool);
+                    }
+                    if response.clicked() {
+                        creative_state.tool = tool;
+                        creative_state.show_quick_select = false;
+                    }
                 }
             });
             ui.small("B adjusts reach and size. Q closes.");
@@ -1872,8 +2178,8 @@ pub struct EguiUi {
     pub factory: crate::world::factory::View,
     pub adventure: crate::world::adventure::View,
     pub survival: crate::world::inventory::SurvivalInventory,
-    pub survival_eat_timer:f32,
-    pub survival_armor_points:u32,
+    pub survival_eat_timer: f32,
+    pub survival_armor_points: u32,
     pub biome_label: &'static str,
     pub elevation_m: f32,
     pub show_hud: bool,
@@ -1883,7 +2189,11 @@ pub struct EguiUi {
     pub fov_degrees: f32,
     pub mouse_sensitivity: f32,
     pub invert_mouse: bool,
+    /// Menu/HUD zoom applied on top of the native DPI correction.
+    pub ui_scale: f32,
     pub persistence_status: Option<String>,
+    /// Sky event banner: (title, line, egui time it appeared).
+    pub sky_notice: Option<(&'static str, &'static str, f64)>,
     pub region_status: Option<String>,
     pub region_error: Option<String>,
     pub ctx: egui::Context,
@@ -1904,6 +2214,12 @@ pub struct EguiUi {
 }
 
 impl EguiUi {
+    /// Show a sky-event banner. Repeated calls for the same event are ignored.
+    pub fn announce_sky(&mut self, title: &'static str, line: &'static str) {
+        let now = self.ctx.input(|i| i.time);
+        self.sky_notice = Some((title, line, now));
+    }
+
     pub fn new(
         window: &Window,
         device: &wgpu::Device,
@@ -1921,7 +2237,11 @@ impl EguiUi {
             None,
         );
 
-        let renderer = Renderer::new(device, surface_format.remove_srgb_suffix(), RendererOptions::default());
+        let renderer = Renderer::new(
+            device,
+            surface_format.remove_srgb_suffix(),
+            RendererOptions::default(),
+        );
         let tool_textures = ToolTextures::load(&ctx, "assets");
 
         Self {
@@ -1939,7 +2259,8 @@ impl EguiUi {
             factory: Default::default(),
             adventure: Default::default(),
             survival: Default::default(),
-            survival_eat_timer:0.0,survival_armor_points:0,
+            survival_eat_timer: 0.0,
+            survival_armor_points: 0,
             biome_label: "Wilderness",
             elevation_m: 0.0,
             target_block: None,
@@ -1948,7 +2269,9 @@ impl EguiUi {
             fov_degrees: 70.0,
             mouse_sensitivity: 0.0025,
             invert_mouse: false,
+            ui_scale: 1.0,
             persistence_status: None,
+            sky_notice: None,
             region_status: None,
             region_error: None,
             ctx,
@@ -1983,18 +2306,21 @@ impl EguiUi {
 
     pub fn begin_frame(&mut self, window: &Window) {
         // Whole physical-pixel UI scaling avoids different blur at 125/150% DPI.
-        let native=window.scale_factor() as f32;
-        self.ctx.set_zoom_factor(native.round().max(1.0)/native);
+        // The user scale is multiplied on top so menus and the HUD can be made
+        // readable on a TV or denser on a large monitor.
+        let native = window.scale_factor() as f32;
+        self.ctx
+            .set_zoom_factor((native.round().max(1.0) / native) * self.ui_scale.clamp(0.75, 1.75));
         let mut raw_input = self.state.take_egui_input(window);
         if crate::torch_review::mode() == "drag" {
             crate::torch_review::drag_input(&self.ctx, &mut raw_input);
         }
-        crate::material_studio::review_input(&self.ctx,&mut raw_input);
+        crate::material_studio::review_input(&self.ctx, &mut raw_input);
         self.ctx.begin_pass(raw_input);
     }
 
     pub fn build_loading_ui(&mut self, loading: &LoadingUiState) {
-        front_end::loading(&self.ctx,loading);
+        front_end::loading(&self.ctx, loading);
     }
 
     fn build_performance_ui(ui: &mut egui::Ui, perf: &PerfSnapshot) {
@@ -2699,12 +3025,18 @@ impl EguiUi {
         using_tool: Option<ToolUseAction>,
     ) -> UiAction {
         let mut action = UiAction::None;
-        if !creative_state.any_ui_open() || self.ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) {
+        if !creative_state.any_ui_open()
+            || self
+                .ctx
+                .input(|i| !i.focused || i.key_pressed(egui::Key::Escape))
+        {
             self.drag_source = None;
             self.drag_target_slot = None;
         }
-        if matches!(mode,UiMode::Playing) {
-            if let Some(error)=&self.region_error {front_end::storage_notice(&self.ctx,error);}
+        if matches!(mode, UiMode::Playing) {
+            if let Some(error) = &self.region_error {
+                front_end::storage_notice(&self.ctx, error);
+            }
         }
         let time_label = format_clock(time_state.time_of_day);
         let move_speed_mps = player.vel.xz().length() * selected_voxel_scale.meters();
@@ -2716,41 +3048,93 @@ impl EguiUi {
             return UiAction::None;
         }
 
-        if matches!(mode,UiMode::WorldSelect) {
-            return front_end::home(self,selected_world,selected_voxel_scale,selected_seed,render_state);
+        if matches!(mode, UiMode::WorldSelect) {
+            return front_end::home(
+                self,
+                selected_world,
+                selected_voxel_scale,
+                selected_seed,
+                render_state,
+            );
         }
-        if matches!(mode,UiMode::Paused) {
-            let action=front_end::pause(self,time_state,physics_state,render_state);
-            if self.show_debug_performance_panel {self.build_debug_performance_panel(mode,perf);}
+        if matches!(mode, UiMode::Paused) {
+            let action = front_end::pause(self, time_state, physics_state, render_state);
+            if self.show_debug_performance_panel {
+                self.build_debug_performance_panel(mode, perf);
+            }
             return action;
         }
         if matches!(mode, UiMode::Playing) {
             if self.show_hud {
                 let mut status_rect = None;
                 if self.show_debug_performance_panel {
-                let status = egui::Area::new("play_status".into())
-                    .anchor(Align2::LEFT_TOP, [16.0, 16.0])
-                    .interactable(false)
-                    .show(&self.ctx, |ui| {
-                        presentation::hud_frame().show(ui, |ui| {
-                            if self.show_debug_performance_panel {
-                                ui.label(RichText::new(self.biome_label).size(14.0).color(Color32::from_rgb(230,235,216)));
-                                ui.small(format!("{time_label}  ·  {:.0} m",self.elevation_m));
-                            }
-                            ui.small(creative_state.cursor_summary());
-                            if creative_state.pending_cells()>0 {ui.small(format!("{} cells queued",creative_state.pending_cells()));}
+                    let status = egui::Area::new("play_status".into())
+                        .anchor(Align2::LEFT_TOP, [16.0, 16.0])
+                        .interactable(false)
+                        .show(&self.ctx, |ui| {
+                            presentation::hud_frame().show(ui, |ui| {
+                                if self.show_debug_performance_panel {
+                                    ui.label(
+                                        RichText::new(self.biome_label)
+                                            .size(14.0)
+                                            .color(Color32::from_rgb(230, 235, 216)),
+                                    );
+                                    ui.small(format!("{time_label}  ·  {:.0} m", self.elevation_m));
+                                }
+                                ui.small(creative_state.cursor_summary());
+                                if creative_state.pending_cells() > 0 {
+                                    ui.small(format!(
+                                        "{} cells queued",
+                                        creative_state.pending_cells()
+                                    ));
+                                }
+                            });
                         });
-                    });
-                status_rect = Some(status.response.rect);
+                    status_rect = Some(status.response.rect);
                 }
-                front_end::journey_hud(&self.ctx,self.expedition.as_ref(),status_rect);
+                front_end::journey_hud(&self.ctx, self.expedition.as_ref(), status_rect);
+                if let Some((title, line, since)) = self.sky_notice {
+                    let age = self.ctx.input(|i| i.time) - since;
+                    if age < 7.0 {
+                        let fade = ((age / 0.8).min(1.0) * ((7.0 - age) / 1.2).min(1.0))
+                            .clamp(0.0, 1.0) as f32;
+                        egui::Area::new("sky_notice".into())
+                            .anchor(Align2::CENTER_TOP, [0.0, 56.0])
+                            .interactable(false)
+                            .show(&self.ctx, |ui| {
+                                ui.set_opacity(fade);
+                                presentation::hud_frame().show(ui, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.label(
+                                            RichText::new(title)
+                                                .size(15.0)
+                                                .strong()
+                                                .color(presentation::AMBER),
+                                        );
+                                        ui.label(
+                                            RichText::new(line)
+                                                .size(12.0)
+                                                .italics()
+                                                .color(presentation::PAPER),
+                                        );
+                                    });
+                                });
+                            });
+                    } else {
+                        self.sky_notice = None;
+                    }
+                }
                 if !creative_state.any_ui_open() && !self.show_debug_performance_panel {
                     tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback);
                 }
                 if !creative_state.any_ui_open() {
-                    if let Some(enemy) = self.adventure.enemy_focus.filter(|_| self.adventure.boss.is_none()) {
+                    if let Some(enemy) = self
+                        .adventure
+                        .enemy_focus
+                        .filter(|_| self.adventure.boss.is_none())
+                    {
                         egui::Area::new("target_name".into())
-                            .anchor(Align2::CENTER_TOP, [0.0, 10.0])
+                            .anchor(Align2::CENTER_TOP, [0.0, 74.0])
                             .interactable(false)
                             .show(&self.ctx, |ui| {
                                 presentation::hud_frame().show(ui, |ui| {
@@ -2788,7 +3172,51 @@ impl EguiUi {
                                                 },
                                             );
                                         });
-                                        let ratio = (enemy.health / enemy.maximum.max(1.0)).clamp(0.0, 1.0);
+                                        if !enemy.affixes.is_empty() || enemy.status.any() || enemy.shield > 0.0 {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 6.0;
+                                                for affix in enemy.affixes.list() {
+                                                    let c = affix.color();
+                                                    ui.label(
+                                                        RichText::new(affix.name().to_uppercase())
+                                                            .size(9.0)
+                                                            .strong()
+                                                            .color(Color32::from_rgb(
+                                                                (c[0] * 255.0) as u8,
+                                                                (c[1] * 255.0) as u8,
+                                                                (c[2] * 255.0) as u8,
+                                                            )),
+                                                    )
+                                                    .on_hover_text(affix.blurb());
+                                                }
+                                                for (on, text, el) in [
+                                                    (enemy.status.burn > 0.0, "BURNING", crate::world::adventure::status::Element::Fire),
+                                                    (enemy.status.poison > 0.0, "POISONED", crate::world::adventure::status::Element::Toxic),
+                                                    (enemy.status.shock > 0.0, "SHOCKED", crate::world::adventure::status::Element::Shock),
+                                                    (enemy.status.wet > 0.0, "WET", crate::world::adventure::status::Element::Wet),
+                                                ] {
+                                                    if on {
+                                                        let c = el.color();
+                                                        ui.label(
+                                                            RichText::new(text).size(9.0).color(Color32::from_rgb(
+                                                                (c[0] * 255.0) as u8,
+                                                                (c[1] * 255.0) as u8,
+                                                                (c[2] * 255.0) as u8,
+                                                            )),
+                                                        );
+                                                    }
+                                                }
+                                                if enemy.shield > 0.0 {
+                                                    ui.label(
+                                                        RichText::new(format!("WARD {:.0}", enemy.shield))
+                                                            .size(9.0)
+                                                            .color(Color32::from_rgb(204, 140, 255)),
+                                                    );
+                                                }
+                                            });
+                                        }
+                                        let ratio =
+                                            (enemy.health / enemy.maximum.max(1.0)).clamp(0.0, 1.0);
                                         let (bar_r, _) = ui.allocate_exact_size(
                                             egui::vec2(ui.available_width().max(150.0), 6.0),
                                             egui::Sense::hover(),
@@ -2815,68 +3243,29 @@ impl EguiUi {
                                     });
                                 });
                             });
-                    } else if let Some(block) = self.target_block.filter(|block| *block != BlockId::Air) {
-                        egui::Area::new("target_name".into())
-                            .anchor(Align2::CENTER_TOP, [0.0, 10.0])
-                            .interactable(false)
-                            .show(&self.ctx, |ui| {
-                                presentation::hud_frame().show(ui, |ui| {
-                                    ui.set_max_width(276.0);
-                                    ui.horizontal(|ui| {
-                                        let (r, _) = ui.allocate_exact_size(
-                                            egui::vec2(22.0, 22.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        draw_voxel_icon(ui.painter(), r, block);
-                                        ui.vertical(|ui| {
-                                            ui.spacing_mut().item_spacing.y = 1.5;
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    RichText::new(block.display_name())
-                                                        .size(12.5)
-                                                        .strong()
-                                                        .color(presentation::PAPER),
-                                                );
-                                                if let Some(temp_c) = self.target_cell_temp_c {
-                                                    ui.monospace(
-                                                        RichText::new(format!("{temp_c:.0}°C"))
-                                                            .size(10.0)
-                                                            .color(Color32::from_rgb(245, 134, 62)),
-                                                    );
-                                                }
-                                            });
-                                            let sub = if let Some(expedition) = &self.expedition {
-                                                let h = crate::world::expedition::hint(block, expedition.tool_tier);
-                                                if !h.is_empty() {
-                                                    h
-                                                } else {
-                                                    crate::world::inventory::Item::Block(block).category()
-                                                }
-                                            } else {
-                                                crate::world::inventory::Item::Block(block).category()
-                                            };
-                                            if let Some((_, node)) = self.factory.focused.as_ref().filter(|(_, n)| n.kind.block() == block) {
-                                                ui.label(
-                                                    RichText::new(format!(
-                                                        "{} · E {} · H₂O {:.1}m³",
-                                                        node.status,
-                                                        node.energy,
-                                                        node.water as f32 / 512.0
-                                                    ))
-                                                    .size(10.0)
-                                                    .color(presentation::JADE),
-                                                );
-                                            } else {
-                                                ui.label(
-                                                    RichText::new(sub)
-                                                        .size(10.5)
-                                                        .color(presentation::MUTED),
-                                                );
-                                            }
-                                        });
-                                    });
-                                });
-                            });
+                    } else if let Some(block) =
+                        self.target_block.filter(|block| *block != BlockId::Air)
+                    {
+                        let hint = self
+                            .expedition
+                            .as_ref()
+                            .map(|e| crate::world::expedition::hint(block, e.tool_tier))
+                            .unwrap_or("");
+                        look_at::draw(
+                            &self.ctx,
+                            &look_at::LookAt {
+                                block,
+                                temperature_c: self.target_cell_temp_c,
+                                distance_m: self.tool_feedback.distance_m,
+                                hint,
+                                machine: self
+                                    .factory
+                                    .focused
+                                    .as_ref()
+                                    .filter(|(_, n)| n.kind.block() == block)
+                                    .map(|(_, n)| n),
+                            },
+                        );
                     }
                 }
                 if self.show_debug_performance_panel {
@@ -2918,10 +3307,12 @@ impl EguiUi {
                         });
                     });
                 if self.show_hud && !creative_state.any_ui_open() {
-                    let held_food = self.survival.hotbar[creative_state.selected_slot]
-                        .and_then(|stack| match stack.item {
-                            crate::world::inventory::Item::Food(food) => Some(food),
-                            _ => None,
+                    let held_food =
+                        self.survival.hotbar[creative_state.selected_slot].and_then(|stack| {
+                            match stack.item {
+                                crate::world::inventory::Item::Food(food) => Some(food),
+                                _ => None,
+                            }
                         });
                     let vitals = adventure::hud(
                         &self.ctx,
@@ -3025,7 +3416,8 @@ impl EguiUi {
         match mode {
             UiMode::Playing => {
                 if creative_state.show_panel {
-                    egui::Window::new("Tool settings").id(egui::Id::new("compact_tools_v2"))
+                    egui::Window::new("Tool settings")
+                        .id(egui::Id::new("compact_tools_v2"))
                         .default_pos([18.0, 18.0])
                         .default_size([350.0, 320.0])
                         .min_size([280.0, 260.0])
@@ -3044,7 +3436,17 @@ impl EguiUi {
                         });
                 }
 
-                if creative_state.show_material_editor { crate::material_studio::draw(&self.ctx, &mut creative_state.show_material_editor, time_state, &mut action); }
+                if creative_state.show_wand_atelier {
+                    wand_atelier::draw(&self.ctx, &mut creative_state.show_wand_atelier);
+                }
+                if creative_state.show_material_editor {
+                    crate::material_studio::draw(
+                        &self.ctx,
+                        &mut creative_state.show_material_editor,
+                        time_state,
+                        &mut action,
+                    );
+                }
                 if creative_state.show_palette {
                     inventory::draw(
                         &self.ctx,
@@ -3081,8 +3483,10 @@ impl EguiUi {
                     self.hovered_quick_area_shape = None;
                 }
 
-                if self.show_hud && !creative_state.any_ui_open()
-                    && self.ctx.content_rect().width() >= 1040.0 {
+                if self.show_hud
+                    && !creative_state.any_ui_open()
+                    && self.ctx.content_rect().width() >= 1040.0
+                {
                     egui::Area::new("play_hint".into())
                         .anchor(Align2::LEFT_BOTTOM, [14.0, -18.0])
                         .interactable(false)
@@ -3095,7 +3499,11 @@ impl EguiUi {
                         });
                 }
 
-                if self.drag_source.is_some() && self.ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+                if self.drag_source.is_some()
+                    && self
+                        .ctx
+                        .input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+                {
                     if let (Some(source), Some(target)) =
                         (self.drag_source.take(), self.drag_target_slot)
                     {
@@ -3136,10 +3544,7 @@ impl EguiUi {
                                 shadow,
                             );
 
-                            let stroke = egui::Stroke::new(
-                                1.5,
-                                self.tool_feedback.color(),
-                            );
+                            let stroke = egui::Stroke::new(1.5, self.tool_feedback.color());
                             painter.line_segment(
                                 [center - egui::vec2(7.0, 0.0), center + egui::vec2(7.0, 0.0)],
                                 stroke,
@@ -3149,15 +3554,32 @@ impl EguiUi {
                                 stroke,
                             );
                         });
-                    draw_held_tool_overlay(
-                        &self.ctx,
-                        &self.held_tool_pose,
-                        self.tool_textures.for_tool(creative_state.tool),
-                        creative_state.tool,
-                        time_state.time_of_day,
-                    );
-                    if creative_state.tool == ToolKind::Hand && self.survival.hotbar[creative_state.selected_slot].is_some_and(|s| matches!(s.item, crate::world::inventory::Item::Weapon(_))) {
-                        draw_held_weapon_overlay(&self.ctx, self.adventure.weapon, &self.held_tool_pose);
+                    // With a wand, the world-space rig draws the arm, fist and
+                    // shaft whatever tool is selected. This overlay uses its own
+                    // projection, so drawing it too put a second glove and tool
+                    // beside the wand, never touching it.
+                    let rig_owns_hand = self.adventure.wand > 0;
+                    if !rig_owns_hand {
+                        draw_held_tool_overlay(
+                            &self.ctx,
+                            &self.held_tool_pose,
+                            self.tool_textures.for_tool(creative_state.tool),
+                            creative_state.tool,
+                            time_state.time_of_day,
+                        );
+                    }
+                    if creative_state.tool == ToolKind::Hand
+                        && !rig_owns_hand
+                        && self.survival.hotbar[creative_state.selected_slot].is_some_and(|s| {
+                            matches!(s.item, crate::world::inventory::Item::Weapon(_))
+                        })
+                    {
+                        draw_held_weapon_overlay(
+                            &self.ctx,
+                            self.adventure.weapon,
+                            self.adventure.tool_head,
+                            &self.held_tool_pose,
+                        );
                     }
                 }
             }
@@ -3206,8 +3628,10 @@ impl EguiUi {
             .handle_platform_output(window, full_output.platform_output);
 
         self.textures_delta = full_output.textures_delta;
-        for (id,delta) in &mut self.textures_delta.set {
-            if *id == egui::TextureId::Managed(0) { delta.options=egui::TextureOptions::NEAREST; }
+        for (id, delta) in &mut self.textures_delta.set {
+            if *id == egui::TextureId::Managed(0) {
+                delta.options = egui::TextureOptions::NEAREST;
+            }
         }
         self.shapes = self
             .ctx

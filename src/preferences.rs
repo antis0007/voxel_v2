@@ -13,8 +13,8 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-const MAGIC: &[u8; 8] = b"VXPRF005";
-const WORDS: usize = 24;
+const MAGIC: &[u8; 8] = b"VXPRF006";
+const WORDS: usize = 25;
 fn path() -> PathBuf {
     storage::save_directory().join("preferences.vxp")
 }
@@ -49,6 +49,8 @@ pub struct Preferences {
     pub effects_volume: f32,
     pub cloud_scale: u32,
     pub indirect_lighting: bool,
+    /// Menu and HUD zoom on top of the native DPI correction.
+    pub ui_scale: f32,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -80,6 +82,7 @@ impl Default for Preferences {
             effects_volume: 0.65,
             cloud_scale: 3,
             indirect_lighting: true,
+            ui_scale: 1.0,
         }
     }
 }
@@ -108,10 +111,17 @@ impl Preferences {
         crate::audio::set_volume(self.effects_volume);
         render::set_cloud_render_scale(self.cloud_scale);
         render::set_indirect_lighting_enabled(self.indirect_lighting);
+        // The old stock setting kept full blocks for three chunks and then
+        // threw the rest away at 256 m. Promote that exact preset once.
+        let (view, lod, levels) = if self.view == 16 && self.lod == 3 && self.levels == 3 {
+            (28, 10, 4)
+        } else {
+            (self.view, self.lod, self.levels)
+        };
         render::set_render_distance_settings(RenderDistanceSettings {
-            view_distance_chunks: self.view,
-            lod_start_chunks: self.lod,
-            lod_levels: self.levels,
+            view_distance_chunks: view,
+            lod_start_chunks: lod,
+            lod_levels: levels,
         });
         render::set_world_residency_budgets_mib(self.cpu, self.gpu);
         render::set_mesh_budget_mib(self.mesh);
@@ -124,6 +134,7 @@ impl Preferences {
         ui.mouse_sensitivity = self.sensitivity;
         ui.invert_mouse = self.invert;
         ui.show_hud = self.hud;
+        ui.ui_scale = self.ui_scale;
     }
     pub fn capture(
         ui: &EguiUi,
@@ -172,6 +183,7 @@ impl Preferences {
             effects_volume: crate::audio::volume(),
             cloud_scale: render::cloud_render_scale(),
             indirect_lighting: render::indirect_lighting_enabled(),
+            ui_scale: ui.ui_scale.clamp(0.75, 1.75),
         }
     }
     fn words(self) -> [u32; WORDS] {
@@ -200,11 +212,14 @@ impl Preferences {
             self.effects_volume.to_bits(),
             self.cloud_scale,
             self.indirect_lighting as u32,
+            self.ui_scale.to_bits(),
         ]
     }
     fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             (bytes.len() == 8 + WORDS * 4 + 8 && bytes.get(..8) == Some(MAGIC.as_slice()))
+                || (bytes.len() == 8 + 24 * 4 + 8
+                    && bytes.get(..8) == Some(b"VXPRF005".as_slice()))
                 || (bytes.len() == 8 + 24 * 4 + 8
                     && bytes.get(..8) == Some(b"VXPRF004".as_slice()))
                 || (bytes.len() == 8 + 23 * 4 + 8
@@ -249,7 +264,11 @@ impl Preferences {
             cpu: w[12].clamp(32, 2048) as usize,
             // Migrate the former default, otherwise old preferences would
             // silently pin upgraded installations to the broken 512 MiB cap.
-            gpu: if w[13] == 0 || (bytes.get(..8) != Some(MAGIC.as_slice()) && w[13] == 512) {
+            gpu: if w[13] == 0
+                || (bytes.get(..8) != Some(MAGIC.as_slice())
+                    && bytes.get(..8) != Some(b"VXPRF005".as_slice())
+                    && w[13] == 512)
+            {
                 0
             } else {
                 w[13].clamp(64, render::MAX_GPU_MIB as u32) as usize
@@ -264,6 +283,12 @@ impl Preferences {
             effects_volume: effects_volume.clamp(0.0, 1.0),
             cloud_scale: w.get(22).copied().unwrap_or(3).clamp(2, 4),
             indirect_lighting: w.get(23).is_none_or(|v| *v != 0),
+            ui_scale: w
+                .get(24)
+                .map(|n| f32::from_bits(*n))
+                .filter(|n| n.is_finite())
+                .unwrap_or(1.0)
+                .clamp(0.75, 1.75),
         })
     }
     fn bytes(self) -> Vec<u8> {
@@ -281,6 +306,38 @@ fn read(path: &std::path::Path) -> Result<(Preferences, Vec<u8>)> {
     ensure!(b.len() <= 1024, "Preferences exceed size limit");
     Ok((Preferences::decode(&b)?, b))
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_scale_round_trips() {
+        let mut preferences = Preferences::default();
+        preferences.ui_scale = 1.35;
+        let bytes = preferences.bytes();
+        let decoded = Preferences::decode(&bytes).expect("preferences must decode");
+        assert!((decoded.ui_scale - 1.35).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn version_five_preferences_default_to_full_scale() {
+        let bytes = Preferences::default().bytes();
+        let mut body = bytes[..8 + 24 * 4].to_vec();
+        body[..8].copy_from_slice(b"VXPRF005");
+        body.extend_from_slice(&hash(&body).to_le_bytes());
+        let decoded = Preferences::decode(&body).expect("legacy preferences must decode");
+        assert_eq!(decoded.ui_scale, 1.0);
+    }
+
+    #[test]
+    fn out_of_range_ui_scale_is_clamped() {
+        let mut preferences = Preferences::default();
+        preferences.ui_scale = 9.0;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.ui_scale, 1.75);
+    }
+}
+
 fn write(value: Preferences) -> Result<()> {
     fs::create_dir_all(storage::save_directory())?;
     let lock = OpenOptions::new()

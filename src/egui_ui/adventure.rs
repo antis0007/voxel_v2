@@ -1,5 +1,8 @@
-use super::{icons::{self, Icon}, presentation as style};
-use crate::world::adventure::{View, spell_name, wands};
+use super::{
+    icons::{self, Icon},
+    presentation as style,
+};
+use crate::world::adventure::{QuestMarker, View, spell_name, wands};
 use egui::{Align2, Color32, FontId, Rect, Stroke, vec2};
 
 #[derive(Clone)]
@@ -39,12 +42,7 @@ fn draw_hearts(
     let dpi = ui.ctx().pixels_per_point();
     let unit = ((icon_step / 8.5) * dpi).floor().max(1.0) / dpi;
     let shape = [
-        " ## ## ",
-        "#######",
-        "#######",
-        " ##### ",
-        "  ###  ",
-        "   #   ",
+        " ## ## ", "#######", "#######", " ##### ", "  ###  ", "   #   ",
     ];
     let mut mesh = egui::Mesh::default();
     let group_width = columns.min(count) as f32 * icon_step;
@@ -140,13 +138,7 @@ fn draw_hunger(
     align_right: bool,
 ) {
     const HAUNCH: [&str; 8] = [
-        "  ####  ",
-        " ###### ",
-        "####### ",
-        " ###### ",
-        "  ####  ",
-        "   ###  ",
-        "    ### ",
+        "  ####  ", " ###### ", "####### ", " ###### ", "  ####  ", "   ###  ", "    ### ",
         "     ## ",
     ];
     let icon_step = (width / 10.0).floor().clamp(11.0, 17.0);
@@ -284,14 +276,7 @@ fn draw_armor_row(ui: &mut egui::Ui, width: f32, armor_points: u32) {
     if armor_points == 0 {
         return;
     }
-    const SHIELD: [&str; 6] = [
-        "######",
-        "######",
-        "######",
-        " #### ",
-        "  ##  ",
-        "  ##  ",
-    ];
+    const SHIELD: [&str; 6] = ["######", "######", "######", " #### ", "  ##  ", "  ##  "];
     let icon_step = (width / 10.0).floor().clamp(11.0, 17.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 13.0), egui::Sense::hover());
     let dpi = ui.ctx().pixels_per_point();
@@ -348,7 +333,7 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, tim
     let mana_bar = Rect::from_min_size(rect.min + vec2(0.0, 2.0), vec2(bar_w, 7.0));
     let timer_bar = Rect::from_min_size(rect.min + vec2(0.0, 11.0), vec2(bar_w, 4.0));
 
-    let flashing = view.mana_flash > 0.0 && ((time * 18.0).sin() > -0.2);
+    let flashing = view.mana_flash > 0.0 && ((time * 2.4).sin() > 0.35);
     p.rect_filled(
         mana_bar.expand(1.5),
         0,
@@ -357,7 +342,10 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, tim
     p.rect_filled(mana_bar, 0, Color32::from_rgb(38, 35, 62));
 
     let fill_frac = (view.mana / maximum).clamp(0.0, 1.0);
-    let filled = Rect::from_min_size(mana_bar.min, vec2(fill_frac * mana_bar.width(), mana_bar.height()));
+    let filled = Rect::from_min_size(
+        mana_bar.min,
+        vec2(fill_frac * mana_bar.width(), mana_bar.height()),
+    );
     p.rect_filled(
         filled,
         0,
@@ -406,7 +394,10 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, tim
             Color32::from_rgb(112, 224, 246)
         };
         p.rect_filled(
-            Rect::from_min_size(timer_bar.min, vec2(frac * timer_bar.width(), timer_bar.height())),
+            Rect::from_min_size(
+                timer_bar.min,
+                vec2(frac * timer_bar.width(), timer_bar.height()),
+            ),
             0,
             timer_col,
         );
@@ -414,7 +405,10 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, tim
 
     let text = if view.mana_flash > 0.0 {
         "LOW MP!".to_string()
-    } else if view.cooldown > 0.0 && view.recharge_total > 0.01 && view.cooldown <= view.recharge_total + 0.01 {
+    } else if view.cooldown > 0.0
+        && view.recharge_total > 0.01
+        && view.cooldown <= view.recharge_total + 0.01
+    {
         format!("RCH {:.2}s", view.cooldown)
     } else {
         format!("{:.0} MP", view.mana.max(0.0).floor())
@@ -463,9 +457,8 @@ pub(super) fn hud(
     let dt = ctx.input(|i| i.predicted_dt).min(0.1);
     let time = ctx.input(|i| i.time as f32);
 
-    let (preview_hunger, preview_heal) = held_food.map_or((0.0, 0.0), |f| {
-        (f.hunger_restore(), f.health_restore())
-    });
+    let (preview_hunger, preview_heal) =
+        held_food.map_or((0.0, 0.0), |f| (f.hunger_restore(), f.health_restore()));
 
     let hp_id = egui::Id::new("health_feedback");
     let mut hp_fb = ctx
@@ -542,6 +535,7 @@ pub(super) fn hud(
                     let mut slot_rects = Vec::with_capacity(cap);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(3.0, 2.0);
+                        ui.set_max_width(bar_width);
                         for slot in 0..cap {
                             let spell = view.loadout.slot(slot);
                             let (r, slot_resp) =
@@ -572,8 +566,8 @@ pub(super) fn hud(
                                 );
                             }
                             if slot == view.loadout.cursor && view.cooldown > 0.0 {
-                                let progress = (view.cooldown / view.cast_total.max(0.12))
-                                    .clamp(0.0, 1.0);
+                                let progress =
+                                    (view.cooldown / view.cast_total.max(0.12)).clamp(0.0, 1.0);
                                 ui.painter().rect_filled(
                                     Rect::from_min_size(
                                         r.left_bottom() - vec2(0.0, 2.0),
@@ -585,19 +579,19 @@ pub(super) fn hud(
                             }
                             slot_resp.on_hover_ui(|ui| {
                                 super::wands::show_spell_hover_card(ui, spell, view);
-                                ui.separator();
-                                super::wands::show_wand_hover_card(ui, view);
                             });
                         }
                         ui.add_space(2.0);
                         style::keycap(ui, "R");
-                        let wand_lbl = ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(spell_name(view.spell))
-                                    .size(11.5)
-                                    .color(style::PAPER),
-                            )
-                            .sense(egui::Sense::hover()),
+                        let name_w = (bar_width - cap as f32 * 25.0 - 56.0).clamp(72.0, 140.0);
+                        let (name_rect, wand_lbl) =
+                            ui.allocate_exact_size(vec2(name_w, 16.0), egui::Sense::hover());
+                        ui.painter().with_clip_rect(name_rect).text(
+                            name_rect.left_center(),
+                            Align2::LEFT_CENTER,
+                            spell_name(view.spell),
+                            FontId::proportional(11.5),
+                            style::PAPER,
                         );
                         style::keycap(ui, "T");
                         wand_lbl.on_hover_ui(|ui| {
@@ -610,14 +604,36 @@ pub(super) fn hud(
             }
             if view.ward > 0.0 && view.ward_hits > 0 {
                 ui.label(
-                    egui::RichText::new(format!("WARD {}  {:.0}s", view.ward_hits, view.ward.ceil()))
-                        .size(12.0)
-                        .color(style::MANA),
+                    egui::RichText::new(format!(
+                        "WARD {}  {:.0}s",
+                        view.ward_hits,
+                        view.ward.ceil()
+                    ))
+                    .size(12.0)
+                    .color(style::MANA),
                 );
             }
 
-            if armor_points > 0 {
-                draw_armor_row(ui, (bar_width * 0.46).max(110.0), armor_points);
+            if armor_points > 0 || view.respawn_point.is_some() {
+                ui.horizontal(|ui| {
+                    if armor_points > 0 {
+                        draw_armor_row(ui, (bar_width * 0.46).max(110.0), armor_points);
+                    }
+                    if let Some(sp) = view.respawn_point {
+                        let lbl = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new("✦ Sanctum Bound")
+                                    .size(10.5)
+                                    .color(style::JADE),
+                            )
+                            .sense(egui::Sense::hover()),
+                        );
+                        lbl.on_hover_text(format!(
+                            "Respawn attuned to Sanctum reliquary at ({:.0}, {:.0}, {:.0})",
+                            sp.x, sp.y, sp.z
+                        ));
+                    }
+                });
             }
 
             // Minecraft-style split row: Health on the left, Hunger on the right above the hotbar.
@@ -674,8 +690,157 @@ pub(super) fn hud(
         });
     super::relics::reward(ctx, view);
     super::relics::encounter(ctx, view);
+    draw_compass(ctx, yaw, view.quest.as_ref());
     combat_feedback(ctx, view, yaw);
     result.response.rect
+}
+
+/// Pixel-art heading strip. The target marker is derived from the same
+/// `next_relic` route as the journal and is clamped to the edge with a chevron
+/// when it is outside the visible arc.
+fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
+    let content = ctx.content_rect();
+    let width = (content.width() - 96.0).clamp(250.0, 540.0);
+    let bar = Rect::from_center_size(
+        egui::pos2(content.center().x, content.top() + 30.0),
+        vec2(width, 36.0),
+    );
+    let p = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        "compass_strip".into(),
+    ));
+    p.rect_filled(bar, 0, Color32::from_rgba_unmultiplied(12, 16, 22, 168));
+    p.rect_stroke(
+        bar,
+        0,
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(210, 202, 172, 120)),
+        egui::StrokeKind::Inside,
+    );
+
+    let heading = yaw.to_degrees().rem_euclid(360.0);
+    let span = 104.0;
+    let half = bar.width() * 0.5;
+    let x_for = |relative: f32| bar.center().x + relative / span * half;
+    let wrap = |angle: f32| {
+        let mut a = angle.rem_euclid(360.0);
+        if a > 180.0 {
+            a -= 360.0;
+        }
+        a
+    };
+
+    for degree in (0..360).step_by(15) {
+        let relative = wrap(degree as f32 - heading);
+        if relative.abs() > span {
+            continue;
+        }
+        let x = x_for(relative);
+        let major = degree % 45 == 0;
+        p.line_segment(
+            [
+                egui::pos2(x, bar.top() + if major { 5.0 } else { 8.0 }),
+                egui::pos2(x, bar.top() + if major { 13.0 } else { 11.0 }),
+            ],
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(214, 208, 184, 120)),
+        );
+        if major {
+            let label = match degree {
+                0 => "N",
+                45 => "NE",
+                90 => "E",
+                135 => "SE",
+                180 => "S",
+                225 => "SW",
+                270 => "W",
+                _ => "NW",
+            };
+            p.text(
+                egui::pos2(x, bar.top() + 15.0),
+                Align2::CENTER_TOP,
+                label,
+                FontId::monospace(if degree % 90 == 0 { 11.0 } else { 8.5 }),
+                if degree == 0 {
+                    Color32::from_rgb(236, 186, 102)
+                } else {
+                    style::PAPER
+                },
+            );
+        }
+    }
+
+    p.text(
+        egui::pos2(bar.right() + 6.0, bar.center().y),
+        Align2::LEFT_CENTER,
+        format!("{:03}°", heading.round() as i32 % 360),
+        FontId::monospace(9.5),
+        style::MUTED,
+    );
+
+    // Fixed heading caret. The world rotates under it; the HUD stays legible.
+    let center = egui::pos2(bar.center().x, bar.top() + 2.0);
+    p.add(egui::Shape::convex_polygon(
+        vec![center, center + vec2(-4.0, -6.0), center + vec2(4.0, -6.0)],
+        style::AMBER,
+        Stroke::new(1.0, style::INK),
+    ));
+
+    if let Some(target) = target {
+        let relative = wrap(target.bearing_deg - heading);
+        let clamped = relative.clamp(-span, span);
+        let x = x_for(clamped);
+        let color = match target.kind {
+            3 => style::AMBER,
+            5 => style::MANA,
+            _ => style::JADE,
+        };
+        let marker = egui::pos2(x, bar.center().y - 3.0);
+        p.circle_filled(
+            marker,
+            8.0,
+            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 55),
+        );
+        p.add(egui::Shape::convex_polygon(
+            vec![
+                marker + vec2(0.0, -6.0),
+                marker + vec2(5.0, 0.0),
+                marker + vec2(0.0, 6.0),
+                marker + vec2(-5.0, 0.0),
+            ],
+            color,
+            Stroke::new(1.0, style::INK),
+        ));
+        if relative.abs() > span {
+            let tip = if relative > 0.0 {
+                marker + vec2(9.0, 0.0)
+            } else {
+                marker + vec2(-9.0, 0.0)
+            };
+            let wing = if relative > 0.0 { -1.0 } else { 1.0 };
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    tip,
+                    tip + vec2(6.0 * wing, -5.0),
+                    tip + vec2(6.0 * wing, 5.0),
+                ],
+                color,
+                Stroke::new(1.0, style::INK),
+            ));
+        }
+        let height = if target.vertical_m > 1.5 {
+            format!("  ↑ {:.0} m", target.vertical_m)
+        } else if target.vertical_m < -1.5 {
+            format!("  ↓ {:.0} m", -target.vertical_m)
+        } else {
+            String::new()
+        };
+        p.text(
+            egui::pos2(x, bar.bottom() + 3.0),
+            Align2::CENTER_TOP,
+            format!("{}  {:.0} m{}", target.label, target.distance_m, height),
+            FontId::monospace(9.5),
+            color,
+        );
+    }
 }
 
 fn combat_feedback(ctx: &egui::Context, view: &View, yaw: f32) {
