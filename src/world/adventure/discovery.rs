@@ -82,7 +82,7 @@ fn discoverable(id: u32) -> bool {
     id != wands::EMPTY && !matches!(id, 6 | 7) && spell_name(id) != "Unknown spell"
 }
 
-fn mix32(mut x: u32) -> u32 {
+pub(super) fn mix32(mut x: u32) -> u32 {
     x ^= x >> 16;
     x = x.wrapping_mul(0x7feb_352d);
     x ^= x >> 15;
@@ -115,6 +115,23 @@ pub fn site_salt(site: IVec3) -> u32 {
     )
 }
 
+/// Chaotic chassis: reorders the occupied slots (within the wand's capacity)
+/// by a seeded Fisher-Yates pass. Empty slots stay where they are, so only the
+/// order of the spells changes, never which spells are on the wand.
+pub fn shuffle_deck(deck: &mut wands::Loadout, seed: u32, capacity: usize) {
+    let spots: Vec<usize> = (0..wands::MAX_SLOTS.min(capacity))
+        .filter(|&i| deck.slot(i) != wands::EMPTY)
+        .collect();
+    let mut spells: Vec<u32> = spots.iter().map(|&i| deck.slot(i)).collect();
+    for i in (1..spells.len()).rev() {
+        let j = mix32(seed ^ (i as u32).wrapping_mul(0x9e37_79b1)) as usize % (i + 1);
+        spells.swap(i, j);
+    }
+    for (&spot, spell) in spots.iter().zip(spells) {
+        deck.set_slot(spot, spell);
+    }
+}
+
 impl Adventure {
     /// Begins a fresh adventure with only the starter spells found.
     pub fn begin_journey(&mut self) {
@@ -136,6 +153,9 @@ impl Adventure {
             if s != wands::EMPTY && !self.spell_log.grants(s) {
                 deck.set_slot(idx, wands::EMPTY);
             }
+        }
+        if deck.mode == 3 {
+            shuffle_deck(&mut deck, self.shuffle_seed, wands::capacity(self.wand));
         }
         deck
     }

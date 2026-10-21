@@ -10,7 +10,7 @@ pub mod discovery;
 pub mod spell_defs;
 pub use spell_defs::{
     Class, Unlock, spell_available, spell_base_damage, spell_base_speed, spell_cast_delay_delta,
-    spell_class, spell_color, spell_cooldown, spell_cost, spell_flavor, spell_hint,
+    spell_class, spell_color, spell_cooldown, spell_cost, spell_flavor, spell_hint, spell_hit_damage,
     spell_kind_tag, spell_name, spell_recharge_delta, spell_spread_delta,
 };
 pub(crate) mod growth;
@@ -782,6 +782,9 @@ pub struct Adventure {
     pub rare_spells: u32,
     /// Spells the player has found. Persisted from save version 19.
     pub spell_log: discovery::SpellLog,
+    /// Seed for the Chaotic chassis; changes each time the deck reloads.
+    /// Not saved: a shuffle is a fresh roll after loading.
+    shuffle_seed: u32,
     sigils: u32,
     route: String,
     stations: Vec<quest::Station>,
@@ -860,6 +863,7 @@ impl Default for Adventure {
             discoveries_ready: false,
             rare_spells: 0,
             spell_log: discovery::SpellLog::default(),
+            shuffle_seed: 0,
             sigils: 0,
             route: String::new(),
             stations: Vec::new(),
@@ -1854,6 +1858,11 @@ impl Adventure {
         for mut shot in shots {
             shot.life -= dt;
             if shot.life <= 0.0 {
+                // On expire: a bolt that times out without hitting anything
+                // still delivers its payload where it ended.
+                if !shot.hostile && shot.mods.expire && shot.payload.is_some() {
+                    self.release_payload(world, &mut shot);
+                }
                 continue;
             }
             if !shot.hostile {
@@ -1873,32 +1882,7 @@ impl Adventure {
                     if shot.mods.timer <= 0.0 {
                         // The payload leaves the carrier mid-flight; the carrier
                         // keeps flying and no longer holds a payload for impact.
-                        if let Some(payload) = shot.payload.take() {
-                            let p_dir = shot.velocity.normalize_or_zero();
-                            if wands::is_effect(payload) {
-                                let created = growth::resolve_effect(world, payload, shot.pos, None);
-                                if let Some(follow) = shot.follow.filter(|f| wands::is_effect(*f)) {
-                                    growth::resolve_effect(world, follow, shot.pos, created);
-                                }
-                            } else if payload == 9 {
-                                self.cast_luminous_drill(
-                                    world,
-                                    shot.pos,
-                                    p_dir,
-                                    shot.payload_mods,
-                                    None,
-                                );
-                            } else {
-                                self.emit_spell_modified(
-                                    payload,
-                                    shot.pos,
-                                    p_dir,
-                                    None,
-                                    shot.payload_mods,
-                                );
-                            }
-                            self.spawn_voxel_burst(shot.pos, shot.color(), 8, 1.4, 0.03);
-                        }
+                        self.release_payload(world, &mut shot);
                     }
                 }
                 if shot.mods.homing || shot.mods.seek_ally {
@@ -2002,6 +1986,7 @@ impl Adventure {
             }
             let travel = shot.velocity * dt;
             let mut spark_target = None;
+            let mut crit_at: Option<Vec3> = None;
             let mut reaction_fx: Option<(Vec3, status::Element, Option<&'static str>)> = None;
             let steps = (travel.length() / (scale * 0.2).min(0.10)).ceil().max(1.0) as usize;
             let mut hit = false;
@@ -2147,12 +2132,17 @@ impl Adventure {
                         Some(e.center()),
                         0.7,
                     );
-                    let base_dmg = spell_base_damage(shot.spell).max(22.0);
+                    let base_dmg = spell_hit_damage(shot.spell);
                     let mut dealt =
                         (base_dmg + rank as f32 * 4.0 + if shatter { 18.0 } else { 0.0 })
                             * shot.mods.damage_mul
                             * if shield { 0.3 } else { 1.0 }
                             * e.affixes.damage_taken();
+                    let crit = shot.mods.crit && wands::crit_roll(self.time, e.slot);
+                    if crit {
+                        dealt *= 2.5;
+                        crit_at = Some(e.center());
+                    }
                     let mut element_stagger = 0.0;
                     if let Some(element) = shot.mods.element {
                         let reaction = e.status.apply(element, e.affixes);
@@ -2164,6 +2154,9 @@ impl Adventure {
                         reaction_fx = Some((e.center(), element, reaction.name));
                     }
                     e.hurt(dealt);
+                    if shot.mods.mana_leech {
+                        self.mana = (self.mana + 4.0).min(100.0 + rank as f32 * 15.0);
+                    }
                     if shot.mods.siphon {
                         self.health = (self.health + 4.0).min(100.0 + rank as f32 * 20.0);
                     }
@@ -2204,6 +2197,10 @@ impl Adventure {
                 }
             }
             if hit {
+                if let Some(at) = crit_at {
+                    self.spawn_voxel_burst(at, [1.0, 0.85, 0.35], 12, 2.8, 0.045);
+                    sound(&mut self.sounds, Cue::Spark, Some(at), 0.8);
+                }
                 if let Some((at, element, name)) = reaction_fx {
                     self.spawn_voxel_burst(
                         at,
@@ -2330,6 +2327,16 @@ impl Adventure {
                         };
                         self.emit_spell_modified(0, shot.pos + back * 0.15, d, None, mods);
                     }
+                }
+                if !shot.hostile && shot.spell == 72 {
+                    let travel = shot.velocity;
+                    self.teleport_to_impact(world, player, shot.pos, travel);
+                }
+                if !shot.hostile && shot.spell == 73 {
+                    self.pour_water(world, shot.pos);
+                }
+                if !shot.hostile && shot.spell == 74 {
+                    self.venom_nova(world, shot.pos, shot.mods.damage_mul);
                 }
                 if !shot.hostile && matches!(shot.spell, 2 | 13) {
                     self.cryo_bloom(world, shot.pos, if shot.spell == 13 { 3.2 } else { 1.35 });

@@ -67,6 +67,12 @@ pub struct ShotMods {
     pub fork: bool,
     /// Seconds of flight before an attached payload fires mid-air (0 = off).
     pub timer: f32,
+    /// Each hit restores a little mana.
+    pub mana_leech: bool,
+    /// One hit in four lands for 2.5x damage.
+    pub crit: bool,
+    /// The attached payload also fires if the bolt times out without a hit.
+    pub expire: bool,
 }
 
 impl Default for ShotMods {
@@ -97,6 +103,9 @@ impl Default for ShotMods {
             blood_price: false,
             fork: false,
             timer: 0.0,
+            mana_leech: false,
+            crit: false,
+            expire: false,
         }
     }
 }
@@ -255,7 +264,7 @@ pub fn stats(tier: u32, mode: u32, rank: u32) -> WandStats {
             _ => "Sanctum Sovereign",
         },
         chassis,
-        shuffle: false,
+        shuffle: mode == 3,
         spells_per_cast,
         cast_delay: (base_delay + delay_mod).max(0.03),
         recharge_time: (base_recharge + recharge_mod).max(0.10),
@@ -363,6 +372,8 @@ fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
         }
         68 => mods.blood_price = true,
         69 => mods.fork = true,
+        77 => mods.mana_leech = true,
+        78 => mods.crit = true,
         _ => return false,
     }
     true
@@ -513,6 +524,11 @@ pub fn evaluate_programmed(
                         attach_trigger = true;
                         mods.timer = 0.6;
                     }
+                    79 => {
+                        // Trigger bolt plus: also fires if the bolt times out.
+                        attach_trigger = true;
+                        mods.expire = true;
+                    }
                     _ => {}
                 }
             }
@@ -656,6 +672,12 @@ pub fn evaluate_programmed(
     }
 }
 
+/// One hit in four is a critical hit. Deterministic in the clock and the
+/// target so a replay of the same fight rolls the same dice.
+pub(super) fn crit_roll(time: f32, slot: u32) -> bool {
+    super::discovery::mix32(time.to_bits() ^ slot.wrapping_mul(0x9e37_79b1)) % 4 == 0
+}
+
 /// Cast a ray from a position in metres. `raycast_block` works in voxel
 /// coordinates, so at any scale other than 1 m a raw metre origin would aim from
 /// the wrong place. Returns the struck cell and its face normal.
@@ -740,6 +762,11 @@ impl Adventure {
         if self.projectiles.len() >= 96 {
             return;
         }
+        let mut mods = mods;
+        if spell == 76 {
+            // Bounce orb always ricochets, whatever else is on the deck.
+            mods.bounces = mods.bounces.max(4);
+        }
         let speed = spell_base_speed(spell) * mods.speed_mul;
         let arc_lift = match spell {
             5 => Vec3::Y * 2.0,
@@ -752,7 +779,12 @@ impl Adventure {
             velocity: dir * speed + arc_lift,
             hostile: false,
             spell,
-            life: (if spell == 10 { 3.6 } else { 3.0 }) * mods.life_mul.max(0.25),
+            life: (match spell {
+                10 => 3.6,
+                71 => 0.16, // Chainsaw: a few metres of reach
+                76 => 4.0,
+                _ => 3.0,
+            }) * mods.life_mul.max(0.25),
             payload,
             payload_mods: ShotMods::default(),
             mods,
@@ -933,6 +965,11 @@ impl Adventure {
                     self.cast_luminous_drill(world, eye, dir, act.mods, act.payload);
                     played_cue.get_or_insert(Cue::Spark);
                 }
+                75 => {
+                    self.cast_ice_wall(world, eye, forward);
+                    played_cue.get_or_insert(Cue::Frost);
+                    played_pitch = 0.8;
+                }
                 30 => {
                     self.cast_time_snag(eye);
                     played_cue.get_or_insert(Cue::Echo);
@@ -1038,6 +1075,11 @@ impl Adventure {
         self.recharge_total = eval.recharge_time;
         self.cast_cd = eval.cast_delay + eval.recharge_time;
         self.cast_total = self.cast_cd;
+        if self.loadout.mode == 3 && eval.recharge_time > 0.0 {
+            // The deck wrapped, so the Chaotic chassis deals a fresh order.
+            self.shuffle_seed =
+                super::discovery::mix32(self.shuffle_seed ^ self.time.to_bits() ^ 0x5eed_0001);
+        }
     }
 
     /// A short, bounded physics shockwave. Rigid assemblies receive a real
@@ -1152,6 +1194,148 @@ impl Adventure {
         player.vel += flat * crate::world::speed_blocks(world.voxel_scale, 5.0);
         player.on_ground = false;
         self.spawn_voxel_burst(eye - Vec3::Y * 1.2, spell_color(32), 14, 1.6, 0.035);
+    }
+
+    /// Fires the payload a carrier holds, from the carrier's position. Shared by
+    /// On timer and On expire; afterwards the carrier holds no payload.
+    pub(super) fn release_payload(&mut self, world: &mut World, shot: &mut Projectile) {
+        let Some(payload) = shot.payload.take() else {
+            return;
+        };
+        let p_dir = shot.velocity.normalize_or_zero();
+        if is_effect(payload) {
+            let created = growth::resolve_effect(world, payload, shot.pos, None);
+            if let Some(follow) = shot.follow.filter(|f| is_effect(*f)) {
+                growth::resolve_effect(world, follow, shot.pos, created);
+            }
+        } else if payload == 9 {
+            self.cast_luminous_drill(world, shot.pos, p_dir, shot.payload_mods, None);
+        } else {
+            self.emit_spell_modified(payload, shot.pos, p_dir, None, shot.payload_mods);
+        }
+        self.spawn_voxel_burst(shot.pos, shot.color(), 8, 1.4, 0.03);
+    }
+
+    /// Swaps the caster to where a Teleport bolt landed, backing off the wall
+    /// until the body fits. `Player::pos` is the feet, so the body is placed
+    /// one eye-height below the bolt. Returns false and does nothing if no
+    /// nearby spot is clear.
+    pub(super) fn teleport_to_impact(
+        &mut self,
+        world: &World,
+        player: &mut Player,
+        at: Vec3,
+        travel: Vec3,
+    ) -> bool {
+        let scale = world.voxel_scale.meters();
+        let back = -travel.normalize_or_zero();
+        let eye_height = (player.eye(world.voxel_scale) - player.pos).y * scale;
+        for lift in [0.0_f32, 0.5, 1.0, 1.5, 2.0, 2.5] {
+            for step in [0.35_f32, 0.7, 1.1, 1.6, 2.2] {
+                let feet = at + back * step + Vec3::Y * lift - Vec3::Y * eye_height;
+                let (min, max) = super::super::player_aabb(
+                    feet / scale,
+                    world.voxel_scale,
+                    player.scale,
+                    player.crouch_t,
+                );
+                if collides_world(world, min, max) {
+                    continue;
+                }
+                let origin = player.pos * scale;
+                player.pos = feet / scale;
+                player.vel = Vec3::ZERO;
+                self.invulnerable = self.invulnerable.max(0.4);
+                self.effect(origin + Vec3::Y, spell_color(72), 1.0);
+                self.effect(feet + Vec3::Y, spell_color(72), 1.0);
+                sound(&mut self.sounds, Cue::Echo, None, 0.8);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Pours a bounded puddle of water at an impact and soaks nearby foes.
+    pub(super) fn pour_water(&mut self, world: &mut World, at: Vec3) {
+        use crate::world::BlockId as B;
+        let scale = world.voxel_scale.meters();
+        let centre = (at / scale).floor().as_ivec3();
+        let mut cells: Vec<(i32, IVec3)> = Vec::new();
+        for dx in -2..=2 {
+            for dy in -1..=2 {
+                for dz in -2..=2 {
+                    let d2 = dx * dx + dy * dy + dz * dz;
+                    let cell = centre + IVec3::new(dx, dy, dz);
+                    if d2 <= 5 && world.get(cell) == B::Air {
+                        // Nearest first, lowest first, so it pools instead of floating.
+                        cells.push((d2 * 4 + dy, cell));
+                    }
+                }
+            }
+        }
+        cells.sort_by_key(|(k, c)| (*k, c.x, c.y, c.z));
+        for (_, cell) in cells.into_iter().take(18) {
+            world.set(cell, B::Water);
+            world.activity.wake(cell);
+            self.mark_voxel_dirty(world, cell);
+        }
+        for e in &mut self.enemies {
+            if e.health > 0.0 && (e.center() - at).length() < 3.5 {
+                e.status.apply(super::status::Element::Wet, e.affixes);
+            }
+        }
+        sound(&mut self.sounds, Cue::Splash, Some(at), 0.8);
+    }
+
+    /// Poisons every foe within 3.4 m of the impact that it can see.
+    pub(super) fn venom_nova(&mut self, world: &World, at: Vec3, damage_mul: f32) {
+        use super::status::Element;
+        for e in &mut self.enemies {
+            if e.health <= 0.0 || (e.center() - at).length() >= 3.4 || !line(world, at, e.center())
+            {
+                continue;
+            }
+            e.status.apply(Element::Toxic, e.affixes);
+            e.status.apply(Element::Toxic, e.affixes);
+            e.hurt(8.0 * damage_mul * e.affixes.damage_taken());
+            e.flash = 0.16;
+        }
+        self.spawn_voxel_burst(at, Element::Toxic.color(), 26, 3.0, 0.045);
+        self.effect(at, Element::Toxic.color(), 2.2);
+        sound(&mut self.sounds, Cue::Bloom, Some(at), 0.8);
+    }
+
+    /// Raises a 3 m wide, 2.5 m tall ice barrier three metres ahead of the
+    /// caster. Only empty cells are filled, and the total is bounded so a very
+    /// fine voxel scale cannot flood the sim.
+    pub(super) fn cast_ice_wall(&mut self, world: &mut World, eye: Vec3, forward: Vec3) {
+        use crate::world::BlockId as B;
+        let scale = world.voxel_scale.meters();
+        let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+        let flat = if flat == Vec3::ZERO { Vec3::NEG_Z } else { flat };
+        let side = Vec3::new(-flat.z, 0.0, flat.x);
+        let base = eye + flat * 3.0 - Vec3::Y * 1.5;
+        let step = scale * 0.9;
+        // Sample both endpoints of each span, or the wall stops short of its
+        // stated 3 m x 2.5 m at coarse voxel sizes.
+        let cols = (3.0 / step).ceil() as i32;
+        let rows = (2.5 / step).ceil() as i32;
+        let mut made = 0;
+        for ci in 0..=cols {
+            let u = (-1.5 + ci as f32 * step).min(1.5);
+            for ri in 0..=rows {
+                let h = (ri as f32 * step).min(2.5);
+                let cell = ((base + side * u + Vec3::Y * h) / scale).floor().as_ivec3();
+                if made < 400 && world.get(cell) == B::Air {
+                    world.set(cell, B::Ice);
+                    world.activity.wake(cell);
+                    self.mark_voxel_dirty(world, cell);
+                    made += 1;
+                }
+            }
+        }
+        self.effect(base + Vec3::Y, spell_color(75), 1.6);
+        self.spawn_voxel_burst(base + Vec3::Y, spell_color(75), 20, 2.0, 0.04);
     }
 
     pub fn cancel_cast_input(&mut self) {
@@ -1903,5 +2087,288 @@ mod time_snag_tests {
             "hostile bolt went from {before} to {after}"
         );
         assert!(a.mana < 100.0, "the cast must cost mana");
+    }
+}
+
+#[cfg(test)]
+mod noita_mechanics_tests {
+    use super::*;
+    use crate::{
+        fluid::VoxelScalePreset,
+        world::{BlockId as B, WorldType},
+    };
+
+    const SCALES: [VoxelScalePreset; 3] = [
+        VoxelScalePreset::OneMeter,
+        VoxelScalePreset::HalfMeter,
+        VoxelScalePreset::QuarterMeter,
+    ];
+
+    fn rig(scale: VoxelScalePreset) -> (World, Player, Vec3, Adventure) {
+        let w = World::with_seed(WorldType::Superflat, scale, 17);
+        let mut p = Player::new();
+        p.pos = Vec3::new(0.0, 150.0, 0.0) / scale.meters();
+        p.flying = true;
+        let eye = p.eye(scale) * scale.meters();
+        let mut a = Adventure::default();
+        a.wand = 3;
+        a.rare_spells = !0;
+        a.mana = 100.0;
+        a.health = 100.0;
+        a.loadout.aux_slots = [EMPTY; 4];
+        (w, p, eye, a)
+    }
+
+    fn run(w: &mut World, p: &mut Player, frames: usize) {
+        for _ in 0..frames {
+            super::super::tick(w, p, 1.0 / 60.0, false, false, false);
+        }
+    }
+
+    /// An enemy whose body centre sits exactly at `centre`.
+    fn enemy_at(centre: Vec3, slot: u32) -> Enemy {
+        let mut e = Enemy::new(IVec3::ZERO, slot, 0, centre, 1);
+        let delta = centre - e.center();
+        e.pos += delta;
+        e
+    }
+
+    #[test]
+    fn chainsaw_is_a_near_free_bolt_that_only_reaches_a_few_metres() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.loadout.slots = [71, EMPTY, EMPTY, EMPTY];
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_eq!(a.projectiles.len(), 1);
+        assert_eq!(a.projectiles[0].spell, 71);
+        assert!(a.projectiles[0].life <= 0.2, "life {}", a.projectiles[0].life);
+        assert!((a.mana - 99.0).abs() < 0.01, "mana {}", a.mana);
+        assert_eq!(spell_hit_damage(71), 7.0, "chainsaw must not inherit the 22 floor");
+        assert_eq!(spell_hit_damage(0), 22.0, "older spells keep the floor");
+        w.adventure = a;
+        run(&mut w, &mut p, 15);
+        assert!(w.adventure.projectiles.is_empty(), "the chainsaw must fizzle out");
+    }
+
+    #[test]
+    fn bounce_orb_ricochets_off_a_wall_instead_of_dying() {
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        let base = (eye / 1.0).floor().as_ivec3();
+        w.set(base + IVec3::new(4, 0, 0), B::Stone);
+        a.emit_spell_modified(76, eye, Vec3::X, None, ShotMods::default());
+        assert_eq!(a.projectiles[0].mods.bounces, 4);
+        w.adventure = a;
+        run(&mut w, &mut p, 18);
+        let shots = &w.adventure.projectiles;
+        assert_eq!(shots.len(), 1, "the orb should have bounced, not been destroyed");
+        assert!(shots[0].velocity.x < 0.0, "velocity {:?}", shots[0].velocity);
+        assert!(shots[0].mods.bounces < 4);
+    }
+
+    #[test]
+    fn teleport_bolt_swaps_the_caster_to_the_impact_at_every_scale() {
+        for scale in SCALES {
+            let (mut w, mut p, eye, mut a) = rig(scale);
+            let s = scale.meters();
+            let start = p.pos * s;
+            let wall = (eye / s).floor().as_ivec3() + IVec3::new(0, 0, -(8.0 / s) as i32);
+            w.set(wall, B::Stone);
+            a.loadout.slots = [72, EMPTY, EMPTY, EMPTY];
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert_eq!(a.projectiles.len(), 1, "{scale:?}");
+            w.adventure = a;
+            run(&mut w, &mut p, 40);
+            assert!(w.adventure.projectiles.is_empty(), "{scale:?}: bolt still flying");
+            let now = p.pos * s;
+            assert!(
+                start.z - now.z >= 4.0,
+                "{scale:?}: only moved {} m",
+                start.z - now.z
+            );
+            assert!(
+                now.z > (wall.z + 1) as f32 * s - 0.001,
+                "{scale:?}: landed inside the wall, z = {}",
+                now.z
+            );
+            let (min, max) = crate::world::player_aabb(p.pos, scale, p.scale, p.crouch_t);
+            assert!(!collides_world(&w, min, max), "{scale:?}: landed inside solid blocks");
+        }
+    }
+
+    #[test]
+    fn flood_bolt_pours_a_bounded_puddle_and_soaks_foes() {
+        let scale = VoxelScalePreset::OneMeter;
+        let (mut w, mut p, eye, mut a) = rig(scale);
+        let wall = (eye).floor().as_ivec3() + IVec3::new(6, 0, 0);
+        w.set(wall, B::Stone);
+        let foe = enemy_at(eye + Vec3::new(4.2, 0.0, 1.0), 0);
+        a.enemies.push(foe);
+        a.loadout.slots = [73, EMPTY, EMPTY, EMPTY];
+        a.cast_wand(&mut w, &mut p, eye, Vec3::X);
+        w.adventure = a;
+        run(&mut w, &mut p, 30);
+        let mut water = 0;
+        for dx in -4..=2 {
+            for dy in -3..=4 {
+                for dz in -4..=4 {
+                    if w.get(wall + IVec3::new(dx, dy, dz)) == B::Water {
+                        water += 1;
+                    }
+                }
+            }
+        }
+        assert!((6..=18).contains(&water), "{water} water cells poured");
+        assert!(
+            w.adventure.enemies.iter().any(|e| e.status.wet > 0.0),
+            "the foe should be soaked"
+        );
+    }
+
+    #[test]
+    fn venom_nova_poisons_foes_in_range_but_not_distant_ones() {
+        let (w, _p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.enemies.push(enemy_at(eye + Vec3::new(2.0, 0.0, 0.0), 0));
+        a.enemies.push(enemy_at(eye + Vec3::new(9.0, 0.0, 0.0), 1));
+        let health = a.enemies[0].health;
+        a.venom_nova(&w, eye, 1.0);
+        assert!(a.enemies[0].status.stacks >= 1, "stacks {}", a.enemies[0].status.stacks);
+        assert!(a.enemies[0].health < health);
+        assert_eq!(a.enemies[1].status.stacks, 0, "a distant foe must be untouched");
+    }
+
+    #[test]
+    fn ice_wall_raises_a_bounded_barrier_ahead_at_every_scale() {
+        for scale in SCALES {
+            let (mut w, mut p, eye, mut a) = rig(scale);
+            let s = scale.meters();
+            a.loadout.slots = [75, EMPTY, EMPTY, EMPTY];
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert!(a.mana < 100.0, "{scale:?}: the cast must cost mana");
+            let (mut ice, mut worst_z) = (0, 0.0_f32);
+            let lo = ((eye - Vec3::new(5.0, 4.0, 6.0)) / s).floor().as_ivec3();
+            let hi = ((eye + Vec3::new(5.0, 3.0, 1.0)) / s).ceil().as_ivec3();
+            for x in lo.x..=hi.x {
+                for y in lo.y..=hi.y {
+                    for z in lo.z..=hi.z {
+                        if w.get(IVec3::new(x, y, z)) == B::Ice {
+                            ice += 1;
+                            worst_z = worst_z.max(((z as f32 + 0.5) * s - (eye.z - 3.0)).abs());
+                        }
+                    }
+                }
+            }
+            assert!((9..=400).contains(&ice), "{scale:?}: {ice} ice cells");
+            assert!(worst_z <= s * 2.0, "{scale:?}: wall is not a flat plane ({worst_z})");
+        }
+    }
+
+    #[test]
+    fn mana_leech_returns_mana_only_when_it_hits() {
+        let measure = |leech: bool| {
+            let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+            a.mana = 50.0;
+            a.enemies.push(enemy_at(eye + Vec3::new(5.0, 0.0, 0.0), 0));
+            let mods = ShotMods {
+                mana_leech: leech,
+                ..Default::default()
+            };
+            a.emit_spell_modified(0, eye, Vec3::X, None, mods);
+            w.adventure = a;
+            run(&mut w, &mut p, 30);
+            w.adventure.mana
+        };
+        let with = measure(true);
+        let without = measure(false);
+        assert!(
+            (with - without - 4.0).abs() < 0.01,
+            "leech gave {with}, control {without}"
+        );
+    }
+
+    #[test]
+    fn critical_hits_are_one_in_four_and_the_modifier_is_flagged() {
+        let hits = (0..4000u32)
+            .filter(|&i| crit_roll(i as f32 * 0.137, i % 7))
+            .count();
+        let rate = hits as f32 / 4000.0;
+        assert!((0.20..=0.30).contains(&rate), "crit rate {rate}");
+
+        let mut b = Adventure::default();
+        b.wand = 3;
+        b.loadout.slots = [78, 77, 0, EMPTY];
+        let m = evaluate_cast_block(3, !0, 0, 0, &b.loadout, 0).actions[0].mods;
+        assert!(m.crit && m.mana_leech);
+    }
+
+    #[test]
+    fn on_expire_delivers_its_payload_on_a_miss_but_a_plain_trigger_does_not() {
+        for (card, expect) in [(79u32, true), (18, false)] {
+            let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+            a.loadout.slots = [card, 0, 3, EMPTY];
+            a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+            assert_eq!(a.projectiles.len(), 1, "card {card}");
+            assert_eq!(a.projectiles[0].payload, Some(3), "card {card}");
+            a.projectiles[0].life = 0.2;
+            w.adventure = a;
+            run(&mut w, &mut p, 30);
+            let released = w.adventure.projectiles.iter().any(|s| s.spell == 3);
+            assert_eq!(released, expect, "card {card}: payload released = {released}");
+        }
+    }
+
+    #[test]
+    fn chaotic_chassis_reorders_the_deck_but_never_changes_its_contents() {
+        let mut base = Loadout::default();
+        base.slots = [0, 2, EMPTY, 3];
+        base.aux_slots = [5, EMPTY, EMPTY, EMPTY];
+        let sorted = |d: &Loadout| {
+            let mut v: Vec<u32> = (0..MAX_SLOTS).map(|i| d.slot(i)).collect();
+            v.sort_unstable();
+            v
+        };
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..60u32 {
+            let mut d = base;
+            super::super::discovery::shuffle_deck(&mut d, seed, 8);
+            assert_eq!(sorted(&d), sorted(&base), "seed {seed} changed which spells exist");
+            for i in 0..MAX_SLOTS {
+                assert_eq!(
+                    d.slot(i) == EMPTY,
+                    base.slot(i) == EMPTY,
+                    "seed {seed}: empty slot {i} moved"
+                );
+            }
+            seen.insert((0..MAX_SLOTS).map(|i| d.slot(i)).collect::<Vec<_>>());
+        }
+        assert!(seen.len() >= 6, "only {} distinct orders in 60 seeds", seen.len());
+
+        // Capacity limits the shuffle: slots beyond the wand are left alone.
+        let mut d = base;
+        super::super::discovery::shuffle_deck(&mut d, 7, 4);
+        assert_eq!(d.slot(4), 5, "a slot beyond capacity must not move");
+    }
+
+    #[test]
+    fn only_the_chaotic_chassis_shuffles_and_reloading_reseeds_it() {
+        assert!(stats(3, 3, 0).shuffle);
+        for mode in [0, 1, 2] {
+            assert!(!stats(3, mode, 0).shuffle, "mode {mode}");
+        }
+
+        let (mut w, mut p, eye, mut a) = rig(VoxelScalePreset::OneMeter);
+        a.loadout.mode = 3;
+        a.loadout.slots = [0, 2, EMPTY, EMPTY];
+        let before = a.shuffle_seed;
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_eq!(a.shuffle_seed, before, "no reload yet");
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+        assert_ne!(a.shuffle_seed, before, "the deck wrapped, so it must reshuffle");
+
+        // A fixed-order chassis never touches the order.
+        let mut direct = Adventure::default();
+        direct.wand = 3;
+        direct.loadout.slots = [0, 2, 3, 5];
+        direct.shuffle_seed = 12345;
+        let deck = direct.usable_loadout();
+        assert_eq!([deck.slot(0), deck.slot(1), deck.slot(2), deck.slot(3)], [0, 2, 3, 5]);
     }
 }

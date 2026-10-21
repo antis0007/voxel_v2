@@ -34,7 +34,7 @@ the palette and from the top wand, and that unknown ids fall back to documented
 defaults.
 
 Unknown ids read "Unknown spell". IDs in use: `0..=27`, `28..=32`, `34..=63`,
-`64..=70`. Free: `33`, `71..=95`.
+`64..=79`. Free: `33`, `80..=95`.
 
 ### Aiming helper
 
@@ -60,6 +60,30 @@ Wand tier is the lowest wand that can hold the spell.
 | 68 | Blood price | modifier | 0 | 3 | Pay half the mana cost in health instead; refuses when it would leave you under 4 health. |
 | 69 | Fork | modifier | 10 | 2 | On impact, splits into three weak sparks that cannot fork again. |
 | 70 | On timer | trigger | 7 | 2 | Like Trigger bolt, but the next spell fires 0.6 s into flight. |
+
+## Noita-style spells and the Chaotic chassis
+
+| Id | Spell | Kind | Mana | Tier | Effect |
+| ---: | --- | --- | ---: | :-: | --- |
+| 71 | Chainsaw | bolt | 1 | 2 | A tiny rapid slicing bolt with about 5 m of reach and 7 damage, so it is nearly free to spam. |
+| 72 | Teleport bolt | bolt | 24 | 2 | On impact you swap to where it landed, backed off the wall until your body fits. |
+| 73 | Flood bolt | bolt | 16 | 2 | On impact it pours up to 18 water cells and soaks foes within 3.5 m, setting up shock, frost and steam. |
+| 74 | Venom nova | bolt | 22 | 2 | On impact a toxic burst poisons every foe within 3.4 m that it can see. |
+| 75 | Ice wall | utility | 20 | 2 | Raises a 3 m wide, 2.5 m tall ice barrier 3 m ahead (empty cells only, capped at 400). Heat melts it. |
+| 76 | Bounce orb | bolt | 8 | 1 | A slow light orb that always ricochets four times. |
+| 77 | Mana leech | modifier | 6 | 2 | Each hit restores 4 mana. |
+| 78 | Critical plus | modifier | 7 | 2 | One hit in four lands for 2.5x damage (deterministic from the clock and target). |
+| 79 | On expire | trigger | 7 | 2 | Like Trigger bolt, but the next spell also fires if the bolt times out without hitting anything. |
+
+Chainsaw and Bounce orb are the only spells allowed to deal less than the legacy
+22-damage floor (`spell_hit_damage`).
+
+**Chaotic chassis (wand mode 3).** The chassis picker already offered "Shuffle"
+but nothing shuffled. It now reorders the occupied slots, within the wand's
+capacity, each time the deck reloads (the cast that wraps the deck). Empty slots
+never move and the set of spells never changes. The order is a seeded
+Fisher-Yates pass; the seed is not saved, so a loaded game deals a fresh order.
+Hover cards show Shuffle: Yes for this chassis only.
 
 ## Discovery
 
@@ -103,5 +127,5 @@ and another version bump.
 
 ## Not done yet
 
-Identify-by-use runes, limited spell charges, shuffle wands, overheat, wand gem
-mods, and oil and acid fluids.
+Identify-by-use runes, limited spell charges, overheat, wand gem mods, and oil
+and acid fluids.

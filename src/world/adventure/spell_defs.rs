@@ -1322,6 +1322,168 @@ pub static SPELLS: &[SpellDef] = &[
         class: Class::Modifier,
         unlock: Unlock::SecondWandOrRare,
     },
+    SpellDef {
+        id: 71,
+        name: "Chainsaw",
+        flavor: "A buzzing arc that lives for a breath. It has opinions about whatever is closest.",
+        hint: "Chainsaw: a tiny rapid slicing bolt that only reaches a few metres. Nearly free to spam.",
+        tag: "PROJECTILE",
+        color: PALETTE_PAPER,
+        cost: 1.0,
+        cooldown: 0.09,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 3.0,
+        damage: 7.0,
+        speed: 30.0,
+        audio: (Cue::Spark, 1.5),
+        class: Class::Projectile,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 72,
+        name: "Teleport bolt",
+        flavor: "You and the bolt agree to trade places. The bolt does not get a vote.",
+        hint: "Teleport bolt: on impact you swap to where it landed. Mind the drop.",
+        tag: "PROJECTILE",
+        color: [0.74, 0.55, 1.0],
+        cost: 24.0,
+        cooldown: 0.8,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 22.0,
+        speed: 38.0,
+        audio: (Cue::Echo, 1.2),
+        class: Class::Projectile,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 73,
+        name: "Flood bolt",
+        flavor: "It arrives as a bolt and leaves as a puddle. The foe is wet, and so is the floor.",
+        hint: "Flood bolt: on impact it pours water and soaks nearby foes. Sets up shock, frost and steam.",
+        tag: "PROJECTILE",
+        color: PALETTE_WATER,
+        cost: 16.0,
+        cooldown: 0.5,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 10.0,
+        speed: 24.0,
+        audio: (Cue::Splash, 1.0),
+        class: Class::Projectile,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 74,
+        name: "Venom nova",
+        flavor: "A green bloom of something you should not breathe. The foes are breathing it.",
+        hint: "Venom nova: on impact a toxic burst poisons every foe within 3.4 m. Stacks with Venom coat.",
+        tag: "PROJECTILE",
+        color: [0.45, 0.85, 0.3],
+        cost: 22.0,
+        cooldown: 0.7,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 12.0,
+        speed: 22.0,
+        audio: (Cue::Bloom, 0.8),
+        class: Class::Projectile,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 75,
+        name: "Ice wall",
+        flavor: "A wall of frozen air. It is only polite to keep it between you and them.",
+        hint: "Ice wall: raises a 3 m wide ice barrier in front of you. Fire and lava melt it.",
+        tag: "UTILITY",
+        color: [0.65, 0.9, 1.0],
+        cost: 20.0,
+        cooldown: 1.2,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 26.0,
+        audio: (Cue::Frost, 0.8),
+        class: Class::Other,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 76,
+        name: "Bounce orb",
+        flavor: "A rubber idea with a bad temper. It bounces until someone stops it.",
+        hint: "Bounce orb: a slow light orb that ricochets four times off walls. Great in tunnels.",
+        tag: "PROJECTILE",
+        color: [0.96, 0.65, 0.85],
+        cost: 8.0,
+        cooldown: 0.3,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 14.0,
+        speed: 18.0,
+        audio: (Cue::Spark, 1.35),
+        class: Class::Projectile,
+        unlock: Unlock::FirstWand,
+    },
+    SpellDef {
+        id: 77,
+        name: "Mana leech",
+        flavor: "The bolt drinks from what it hits and passes the cup back.",
+        hint: "Mana leech: each hit restores 4 mana. Pair it with a cheap fast bolt to keep casting.",
+        tag: "MODIFIER",
+        color: PALETTE_MANA,
+        cost: 6.0,
+        cooldown: 0.0,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 26.0,
+        audio: (Cue::Spark, 1.0),
+        class: Class::Modifier,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 78,
+        name: "Critical plus",
+        flavor: "Sometimes it lands exactly where it should. Sometimes that hurts.",
+        hint: "Critical plus: one hit in four lands for 2.5x damage.",
+        tag: "MODIFIER",
+        color: PALETTE_CORAL,
+        cost: 7.0,
+        cooldown: 0.0,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 26.0,
+        audio: (Cue::Spark, 1.0),
+        class: Class::Modifier,
+        unlock: Unlock::SecondWandOrRare,
+    },
+    SpellDef {
+        id: 79,
+        name: "On expire",
+        flavor: "A fuse with patience. If nothing gets in the way, the next spell goes off anyway.",
+        hint: "On expire: like Trigger bolt, but the next spell also fires if the bolt times out without hitting anything.",
+        tag: "TRIGGER MOD",
+        color: PALETTE_PLUM,
+        cost: 7.0,
+        cooldown: 0.0,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 26.0,
+        audio: (Cue::Spark, 1.0),
+        class: Class::Modifier,
+        unlock: Unlock::SecondWandOrRare,
+    },
 ];
 
 /// The row for a spell id, if it has one.
@@ -1374,6 +1536,18 @@ pub fn spell_spread_delta(spell: u32) -> f32 {
 
 pub fn spell_base_damage(spell: u32) -> f32 {
     def(spell).map_or(0.0, |d| d.damage)
+}
+
+/// Damage a bolt deals on a direct hit. Older spells keep a floor of 22 so a
+/// missing table value never makes a bolt toothless; the two deliberately weak
+/// spam spells (Chainsaw, Bounce orb) are allowed to be below it.
+pub fn spell_hit_damage(spell: u32) -> f32 {
+    let base = spell_base_damage(spell);
+    if matches!(spell, 71 | 76) {
+        base
+    } else {
+        base.max(22.0)
+    }
 }
 
 pub fn spell_base_speed(spell: u32) -> f32 {
@@ -1459,7 +1633,7 @@ mod tests {
 
     #[test]
     fn unknown_ids_fall_back_to_the_documented_defaults() {
-        for id in [33, 71, 95, 4000] {
+        for id in [33, 80, 95, 4000] {
             assert!(def(id).is_none());
             assert_eq!(spell_name(id), "Unknown spell");
             assert_eq!(spell_class(id), Class::Other);

@@ -9,14 +9,14 @@ use crate::world::{
 };
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, vec2};
 
-const BOLTS: &[u32] = &[0, 2, 3, 5, 6, 9, 10, 11, 12, 13, 14, 15, 28, 29];
-const EFFECTS: &[u32] = &[1, 4, 7, 24, 25, 30, 31, 32, 34, 35, 39];
+const BOLTS: &[u32] = &[0, 2, 3, 5, 6, 9, 10, 11, 12, 13, 14, 15, 28, 29, 71, 72, 73, 74, 76];
+const EFFECTS: &[u32] = &[1, 4, 7, 24, 25, 30, 31, 32, 34, 35, 39, 75];
 const SUMMONS: &[u32] = &[36];
 const SHOT_MODIFIERS: &[u32] = &[
     16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 37, 38, 45, 51, 52, 53, 54, 55, 64, 65, 66, 67, 68,
-    69,
+    69, 77, 78,
 ];
-const PROGRAM_MODIFIERS: &[u32] = &[40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 70];
+const PROGRAM_MODIFIERS: &[u32] = &[40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 70, 79];
 const ELEMENTS: &[u32] = &[56, 57, 58, 59, 60, 61, 62, 63];
 
 /// The workbench column and every hover card use this width. A card that grows
@@ -1045,7 +1045,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
     let blurb = match view.loadout.mode {
         1 => "Prism Chassis: Draws 2 spells per cast with slight spread.",
         2 => "Trigger Chassis: First projectile carries the next projectile spell and releases it on impact.",
-        3 => "Chaotic Chassis: Shuffles deck order with -28% Cast Delay and -30% Recharge Time.",
+        3 => "Chaotic Chassis: Reshuffles the deck order every reload, with faster cast delay and recharge.",
         _ => "Conduit Chassis: Evaluates modifier chains left-to-right in strict slot order.",
     };
     let width = ui.available_width().min(BOARD_W);
