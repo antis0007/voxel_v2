@@ -837,7 +837,11 @@ fn paint_spell_library(
                         }),
                 );
                 ui.label(
-                    RichText::new(format!("{} available", spells.len()))
+                    RichText::new(format!(
+                        "{}/{} found",
+                        found_count(&spells, &view.spell_log),
+                        spells.len()
+                    ))
                         .font(FontId::monospace(9.5))
                         .color(style::MUTED),
                 );
@@ -1277,6 +1281,12 @@ fn deck_drag_hint(ui: &egui::Ui, rect: Rect, dragging: bool, hovered: bool) {
     );
 }
 
+/// How many of these spells the player has found. Spells held back by rare
+/// magic (6 and 7) count as found, matching what the log lets through.
+fn found_count(spells: &[u32], log: &crate::world::adventure::discovery::SpellLog) -> usize {
+    spells.iter().filter(|&&id| log.grants(id)).count()
+}
+
 #[cfg(test)]
 mod palette_tests {
     use super::*;
@@ -1298,5 +1308,17 @@ mod palette_tests {
         for id in &listed {
             assert_ne!(adventure::spell_name(*id), "Unknown spell", "tab lists undefined spell {id}");
         }
+    }
+
+    #[test]
+    fn found_count_reflects_the_log() {
+        use crate::world::adventure::discovery::SpellLog;
+        let start = SpellLog::starter();
+        assert_eq!(found_count(BOLTS, &SpellLog::all()), BOLTS.len());
+        // Starter: Spark and Frost lance are bolts; Spore bloom is not found,
+        // while rift well (6) is never blocked by the log.
+        let bolts = found_count(BOLTS, &start);
+        assert_eq!(bolts, 3, "spark, frost lance and rift well");
+        assert_eq!(found_count(&[3, 5, 29], &start), 0);
     }
 }
