@@ -4,8 +4,12 @@ use crate::mesh::Vertex3;
 use crate::render::{ChunkCache, render_distance_settings};
 use crate::world::CHUNK_SIZE;
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-pub fn enabled() -> bool { ENABLED.load(std::sync::atomic::Ordering::Relaxed) }
-pub fn set_enabled(value: bool) { ENABLED.store(value, std::sync::atomic::Ordering::Relaxed); }
+pub fn enabled() -> bool {
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn set_enabled(value: bool) {
+    ENABLED.store(value, std::sync::atomic::Ordering::Relaxed);
+}
 
 pub const SHADOW_MAP_SIZE: u32 = 2048;
 pub const CASCADE_COUNT: usize = 4;
@@ -80,8 +84,12 @@ fn covers_receivers(cascade: &CascadeData, corners: &[Vec3; 8]) -> bool {
     let edge = 1.0 - 6.0 / SHADOW_MAP_SIZE as f32;
     corners.iter().all(|&p| {
         let q = matrix * p.extend(1.0);
-        q.is_finite() && q.w > 0.0 && q.x.abs() <= edge * q.w
-            && q.y.abs() <= edge * q.w && q.z > 0.0 && q.z < q.w
+        q.is_finite()
+            && q.w > 0.0
+            && q.x.abs() <= edge * q.w
+            && q.y.abs() <= edge * q.w
+            && q.z > 0.0
+            && q.z < q.w
     })
 }
 
@@ -282,7 +290,8 @@ impl ShadowRenderer {
         // The visual frustum extends to the horizon, while shadow coverage stays
         // local. Normalize against the actual projection depth, not the shadow limit.
         let projection_depth = unproject_clip(inv_view_proj, Vec3::new(0.0, 0.0, 1.0))
-            .distance(unproject_clip(inv_view_proj, Vec3::ZERO)).max(1e-6);
+            .distance(unproject_clip(inv_view_proj, Vec3::ZERO))
+            .max(1e-6);
         for i in 0..CASCADE_COUNT {
             let ratio_near = (splits[i] - camera_near) / projection_depth;
             let ratio_far = (splits[i + 1] - camera_near) / projection_depth;
@@ -320,7 +329,8 @@ impl ShadowRenderer {
             // A camera pan does not change an existing world-space shadow.
             // Reuse its actual texture/matrix pair while every new receiver
             // still fits, rather than rerasterizing all four maps each frame.
-            if self.initialized && self.active_uniform.world_scale == scale
+            if self.initialized
+                && self.active_uniform.world_scale == scale
                 && (self.active_uniform.cascades[i].far_plane - splits[i + 1]).abs() < 1e-4
                 && safe_dir.distance_squared(self.active_light_dirs[i]) <= 1e-8
                 && covers_receivers(&self.active_uniform.cascades[i], &corners)

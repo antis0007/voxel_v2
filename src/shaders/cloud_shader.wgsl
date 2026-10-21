@@ -46,6 +46,18 @@ struct CloudSample {
 const SHAPE_TEX_SIZE  : f32 = 64.0;
 const DETAIL_TEX_SIZE : f32 = 32.0;
 
+// One global scale keeps every consumer of the wind field in sync. Cloud
+// speed had drifted into six different hard-coded multipliers (shape noise,
+// weather advection, shadow taps, cirrus attenuation), so increasing only one
+// of them sheared cloud shape away from its own shadow and weather system.
+const CLOUD_ADVECTION_SPEED_SCALE : f32 = 1.65;
+
+fn cloud_layer_speed_mult(layer_id: i32) -> f32 {
+    // Low: 8.0, mid: 0.7 * 9.5 = 6.65, high: 12.0.
+    return select(select(8.0, 6.65, layer_id == 1), 12.0, layer_id == 2)
+        * CLOUD_ADVECTION_SPEED_SCALE;
+}
+
 // Weather cell size used only for the per-cell seed hash in weather_at_world().
 const CLOUD_WEATHER_CELL_M : f32 = 400.0;
 const CLOUD_NOISE_STABLE_REGION_M : f32 = 8192.0;
@@ -459,15 +471,16 @@ fn scene_depth_distance(ndc: vec2<f32>, dir: vec3<f32>) -> f32 {
     let d10 = textureLoad(scene_depth_tex, vec2<i32>(next.x, base.y), 0);
     let d01 = textureLoad(scene_depth_tex, vec2<i32>(base.x, next.y), 0);
     let d11 = textureLoad(scene_depth_tex, next, 0);
-    let depth = min(min(d00, d10), min(d01, d11));
+    // Reverse-Z: the nearest surface has the largest depth; cleared sky is 0.
+    let depth = max(max(d00, d10), max(d01, d11));
 
-    if depth >= 0.9999999 {
+    if depth <= 1e-7 {
         return 1e9;
     }
 
     // Recover view depth analytically, avoiding subtraction of two distant
     // world positions. The basis w components carry projection coefficients.
-    let view_depth = cam.ray_up.w / min(depth + cam.ray_right.w, -1e-8);
+    let view_depth = cam.ray_up.w / max(depth + cam.ray_right.w, 1e-8);
     return view_depth / max(dot(dir, cam.camera_forward.xyz), 1e-4);
 }
 
@@ -571,6 +584,27 @@ fn cloud_phase(cos_theta: f32, forward_g: f32, silver: f32) -> f32 {
     let broad    = cs_phase(cos_theta, 0.10);
     let silver_peak = hg_phase(cos_theta, 0.97) * silver * 0.06;
     return mix(mix(forward, broad, 0.25), backward, 0.12) + silver_peak;
+}
+
+// Four scattering orders from one optical depth (Hillaire / Frostbite).
+// The phase is constant along a view ray, so this is evaluated once. Each
+// sample then spends four exponentials of the light depth it already has.
+// Order 0 is the sun-colored rim. Later orders reach deeper, lose direction,
+// and drift toward white, which is the luminous core behind a bright edge.
+fn scatter_order_phase(mu: f32, g: f32, silver: f32, sun_elev: f32, ice: bool) -> vec4<f32> {
+    let primary = select(
+        cloud_phase(mu, g, silver),
+        cirrus_phase(mu, sun_elev),
+        ice,
+    );
+    let ms = select(1.0, 0.35, ice);
+    let g_soft = clamp(g, 0.40, 0.85) * 0.40;
+    return vec4<f32>(
+        primary,
+        (hg_phase(mu, g_soft) * 0.30 + 0.012) * ms,
+        (hg_phase(mu, g_soft * 0.30) * 0.12 + 0.010) * ms,
+        0.008 * ms,
+    );
 }
 
 // Ice-crystal phase for cirrus: strong forward diffraction + 22° halo ring.
@@ -726,13 +760,17 @@ fn sample_cirrus_density(
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0);
 
-    let advected_xz = p.xz + wind * time * wspd * 12.0;
+    let advected_xz = p.xz + wind * time * wspd * 12.0
+        * CLOUD_ADVECTION_SPEED_SCALE;
 
     // Compress the along-wind domain, so fibers stretch ALONG the wind.
     let along_wind  = dot(advected_xz, wind);
     let perp_wind   = dot(advected_xz, side);
-    let fallstreak = sin(perp_wind * 0.004 + along_wind * 0.0008) * 26.0;
-    let stretched_xz = (along_wind * 0.167 + fallstreak) * wind + perp_wind * side;
+    // Long fibres fan out from the zenith under perspective and read as a
+    // zoom blur. Shorter, patchier mares' tails keep the wind direction
+    // without drawing radial streaks across the whole dome.
+    let fallstreak = sin(perp_wind * 0.004 + along_wind * 0.0008) * 18.0;
+    let stretched_xz = (along_wind * 0.36 + fallstreak) * wind + perp_wind * side;
 
     let h_frac = remap01(eff_y, base_y, top_y);
 
@@ -770,8 +808,12 @@ fn sample_cirrus_density(
     let fiber        = s1 * 0.50 + s2 * 0.25 + mix(0.5, s3, fine_keep) * 0.25;
     let effective_cirrus_amt = cirrus_amt * height_shape;
     let thresh = mix(0.46, 0.24, cirrus_amt);
+    // Break the fibres into mares' tails of different lengths instead of one
+    // continuous sheet across the dome.
+    let tail = weather_bank_noise(vec2<f32>(along_wind * 0.00055, perp_wind * 0.0016));
 
-    return smoothstep(thresh, thresh + 0.16, fiber) * effective_cirrus_amt * density_ctl * 0.90;
+    return smoothstep(thresh, thresh + 0.16, fiber) * effective_cirrus_amt * density_ctl * 0.90
+        * smoothstep(0.18, 0.62, tail * 0.75 + fiber * 0.25);
 }
 
 fn sample_mid_density(
@@ -787,7 +829,8 @@ fn sample_mid_density(
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0) * 0.7;
 
-    let advected_xz = p.xz + wind * time * wspd * 9.5;
+    let advected_xz = p.xz + wind * time * wspd * 9.5
+        * CLOUD_ADVECTION_SPEED_SCALE;
 
     let ac_bias = authored_altocumulus() * (0.45 + weather.convection * 0.55)
                 + weather.convection * 0.20;
@@ -827,6 +870,12 @@ fn sample_mid_density(
     let ac_base   = billow * 0.55 + cell * 0.45;
     let ac_thresh = mix(0.42, 0.24, ac_amt) + smoothstep(0.40, 1.0, h) * 0.14;
     var ac_body = smoothstep(ac_thresh, ac_thresh + 0.13, ac_base);
+    // Two clump scales, so altocumulus arrives as flocks of different sizes
+    // with clear sky between them instead of one repeating texture.
+    let flock = weather_bank_noise(advected_xz / mix(980.0, 340.0, weather.convection));
+    let morsel = weather_bank_noise(advected_xz / 150.0 + vec2<f32>(9.2, -4.4));
+    let flock_mask = smoothstep(0.30, 0.66, flock * 0.62 + morsel * 0.38 + ac_amt * 0.20);
+    ac_body *= flock_mask;
 
     let fine_keep = 1.0 - smoothstep(10.0, 28.0, sample_footprint_m);
     if ac_body > 0.001 && fine_keep > 0.01 {
@@ -838,7 +887,7 @@ fn sample_mid_density(
             mid_lod
         );
         let detail_fbm = detail_tex.r * 0.625 + detail_tex.g * 0.25 + detail_tex.b * 0.125;
-        ac_body = erode_remap(ac_body, detail_fbm * 0.26 * fine_keep);
+        ac_body = erode_remap(ac_body, detail_fbm * 0.17 * fine_keep);
     }
     // Erode shape before applying the amount. Eroding the small final density
     // deleted every delicate patch in a low-coverage evening sky.
@@ -862,7 +911,10 @@ fn sample_mid_density(
     let height_as  = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.88, 1.0, h));
     let effective_as_amt = as_amt * height_as;
     let veil = smoothstep(0.12, 0.42, sheet);
-    let as_density = veil * effective_as_amt * density_ctl * 1.05;
+    // Streaks of uneven length. A flat veil painted the whole sky the same pink.
+    let streak = weather_bank_noise(advected_xz / vec2<f32>(1700.0, 360.0));
+    let as_density = veil * effective_as_amt * density_ctl * 1.05
+        * mix(0.25, 1.0, smoothstep(0.16, 0.72, streak));
 
     return max(ac_density, as_density);
 }
@@ -893,10 +945,9 @@ fn layer_wind_advection_offset(layer_id: i32) -> vec2<f32> {
     let wind = safe_normalize2(light.weather_globals[0].zw, vec2<f32>(0.9, -0.4));
     let time = light.weather_globals[0].x;
     let wind_spd = max(light.weather_globals[0].y, 0.0);
-    // Must match actual density sampler multipliers including per-layer speed factors.
-    // Low: wspd * 8.0, Mid: wspd * 0.7 * 9.5 = 6.65, High: wspd * 12.0
-    let mult = select(select(8.0, 6.65, layer_id == 1), 12.0, layer_id == 2);
-    return wind * time * wind_spd * mult;
+    // Must match actual density sampler multipliers including per-layer speed
+    // factors. The helper applies the shared speed scale to all of them.
+    return wind * time * wind_spd * cloud_layer_speed_mult(layer_id);
 }
 
 fn macro_shadow_optical_depth(world_xz: vec2<f32>, layer_id: i32) -> f32 {
@@ -1002,9 +1053,10 @@ fn sample_local_self_shadow(
 // any cloud AABB are skipped cheaply. This produces seamless
 // coverage — no cell-boundary artifacts anywhere.
 //
-// Empty-space skipping: per-step AABB cull + coverage early-out
-// inside the density samplers (no explicit large-step mechanism
-// needed since both are already O(1) cheap before the texture taps).
+// Empty-space skipping: an invalid AABB jumps ahead. A midpoint probe
+// keeps the jump from clearing a cloud that starts inside the interval.
+// In-cloud steps stay on the fine spacing and get any iterations the
+// empty air did not spend.
 // ============================================================
 
 // Layer ID constants for selecting the correct per-step AABB.
@@ -1078,8 +1130,6 @@ fn march_layer_core(
         }
     }
     
-    let ray_length_in_slab = max(env_exit - env_enter, 0.0);
-
     // ---- Layer ID for per-cell AABB dispatch ----
     var layer_id = LAYER_LOW;
     if mid_layer    { layer_id = LAYER_MID; }
@@ -1106,23 +1156,22 @@ fn march_layer_core(
     let wind     = safe_normalize2(light.weather_globals[0].zw, vec2<f32>(0.9, -0.4));
     let time     = light.weather_globals[0].x;
     let wind_spd = max(light.weather_globals[0].y, 0.0);
-    // Match density sampler wind multipliers: low=8, mid=6.65 (0.7*9.5), high=12
-    let wx_mult  = select(select(8.0, 6.65, mid_layer), 12.0, cirrus_layer);
+    // Match density sampler wind multipliers through the shared helper.
+    let wx_mult  = cloud_layer_speed_mult(select(select(0, 1, mid_layer), 2, cirrus_layer));
     let wx_offset_march = wind * time * wind_spd * wx_mult;
 
     let daylight = saturate1(light.sun_color_daylight.w);
     let night    = 1.0 - daylight;
     let silver   = saturate1(light.weather_globals[2].z);
+    let bounds   = cloud_layer_bounds();
 
     let cos_theta_sun  = dot(ray_dir, sun_dir);
     let cos_theta_moon = dot(ray_dir, moon_dir);
 
-    let phase_sun  = select(
-        cloud_phase(cos_theta_sun, forward_g, silver),
-        cirrus_phase(cos_theta_sun, sun_dir.y),
-        cirrus_layer
-    );
     let phase_moon = cs_phase(cos_theta_moon, 0.45);
+    // Phase depends only on the angle between the view and the sun, so the
+    // four orders are shared by every sample on this ray.
+    let sun_orders = scatter_order_phase(cos_theta_sun, forward_g, silver, sun_dir.y, cirrus_layer);
 
     // Interpolate bottom/top sunlight: raised turrets can remain peach-lit
     // after the low deck has entered the planet's shadow.
@@ -1139,14 +1188,14 @@ fn march_layer_core(
     // Pre-compute once here to avoid the smoothstep per step.
     let horizon_elev_fade_precomp = smoothstep(0.015, 0.070, abs(ray_dir.y));
 
-    // Two approximate higher scattering orders with decreasing energy and
-    // reduced extinction preserve luminous cores behind a strongly lit edge.
-    let ms_phase_iso  = 0.07957747; // 1/(4*pi) — pure isotropic scatter
-    let ms_scatter = select(mix(0.55, 0.42, twilight_light), 0.30, cirrus_layer);
     let shadow_dir = select(sun_dir, moon_dir, night > 0.7);
-    let ground_base  = light.sun_color_daylight.rgb * sun_trans_base
-                     * daylight * max(sun_dir.y, 0.12) * 0.06
-                     * vec3<f32>(0.15, 0.18, 0.12) * 1.20;
+    // Undersides pick up the ground. Clear days bounce green, low sun bounces
+    // warm earth, and a storm bounce goes dull so the deck does not glow.
+    let ground_tint = mix(vec3<f32>(0.30, 0.36, 0.18), vec3<f32>(0.58, 0.32, 0.16), twilight_light);
+    let ground_tint_w = mix(ground_tint, vec3<f32>(0.16, 0.18, 0.17),
+        saturate1(light.weather_clip_summaries[0].z));
+    let ground_base = vec3<f32>(dot(sun_trans_base, vec3<f32>(0.2126, 0.7152, 0.0722)))
+                    * daylight * max(sun_dir.y, 0.05) * ground_tint_w * 0.62;
 
     // max_dist is measured from the slab entry, but density LOD and distance
     // fading use distances from the camera. Mixing those spaces made a raised
@@ -1165,13 +1214,15 @@ fn march_layer_core(
     // Pre-compute the three hemisphere directions and their sky radiance here.
     // The per-step code then just does a weighted blend of these three constants.
     let sky_zenith_precomp  = atmosphere_color(vec3<f32>(0.0, 1.0, 0.0));
-    // Illumination is independent of the camera direction. Opposed sky samples
-    // keep a cloud's shadow color stable while the player looks around it.
+    // Fill comes from the sky beside the sun, not the average of the solar
+    // aureole and the opposite belt. Averaging those two cancelled the warm
+    // key and the cool fill into one grey. The low sample is the afterglow
+    // that reaches cloud bases at dusk.
     let sun_az = safe_normalize2(sun_dir.xz, vec2<f32>(1.0, 0.0));
-    let sky_upper_precomp = (atmosphere_color(vec3<f32>(sun_az.x * 0.8, 0.6, sun_az.y * 0.8))
-        + atmosphere_color(vec3<f32>(-sun_az.x * 0.8, 0.6, -sun_az.y * 0.8))) * 0.5;
-    let sky_horizon_precomp = (atmosphere_color(vec3<f32>(sun_az.x, 0.0, sun_az.y))
-        + atmosphere_color(vec3<f32>(-sun_az.x, 0.0, -sun_az.y))) * 0.5;
+    let side_az = vec2<f32>(-sun_az.y, sun_az.x);
+    let sky_upper_precomp = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.50, 0.72, side_az.y * 0.50)));
+    let sky_horizon_precomp = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.92, 0.16, side_az.y * 0.92)));
+    let sky_low_precomp = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.98, 0.035, side_az.y * 0.98)));
 
     // ---- Accumulated march state ----
     var trans          = 1.0;
@@ -1185,20 +1236,21 @@ fn march_layer_core(
     // ---- Step budget: sufficient for the shorter march distances.
     let global_step_budget = select(select(192, 72, mid_layer), 32, cirrus_layer);
 
-    // Step size: smaller for the voxel-world scale (clouds are 30-350m thick).
-    let min_dt  = ray_length_in_slab / max(f32(global_step_budget), 1.0);
-    // Resolve thin cloud silhouettes with several samples through their depth.
+    // Fine spacing resolves cloud shape. A solid deck still uses `need` so the
+    // march reaches the far side of the slab inside the same step budget.
     // Sample spacing must not change when the camera rotates.
     let layer_dt_max = select(select(8.0, 12.0, mid_layer), 14.0, cirrus_layer);
     let layer_dt_min = select(select(3.5, 5.0, mid_layer), 6.0, cirrus_layer);
-    let base_dt = mix(layer_dt_min, layer_dt_max, grazing_f);
-    let dt      = max(base_dt, min_dt);
+    let fine_dt = mix(layer_dt_min, layer_dt_max, grazing_f);
 
+    var march_t = env_enter;
     for (var i: i32 = 0; i < global_step_budget; i = i + 1) {
-        if trans <= 0.005 { break; }
+        if trans <= 0.005 || march_t >= env_exit { break; }
+        let steps_left = max(global_step_budget - i, 1);
+        let need = (env_exit - march_t) / f32(steps_left);
+        let dt = max(fine_dt, need);
 
-        let segment_start = env_enter + f32(i) * dt;
-        if segment_start >= env_exit { break; }
+        let segment_start = march_t;
         let segment_length = min(dt, env_exit - segment_start);
         let jitter = 0.05 + fract(phase + f32(i) * 0.618033989) * 0.90;
         var t_cur = segment_start + segment_length * jitter;
@@ -1211,6 +1263,22 @@ fn march_layer_core(
 
         if !cell_aabb_valid(step_aabb) {
             total_steps += 1;
+            let dist_m = cam_dist_offset + segment_start;
+            // Far jumps stay inside a small puff. A 48 m step cleared the
+            // scraps the coarse lattice is no longer responsible for.
+            let jump_cap = select(12.0, 28.0, dist_m > 360.0);
+            let jump_limit = max(dt, min(jump_cap, max(env_exit - segment_start, dt)));
+            let jump = clamp(max(need * 3.0, dt), dt, jump_limit);
+            if jump > dt + 1.0 {
+                let probe_t = min(segment_start + jump * 0.5, env_exit);
+                let probe_p = ray_origin + ray_dir * probe_t;
+                let probe_weather = weather_at_world(probe_p.xz + wx_offset_march);
+                if !cell_aabb_valid(cell_aabb_for_layer(probe_weather, layer_id)) {
+                    march_t = segment_start + jump;
+                    continue;
+                }
+            }
+            march_t = segment_start + segment_length;
             continue;
         }
         // Integrate the intersection of this march segment and the local
@@ -1222,11 +1290,16 @@ fn march_layer_core(
             let local_start = max(segment_start, local_hit.x);
             let local_end = min(segment_start + segment_length, local_hit.y);
             integration_length = max(local_end - local_start, 0.0);
-            if integration_length <= 0.0 { total_steps += 1; continue; }
+            if integration_length <= 0.0 {
+                total_steps += 1;
+                march_t = segment_start + segment_length;
+                continue;
+            }
             t_cur = local_start + integration_length * jitter;
             p = ray_origin + ray_dir * t_cur;
         } else if p.y < step_aabb.y_min || p.y > step_aabb.y_max {
             total_steps += 1;
+            march_t = segment_start + segment_length;
             continue;
         }
 
@@ -1300,121 +1373,111 @@ fn march_layer_core(
                     p, shadow_dir, layer_id, sample_footprint_m, layer_thickness_m,
                 );
             }
-            let local_scale = select(select(0.95, 0.80, mid_layer), 0.58, cirrus_layer);
-            let macro_scale = select(select(0.24, 0.18, mid_layer), 0.12, cirrus_layer);
+            let local_scale = select(select(1.08, 0.90, mid_layer), 0.58, cirrus_layer);
+            let macro_scale = select(select(0.28, 0.20, mid_layer), 0.12, cirrus_layer);
             // The coarse weather shadow is a distant fallback, not a second
             // occluder laid over the same nearby cloud.
-            let shadow_d = mix(local_shadow_od * local_scale,
+            var shadow_d = mix(local_shadow_od * local_scale,
                 macro_shadow_od * macro_scale, macro_blend);
+            // The mid deck occludes the low deck below it. Read the mid-layer
+            // shadow field where the light leaves this point toward that deck.
+            // It is coarse, so it adds a soft term rather than a second local
+            // occluder.
+            if layer_id == LAYER_LOW && bounds.mid_base > p.y {
+                let mid_project = min((bounds.mid_base - p.y) / max(shadow_dir.y, 0.08), 2000.0);
+                let mid_xz = p.xz + shadow_dir.xz * mid_project;
+                shadow_d += shadow_field_at_world(mid_xz).y * 0.30;
+            }
             debug_shadow_max = max(debug_shadow_max, shadow_d);
 
             let h_frac     = saturate1(remap01(p.y, step_base_y, step_top_y));
             let sun_spectral_trans = mix(sun_trans_base, sun_trans_top,
                 saturate1((p.y - base_y) / max(top_y - base_y, 1.0)));
             let cell_thick = max(step_top_y - step_base_y, 1.0);
-            // Optical depth from sun entry at top to current altitude.
-            // Decoupled from march extinction so height shading stays consistent.
-            let od_top_coeff    = select(select(0.030, 0.020, mid_layer), 0.010, cirrus_layer);
-            let top_atten_coeff = od_top_coeff * cell_thick * 0.006;
-            let sun_from_top    = exp(-max(1.0 - h_frac, 0.0) * top_atten_coeff);
-            let base_dark       = mix(0.32, 1.0, smoothstep(0.0, 0.35, h_frac))
-                                * select(1.0, 0.85, !cirrus_layer);
-            // At low solar elevation light enters from the side, so the old
-            // top-down gradient incorrectly darkened even exposed sunset rims.
-            let vertical_gradient = (sun_from_top * 0.55 + 0.45) * base_dark
-                * (1.0 - smoothstep(0.88, 1.0, h_frac) * 0.08);
-            let height_gradient = mix(vertical_gradient, 1.0, twilight_light * 0.75);
 
-            // Local lighting must not depend on view-step length/history.
-            // Ambient light enters through nearby cloud surfaces. Scaling its
-            // occlusion by the entire kilometer-deep storm column crushed the
-            // visible underside to black, leaving aerial haze to fill it in.
-            let interior_od = sample_density * extinction * min(cell_thick * 0.5, 220.0);
-            // Diffuse sky reaches the visible boundary from a hemisphere of
-            // directions, including nearby sides. A full vertical-column AO
-            // crushed that cool fill and left every sunset shadow brown.
+            // Sky enters from the sides of the volume. A full-column ambient
+            // occlusion crushed every underside to black.
             let ambient_path = mix(90.0, 220.0, step_weather.storm);
             let ambient_od = sample_density * extinction * min(cell_thick * 0.5, ambient_path);
-            let depth_ao = exp(-ambient_od * select(0.35, 0.14, cirrus_layer));
-            let light_trans = exp(-shadow_d);
-            let moon_trans  = light_trans;
-            let powder = 1.0 - exp(-interior_od * 2.0);
-            let powder_gain = 1.0 + powder * (1.0 - max(cos_theta_sun, 0.0)) * 0.35;
+            let amb_trans = exp(-ambient_od * select(
+                mix(0.20, 0.40, step_weather.storm), 0.12, cirrus_layer));
 
-            let light_trans_attenuated = light_trans * cirrus_transmittance_atten;
-            // Golden light is concentrated on exposed faces and thin rims;
-            // increasing every scattering order would wash out cool interiors.
-            // Preserve a cool cloud core while letting low-angle, atmosphere-
-            // filtered sunlight paint brighter warm edges and thin crowns.
-            let sunset_key_gain = 1.0 + twilight_light * 0.95;
-            let sun_lit = light.sun_color_daylight.rgb
-                        * sun_spectral_trans * cloud_solar_irradiance
-                        * light_trans_attenuated * phase_sun * height_gradient * sunset_key_gain;
-            let moon_lit = moon_light * moon_trans * phase_moon * 0.40 * height_gradient;
+            // One light integral, four analytic orders. Extinction halves each
+            // order so the rim dies in the creases and the core stays lit.
+            // Beer-powder (Schneider) sits on the primary only: it peaks on a
+            // thin sun-facing edge and falls off inside the body.
+            let albedo = mix(0.90, 0.46, step_weather.storm);
+            let beer0 = exp(-shadow_d);
+            let beer1 = exp(-shadow_d * 0.50);
+            let beer2 = exp(-shadow_d * 0.22);
+            let beer3 = exp(-shadow_d * 0.08);
+            // Powder is the sun-facing edge brightening. It weakens as the sun
+            // drops: a low sun crosses the whole cloud thickness, so there is
+            // no thin lit edge to brighten.
+            let powder = 1.0 - exp(-shadow_d * 2.0);
+            let powder_strength = mix(0.30, 0.62, smoothstep(0.04, 0.42, sun_dir.y));
+            let primary_trans = beer0 * mix(1.0, powder, powder_strength);
 
-            // Hillaire energy-preserving MS: second path sees reduced extinction (sqrt approx).
-            let ms_ext_factor = exp(-shadow_d * 0.45) * cirrus_transmittance_atten;
-            let ms_sun_base   = light.sun_color_daylight.rgb * sun_spectral_trans
-                              * cloud_solar_irradiance * ms_phase_iso * ms_ext_factor * ms_scatter
-                              * height_gradient;
-            // Deep interior clouds whiten due to higher-order scattering cascade.
-            let ms_sun = ms_sun_base + light.sun_color_daylight.rgb * sun_spectral_trans
-                * cloud_solar_irradiance * ms_phase_iso
-                * ms_scatter * ms_scatter * exp(-shadow_d * 0.18)
-                * cirrus_transmittance_atten * height_gradient;
-            let ms_moon  = moon_light * pow(max(moon_trans, 0.001), 0.5)
-                         * ms_scatter * 0.30 * night * height_gradient;
+            // Multiple scattering fills dense cores and barely touches thin
+            // wisps. At low sun the body keeps its share of the light, so the
+            // cloud reads as lit mass instead of a dark shape with a bright rim.
+            let body = smoothstep(0.15, 1.20, sample_density);
+            let bounce_gain = 1.0 + body * (0.45 + twilight_light * 0.55);
 
-            // Pre-computed hemisphere sky samples (hoisted outside march loop).
-            let sky_zenith  = sky_zenith_precomp;
-            let sky_upper   = sky_upper_precomp;
-            let sky_horizon = sky_horizon_precomp;
-            let w_zenith  = saturate1(h_frac * 1.4);
-            let w_upper   = 1.0 - abs(h_frac - 0.55) * 1.6;
-            let w_horizon = saturate1(1.0 - h_frac * 2.0);
-            let w_sum     = max(w_zenith + max(w_upper, 0.0) + w_horizon, 1e-4);
-            let sky_hemi  = (sky_zenith * w_zenith
-                          + sky_upper  * max(w_upper, 0.0)
-                          + sky_horizon * w_horizon) / w_sum;
-            // Diffuse skylight retains the cool upper hemisphere even when
-            // the narrow sunset horizon is strongly warm.
-            let diffuse_sky = mix(sky_hemi, sky_zenith, 0.45);
-            let sky_luma = dot(diffuse_sky, vec3<f32>(0.2126, 0.7152, 0.0722));
-            // Cool hemisphere light stays in shadowed pockets while exposed
-            // material receives the altitude-dependent warm solar spectrum.
-            let shadow_sky = cloud_shadow_chroma(sun_dir.y, h_frac) * sky_luma;
-            let sky_above = mix(diffuse_sky, shadow_sky, twilight_light * 0.78)
-                * (0.16 + ambient_gain * 0.60);
+            let sun_rgb = light.sun_color_daylight.rgb * sun_spectral_trans;
+            let sun_luma = dot(sun_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let white = vec3<f32>(sun_luma);
+            // Rim takes the filtered sun. The second bounce keeps some of that
+            // hue. The deep core is white, so a sunset does not dye the body.
+            // At twilight the body takes more of the warm sun colour.
+            let rim = mix(sun_rgb, sun_rgb * vec3<f32>(0.70, 0.80, 0.92), step_weather.storm * 0.60);
+            let warm = mix(white, sun_rgb, mix(0.58, 0.82, twilight_light));
+            let core = mix(white, sun_rgb, mix(0.16, 0.40, twilight_light));
+            let rim_gain = 1.0 + twilight_light * (0.08 - step_weather.storm * 0.16);
+            let a2 = albedo * albedo;
+            let sun_scatter = (
+                    rim  * sun_orders.x * primary_trans * rim_gain
+                  + (warm * sun_orders.y * beer1 * albedo
+                  + core * sun_orders.z * beer2 * a2
+                  + white * sun_orders.w * beer3 * a2 * albedo) * bounce_gain
+                ) * cloud_solar_irradiance * cirrus_transmittance_atten;
 
-            let ground_dist   = saturate1(1.0 - h_frac * 1.4);
-            let ground_bounce = ground_base * ground_dist * 1.8;
-            let ambient       = (sky_above + ground_bounce
-                               + vec3<f32>(0.008, 0.012, 0.028) * night) * depth_ao;
+            // A gentle floor on the base. The lobe shadow comes from shadow_d;
+            // this only keeps a thick underside from going flat white when the
+            // three light taps miss the column above it. Low sun lights the
+            // side, so the floor lifts back out of the way of the rim.
+            let base_shade = mix(0.68, 1.0, smoothstep(0.0, 0.46, h_frac));
+            let low_sun = 1.0 - smoothstep(0.0, 0.24, sun_dir.y);
+            let core_shade = mix(base_shade, 1.0, low_sun * 0.85);
 
-            let interior_depth = 1.0 - depth_ao;
-            let tint_strength  = mix(0.025, 0.010, saturate1(interior_od * 0.25))
-                               * select(1.0, 0.0, cirrus_layer);
-            let blue_tint         = vec3<f32>(0.85, 0.91, 1.0) * tint_strength * interior_depth;
-            let ambient_with_tint = ambient + blue_tint;
+            // Bases take the afterglow, tops take the zenith of this day.
+            let sky_amb_col = mix(
+                mix(sky_low_precomp, sky_horizon_precomp, 0.42),
+                mix(sky_upper_precomp, sky_zenith_precomp, 0.55),
+                smoothstep(0.10, 0.78, h_frac));
+            // Occluded faces take the day's shadow chroma at the sky's luminance,
+            // so a crease stays blue at noon and rose at dusk instead of grey.
+            let sky_luma_amb = dot(sky_amb_col, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let shaded_sky = mix(
+                sky_amb_col,
+                cloud_shadow_chroma(sun_dir.y, h_frac) * sky_luma_amb,
+                (1.0 - amb_trans) * 0.65);
+            let sky_amb = shaded_sky * amb_trans * (0.30 + ambient_gain * 0.58) * core_shade;
+            let ground_bounce = ground_base * saturate1(1.0 - h_frac * 1.45)
+                * exp(-ambient_od * 0.10) * mix(1.0, 1.40, twilight_light);
+            let ambient = sky_amb + ground_bounce
+                + vec3<f32>(0.006, 0.010, 0.022) * night * amb_trans;
 
-            let edge_density = smoothstep(0.0, 0.030, sample_density)
-                             * (1.0 - smoothstep(0.030, 0.14, sample_density));
-            let silver_angle        = pow(max(cos_theta_sun * 0.5 + 0.5, 0.0), 2.5);
-            let silver_density_gate = 1.0 / (1.0 + sample_density * 4.0);
-            let sun_elev_silver     = mix(1.0, 0.55, saturate1(sun_dir.y * 2.0));
-            let silver_light = light.sun_color_daylight.rgb * sun_spectral_trans
-                             * light_trans
-                             * edge_density * silver * silver_angle * cloud_solar_irradiance * 0.28
-                             * silver_density_gate * sun_elev_silver * sunset_key_gain;
+            let moon_lit = moon_light * (beer0 * phase_moon * 0.55 + beer1 * 0.020)
+                * core_shade;
 
-            // Direct light is attenuated once. The old beer-powder mix applied
-            // Beer extinction twice, crushing the sculpted middle tones.
-            let scatter = (sun_lit + moon_lit) * powder_gain
-                + ambient_with_tint * mix(1.0, 0.65, step_weather.storm)
-                + ms_sun + ms_moon + silver_light;
+            let scatter = sun_scatter * mix(1.0, core_shade, 0.35)
+                + moon_lit
+                + ambient * mix(1.0, 0.62, step_weather.storm);
 
             radiance += pre_step_trans * scatter * step_alpha_cheap;
         }
+        march_t = segment_start + segment_length;
     }
 
     return CloudSample(
@@ -1508,7 +1571,8 @@ fn approx_cirrus_transmittance(dir: vec3<f32>) -> f32 {
     let wind = safe_normalize2(light.weather_globals[0].zw, vec2<f32>(0.9, -0.4));
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0);
-    let wx   = weather_at_world(p_mid.xz + wind * time * wspd * 12.0);
+    let wx   = weather_at_world(p_mid.xz + wind * time * wspd * 12.0
+        * CLOUD_ADVECTION_SPEED_SCALE);
 
     let local_aabb = cell_aabb_for_layer(wx, LAYER_HIGH);
     let d_cirrus = sample_cirrus_density(p_mid, local_aabb.y_min, local_aabb.y_max, p_mid.y, 16.0, wx);
@@ -1558,10 +1622,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let unclamped_max_dist = 16000.0;
     let scene_dist = scene_depth_distance(in.ndc, dir);
     let terrain_fade = terrain_streaming_fade(scene_dist * length(dir.xz));
-    // Far terrain is blended into the background only at the outer horizon boundary.
-    // Do not march clouds behind solid mountains until terrain_fade is substantial.
-    let max_dist = select(min(unclamped_max_dist, max(scene_dist - scale * 2.0, 0.0)),
-        unclamped_max_dist, terrain_fade > 0.25);
+    // Solid mountains keep their depth until the surface itself has dissolved
+    // into the sky. Releasing occlusion at a slight fade drew clouds through
+    // blocky ridges that were still fully visible.
+    let release = smoothstep(0.88, 0.99, terrain_fade);
+    let max_dist = min(unclamped_max_dist,
+        mix(max(scene_dist - scale * 2.0, 0.0), unclamped_max_dist, release));
     let pixel_jitter = in.pos.xy;
 
     if max_dist <= 0.0 {
@@ -1643,8 +1709,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // continuously with the same world-space fade used for the terrain colour.
     for (var i = 0; i < 4; i += 1) {
         if dists[i] > scene_dist {
-            layers[i].radiance *= terrain_fade;
-            layers[i].transmittance = mix(1.0, layers[i].transmittance, terrain_fade);
+            layers[i].radiance *= release;
+            layers[i].transmittance = mix(1.0, layers[i].transmittance, release);
         }
     }
 

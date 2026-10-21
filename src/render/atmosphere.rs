@@ -596,9 +596,9 @@ impl AtmosphereRuntime {
         let aerial_perspective_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("atmosphere aerial perspective"),
             size: wgpu::Extent3d {
-                width: 32,
-                height: 32,
-                depth_or_array_layers: 24,
+                width: 48,
+                height: 48,
+                depth_or_array_layers: 32,
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -635,9 +635,9 @@ impl AtmosphereRuntime {
             aerial_perspective: AtmosphereLut3D {
                 texture: aerial_perspective_tex,
                 view: aerial_perspective_view,
-                width: 32,
-                height: 32,
-                depth: 24,
+                width: 48,
+                height: 48,
+                depth: 32,
             },
         };
         let generation = Self::create_lut_generation_resources(
@@ -901,9 +901,9 @@ impl AtmosphereRuntime {
             pass.set_bind_group(1, camera_bind_group, &[]);
             pass.set_bind_group(2, &self.generation.ap_bind_group, &[]);
             pass.dispatch_workgroups(
-                div_ceil_u32(32, 8),
-                div_ceil_u32(32, 8),
-                div_ceil_u32(24, 4),
+                div_ceil_u32(self._luts.aerial_perspective.width, 8),
+                div_ceil_u32(self._luts.aerial_perspective.height, 8),
+                div_ceil_u32(self._luts.aerial_perspective.depth, 4),
             );
         }
         queue.submit(Some(encoder.finish()));

@@ -8,6 +8,8 @@ pub(crate) const ATMOSPHERE_LUT_GENERATION_WGSL: &str =
 const CLOUD_SHARED_WGSL: &str = include_str!("shaders/cloud_shared.wgsl");
 const CLOUD_MORPHOLOGY_WGSL: &str = include_str!("shaders/cloud_morphology.wgsl");
 const WEATHER_VOLUME_WGSL: &str = include_str!("shaders/weather_volume.wgsl");
+const UNDERWATER_WGSL: &str = include_str!("shaders/underwater_shared.wgsl");
+const MOOD_WGSL: &str = include_str!("shaders/mood_shared.wgsl");
 
 const WORLD_SHADER_BODY: &str = include_str!("shaders/world_shader.wgsl");
 const LOCAL_MIST_WGSL: &str = include_str!("shaders/local_mist_shared.wgsl");
@@ -18,20 +20,28 @@ const CLOUD_TEMPORAL_SHADER_BODY: &str = include_str!("shaders/cloud_temporal.wg
 
 pub(crate) fn world_shader_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         CAMERA_LIGHTING_WGSL,
         ATMOSPHERE_RUNTIME_WGSL,
         ATMOSPHERE_WGSL,
         CLOUD_SHARED_WGSL,
         LOCAL_MIST_WGSL,
+        UNDERWATER_WGSL,
+        MOOD_WGSL,
         WORLD_SHADER_BODY
     )
 }
 
 pub(crate) fn sky_shader_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}",
-        CAMERA_LIGHTING_WGSL, ATMOSPHERE_RUNTIME_WGSL, ATMOSPHERE_WGSL, LOCAL_MIST_WGSL, SKY_SHADER_BODY
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        CAMERA_LIGHTING_WGSL,
+        ATMOSPHERE_RUNTIME_WGSL,
+        ATMOSPHERE_WGSL,
+        LOCAL_MIST_WGSL,
+        UNDERWATER_WGSL,
+        MOOD_WGSL,
+        SKY_SHADER_BODY
     )
 }
 
@@ -87,6 +97,7 @@ pub(crate) const LINE_SHADER: &str = include_str!("shaders/outline_shader.wgsl")
 pub(crate) const SHADOW_SHADER: &str = include_str!("shaders/shadow_shader.wgsl");
 pub(crate) const UI_SHADER: &str = include_str!("shaders/ui_shader.wgsl");
 pub(crate) const POSTPROCESS_SHADER: &str = include_str!("shaders/postprocess.wgsl");
+pub(crate) const PRESENT_SHADER: &str = include_str!("shaders/present.wgsl");
 pub(crate) const TERRAIN_COMPUTE_SHADER: &str = include_str!("terrain_compute.wgsl");
 pub(crate) const FLUID_SHADER: &str = include_str!("fluid_compute.wgsl");
 

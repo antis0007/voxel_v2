@@ -157,6 +157,26 @@ fn sky_transmittance_to_sun(sun_height: f32) -> vec3<f32> {
     return sky_transmittance_to_sun_at_altitude(sun_height, 0.0);
 }
 
+// Visible photosphere chromaticity. The lighting source stays near-white so
+// terrain is not painted brown; only the disk and its glow use this.
+// High sun is white. A few degrees up it goes gold with the warm sky, and
+// on the horizon it goes orange-red. Afterglow leans rose when the sky does.
+fn solar_disk_chroma(sun_height: f32) -> vec3<f32> {
+    let gold = 1.0 - smoothstep(0.035, 0.22, sun_height);
+    let red = 1.0 - smoothstep(-0.025, 0.07, sun_height);
+    let dusk = 1.0 - smoothstep(-0.065, 0.095, sun_height);
+    let after = smoothstep(-0.14, -0.015, sun_height) * (1.0 - smoothstep(-0.015, 0.02, sun_height));
+    var core = mix(vec3<f32>(1.0, 0.97, 0.92), vec3<f32>(1.0, 0.55, 0.12), smoothstep(0.12, 0.82, gold));
+    core = mix(core, vec3<f32>(1.0, 0.22, 0.035), smoothstep(0.20, 0.90, red));
+    core = mix(core, vec3<f32>(1.0, 0.18, 0.16), after * 0.45);
+    core = mix(core, vec3<f32>(0.92, 0.14, 0.30), after * dusk * 0.55);
+    let trans = sky_transmittance_to_sun_at_altitude(sun_height, 0.0);
+    let red_t = max(trans.r, 1e-4);
+    let trans_sat = saturate1(1.0 - trans.b / red_t);
+    let trans_hue = vec3<f32>(1.0, trans.g / red_t, trans.b / red_t);
+    return mix(core, trans_hue, smoothstep(0.45, 0.85, trans_sat) * 0.65);
+}
+
 // Photograph-guided radiance response. Keep extinction/transmittance physical;
 // art direction belongs to illumination, never opacity or a full-screen tint.
 fn photographic_twilight(sun_height: f32) -> f32 {
@@ -168,57 +188,115 @@ fn radiance_chroma(color: vec3<f32>) -> vec3<f32> {
     return color / max(dot(color, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.00001);
 }
 
+fn sky_luma(color: vec3<f32>) -> f32 {
+    return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+fn sky_chroma(color: vec3<f32>, amount: f32) -> vec3<f32> {
+    return mix(vec3<f32>(sky_luma(color)), color, amount);
+}
+
+// Layered sky, not a two-stop blend. A photographed sky is palest and least
+// saturated at the horizon, most chromatic a little above it, and deeper
+// toward an ozone-shifted zenith. Sunset is a solar aureole plus a pink
+// antisolar belt, with the zenith left blue.
 fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
     let sun = normalize(light.sun_dir_intensity.xyz);
     let twilight = photographic_twilight(sun.y);
-    let day = smoothstep(0.12, 0.38, sun.y);
+    let day = smoothstep(0.04, 0.30, sun.y);
+    let night = 1.0 - smoothstep(-0.16, 0.02, sun.y);
     let sun_az = safe_normalize2(sun.xz, vec2<f32>(1.0, 0.0));
     let view_az = safe_normalize2(dir.xz, sun_az);
-    let toward_sun = pow(saturate1(dot(sun_az, view_az) * 0.5 + 0.5), 3.0);
-    let elevation = max(dir.y, 0.0);
-    let dusk = 1.0 - smoothstep(-0.065, 0.095, sun.y);
-    let horizon = exp(-abs(elevation - 0.025) * 11.0);
-    // Blue upper air, a cyan transition, and a localized warm/rose horizon.
-    // The antisolar rose belt and the golden solar horizon have different hues.
-    let upper = mix(vec3<f32>(0.16, 0.39, 0.67), vec3<f32>(0.13, 0.20, 0.35),
-        smoothstep(0.04, 0.65, elevation));
-    let gold = mix(vec3<f32>(1.0, 0.53, 0.17), vec3<f32>(1.0, 0.20, 0.24), dusk);
-    let rose = vec3<f32>(0.64, 0.19, 0.37);
-    let horizon_color = mix(rose, gold, toward_sun);
-    var twilight_color = mix(upper, horizon_color, horizon * mix(0.70, 0.94, toward_sun));
-    let rose_belt = exp(-pow((elevation - 0.16) / 0.13, 2.0)) * (1.0 - toward_sun);
-    twilight_color = mix(twilight_color, rose, rose_belt * (0.35 + dusk * 0.35));
-    let day_color = mix(vec3<f32>(0.29, 0.58, 0.88), vec3<f32>(0.045, 0.24, 0.85),
-        smoothstep(0.0, 0.75, elevation));
-    let luminance = max(dot(physical, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0);
-    var result = mix(physical, radiance_chroma(day_color) * luminance, day * 0.34);
-    result = mix(result, radiance_chroma(twilight_color) * luminance, twilight * 0.85);
+    let toward = saturate1(dot(sun_az, view_az) * 0.5 + 0.5);
+    let elev = dir.y;
+    let above = max(elev, 0.0);
+
+    let zenith = max(light.sky_top_saturation.rgb, vec3<f32>(0.02, 0.05, 0.12));
+    let horizon_col = max(light.sky_horizon_reserved.rgb, vec3<f32>(0.20, 0.28, 0.36));
+    let cover = saturate1(light.weather_clip_summaries[0].y);
+    let storm = saturate1(light.weather_clip_summaries[0].z);
+    let open_sky = saturate1(1.0 - cover * 0.70 - storm * 0.40);
+
+    let horizon_w = exp(-above * 6.5);
+    let chroma_band = smoothstep(0.0, 0.14, above) * (1.0 - smoothstep(0.20, 0.58, above));
+    let zenith_w = smoothstep(0.16, 0.82, above);
+    let chroma = sky_chroma(mix(horizon_col, zenith, 0.58), 1.28);
+    let ozone = sky_chroma(zenith * vec3<f32>(0.70, 0.76, 1.16), 1.12);
+
+    var grade = mix(horizon_col, chroma, saturate1(1.0 - horizon_w));
+    grade = mix(grade, zenith, zenith_w * 0.72);
+    grade = mix(grade, ozone, zenith_w * zenith_w * 0.38 * open_sky);
+    grade = mix(grade, chroma, chroma_band * 0.62 * open_sky);
+
+    // Tight solar aureole, then a wider low golden field. Neither one paints
+    // the opposite half of the sky.
+    let facing = saturate1(dot(dir, sun));
+    let aureole = pow(facing, 12.0) * open_sky;
+    let disk_hue = solar_disk_chroma(sun.y);
+    grade = mix(grade, disk_hue, aureole * (twilight * 0.85 + day * 0.06));
+    let gold = pow(toward, 1.7) * horizon_w * twilight * open_sky;
+    grade = mix(grade, disk_hue, gold * 0.42);
+
+    // Belt of Venus sits a few degrees up, opposite the sun. Dusty air shifts
+    // it from rose toward copper. Below it, the earth shadow cools back down.
+    let dust = saturate1((horizon_col.r - horizon_col.b) * 1.8);
+    let belt = exp(-pow((elev - 0.09) / 0.065, 2.0)) * (1.0 - toward) * twilight * open_sky;
+    let belt_hue = mix(vec3<f32>(0.76, 0.34, 0.48), vec3<f32>(0.92, 0.46, 0.26), dust);
+    grade = mix(grade, belt_hue, belt * 0.62);
+    let earth_shadow = (1.0 - smoothstep(-0.01, 0.10, elev)) * (1.0 - toward) * twilight * open_sky;
+    grade = mix(grade, mix(zenith, vec3<f32>(0.22, 0.26, 0.36), 0.55), earth_shadow * 0.40);
+
+    // Cloud cover lifts a pale veil off the horizon. A storm darkens overhead
+    // and leaves a slightly lighter, greener horizon.
+    let veil = sky_chroma(horizon_col, 0.35);
+    let veil_rise = exp(-above * mix(2.4, 0.55, cover));
+    grade = mix(grade, veil, veil_rise * cover * 0.72);
+    grade = mix(grade, vec3<f32>(0.15, 0.19, 0.20), storm * (0.28 + zenith_w * 0.45));
+
+    // Night keeps a deep zenith and a faint horizon airglow, so it does not
+    // collapse to a flat navy disc.
+    let airglow = mix(vec3<f32>(0.06, 0.08, 0.16), horizon_col, 0.22);
+    grade = mix(grade, mix(airglow, ozone * 0.20, zenith_w), night * (1.0 - cover * 0.45));
+
+    let luminance = max(sky_luma(physical), 0.0);
+    let grade_amount = day * 0.50 + twilight * 0.74 + night * 0.58;
+    var result = mix(physical, radiance_chroma(grade) * luminance, grade_amount);
+    // The last degree of sky is the fog colour, so terrain haze and the dome meet.
+    let fog = max(light.fog_color_density.rgb, vec3<f32>(0.02));
+    let seam = exp(-abs(elev) * 18.0);
+    result = mix(result, radiance_chroma(fog) * max(luminance, sky_luma(fog) * 0.20), seam * 0.55);
     return max(result, vec3<f32>(0.0));
 }
 
 fn photographic_cloud_sun(sun_height: f32, altitude_m: f32) -> vec3<f32> {
     let physical = sky_transmittance_to_sun_at_altitude(sun_height, altitude_m);
     let twilight = photographic_twilight(sun_height);
-    // High turrets see a shorter atmospheric path; lower, later-lit cloud
-    // faces move from amber through peach to rose as the sun descends.
+    // Keep a white core. Amber reaches the lit rim; deep rose does not repaint
+    // the cloud body. Storm light is cooler and dimmer than fair-weather sun.
     let local_sun = sun_height + sqrt(2.0 * max(altitude_m, 0.0) / 6360000.0);
-    let amber = 1.0 - smoothstep(0.035, 0.22, local_sun);
-    let coral = 1.0 - smoothstep(-0.015, 0.055, local_sun);
-    let rose = 1.0 - smoothstep(-0.060, 0.005, local_sun);
-    var hue = mix(vec3<f32>(1.0, 0.68, 0.25), vec3<f32>(1.0, 0.27, 0.055), amber);
-    hue = mix(hue, vec3<f32>(1.0, 0.095, 0.16), coral);
-    hue = mix(hue, vec3<f32>(0.88, 0.10, 0.36), rose);
+    let amber = 1.0 - smoothstep(0.05, 0.30, local_sun);
+    let low = 1.0 - smoothstep(-0.02, 0.06, local_sun);
+    let storm = saturate1(light.weather_clip_summaries[0].z);
+    let cover = saturate1(light.weather_clip_summaries[0].y);
+    var hue = mix(vec3<f32>(1.0, 0.97, 0.92), vec3<f32>(1.0, 0.62, 0.28), amber * 0.80);
+    hue = mix(hue, vec3<f32>(1.0, 0.40, 0.18), low * 0.45 * (1.0 - storm));
+    hue = mix(hue, vec3<f32>(0.78, 0.84, 0.92), cover * 0.28 + storm * 0.55);
     let luminance = dot(physical, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return mix(physical, radiance_chroma(hue) * luminance, twilight * 0.86)
-        * (1.0 + twilight * 0.25);
+    return mix(physical, radiance_chroma(hue) * luminance, twilight * (0.40 - storm * 0.18))
+        * (1.0 + twilight * 0.10)
+        * (1.0 - storm * 0.22);
 }
 
 fn cloud_shadow_chroma(sun_height: f32, height_fraction: f32) -> vec3<f32> {
-    let evening = 1.0 - smoothstep(-0.01, 0.16, sun_height);
-    let afterglow = 1.0 - smoothstep(-0.10, -0.015, sun_height);
-    var hue = mix(vec3<f32>(0.15, 0.38, 0.62), vec3<f32>(0.19, 0.20, 0.46), evening);
-    hue = mix(hue, vec3<f32>(0.26, 0.12, 0.37), afterglow);
-    return radiance_chroma(mix(hue, vec3<f32>(0.13, 0.29, 0.52), height_fraction * 0.35));
+    let sky = max(light.sky_top_saturation.rgb, vec3<f32>(0.08, 0.14, 0.28));
+    let evening = 1.0 - smoothstep(0.0, 0.20, sun_height);
+    let storm = saturate1(light.weather_clip_summaries[0].z);
+    let cover = saturate1(light.weather_clip_summaries[0].y);
+    var hue = mix(sky, vec3<f32>(0.55, 0.64, 0.78), 0.28);
+    hue = mix(hue, vec3<f32>(0.48, 0.40, 0.50), evening * 0.28);
+    hue = mix(hue, vec3<f32>(0.40, 0.46, 0.52), cover * 0.45);
+    hue = mix(hue, vec3<f32>(0.22, 0.26, 0.32), storm * 0.70);
+    return radiance_chroma(mix(hue, sky, height_fraction * 0.30));
 }
 // Atmospheric density factor at camera altitude.
 // Models exponential atmosphere falloff: less air above = darker, more saturated sky.
@@ -306,9 +384,10 @@ fn runtime_sky_view_atmosphere_color(
     sky += light.sky_horizon_reserved.rgb * horizon_w * daylight * 0.03;
     sky += light.sky_top_saturation.rgb * up * 0.02;
     sky += light.fog_color_density.rgb * down * 0.04 * alt_factor;
-    sky += light.sun_color_daylight.rgb
+    let beam_luma = dot(sun_trans, vec3<f32>(0.2126, 0.7152, 0.0722));
+    sky += solar_disk_chroma(sun_dir.y)
+        * beam_luma
         * light.sun_dir_intensity.w
-        * sun_trans
         * vec3<f32>(mie_phase_atmo(cos_theta, 0.76) * 0.004)
         * daylight
         * (0.28 + 0.72 * (1.0 - up));
@@ -359,11 +438,17 @@ fn atmosphere_color(dir: vec3<f32>) -> vec3<f32> {
     let alt_top = mix(top, top * 0.72, 1.0 - alt_factor);
 
     // Upper hemisphere: same atmosphere family as before.
-    let upper_sky = mix(
+    var upper_sky = mix(
         horizon * haze_atten + alt_top * (1.0 - haze_atten),
         alt_top,
         pow(up, 0.42),
     );
+    // Same structure as the graded path: the saturated blue sits above the
+    // horizon, and the zenith is a deeper ozone-shifted colour.
+    let sky_band = smoothstep(0.03, 0.18, elev) * (1.0 - smoothstep(0.28, 0.68, elev));
+    let zenith_shift = smoothstep(0.35, 0.90, elev);
+    upper_sky = mix(upper_sky, mix(horizon, top, 0.50), sky_band * 0.48 * daylight);
+    upper_sky = mix(upper_sky, top * vec3<f32>(0.82, 0.88, 1.12), zenith_shift * 0.22 * daylight);
 
     // Lower hemisphere: continuous atmospheric continuation, not a separate blank skybox.
     let lower_horizon = mix(
@@ -420,24 +505,25 @@ fn atmosphere_color(dir: vec3<f32>) -> vec3<f32> {
     let tw_vert  = exp(-abs(elev) * 5.0);
     let tw_solar = saturate1(az_align * 0.5 + 0.5);
     let tw_angle = tw_solar * tw_solar;
+    // The horizon color is already the day's sunset. This is only a localized
+    // solar glow, and closed weather does not get a second orange wash.
+    let sky_open = saturate1(1.0 - light.weather_clip_summaries[0].y * 0.75
+        - light.weather_clip_summaries[0].z * 0.50);
 
-    sky += vec3<f32>(1.00, 0.40, 0.06)
+    sky += vec3<f32>(1.00, 0.46, 0.14)
         * twilight
         * tw_vert
         * tw_angle
-        * 0.50
+        * 0.26
+        * sky_open
         * (1.0 - daylight * 0.60)
         * mix(haze_atten, 1.0, horizon_w);
 
     let bov_vert = exp(-abs(elev) * 6.0) * saturate1(0.65 + elev * 7.5);
     let bov_az   = saturate1(-az_align * 0.5 + 0.5) * (1.0 - saturate1(az_align));
-    sky += vec3<f32>(0.62, 0.28, 0.48) * twilight * bov_vert * bov_az * 0.20 * haze_atten;
+    sky += vec3<f32>(0.55, 0.32, 0.46) * twilight * bov_vert * bov_az * 0.10 * haze_atten * sky_open;
 
-    let lower_warm = vec3<f32>(0.82, 0.48, 0.20)
-        * twilight
-        * tw_angle
-        * exp(-down * 4.2)
-        * 0.14;
+    let lower_warm = horizon * twilight * tw_angle * exp(-down * 4.2) * 0.08 * sky_open;
     sky += lower_warm;
 
     let horizon_boost = daylight * 0.08 * horizon_w * haze_atten;

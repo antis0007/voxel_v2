@@ -93,11 +93,7 @@ pub(super) fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) ->
     } else {
         min_h - cfg.blocks_for_span(8.0)
     };
-    (
-        min_cy,
-        max_cy,
-        floor_div_i32(surface_base, CHUNK_SIZE),
-    )
+    (min_cy, max_cy, floor_div_i32(surface_base, CHUNK_SIZE))
 }
 
 /// Fast erosion-free estimate used while `ColumnPlans` is still evaluating
@@ -107,11 +103,13 @@ fn preview_column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) -> Co
     let oz = cz * CHUNK_SIZE;
     let mut min_h = i32::MAX;
     let mut max_h = i32::MIN;
-    for (dx, dz) in [(0, 0), (31, 0), (0, 31), (31, 31), (16, 16)] {
-        let (h, _) = crate::world::landscape::preview_surface(cfg, ox + dx, oz + dz);
-        let hi = h as i32;
-        min_h = min_h.min(hi);
-        max_h = max_h.max(hi);
+    for dz in [0, 8, 16, 24, 31] {
+        for dx in [0, 8, 16, 24, 31] {
+            let (h, _) = crate::world::landscape::preview_surface(cfg, ox + dx, oz + dz);
+            let hi = h as i32;
+            min_h = min_h.min(hi);
+            max_h = max_h.max(hi);
+        }
     }
     let water_level = cfg.water_level();
     let tree_margin = cfg.blocks_for_span(28.0) + 1;
@@ -124,13 +122,9 @@ fn preview_column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) -> Co
     let surface_base = if min_h <= water_level {
         min_h.min(water_level)
     } else {
-        min_h - cfg.blocks_for_span(12.0)
+        min_h - cfg.blocks_for_span(16.0)
     };
-    (
-        min_cy,
-        max_cy,
-        floor_div_i32(surface_base, CHUNK_SIZE),
-    )
+    (min_cy, max_cy, floor_div_i32(surface_base, CHUNK_SIZE))
 }
 
 /// Surface/cave coverage plus a separate player-height band when underground.
@@ -443,4 +437,69 @@ pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
     // Opaque terrain benefits from early depth rejection and deterministic order.
     out.sort_unstable_by_key(|key| chunk_sort_key(cache.center_chunk, *key));
     out
+}
+
+#[cfg(test)]
+mod crown_coverage {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use crate::world::{World, WorldType};
+
+    /// Every tree crown that reaches into a column must sit inside that column's
+    /// resident Y range, or the chunk holding its top is never generated and the
+    /// crown is sliced flat at a chunk boundary.
+    fn uncovered_crowns(world_type: WorldType, scale: VoxelScalePreset) -> (usize, usize, i32) {
+        let cfg = World::with_seed(world_type, scale, 7).sample_config();
+        let m = cfg.voxel_meters();
+        let cell = cfg.blocks_for_span(12.0);
+        let (mut missed, mut checked, mut worst) = (0, 0, 0);
+        for cz in -24..24 {
+            for cx in -24..24 {
+                let (_, max_cy, _) = column_y_chunk_range(cx, cz, &cfg);
+                let top_allowed = (max_cy + 1) * CHUNK_SIZE;
+                let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+                for tz in
+                    (z0 - cell).div_euclid(cell) - 1..=(z0 + CHUNK_SIZE + cell).div_euclid(cell)
+                {
+                    for tx in
+                        (x0 - cell).div_euclid(cell) - 1..=(x0 + CHUNK_SIZE + cell).div_euclid(cell)
+                    {
+                        let Some(tree) = crate::world::tree_visual(&cfg, tx, tz) else {
+                            continue;
+                        };
+                        let reach = tree.radius * 1.55 + 1.0;
+                        let (bx, bz) = (tree.base.x / m, tree.base.z / m);
+                        if bx + reach / m < x0 as f32
+                            || bx - reach / m > (x0 + CHUNK_SIZE) as f32
+                            || bz + reach / m < z0 as f32
+                            || bz - reach / m > (z0 + CHUNK_SIZE) as f32
+                        {
+                            continue;
+                        }
+                        checked += 1;
+                        let top =
+                            ((tree.base.y + tree.height + tree.crown_height) / m).ceil() as i32;
+                        if top >= top_allowed {
+                            missed += 1;
+                            worst = worst.max(top - top_allowed);
+                        }
+                    }
+                }
+            }
+        }
+        (missed, checked, worst)
+    }
+
+    #[test]
+    fn resident_columns_cover_whole_tree_crowns() {
+        for world_type in [WorldType::Hills, WorldType::Ridged] {
+            for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::QuarterMeter] {
+                let (missed, checked, worst) = uncovered_crowns(world_type, scale);
+                println!(
+                    "{world_type:?} {scale:?}: {missed}/{checked} crowns exceed range (worst +{worst} voxels)"
+                );
+                assert_eq!(missed, 0);
+            }
+        }
+    }
 }

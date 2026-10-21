@@ -9,6 +9,9 @@ struct Camera {
     ray_up : vec4<f32>,
     previous_camera_pos : vec4<f32>,
     scene_seed : vec4<u32>,
+    // x: conservative published resident coverage in metres. Negative means
+    // no override; zero means no resident mesh is published.
+    coverage : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cam : Camera;
@@ -40,17 +43,21 @@ struct Lighting {
     material_tints: array<vec4<f32>,256>,
     material_properties: array<vec4<f32>,256>,
     surface_weather: vec4<f32>,
+    // x: cosmos chamber, y: aurora, z: meteor shower, w: rainbow.
+    mood: vec4<f32>,
+    // x: fireflies, y: pollen, z: diamond dust, w: embers.
+    ambience: vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> light : Lighting;
 
 // Shared by opaque terrain and clouds: fading terrain must also release its
 // occlusion of the background volume, not merely change its surface colour.
-fn terrain_streaming_fade(horizontal_distance: f32) -> f32 {
-    if cam.previous_camera_pos.w > 0.5 {
-        return smoothstep(12000.0, 16000.0, horizontal_distance);
-    }
-    let radius = max(cam.world_params.w - 48.0 * cam.world_params.x,
-        cam.world_params.w * 0.5);
-    return smoothstep(radius * 0.70, radius, horizontal_distance);
+fn terrain_streaming_fade(_horizontal_distance: f32) -> f32 {
+    // Retained for shader ABI compatibility, but deliberately disabled.
+    // Resident terrain is no longer discarded beyond the published coverage,
+    // and the depth-tested heightfield now fills any transient missing chunk.
+    // Blending valid resident geometry toward sky created a moving transparent
+    // ring and let the sky/cloud pass show through ground that was still there.
+    return 0.0;
 }

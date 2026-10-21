@@ -18,7 +18,7 @@ fn water_reflection(uv:vec2<f32>,receiver:vec4<f32>)->vec4<f32>{
   if any(at<vec2<f32>(0.002)) || any(at>vec2<f32>(0.998)){break;}
   let scene_depth=dot(view_position(at),cam.camera_forward.xyz);
   let delta=dot(q,cam.camera_forward.xyz)-scene_depth;
-  if depth_at(at)<0.99999 && delta>0.0 && previous_delta<=0.0 {
+  if depth_at(at)>0.00001 && delta>0.0 && previous_delta<=0.0 {
    var lo=previous_t;var hi=t;var hit=at;
    for(var j=0;j<5;j++){
     let mid=(lo+hi)*0.5;let point=start+direction*mid;
@@ -48,7 +48,7 @@ fn water_reflection(uv:vec2<f32>,receiver:vec4<f32>)->vec4<f32>{
  let at=min(vec2<i32>(pixel.xy)*2+1,dims-1);
  let uv=(vec2<f32>(at)+0.5)/vec2<f32>(dims);
  let receiver=textureLoad(receiver_tex,at,0);
- if depth_at(uv)>=0.99999 {return vec4<f32>(0.0);}
+ if depth_at(uv)<=0.00001 {return vec4<f32>(0.0);}
  if receiver.a<0.0 {return water_reflection(uv,receiver);}
  if receiver.a==0.0 {return vec4<f32>(0.0);}
  let p=view_position(uv);
@@ -60,7 +60,7 @@ fn water_reflection(uv:vec2<f32>,receiver:vec4<f32>)->vec4<f32>{
  var bounce=vec3<f32>(0.0);var obscurance=0.0;
  for(var i=0;i<8;i++){
   let q_uv=uv+taps[i]*projected;
-  if any(q_uv<vec2<f32>(0.0))||any(q_uv>vec2<f32>(1.0))||depth_at(q_uv)>=0.99999{continue;}
+  if any(q_uv<vec2<f32>(0.0))||any(q_uv>vec2<f32>(1.0))||depth_at(q_uv)<=0.00001{continue;}
   let q=view_position(q_uv);let delta=q-p;let length2=dot(delta,delta);
   if length2<0.0025||length2>radius*radius{continue;}
   let direction=delta*inverseSqrt(length2);let cosine=max(dot(n,direction)-0.06,0.0);

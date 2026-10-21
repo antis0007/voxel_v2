@@ -111,14 +111,14 @@ fn cloud_sample_depth(uv: vec2<f32>) -> f32 {
     let base = vec2<i32>(floor(uv * vec2<f32>(dims) - vec2<f32>(0.5)));
     let a = clamp(base, vec2<i32>(0), dims - 1);
     let b = clamp(base + 1, vec2<i32>(0), dims - 1);
-    return min(min(textureLoad(scene_depth_tex, a, 0),
+    return max(max(textureLoad(scene_depth_tex, a, 0),
         textureLoad(scene_depth_tex, vec2<i32>(b.x, a.y), 0)),
-        min(textureLoad(scene_depth_tex, vec2<i32>(a.x, b.y), 0), textureLoad(scene_depth_tex, b, 0)));
+        max(textureLoad(scene_depth_tex, vec2<i32>(a.x, b.y), 0), textureLoad(scene_depth_tex, b, 0)));
 }
 
 fn depth_match(a: f32, b: f32) -> f32 {
-    if (a >= 0.9999999) != (b >= 0.9999999) { return 0.0; }
-    return exp(-abs(a - b) * 24.0 / max(1.0 - a, 1e-7));
+    if (a <= 1e-7) != (b <= 1e-7) { return 0.0; }
+    return exp(-abs(a - b) * 24.0 / max(a, 1e-7));
 }
 
 fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
@@ -138,12 +138,12 @@ fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
     let depth = textureLoad(scene_depth_tex, pixel, 0);
     var total = vec4<f32>(0.0);
     var weight = 0.0;
-    var all_sky = depth >= 0.9999999;
+    var all_sky = depth <= 1e-7;
     for (var i = 0; i < 4; i += 1) {
         let corner = vec2<f32>(f32(i % 2), f32(i / 2));
         let tap_uv = (base + corner + vec2<f32>(0.5)) / dims;
         let tap_depth = cloud_sample_depth(tap_uv);
-        all_sky = all_sky && tap_depth >= 0.9999999;
+        all_sky = all_sky && tap_depth <= 1e-7;
         let bilinear = mix(1.0 - f, f, corner);
         let w = bilinear.x * bilinear.y * depth_match(depth, tap_depth);
         total += colors[i] * w;
@@ -171,23 +171,39 @@ fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
         }
         return fallback;
     }
-    // Dense storm decks need reconstruction of the stratified integration
-    // noise, not a sharpening cubic filter. Keep positive weights and reject
-    // geometry neighbours so this cannot bleed clouds across a roof silhouette.
-    if light.cloud_authoring[1].z > 0.08 && min(min(colors[0].a,colors[1].a),min(colors[2].a,colors[3].a)) > 0.55 {
-        let center=total/max(weight,1e-5);
-        var filtered=vec4<f32>(0.0);
-        var filtered_weight=0.0;
-        for(var y=-1;y<=1;y+=1) {for(var x=-1;x<=1;x+=1) {
-            let offset=vec2<f32>(f32(x),f32(y));
-            let tap_uv=uv+offset/dims;
-            if cloud_sample_depth(tap_uv)<0.9999999 {continue;}
-            let tap=textureSampleLevel(cloud_tex,cloud_sampler,tap_uv,0.0);
-            let w=exp(-dot(offset,offset)*0.65-abs(tap.a-center.a)*16.0);
-            filtered+=tap*w;filtered_weight+=w;
-        }}
-        return filtered/max(filtered_weight,1e-5);
+    // The march is stochastic and runs at reduced resolution. Edge-aware smoothing
+    // reconstructs it without bleeding across depth or opacity edges. Dense storm
+    // decks use it alone; other clouds blend it with the cubic below so their
+    // fringes lose the grain without turning to blur.
+    let center=total/max(weight,1e-5);
+    // Nine taps suppress stochastic march noise at reduced resolution. The
+    // cubic reconstruction adds its own fetches, but the former 3x3 filter plus
+    // cubic path spent 22 texture fetches per full-resolution pixel and
+    // softened fair-weather silhouettes long before the art-direction blend did.
+    // The march phase is frame-stable blue noise with temporal history off, so
+    // its error never averages out over time. A 3x3 neighbourhood covers the
+    // blue-noise period's high frequencies; a 5-tap cross left visible grain.
+    var filtered=vec4<f32>(0.0);
+    var filtered_weight=0.0;
+    for (var i = 0; i < 9; i += 1) {
+        let offset = vec2<f32>(f32(i % 3) - 1.0, f32(i / 3) - 1.0);
+        let tap_uv=uv+offset/dims;
+        if cloud_sample_depth(tap_uv)>1e-7 {continue;}
+        let tap=textureSampleLevel(cloud_tex,cloud_sampler,tap_uv,0.0);
+        let w=exp(-dot(offset,offset)*0.45-abs(tap.a-center.a)*6.0);
+        filtered+=tap*w;filtered_weight+=w;
     }
+    let smoothed=filtered/max(filtered_weight,1e-5);
+    // Dense storm decks lean fully on the smoothed value. Every factor here is
+    // a continuous ramp: an earlier version switched on min(corner alpha)
+    // thresholds, which drew contour lines through the deck and broke it into
+    // flat, hard-edged blotches. Use the mean and minimum together so a single
+    // transparent corner cannot collapse the whole footprint into one mode.
+    let mean_alpha = (colors[0].a + colors[1].a + colors[2].a + colors[3].a) * 0.25;
+    let min_alpha = min(min(colors[0].a,colors[1].a),min(colors[2].a,colors[3].a));
+    let deck_alpha = mix(min_alpha, mean_alpha, 0.65);
+    let storm_dense = smoothstep(0.04, 0.16, light.cloud_authoring[1].z)
+        * smoothstep(0.18, 0.82, deck_alpha);
     // Separable Catmull-Rom, combining its two positive middle weights into
     // one bilinear tap: nine fetches retain detail without another ray march.
     let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
@@ -207,8 +223,17 @@ fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
         }
     }
     // Negative cubic lobes must not invent bright rims or negative opacity.
-    return clamp(cubic, min(min(colors[0], colors[1]), min(colors[2], colors[3])),
+    let sharp = clamp(cubic, min(min(colors[0], colors[1]), min(colors[2], colors[3])),
         max(max(colors[0], colors[1]), max(colors[2], colors[3])));
+    // Interiors take the denoised value; thin silhouettes keep the cubic so
+    // fair-weather edges stay crisp. `neighbour_confidence` replaces the old
+    // binary "did any 3x3 tap survive depth?" select. It ramps over the total
+    // bilateral weight, so a footprint with one or two rejected taps fades
+    // between cubic and smoothed instead of switching at a contour line.
+    let denoise = mix(0.38 + 0.46 * smoothstep(0.18, 0.72, center.a), 1.0, storm_dense);
+    let neighbour_confidence = smoothstep(0.0, 1.6, filtered_weight);
+    let blend = clamp(denoise * neighbour_confidence, 0.0, 1.0);
+    return mix(sharp, smoothed, blend);
 }
 
 @fragment
@@ -253,11 +278,62 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(cloud.rgb, alpha);
     }
 
-    if alpha <= 0.0001 {
+    // A soft coverage knee instead of a hard 1e-4 nesting threshold. The
+    // marched target is half-resolution, so an abrupt cutoff can leave a
+    // one-pixel halo where neighbouring footprints disagree.
+    let coverage = smoothstep(0.0, 0.006, alpha);
+    if coverage <= 0.0001 {
         return vec4<f32>(0.0);
     }
 
     // Premultiplied linear radiance. Blending tone-mapped cloud RGB over a
     // separately tone-mapped sky made edges dark and sunset colours disagree.
-    return vec4<f32>(max(cloud.rgb, vec3<f32>(0.0)), alpha);
+    return stylise_cloud(
+        max(cloud.rgb, vec3<f32>(0.0)) * coverage,
+        alpha * coverage,
+    );
+}
+
+// Art grade for clouds, applied to straight (unpremultiplied) radiance.
+// The marched result is physically plausible but reads as dull grey lumps next
+// to chunky, saturated voxel terrain. This lifts shade toward a sky-tinted
+// lavender, keeps sunlit crowns cream, steps the light ramp softly like the
+// terrain's cell shading, and firms the silhouette. It fades out at night and
+// twilight, where the marched colours are already doing the art direction.
+fn stylise_cloud(premul: vec3<f32>, alpha: f32) -> vec4<f32> {
+    let a = max(alpha, 1e-3);
+    let c = premul / a;
+    let luma_w = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let l = dot(c, luma_w);
+    let day = clamp(light.sun_color_daylight.w, 0.0, 1.0);
+    let twilight = clamp(light.moon_color_twilight.w, 0.0, 1.0);
+    let storm = clamp(light.weather_clip_summaries[0].z, 0.0, 1.0);
+    let sun_h = clamp(light.sun_dir_intensity.y, 0.0, 1.0);
+    // Radiance of a fully sunlit crown at this hour; everything is graded
+    // relative to it so the ramp holds from morning to afternoon.
+    let crown = (mix(0.62, 1.20, smoothstep(0.0, 0.7, sun_h)) * (1.0 - storm * 0.55)) * max(day, 0.05) + 0.06;
+    let t = clamp(l / crown, 0.0, 2.0);
+    let lifted = pow(t, 0.80);
+    // Soft cell-shading: a plain floor() gave the ramp hard steps, which
+    // read as contour bands once the cloud was already denoised. The eased
+    // half-cell keeps flat plateaus but joins them continuously.
+    let bands = 4.0;
+    let band_pos = lifted * bands;
+    let band_i = floor(band_pos);
+    let band_f = fract(band_pos);
+    let stepped = (band_i + smoothstep(0.15, 0.85, band_f)) / bands;
+    let ramp = mix(lifted, stepped, 0.18 * (1.0 - storm));
+    let sky = light.sky_top_saturation.rgb;
+    let lit_col = mix(vec3<f32>(1.0, 0.975, 0.92), light.sun_color_daylight.rgb, 0.45);
+    let shade_col = mix(vec3<f32>(0.44, 0.51, 0.72), sky * 1.3 + vec3<f32>(0.06), 0.40);
+    let storm_col = mix(vec3<f32>(0.50, 0.56, 0.66), shade_col, 0.4);
+    let base_shade = mix(shade_col, storm_col, storm);
+    let tone = mix(base_shade, lit_col, smoothstep(0.16, 1.05, ramp));
+    let recoloured = tone * crown * ramp * 1.40;
+    // Marched colour survives wherever it is doing real work.
+    let strength = smoothstep(0.10, 0.50, day) * (1.0 - twilight * 0.88) * (1.0 - storm * 0.92) * 0.85;
+    let graded = mix(c, recoloured, strength);
+    // Firmer silhouette: pull wispy edges in without deleting thin veils.
+    let edge_alpha = mix(alpha, smoothstep(0.06, 0.92, alpha), 0.20 * strength);
+    return vec4<f32>(max(graded, vec3<f32>(0.0)) * edge_alpha, edge_alpha);
 }

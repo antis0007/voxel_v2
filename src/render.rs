@@ -6,20 +6,22 @@ mod horizon;
 pub use horizon::FAR_PLANE as HORIZON_FAR_PLANE;
 mod streaming;
 pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, build_draw_list};
-pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
 pub use streaming::{
-    mesh_budget_mib, set_mesh_budget_mib, set_world_residency_budgets_mib,
-    world_residency_budgets_mib,
-    gpu_residency_limit_mib, gpu_residency_status, MAX_GPU_MIB,
+    MAX_GPU_MIB, gpu_residency_limit_mib, gpu_residency_status, mesh_budget_mib,
+    set_mesh_budget_mib, set_world_residency_budgets_mib, world_residency_budgets_mib,
 };
+pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
 
 mod atmosphere;
 pub mod atmosphere_params;
+pub mod cloud_governor;
 pub mod clouds;
 mod debug;
-mod postprocess;
 mod indirect;
-pub use indirect::{enabled as indirect_lighting_enabled, set_enabled as set_indirect_lighting_enabled};
+mod postprocess;
+pub use indirect::{
+    enabled as indirect_lighting_enabled, set_enabled as set_indirect_lighting_enabled,
+};
 pub mod shadow;
 
 use anyhow::{Context, Result};
@@ -38,15 +40,16 @@ use crate::world::{
 };
 
 use atmosphere::{
-    AtmosphereRuntime, AtmosphereRuntimeState, cloud_composite_shader_source, cloud_shader_source_for_filtering,
-    cloud_temporal_shader_source, sky_shader_source, world_shader_source,
+    AtmosphereRuntime, AtmosphereRuntimeState, cloud_composite_shader_source,
+    cloud_shader_source_for_filtering, cloud_temporal_shader_source, sky_shader_source,
+    world_shader_source,
 };
 pub use atmosphere_params::AtmosphereMode;
 pub use debug::RenderDebugView;
 
-const DEFAULT_VIEW_DISTANCE_CHUNKS: i32 = 16;
-const DEFAULT_LOD_START_CHUNKS: i32 = 3;
-const DEFAULT_LOD_LEVELS: u32 = 3;
+const DEFAULT_VIEW_DISTANCE_CHUNKS: i32 = 28;
+const DEFAULT_LOD_START_CHUNKS: i32 = 10;
+const DEFAULT_LOD_LEVELS: u32 = 4;
 
 static VIEW_DISTANCE_CHUNKS_ATOMIC: AtomicI32 = AtomicI32::new(DEFAULT_VIEW_DISTANCE_CHUNKS);
 static LOD_START_CHUNKS_ATOMIC: AtomicI32 = AtomicI32::new(DEFAULT_LOD_START_CHUNKS);
@@ -343,13 +346,17 @@ impl GpuProfiler {
     }
 
     fn disable(&mut self, reason: &str) {
-        if !self.failed { eprintln!("GPU profiling disabled: {reason}"); }
+        if !self.failed {
+            eprintln!("GPU profiling disabled: {reason}");
+        }
         self.failed = true;
         self.last_timings = GpuPassTimings::default();
     }
 
     fn acquire_slot(&mut self) -> Option<usize> {
-        if !self.healthy() { return None; }
+        if !self.healthy() {
+            return None;
+        }
         for _ in 0..self.slots.len() {
             let slot_index = self.next_slot;
             self.next_slot = (self.next_slot + 1) % self.slots.len();
@@ -405,14 +412,19 @@ impl GpuProfiler {
         slot.query_count = query_count;
         slot.pass_queries = pass_queries;
         let requested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            slot.readback_buffer.slice(..GPU_TIMESTAMP_RESULT_BYTES)
+            slot.readback_buffer
+                .slice(..GPU_TIMESTAMP_RESULT_BYTES)
                 .map_async(wgpu::MapMode::Read, move |result| {
                     let _ = tx.send(GpuTimestampReadback {
-                        slot_index, submission_id, ok: result.is_ok(),
+                        slot_index,
+                        submission_id,
+                        ok: result.is_ok(),
                     });
                 });
         }));
-        if requested.is_err() { self.disable("timing map request became invalid"); }
+        if requested.is_err() {
+            self.disable("timing map request became invalid");
+        }
     }
     fn collect_finished(&mut self, device: &wgpu::Device) -> bool {
         if !self.healthy() {
@@ -424,8 +436,12 @@ impl GpuProfiler {
             return false;
         }
         while let Ok(done) = self.done_rx.try_recv() {
-            let Some(slot) = self.slots.get_mut(done.slot_index) else { continue; };
-            if !slot.pending || slot.submission_id != done.submission_id { continue; }
+            let Some(slot) = self.slots.get_mut(done.slot_index) else {
+                continue;
+            };
+            if !slot.pending || slot.submission_id != done.submission_id {
+                continue;
+            }
             slot.pending = false;
             if !done.ok || self.device_lost.load(Ordering::Acquire) {
                 // A failed/destroyed mapping is not safe to unmap or recycle.
@@ -438,9 +454,14 @@ impl GpuProfiler {
             // Contain that race here and retire the entire optional profiler.
             // Never retry/unmap a buffer whose mapping state is now uncertain.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mapped = slot.readback_buffer.slice(..GPU_TIMESTAMP_RESULT_BYTES).get_mapped_range();
+                let mapped = slot
+                    .readback_buffer
+                    .slice(..GPU_TIMESTAMP_RESULT_BYTES)
+                    .get_mapped_range();
                 let mut raw = [0u64; GPU_TIMESTAMP_QUERY_COUNT as usize];
-                if mapped.len() != GPU_TIMESTAMP_RESULT_BYTES as usize { return None; }
+                if mapped.len() != GPU_TIMESTAMP_RESULT_BYTES as usize {
+                    return None;
+                }
                 for (value, bytes) in raw.iter_mut().zip(mapped.chunks_exact(8)) {
                     *value = u64::from_le_bytes(bytes.try_into().unwrap());
                 }
@@ -478,7 +499,12 @@ impl GpuProfiler {
             GPU_TIMESTAMP_PASS_TERRAIN,
             timestamp_period_ns,
         );
-        let indirect_ms = Self::pass_duration_ms(raw, pass_queries, GPU_TIMESTAMP_PASS_INDIRECT, timestamp_period_ns);
+        let indirect_ms = Self::pass_duration_ms(
+            raw,
+            pass_queries,
+            GPU_TIMESTAMP_PASS_INDIRECT,
+            timestamp_period_ns,
+        );
         let cloud_raymarch_ms = Self::pass_duration_ms(
             raw,
             pass_queries,
@@ -518,7 +544,8 @@ impl GpuProfiler {
 
         GpuPassTimings {
             total_ms: shadow_ms
-                + terrain_ms + indirect_ms
+                + terrain_ms
+                + indirect_ms
                 + cloud_raymarch_ms
                 + cloud_temporal_ms
                 + sky_ms
@@ -560,9 +587,28 @@ impl GpuProfiler {
 // available for diagnostics, but an estimated volume depth can drag unrelated
 // cloud samples together during translation. The default uses the current frame.
 static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(3);
-/// Requested divisor: 2 = High, 3 = Balanced, 4 = Fast.
-pub fn cloud_render_scale() -> u32 { CLOUD_RENDER_SCALE.load(Ordering::Relaxed) }
-pub fn set_cloud_render_scale(scale: u32) { CLOUD_RENDER_SCALE.store(scale.clamp(2,4),Ordering::Relaxed); }
+/// Requested divisor: 2 = Ultra, 3 = High, 4 = Balanced.
+/// Extra divisor added by the adaptive cloud governor (0 = none).
+static CLOUD_AUTO_BUMP: AtomicU32 = AtomicU32::new(0);
+
+pub fn cloud_render_scale() -> u32 {
+    CLOUD_RENDER_SCALE.load(Ordering::Relaxed)
+}
+pub fn set_cloud_render_scale(scale: u32) {
+    CLOUD_RENDER_SCALE.store(scale.clamp(2, 4), Ordering::Relaxed);
+}
+/// The requested divisor is a quality ceiling, not permission to render a
+/// 180-line cloud image. Keep at least 360 rows so small windows do not turn
+/// every cumulus into a soft blob after the cubic reconstruction.
+pub fn effective_cloud_render_scale(width: u32, height: u32) -> u32 {
+    let by_height = (height / 360).max(1);
+    let base = cloud_render_scale().min(by_height).clamp(2, 4);
+    (base + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)).min(4)
+}
+/// Divisor request including the governor's bump, used to notice changes.
+fn cloud_scale_request() -> u32 {
+    cloud_render_scale() * 8 + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)
+}
 const CLOUD_TEMPORAL_ENABLED: bool = false;
 
 use crate::shader_sources::{LINE_SHADER, SHADOW_SHADER, UI_SHADER};
@@ -580,6 +626,9 @@ struct CameraUniform {
     ray_up: [f32; 4],
     previous_camera_pos: [f32; 4],
     scene_seed: [u32; 4],
+    /// x: conservative published resident coverage in metres. A negative
+    /// value means "no override"; zero means no resident mesh is published.
+    coverage: [f32; 4],
 }
 
 #[repr(C)]
@@ -603,9 +652,13 @@ struct LightingUniform {
     torch_meta: [f32; 4],
     torch_positions: [[f32; 4]; MAX_TORCH_LIGHTS],
     torch_colors: [[f32; 4]; MAX_TORCH_LIGHTS],
-    material_tints: [[f32;4];256],
-    material_properties: [[f32;4];256],
-    surface_weather: [f32;4],
+    material_tints: [[f32; 4]; 256],
+    material_properties: [[f32; 4]; 256],
+    surface_weather: [f32; 4],
+    /// cosmos chamber, aurora, meteor shower, rainbow.
+    mood: [f32; 4],
+    /// fireflies, pollen, diamond dust, embers.
+    ambience: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -648,6 +701,17 @@ fn cloud_weather_uniform_state(
             ]
         }),
     }
+}
+
+/// The material studio's tints with the season layered over the meadow (1) and
+/// canopy (6) families, so the year turns without touching any mesh.
+fn seasonal_tints(state: &LightingState) -> [[f32; 4]; 256] {
+    let mut tints = crate::material_studio::snapshot().tints;
+    for k in 0..3 {
+        tints[1][k] *= state.grass_tint[k];
+        tints[6][k] *= state.foliage_tint[k];
+    }
+    tints
 }
 
 fn lighting_uniform_from_state(
@@ -807,9 +871,11 @@ fn lighting_uniform_from_state(
         ],
         torch_positions,
         torch_colors,
-        material_tints: crate::material_studio::snapshot().tints,
+        material_tints: seasonal_tints(state),
         material_properties: crate::material_studio::snapshot().properties,
         surface_weather: crate::material_studio::weather_surface(cloud_controls.cumulonimbus),
+        mood: state.mood,
+        ambience: state.ambience,
     }
 }
 
@@ -820,6 +886,15 @@ pub struct TorchLight {
     pub color: [f32; 3],
     pub strength: f32,
 }
+
+/// Maps conventional clip depth (0 near .. 1 far) to reverse-Z (1 near .. 0 far):
+/// z' = w - z. It is an involution, so it also converts inverse matrices back.
+const REVERSE_Z: Mat4 = Mat4::from_cols(
+    Vec4::new(1.0, 0.0, 0.0, 0.0),
+    Vec4::new(0.0, 1.0, 0.0, 0.0),
+    Vec4::new(0.0, 0.0, -1.0, 0.0),
+    Vec4::new(0.0, 0.0, 1.0, 1.0),
+);
 
 fn unproject_clip(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
     let clip = Vec4::new(ndc.x, ndc.y, ndc.z, 1.0);
@@ -886,6 +961,16 @@ impl DynamicVertexBuffer {
 
 pub struct Gpu {
     pub underwater: bool,
+    /// Height of the water surface above a submerged eye, in metres.
+    pub water_surface_m: f32,
+    /// World-space sea level in metres. Sent through the spare camera coverage
+    /// lane so terrain can receive the shallow caustic spill without a second
+    /// uniform buffer.
+    pub water_level_m: f32,
+    /// RGB + intensity of active spell effects for the trippy resolve.
+    screen_magic: [f32; 4],
+    /// Underground zone grade: veil rgb+amount, then desat/pulse/swirl/gain.
+    zone_grade: ([f32; 4], [f32; 4]),
     postprocess: postprocess::PostProcess,
     indirect: indirect::IndirectLighting,
     pub fxaa_enabled: bool,
@@ -957,7 +1042,12 @@ pub struct Gpu {
     last_world_scale: f32,
     cloud_history_valid: bool,
     cloud_render_scale: u32,
+    cloud_governor: cloud_governor::CloudGovernor,
+    last_frame_instant: Instant,
     frame_index: u32,
+    // Monotonic sky time, used by the spell grade so its cadence is independent
+    // of frame rate. frame_index is retained for temporal jitter only.
+    effect_time: f32,
     cloud_history_frame_stats: CloudHistoryFrameStats,
     last_weather_upload_stats: WeatherUploadStats,
     last_render_stats: RenderFrameStats,
@@ -1383,8 +1473,8 @@ impl GpuBootstrap {
             "{} / {:?} / {:?}",
             adapter_info.name, adapter_info.backend, adapter_info.device_type
         );
-        let requested_features = adapter.features() &
-            (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE);
+        let requested_features = adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -1414,7 +1504,11 @@ impl GpuBootstrap {
             desired_maximum_frame_latency: 2,
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: caps.alpha_modes[0],
-            view_formats: if format.is_srgb() { vec![format.remove_srgb_suffix()] } else { vec![] },
+            view_formats: if format.is_srgb() {
+                vec![format.remove_srgb_suffix()]
+            } else {
+                vec![]
+            },
         };
         surface.configure(&device, &config);
 
@@ -1713,6 +1807,7 @@ impl GpuPendingInit {
                         ray_up: [0.0, 1.0, 0.0, -0.01],
                         previous_camera_pos: [0.0; 4],
                         scene_seed: [0; 4],
+                        coverage: [-1.0, 0.0, 0.0, 0.0],
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
@@ -1879,7 +1974,9 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
+                                        filterable: device
+                                            .features()
+                                            .contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -1892,7 +1989,9 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
+                                        filterable: device
+                                            .features()
+                                            .contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -1962,7 +2061,9 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
+                                        filterable: device
+                                            .features()
+                                            .contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -2228,11 +2329,19 @@ impl GpuPendingInit {
                 let bootstrap = self.bootstrap.as_ref().expect("bootstrap missing");
                 let device = &bootstrap.device;
 
-                self.cloud_shader =
-                    Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                self.cloud_shader = Some(
+                    device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("cloud shader"),
-                        source: wgpu::ShaderSource::Wgsl(cloud_shader_source_for_filtering(device.features().contains(wgpu::Features::FLOAT32_FILTERABLE)).into()),
-                    }));
+                        source: wgpu::ShaderSource::Wgsl(
+                            cloud_shader_source_for_filtering(
+                                device
+                                    .features()
+                                    .contains(wgpu::Features::FLOAT32_FILTERABLE),
+                            )
+                            .into(),
+                        ),
+                    }),
+                );
                 self.cloud_composite_shader =
                     Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("cloud composite shader"),
@@ -2394,7 +2503,7 @@ impl GpuPendingInit {
                         }),
                         primitive: wgpu::PrimitiveState::default(),
                         depth_stencil: Some(wgpu::DepthStencilState {
-                            format: wgpu::TextureFormat::Depth24Plus,
+                            format: wgpu::TextureFormat::Depth32Float,
                             depth_write_enabled: false,
                             depth_compare: wgpu::CompareFunction::Equal,
                             stencil: Default::default(),
@@ -2497,20 +2606,27 @@ impl GpuPendingInit {
                             module: self.world_shader.as_ref().unwrap(),
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            targets: &[Some(wgpu::ColorTargetState {
-                                format: postprocess::SCENE_FORMAT,
-                                blend: Some(wgpu::BlendState::REPLACE),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            }), Some(wgpu::ColorTargetState {format: postprocess::SCENE_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL})],
+                            targets: &[
+                                Some(wgpu::ColorTargetState {
+                                    format: postprocess::SCENE_FORMAT,
+                                    blend: Some(wgpu::BlendState::REPLACE),
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                }),
+                                Some(wgpu::ColorTargetState {
+                                    format: postprocess::SCENE_FORMAT,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                }),
+                            ],
                         }),
                         primitive: wgpu::PrimitiveState {
                             cull_mode: Some(wgpu::Face::Back),
                             ..Default::default()
                         },
                         depth_stencil: Some(wgpu::DepthStencilState {
-                            format: wgpu::TextureFormat::Depth24Plus,
+                            format: wgpu::TextureFormat::Depth32Float,
                             depth_write_enabled: true,
-                            depth_compare: wgpu::CompareFunction::Less,
+                            depth_compare: wgpu::CompareFunction::Greater,
                             stencil: Default::default(),
                             bias: Default::default(),
                         }),
@@ -2549,9 +2665,9 @@ impl GpuPendingInit {
                             ..Default::default()
                         },
                         depth_stencil: Some(wgpu::DepthStencilState {
-                            format: wgpu::TextureFormat::Depth24Plus,
+                            format: wgpu::TextureFormat::Depth32Float,
                             depth_write_enabled: false,
-                            depth_compare: wgpu::CompareFunction::LessEqual,
+                            depth_compare: wgpu::CompareFunction::GreaterEqual,
                             stencil: Default::default(),
                             bias: Default::default(),
                         }),
@@ -2658,12 +2774,25 @@ impl GpuPendingInit {
             GpuInitStage::Complete => {
                 let bootstrap = self.bootstrap.take().expect("bootstrap missing");
                 let gpu_profiler = GpuProfiler::new(&bootstrap.device, &bootstrap.queue);
-                let postprocess =
-                    postprocess::PostProcess::new(&bootstrap.device, &bootstrap.config);
-                let indirect = indirect::IndirectLighting::new(&bootstrap.device, &bootstrap.config, self.camera_layout.as_ref().unwrap(), self.depth.as_ref().unwrap(), &postprocess.scene);
+                let postprocess = postprocess::PostProcess::new(
+                    &bootstrap.device,
+                    &bootstrap.config,
+                    self.blue_noise_view.as_ref().unwrap(),
+                );
+                let indirect = indirect::IndirectLighting::new(
+                    &bootstrap.device,
+                    &bootstrap.config,
+                    self.camera_layout.as_ref().unwrap(),
+                    self.depth.as_ref().unwrap(),
+                    &postprocess.scene,
+                );
 
                 let mut gpu = Gpu {
                     underwater: false,
+                    water_surface_m: 12.0,
+                    water_level_m: 0.0,
+                    screen_magic: [0.0; 4],
+                    zone_grade: crate::world::zones::NO_GRADE,
                     postprocess,
                     indirect,
                     fxaa_enabled: true,
@@ -2740,8 +2869,11 @@ impl GpuPendingInit {
 
                     // History is invalid until the first resolved cloud frame is produced.
                     cloud_history_valid: false,
-                    cloud_render_scale: cloud_render_scale(),
+                    cloud_render_scale: cloud_scale_request(),
+                    cloud_governor: cloud_governor::CloudGovernor::default(),
+                    last_frame_instant: Instant::now(),
                     frame_index: 0,
+                    effect_time: 0.0,
                     cloud_history_frame_stats: CloudHistoryFrameStats::default(),
                     last_weather_upload_stats: WeatherUploadStats::default(),
                     last_render_stats: RenderFrameStats::default(),
@@ -2751,10 +2883,16 @@ impl GpuPendingInit {
                 };
 
                 // If the window was resized during startup, textures created early
-                // in the pipeline (like depth and clouds) will have the old size.
-                // We force a resize here to ensure everything is perfectly in sync.
+                // in the pipeline (like depth and clouds) may have the old size.
+                // Rebuilding all targets at the same size is especially expensive:
+                // wgpu keeps the old resources alive until their last GPU use has
+                // retired, so an unconditional resize can briefly double VRAM and
+                // trigger a D3D12 out-of-memory failure during startup.
                 let final_size = gpu.size;
-                gpu.resize(final_size);
+                let configured_size = PhysicalSize::new(gpu.config.width, gpu.config.height);
+                if configured_size != final_size {
+                    gpu.resize(final_size);
+                }
 
                 Ok(Some(gpu))
             }
@@ -2763,11 +2901,32 @@ impl GpuPendingInit {
 }
 impl Gpu {
     pub fn upload_scene(&mut self, vertices: &[Vertex3]) {
-        self.scene_vertices=vertices.len();
-        if vertices.is_empty() { return; }
-        let stream=self.scene_stream.get_or_insert_with(||DynamicVertexBuffer::new::<Vertex3>(&self.device,"animated scene models",vertices.len()));
-        stream.upload(&self.device,&self.queue,vertices);
+        self.scene_vertices = vertices.len();
+        if vertices.is_empty() {
+            return;
+        }
+        let stream = self.scene_stream.get_or_insert_with(|| {
+            DynamicVertexBuffer::new::<Vertex3>(
+                &self.device,
+                "animated scene models",
+                vertices.len(),
+            )
+        });
+        stream.upload(&self.device, &self.queue, vertices);
     }
+    pub fn set_zone_grade(&mut self, grade: ([f32; 4], [f32; 4])) {
+        self.zone_grade = grade;
+    }
+
+    pub fn set_screen_magic(&mut self, intensity: f32, color: [f32; 3]) {
+        self.screen_magic = [
+            color[0].clamp(0.0, 2.0),
+            color[1].clamp(0.0, 2.0),
+            color[2].clamp(0.0, 2.0),
+            intensity.clamp(0.0, 1.0),
+        ];
+    }
+
     pub fn vsync(&self) -> bool {
         self.config.present_mode == wgpu::PresentMode::AutoVsync
     }
@@ -2880,7 +3039,7 @@ impl Gpu {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth24Plus,
+                format: wgpu::TextureFormat::Depth32Float,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -2903,8 +3062,10 @@ impl Gpu {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: (config.width / cloud_render_scale()).max(1),
-                height: (config.height / cloud_render_scale()).max(1),
+                width: (config.width / effective_cloud_render_scale(config.width, config.height))
+                    .max(1),
+                height: (config.height / effective_cloud_render_scale(config.width, config.height))
+                    .max(1),
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -3244,21 +3405,32 @@ impl Gpu {
         let size = 256u32;
         let total = (size * size) as usize;
         let hash = |mut v: u32| {
-            v ^= v >> 16; v = v.wrapping_mul(0x7feb352d);
-            v ^= v >> 15; v = v.wrapping_mul(0x846ca68b);
+            v ^= v >> 16;
+            v = v.wrapping_mul(0x7feb352d);
+            v ^= v >> 15;
+            v = v.wrapping_mul(0x846ca68b);
             ((v ^ (v >> 16)) as f64 / u32::MAX as f64) as f32
         };
         let raw: Vec<f32> = (0..total).map(|i| hash(i as u32 ^ 0xa1539e27)).collect();
-        let mut ranked: Vec<(usize,f32)> = (0..total).map(|i| {
-            let x = i as u32 % size; let y = i as u32 / size;
-            let at = |dx:i32,dy:i32| raw[(((y as i32+dy).rem_euclid(size as i32) as u32)*size
-                +(x as i32+dx).rem_euclid(size as i32) as u32) as usize];
-            (i,raw[i]-(at(-1,0)+at(1,0)+at(0,-1)+at(0,1))*0.25)
-        }).collect();
-        ranked.sort_unstable_by(|a,b| a.1.total_cmp(&b.1));
-        let mut data = vec![0u8;total];
-        for (rank,(index,_)) in ranked.into_iter().enumerate() {
-            data[index]=(rank*256/total) as u8;
+        let mut ranked: Vec<(usize, f32)> = (0..total)
+            .map(|i| {
+                let x = i as u32 % size;
+                let y = i as u32 / size;
+                let at = |dx: i32, dy: i32| {
+                    raw[(((y as i32 + dy).rem_euclid(size as i32) as u32) * size
+                        + (x as i32 + dx).rem_euclid(size as i32) as u32)
+                        as usize]
+                };
+                (
+                    i,
+                    raw[i] - (at(-1, 0) + at(1, 0) + at(0, -1) + at(0, 1)) * 0.25,
+                )
+            })
+            .collect();
+        ranked.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+        let mut data = vec![0u8; total];
+        for (rank, (index, _)) in ranked.into_iter().enumerate() {
+            data[index] = (rank * 256 / total) as u8;
         }
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("blue noise"),
@@ -3411,7 +3583,7 @@ impl Gpu {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
-        self.cloud_render_scale = cloud_render_scale();
+        self.cloud_render_scale = cloud_scale_request();
         self.size = new_size;
         self.config.width = new_size.width;
         self.config.height = new_size.height;
@@ -3420,7 +3592,12 @@ impl Gpu {
             .resize(&self.queue, self.config.width, self.config.height);
         self.depth = Self::create_depth(&self.device, &self.config);
         self.postprocess.resize(&self.device, &self.config);
-        self.indirect.resize(&self.device, &self.config, &self.depth, &self.postprocess.scene);
+        self.indirect.resize(
+            &self.device,
+            &self.config,
+            &self.depth,
+            &self.postprocess.scene,
+        );
         self.cloud_render_bind_group = Self::create_cloud_render_bind_group(
             &self.device,
             &self.cloud_render_layout,
@@ -3468,16 +3645,48 @@ impl Gpu {
         self.capture_path = Some(path);
     }
 
-    pub fn update_horizon(&mut self, world: &mut crate::world::World, eye: Vec3) {
+    pub fn update_horizon(
+        &mut self,
+        world: &mut crate::world::World,
+        eye: Vec3,
+        coverage_radius: f32,
+    ) {
         let scale = world.voxel_scale.meters();
         let revision = world.revision();
-        let hidden_radius = (128.0 * scale).min(render_distance_settings().view_distance_chunks as f32 * CHUNK_SIZE as f32 * scale * 0.65);
-        self.horizon.update(&self.device, &self.queue, world, revision, eye, hidden_radius);
+        let visible_world =
+            render_distance_settings().view_distance_chunks as f32 * CHUNK_SIZE as f32 * scale;
+        // The horizon may only hide where resident GPU coverage is actually
+        // published. A fixed fraction of the requested radius left a gap when
+        // streaming had not reached that fraction yet.
+        let hidden_radius = if coverage_radius.is_finite() {
+            coverage_radius.clamp(0.0, visible_world)
+        } else {
+            0.0
+        };
+        self.horizon.update(
+            &self.device,
+            &self.queue,
+            world,
+            revision,
+            eye,
+            hidden_radius,
+        );
     }
 
-    pub fn horizon_ready(&self)->bool {self.horizon.mesh.is_some()}
+    pub fn horizon_ready(&self) -> bool {
+        self.horizon.mesh.is_some()
+    }
 
-    pub fn upload_camera(&mut self, precise_eye: glam::DVec3, world_scale: f32, forward: Vec3, projection: Mat4, world_seed: u32, generator_version: u32) {
+    pub fn upload_camera(
+        &mut self,
+        precise_eye: glam::DVec3,
+        world_scale: f32,
+        forward: Vec3,
+        projection: Mat4,
+        world_seed: u32,
+        generator_version: u32,
+        coverage_radius: f32,
+    ) {
         // Invert only the rotation/projection. Inverting the translated f32 matrix
         // makes rays and motion estimates increasingly unstable away from the origin.
         // Capture-time A/B uses the same executable and shader pipeline.
@@ -3490,14 +3699,25 @@ impl Gpu {
         let eye = precise_eye.as_vec3();
         let residual = (precise_eye - eye.as_dvec3()).as_vec3();
         let cur_forward = forward.normalize();
-        let rotation_view_proj = projection * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y) * Mat4::from_translation(-residual);
-        let inv_view_proj = Mat4::from_translation(eye) * rotation_view_proj.inverse();
+        // Callers supply a conventional 0 = near, 1 = far projection. The scene is
+        // drawn reverse-Z into a 32-bit float depth buffer: 24-bit forward-Z gave
+        // steps of ~1 m at 1 km and ~76 m at 8 km, so distant shoreline terrain and
+        // water z-fought. Shaders that reconstruct depth read the reversed matrix.
+        let standard_view_proj = projection
+            * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)
+            * Mat4::from_translation(-residual);
+        let standard_inv_view_proj = Mat4::from_translation(eye) * standard_view_proj.inverse();
+        let projection = REVERSE_Z * projection;
+        let rotation_view_proj = REVERSE_Z * standard_view_proj;
+        // REVERSE_Z is its own inverse, so the reversed inverse needs no second inversion.
+        let inv_view_proj = standard_inv_view_proj * REVERSE_Z;
         let right = cur_forward.cross(Vec3::Y).normalize() / projection.x_axis.x;
         let up = right.normalize().cross(cur_forward) / projection.y_axis.y;
         let prev_forward = self.last_camera_forward;
 
         let angular_motion = (1.0 - cur_forward.dot(prev_forward).clamp(-1.0, 1.0)).clamp(0.0, 1.0);
-        let translation_delta = (eye - self.last_camera_pos) + (residual - self.last_camera_residual);
+        let translation_delta =
+            (eye - self.last_camera_pos) + (residual - self.last_camera_residual);
         let translation_motion = (translation_delta.length() / 8.0).clamp(0.0, 1.0);
         let camera_motion = (angular_motion * 6.0 + translation_motion * 0.25).clamp(0.0, 1.0);
 
@@ -3517,7 +3737,17 @@ impl Gpu {
             bytemuck::bytes_of(&CameraUniform {
                 // Terrain and outlines subtract the eye before projection.
                 view_proj: rotation_view_proj.to_cols_array_2d(),
-                camera_pos: [eye.x, eye.y, eye.z, if self.underwater { 1.0 } else { 0.0 }],
+                // w encodes 'submerged' as 1 + the surface height, so `w > 0.5` still means underwater.
+                camera_pos: [
+                    eye.x,
+                    eye.y,
+                    eye.z,
+                    if self.underwater {
+                        1.0 + self.water_surface_m.max(0.0)
+                    } else {
+                        0.0
+                    },
+                ],
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
                 world_params: [
                     world_scale,
@@ -3525,7 +3755,15 @@ impl Gpu {
                     camera_motion,
                     visible_world,
                 ],
-                scene_seed: [world_seed, generator_version, u32::from(mist_disabled), u32::from(!shadow::enabled())],
+                scene_seed: [
+                    world_seed,
+                    generator_version,
+                    u32::from(mist_disabled),
+                    u32::from(!shadow::enabled()),
+                ],
+                // x: resident coverage radius; y: sea level in metres. The
+                // caustic spill reads this without adding another uniform slot.
+                coverage: [coverage_radius, self.water_level_m, 0.0, 0.0],
                 // Previous projection has no translation; temporal uses camera deltas.
                 prev_view_proj: self.last_rotation_view_proj.to_cols_array_2d(),
                 camera_forward: [
@@ -3555,7 +3793,7 @@ impl Gpu {
 
         self.last_camera_pos = eye;
         self.last_camera_residual = residual;
-        self.last_inv_view_proj = inv_view_proj;
+        self.last_inv_view_proj = standard_inv_view_proj;
         self.last_rotation_view_proj = rotation_view_proj;
         self.last_camera_forward = cur_forward;
         self.last_world_scale = world_scale;
@@ -3567,7 +3805,7 @@ impl Gpu {
 
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
-            inv_view_proj,
+            standard_inv_view_proj,
             0.05 * world_scale,
             far_plane_world,
             world_scale,
@@ -3596,6 +3834,7 @@ impl Gpu {
         debug_view: RenderDebugView,
         atmosphere_mode: AtmosphereMode,
     ) {
+        self.effect_time = sky_time;
         let uniform = lighting_uniform_from_state(
             lighting,
             cloud_controls,
@@ -3859,8 +4098,29 @@ impl Gpu {
             u32,
         ),
     {
-        if self.cloud_render_scale != cloud_render_scale() { self.resize(self.size); }
-        if self.gpu_profiler.as_mut().is_some_and(|profiler| !profiler.collect_finished(&self.device)) {
+        if self.cloud_governor.update(
+            self.last_render_stats.gpu_pass_total_ms,
+            self.last_frame_instant.elapsed().as_secs_f32(),
+        ) {
+            CLOUD_AUTO_BUMP.store(self.cloud_governor.bump(), Ordering::Relaxed);
+            // Cloud resolution follows measured GPU time, so two builds (or two
+            // GPUs) can settle on different looks. Say so instead of changing
+            // the image silently.
+            eprintln!(
+                "[cloud-governor] cloud resolution step {} (gpu pass {:.1} ms)",
+                self.cloud_governor.bump(),
+                self.last_render_stats.gpu_pass_total_ms
+            );
+        }
+        self.last_frame_instant = Instant::now();
+        if self.cloud_render_scale != cloud_scale_request() {
+            self.resize(self.size);
+        }
+        if self
+            .gpu_profiler
+            .as_mut()
+            .is_some_and(|profiler| !profiler.collect_finished(&self.device))
+        {
             // Drop all slots together; no failed map can be reused next frame.
             self.gpu_profiler = None;
         }
@@ -3947,7 +4207,9 @@ impl Gpu {
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {
-                    if !self.shadow_renderer.renders_cascade(pass_index as usize) { continue; }
+                    if !self.shadow_renderer.renders_cascade(pass_index as usize) {
+                        continue;
+                    }
                     let begin = gpu_query_count;
                     let end = begin + 1;
                     gpu_query_count += 2;
@@ -3963,7 +4225,11 @@ impl Gpu {
             );
         }
         frame_stats.shadow_redraw = redraw_shadow_map;
-        frame_stats.shadow_draw_calls = if redraw_shadow_map { self.shadow_renderer.draw_call_count() } else { 0 };
+        frame_stats.shadow_draw_calls = if redraw_shadow_map {
+            self.shadow_renderer.draw_call_count()
+        } else {
+            0
+        };
         frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0;
 
         let scene_view = &self.postprocess.scene;
@@ -3971,28 +4237,39 @@ impl Gpu {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: scene_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: if paused {
-                            wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.12,
-                                g: 0.12,
-                                b: 0.16,
-                                a: 1.0,
-                            })
-                        } else {
-                            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: scene_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if paused {
+                                wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.12,
+                                    g: 0.12,
+                                    b: 0.16,
+                                    a: 1.0,
+                                })
+                            } else {
+                                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                            },
+                            store: wgpu::StoreOp::Store,
                         },
-                        store: wgpu::StoreOp::Store,
-                    },
-                }), Some(wgpu::RenderPassColorAttachment {view: &self.indirect.receiver, depth_slice: None, resolve_target: None, ops: wgpu::Operations {load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store: wgpu::StoreOp::Store}})],
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &self.indirect.receiver,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -4027,13 +4304,16 @@ impl Gpu {
                     }
                 }
                 if let Some(mesh) = &self.horizon.mesh {
-                    let planes = streaming::extract_planes(self.last_rotation_view_proj);
+                    let planes =
+                        streaming::extract_planes(REVERSE_Z * self.last_rotation_view_proj);
                     for page in &mesh.pages {
                         pass.set_vertex_buffer(0, page.vertices.slice(..));
                         pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
                         if mesh.cull {
                             for batch in &page.batches {
-                                if !batch.visible(self.last_camera_pos, &planes) { continue; }
+                                if !batch.visible(self.last_camera_pos, &planes) {
+                                    continue;
+                                }
                                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                                 terrain_draw_calls += 1;
                                 terrain_indices += batch.indices.len();
@@ -4046,11 +4326,11 @@ impl Gpu {
                     }
                 }
                 frame_stats.terrain_draw_calls = terrain_draw_calls;
-                if self.scene_vertices>0 {
-                    if let Some(stream)=&self.scene_stream {
-                        pass.set_vertex_buffer(0,stream.slice::<Vertex3>(self.scene_vertices));
-                        pass.draw(0..self.scene_vertices as u32,0..1);
-                        frame_stats.terrain_draw_calls+=1;
+                if self.scene_vertices > 0 {
+                    if let Some(stream) = &self.scene_stream {
+                        pass.set_vertex_buffer(0, stream.slice::<Vertex3>(self.scene_vertices));
+                        pass.draw(0..self.scene_vertices as u32, 0..1);
+                        frame_stats.terrain_draw_calls += 1;
                     }
                 }
                 frame_stats.terrain_indices = terrain_indices;
@@ -4058,16 +4338,35 @@ impl Gpu {
         }
         frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0;
         if !paused && indirect_lighting_enabled() {
-            let timestamps = allocate_pass_timestamp_writes(gpu_query_set.as_ref(), &mut gpu_query_count, &mut gpu_pass_queries, GPU_TIMESTAMP_PASS_INDIRECT);
-            self.indirect.render(&mut encoder, &self.camera_bind_group, scene_view,
-                timestamps.map(|t| (t.query_set, t.beginning_of_pass_write_index.unwrap(), t.end_of_pass_write_index.unwrap())));
+            let timestamps = allocate_pass_timestamp_writes(
+                gpu_query_set.as_ref(),
+                &mut gpu_query_count,
+                &mut gpu_pass_queries,
+                GPU_TIMESTAMP_PASS_INDIRECT,
+            );
+            self.indirect.render(
+                &mut encoder,
+                &self.camera_bind_group,
+                scene_view,
+                timestamps.map(|t| {
+                    (
+                        t.query_set,
+                        t.beginning_of_pass_write_index.unwrap(),
+                        t.end_of_pass_write_index.unwrap(),
+                    )
+                }),
+            );
         }
 
         let cloud_start = Instant::now();
         if !paused {
             let cloud_extent = wgpu::Extent3d {
-                width: (self.config.width / cloud_render_scale()).max(1),
-                height: (self.config.height / cloud_render_scale()).max(1),
+                width: (self.config.width
+                    / effective_cloud_render_scale(self.config.width, self.config.height))
+                .max(1),
+                height: (self.config.height
+                    / effective_cloud_render_scale(self.config.width, self.config.height))
+                .max(1),
                 depth_or_array_layers: 1,
             };
 
@@ -4288,7 +4587,14 @@ impl Gpu {
         }
         frame_stats.cloud_encode_ms = cloud_start.elapsed().as_secs_f32() * 1000.0;
 
+        // Native stylised resolve. The previous art-pixel downscale was the
+        // dominant source of the "cheap low-resolution" read: it discarded
+        // most of the scene's material and lighting detail before presentation.
+        // Keep the 16-bit float resolve + native present dither, but no block
+        // sampling, palette quantization, or block contour by default.
+        let pixel_scale = 1.0;
         self.postprocess.render(
+            &self.device,
             &self.queue,
             &mut encoder,
             &view,
@@ -4301,6 +4607,30 @@ impl Gpu {
                 } else {
                     1.0
                 },
+                pixel_scale,
+                0.85, // native 8x8 ordered dither, one 8-bit code at most
+                0.0,  // no palette quantization: preserve the authored ramps
+                0.0,  // no block contour: lighting owns the silhouettes
+                0.30, // stacked tight + wide Noita-style glow
+                0.72, // glow threshold: emissives, not ordinary daylight
+                self.effect_time,
+                0.06, // restrained vignette
+                self.screen_magic[0],
+                self.screen_magic[1],
+                self.screen_magic[2],
+                self.screen_magic[3],
+                self.current_lighting.mood_tint[0],
+                self.current_lighting.mood_tint[1],
+                self.current_lighting.mood_tint[2],
+                self.current_lighting.mood_tint[3],
+                self.zone_grade.0[0],
+                self.zone_grade.0[1],
+                self.zone_grade.0[2],
+                self.zone_grade.0[3],
+                self.zone_grade.1[0],
+                self.zone_grade.1[1],
+                self.zone_grade.1[2],
+                self.zone_grade.1[3],
             ],
         );
         let ui_start = Instant::now();

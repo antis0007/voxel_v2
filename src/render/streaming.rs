@@ -3,10 +3,10 @@
 mod lod_cache;
 mod mesh_budget;
 pub use mesh_budget::{mesh_budget_mib, set_mesh_budget_mib};
-mod residency;
 mod gpu_budget;
-pub use gpu_budget::{gpu_residency_limit_mib, gpu_residency_status, MAX_GPU_MIB};
+mod residency;
 pub(super) use gpu_budget::configure_gpu_residency;
+pub use gpu_budget::{MAX_GPU_MIB, gpu_residency_limit_mib, gpu_residency_status};
 use mesh_budget::{MeshBudget, MeshLease};
 use residency::{ResidentChunk, VoxelAllocations};
 pub use residency::{set_world_residency_budgets_mib, world_residency_budgets_mib};
@@ -24,7 +24,7 @@ use visibility::{
     desired_chunk_keys_with_snapshot_cached, lod_for_chunk, pending_priority,
 };
 
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,6 +89,44 @@ pub struct ChunkCache {
     /// Whether expansion is complete (reached view distance).
     pub fully_expanded: bool,
     pub spawn_ready: bool,
+    /// Stable horizon handoff radius. A single chunk that is momentarily
+    /// missing (remesh, GPU-budget eviction, or a just-expanded ring) must not
+    /// drag the entire backdrop inward and fade the resident world to sky.
+    coverage_stable_meters: f32,
+    coverage_drop_since: Option<Instant>,
+    coverage_last_tick: Option<Instant>,
+    coverage_center: Option<IVec3>,
+}
+
+/// Reject a handful of near misses while still reducing coverage for a ring
+/// that is genuinely incomplete. Distant misses clustered around the median are
+/// fence posts: they are missing because the stream has not reached that ring,
+/// not because the world ended. A small number of near misses is a transient
+/// hole to be filled by the backdrop, and must not pull the handoff inward.
+fn robust_coverage_from_missing(
+    missing: &mut [f32],
+    full_radius: f32,
+    margin: f32,
+    total_columns: usize,
+) -> f32 {
+    if missing.is_empty() || full_radius <= 0.0 {
+        return full_radius.max(0.0);
+    }
+    // Four holes in a normal view are isolated. In a tiny test view they may be
+    // the whole visible world, so only discount them when they are sparse.
+    if missing.len() <= 4 && missing.len() * 8 < total_columns {
+        return full_radius;
+    }
+    missing.sort_by(f32::total_cmp);
+    let median = missing[missing.len() / 2];
+    let near_outlier_cutoff = median * 0.70;
+    // Ignore only a bounded number of isolated near misses, not an entire sector.
+    let outlier_budget = (missing.len() / 20).clamp(1, 8);
+    let outlier_count = missing
+        .partition_point(|distance| *distance < near_outlier_cutoff)
+        .min(outlier_budget);
+    let representative = missing[outlier_count.min(missing.len() - 1)];
+    (representative - margin).min(full_radius).max(0.0)
 }
 
 impl ChunkCache {
@@ -119,7 +157,123 @@ impl ChunkCache {
             expansion_radius: 0,
             fully_expanded: false,
             spawn_ready: false,
+            coverage_stable_meters: -1.0,
+            coverage_drop_since: None,
+            coverage_last_tick: None,
+            coverage_center: None,
         }
+    }
+
+    /// Conservative radius in metres where the visible terrain columns have a
+    /// published GPU mesh. Missing columns are measured by the nearest point on
+    /// their XZ bounds, then reduced by a safety margin.
+    ///
+    /// A single remeshing chunk is not a world edge. Taking the absolute nearest
+    /// miss made one transient hole collapse the handoff to that column, hiding
+    /// every resident chunk beyond it and pulling the low-poly backdrop right up
+    /// to the player. Sparse misses are therefore treated as holes to fill, not
+    /// as evidence that the whole ring ended. Several misses at the same distance
+    /// still reduce coverage immediately.
+    pub fn published_coverage_meters(&self, eye: Vec3, view_chunks: i32, scale: f32) -> f32 {
+        if !eye.is_finite() || !scale.is_finite() || scale <= 0.0 {
+            return 0.0;
+        }
+        let chunk_m = CHUNK_SIZE as f32 * scale;
+        let radius = view_chunks.clamp(1, 64);
+        let full_radius = radius as f32 * chunk_m;
+        let center_x = (eye.x / chunk_m).floor() as i32;
+        let center_z = (eye.z / chunk_m).floor() as i32;
+        // A column counts as covered only when its highest required chunk has a
+        // published mesh. Any lower mesh would otherwise overstate surface
+        // coverage and let the backdrop start too far away.
+        let mut top_by_column: HashMap<(i32, i32), i32> =
+            HashMap::with_capacity(self.visible_coords.len());
+        for coord in &self.visible_coords {
+            let top = top_by_column.entry((coord.x, coord.z)).or_insert(coord.y);
+            *top = (*top).max(coord.y);
+        }
+        let total_columns = ((radius * 2 + 1) * (radius * 2 + 1)) as usize;
+        let mut missing = Vec::with_capacity(total_columns);
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                let cx = center_x + dx;
+                let cz = center_z + dz;
+                let covered = top_by_column
+                    .get(&(cx, cz))
+                    .is_some_and(|top| self.gpu_meshes.contains_key(&IVec3::new(cx, *top, cz)));
+                if covered {
+                    continue;
+                }
+                let min_x = cx as f32 * chunk_m;
+                let min_z = cz as f32 * chunk_m;
+                let nx = eye.x.clamp(min_x, min_x + chunk_m);
+                let nz = eye.z.clamp(min_z, min_z + chunk_m);
+                missing.push(((nx - eye.x).powi(2) + (nz - eye.z).powi(2)).sqrt());
+            }
+        }
+        robust_coverage_from_missing(&mut missing, full_radius, 8.0 * scale, total_columns)
+    }
+
+    /// Quantize coverage down to a coarse step so a slowly settling stream does
+    /// not force a horizon rebuild every frame. Rounding down keeps the
+    /// published radius a lower bound.
+    ///
+    /// A drop is held for a short grace period and then eased. A hole that is
+    /// repaired by the next streaming result never moves the horizon at all.
+    pub fn backdrop_coverage_meters(&mut self, eye: Vec3, view_chunks: i32, scale: f32) -> f32 {
+        const QUANTUM: f32 = 64.0;
+        const DROP_HOLD: Duration = Duration::from_secs(1);
+        const DROP_RATE: f32 = 2.5;
+        let now = Instant::now();
+        let full = view_chunks.clamp(1, 64) as f32 * CHUNK_SIZE as f32 * scale;
+        let raw =
+            (self.published_coverage_meters(eye, view_chunks, scale) / QUANTUM).floor() * QUANTUM;
+        let center = if scale.is_finite() && scale > 0.0 {
+            Some(IVec3::new(
+                (eye.x / (CHUNK_SIZE as f32 * scale)).floor() as i32,
+                self.center_chunk.y,
+                (eye.z / (CHUNK_SIZE as f32 * scale)).floor() as i32,
+            ))
+        } else {
+            None
+        };
+        let teleported = self.coverage_center.is_some_and(|previous| {
+            center.is_some_and(|current| {
+                (current.x - previous.x)
+                    .abs()
+                    .max((current.z - previous.z).abs())
+                    > 4
+            })
+        });
+        if self.coverage_stable_meters < 0.0 || teleported {
+            self.coverage_stable_meters = raw;
+            self.coverage_drop_since = None;
+        } else {
+            let dt = self
+                .coverage_last_tick
+                .map(|last| now.saturating_duration_since(last).as_secs_f32())
+                .unwrap_or(0.0)
+                .clamp(0.0, 0.1);
+            let stable = self.coverage_stable_meters.clamp(0.0, full);
+            if raw >= stable {
+                self.coverage_stable_meters = raw;
+                self.coverage_drop_since = None;
+            } else {
+                let since = *self.coverage_drop_since.get_or_insert(now);
+                if now.saturating_duration_since(since) >= DROP_HOLD {
+                    // Ease toward the honest radius instead of slamming the
+                    // horizon inward. Recovery is immediate because a wider
+                    // stable radius never hides published terrain.
+                    let eased = stable + (raw - stable) * (1.0 - (-DROP_RATE * dt).exp());
+                    self.coverage_stable_meters = eased.min(stable).max(raw);
+                } else {
+                    self.coverage_stable_meters = stable;
+                }
+            }
+        }
+        self.coverage_last_tick = Some(now);
+        self.coverage_center = center;
+        (self.coverage_stable_meters / QUANTUM).floor() * QUANTUM
     }
 
     pub fn new_with_snapshot(center_chunk: IVec3, snapshot: &WorldSnapshot) -> Self {
@@ -146,6 +300,10 @@ impl ChunkCache {
             expansion_radius: 2,
             fully_expanded: false,
             spawn_ready: false,
+            coverage_stable_meters: -1.0,
+            coverage_drop_since: None,
+            coverage_last_tick: None,
+            coverage_center: None,
         };
         cache.visible = desired_chunk_keys_with_snapshot_cached(
             center_chunk,
@@ -231,6 +389,10 @@ impl ChunkCache {
         self.simulation_seeds.clear();
         self.expansion_radius = 0;
         self.fully_expanded = false;
+        self.coverage_stable_meters = -1.0;
+        self.coverage_drop_since = None;
+        self.coverage_last_tick = None;
+        self.coverage_center = None;
     }
 
     pub fn reset_with_snapshot(&mut self, center_chunk: IVec3, snapshot: &WorldSnapshot) {
@@ -256,6 +418,10 @@ impl ChunkCache {
             self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
         }
         self.cpu_chunks.clear();
+        self.coverage_stable_meters = -1.0;
+        self.coverage_drop_since = None;
+        self.coverage_last_tick = None;
+        self.coverage_center = None;
     }
 
     pub fn update_center_chunk(&mut self, center_chunk: IVec3) -> bool {
@@ -320,11 +486,11 @@ impl ChunkCache {
             .set_interest((self.center_chunk.x, self.center_chunk.z), target + 2);
         self.column_y_cache.begin(snapshot.cfg);
         let mut added = Vec::new();
-        let limit = target + 1;
         for (c, range) in self.column_y_cache.completed() {
             let dx = c.0 - self.center_chunk.x;
             let dz = c.1 - self.center_chunk.z;
-            if dx * dx + dz * dz > limit * limit {
+            let current_limit = self.expansion_radius;
+            if dx * dx + dz * dz > current_limit * current_limit {
                 continue;
             }
             for mut key in visibility::keys_for_column(self.center_chunk, c, range, &snapshot.cfg) {
@@ -515,6 +681,36 @@ fn spawn_mesh_workers(
                         }
                         let planning = budget.begin_plan(&job.cancelled)?;
                         let mut lease = budget.acquire(PLANNING_BYTES, &job.cancelled)?;
+                        if job.key.lod > 0 {
+                            drop(planning);
+                            if job.cancelled.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            let mut mesh =
+                                crate::mesh::coarsened_mesh(job.chunk.as_ref(), job.key.lod);
+                            let lod_invariant = mesh.vertices.is_empty();
+                            drop(job.chunk);
+                            if mesh.vertices.len() * std::mem::size_of::<crate::mesh::Vertex3>()
+                                <= 4 * 1024 * 1024
+                                && mesh.indices.len() * 4 <= 4 * 1024 * 1024
+                            {
+                                mesh.vertices.shrink_to_fit();
+                                mesh.indices.shrink_to_fit();
+                            }
+                            let bytes = mesh.vertices.capacity()
+                                * std::mem::size_of::<crate::mesh::Vertex3>()
+                                + mesh.indices.capacity() * 4;
+                            lease.finish(bytes);
+                            return Some(CpuChunkMesh {
+                                key,
+                                revision,
+                                job_id,
+                                mesh,
+                                failed: false,
+                                lod_invariant,
+                                _lease: Some(lease),
+                            });
+                        }
                         let plan = MeshPlan::for_chunk(job.chunk.as_ref(), &job.cancelled)?;
                         lease.grow_to(plan.bytes(), &job.cancelled)?;
                         drop(planning);
@@ -770,7 +966,8 @@ impl ChunkStreamer {
 
     pub fn retain_visible(&mut self, visible: &HashSet<ChunkKey>) {
         let coords: HashSet<_> = visible.iter().map(|key| key.coord).collect();
-        self.dirty_revisions.retain(|coord, _| coords.contains(coord));
+        self.dirty_revisions
+            .retain(|coord, _| coords.contains(coord));
         // Geometry detail changes do not invalidate source voxels or a reusable LOD.
         self.requested.retain(|key| coords.contains(&key.coord));
         self.generating.retain(|key| coords.contains(&key.coord));
@@ -988,8 +1185,11 @@ impl ChunkStreamer {
         // Preserve work already in flight. Repeated water/fire edits used to
         // cancel generation, meshing and even completed results every tick.
         // Keep only one job per coordinate and repair its revision on publish.
-        let inflight_dirty: HashSet<_> = dirty_coords.iter().copied()
-            .filter(|coord| self.requested_coords.contains(coord)).collect();
+        let inflight_dirty: HashSet<_> = dirty_coords
+            .iter()
+            .copied()
+            .filter(|coord| self.requested_coords.contains(coord))
+            .collect();
         let restart: HashSet<_> = dirty_coords.difference(&inflight_dirty).copied().collect();
         for &coord in dirty_coords {
             self.dirty_revisions.insert(coord, revision);
@@ -1411,7 +1611,9 @@ impl ChunkStreamer {
                     self.push_pending_key(desired);
                 }
             }
-            if self.dirty_revisions.get(&cpu_mesh.key.coord)
+            if self
+                .dirty_revisions
+                .get(&cpu_mesh.key.coord)
                 .is_some_and(|&edited| edited > cpu_mesh.revision)
             {
                 // install_mesh clears the dirty flag. Restore it when this is
@@ -1419,7 +1621,10 @@ impl ChunkStreamer {
                 cache.dirty_meshes.insert(cpu_mesh.key.coord);
                 cache.cpu_chunks.remove(&cpu_mesh.key.coord);
                 cache.lod_meshes.retain(|coord| coord != cpu_mesh.key.coord);
-                self.push_pending_key(ChunkKey { coord: cpu_mesh.key.coord, lod: desired_lod });
+                self.push_pending_key(ChunkKey {
+                    coord: cpu_mesh.key.coord,
+                    lod: desired_lod,
+                });
             } else {
                 self.dirty_revisions.remove(&cpu_mesh.key.coord);
             }
@@ -1440,7 +1645,10 @@ impl ChunkStreamer {
         self.last_stats.cpu_evictions = cache.cpu_evictions;
         self.last_stats.gpu_evictions = cache.gpu_evictions;
         self.last_stats.gpu_resident_bytes = cache.gpu_bytes + cache.lod_meshes.bytes();
-        gpu_budget::observe_residency(self.last_stats.gpu_resident_bytes, cache.budget_deferred.len());
+        gpu_budget::observe_residency(
+            self.last_stats.gpu_resident_bytes,
+            cache.budget_deferred.len(),
+        );
         self.last_stats.lod_cache_bytes = cache.lod_meshes.bytes();
         self.last_stats.terrain_buffer_bytes = self.terrain_generator.buffer_bytes();
         self.last_stats.queued_mesh_bytes = self.mesh_budget.used();
@@ -1458,6 +1666,37 @@ impl ChunkStreamer {
             + self.ready_chunks.len()
             + self.ready_meshes.len()
             + self.pending_keys.len()
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::robust_coverage_from_missing;
+
+    #[test]
+    fn isolated_near_miss_does_not_collapse_horizon_coverage() {
+        // Four far fence posts justify the real handoff; one remeshing chunk
+        // next to the player must not drag it inward.
+        let mut missing = [40.0, 600.0, 600.0, 600.0, 600.0];
+        let coverage = robust_coverage_from_missing(&mut missing, 896.0, 8.0, 169);
+        assert_eq!(coverage, 592.0);
+    }
+
+    #[test]
+    fn complete_ring_uses_the_published_radius() {
+        let mut missing = [];
+        assert_eq!(
+            robust_coverage_from_missing(&mut missing, 896.0, 8.0, 169),
+            896.0
+        );
+    }
+
+    #[test]
+    fn a_contiguous_near_sector_still_reduces_coverage() {
+        let mut missing = vec![40.0; 20];
+        missing.extend([600.0; 20]);
+        let coverage = robust_coverage_from_missing(&mut missing, 896.0, 8.0, 169);
+        assert_eq!(coverage, 32.0);
     }
 }
 

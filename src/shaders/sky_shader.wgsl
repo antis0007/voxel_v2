@@ -238,7 +238,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         sky += mood_meteors(dir, event_time) * light.mood.z * smoothstep(0.30, 0.9, night)
             * (1.0 - cloud_cover * 0.85) * smoothstep(0.0, 0.08, dir.y);
     }
-    sky += mood_ambience(cam.camera_pos.xyz, dir, 30.0, event_time, light.ambience) * smoothstep(-0.1, 0.1, dir.y + 0.1);
+    sky += mood_ambience(cam.camera_pos.xyz, dir, 30.0, event_time, light.ambience,
+        max(length(dpdx(dir)), length(dpdy(dir)))) * smoothstep(-0.1, 0.1, dir.y + 0.1);
     if light.mood.w > 0.001 {
         // A bow needs rain in front of the viewer and direct sun behind them.
         // The scheduled event alone drew one into clear or fully overcast sky.

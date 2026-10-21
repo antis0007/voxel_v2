@@ -195,22 +195,35 @@ fn mood_rainbow(dir: vec3<f32>, sun_dir: vec3<f32>) -> vec3<f32> {
 // Fireflies, pollen, diamond dust and embers: one mote per world-space lattice
 // cell, bobbing inside its own cell, added as in-scatter along the view ray so
 // they sit in front of surfaces and slide past with true parallax. A mote is
-// never smaller than about a pixel, which keeps it a crisp point of light.
+// exactly one native screen pixel at any distance, in a palette colour: it is
+// one more pixel of the same art as the world, not a soft light.
 // Every input is a pure function of world position and the simulation clock:
 // camera motion may change which motes a ray crosses, never where a mote is.
-fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<f32>) -> vec3<f32> {
+// Mote palette: the shared pixel palette (docs/PIXEL_ART_DIRECTION.md), in
+// linear light. Every mote takes one of these colours; nothing is blended.
+const MOTE_HIGHLIGHT: vec3<f32> = vec3<f32>(0.930, 0.768, 0.348);
+const MOTE_PAPER: vec3<f32> = vec3<f32>(0.846, 0.753, 0.558);
+const MOTE_GOLD: vec3<f32> = vec3<f32>(0.700, 0.418, 0.117);
+const MOTE_EMBER: vec3<f32> = vec3<f32>(0.529, 0.133, 0.031);
+const MOTE_TEAL: vec3<f32> = vec3<f32>(0.130, 0.472, 0.430);
+
+// `pixel` is the angle one screen pixel subtends, in radians. Every mote is
+// drawn as exactly one native screen pixel (or a one-pixel plus sign for a
+// glint) whatever its distance. No halo, no soft edge, no size that changes
+// with range: it reads as one more pixel of the same art as the world.
+fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<f32>, pixel: f32) -> vec3<f32> {
     let total = a.x + a.y + a.z + a.w;
     if total < 0.002 { return vec3<f32>(0.0); }
     // Sparse on purpose: a mote should be found, not sprinkled across every view.
     let presence = (a.x * 0.10 + a.y * 0.12 + a.z * 0.14 + a.w * 0.10) * 0.5;
     let far = min(max_d, 22.0);
+    let pixel_angle = max(pixel, 1e-4);
 
     // One mote per lattice cell, fixed in world space. The ray walks the cells
     // it crosses (Amanatides-Woo) and takes its closest approach to each mote.
-    // The previous version tested eight fixed-depth points against a 5 cm box,
-    // so a mote appeared only when a sample happened to land inside it and
-    // every footstep reshuffled which ones did. It also warped the lattice by
-    // the sample position, so a mote hopped between cells as time passed.
+    // Sampling fixed points along the ray made a mote appear only when a sample
+    // landed inside it, and warping the lattice by the sample position made a
+    // mote hop between cells; this version has neither.
     let cell_size = 2.4;
     var cell = floor(origin / cell_size);
     let step_dir = select(vec3<f32>(-1.0), vec3<f32>(1.0), dir >= vec3<f32>(0.0));
@@ -219,7 +232,7 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
     let next_edge = (cell + max(step_dir, vec3<f32>(0.0))) * cell_size;
     var t_max = (next_edge - origin) * step_dir / safe_dir;
 
-    // Screen-facing axes for the four-point glint. They depend only on the ray.
+    // Screen-aligned axes: they give the offset from the pixel centre in pixels.
     let up_ref = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(dir.y) > 0.99);
     let axis_r = normalize(cross(dir, up_ref));
     let axis_u = cross(axis_r, dir);
@@ -249,64 +262,56 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
                 sin(t * 0.33 + ph * 1.7) * 0.7,
                 cos(t * 0.17 + ph * 0.6)) * 0.16;
             // Pollen and embers climb through their cell, then start again from
-            // the bottom. They are invisible at both ends of the climb (`vis`),
-            // so the loop never shows.
+            // the bottom. `vis` is zero at both ends of the climb, so the loop
+            // never shows.
             var vis = 1.0;
             if rising {
                 let u = fract(t * select(0.05, 0.11, kind == 3) + ph * 0.137);
                 offset.y = 0.0;
                 drift.y = (u - 0.5) * 0.9;
-                vis = pow(sin(3.14159265 * u), 1.5);
+                vis = sin(3.14159265 * u);
             }
             let center = (cell + vec3<f32>(0.5) + offset + drift) * cell_size;
             let rel = center - origin;
             let s = dot(rel, dir);
-            if s > 0.15 && s < far && vis > 0.01 {
+            if s > 0.15 && s < far && vis > 0.05 {
+                // Offset from this pixel's ray, measured in pixels at the mote.
                 let perp = rel - dir * s;
-                let miss = length(perp);
-                // Never thinner than about a pixel, with the energy of the real
-                // mote kept so a distant one dims instead of aliasing.
-                let body = 0.03;
-                let rad = max(body, s * 0.0016);
-                let energy = clamp((body * body) / (rad * rad), 0.4, 1.0);
-                let core = 1.0 - smoothstep(rad * 0.5, rad, miss);
-                // A soft bloom around the pixel core, like a light seen through haze.
-                let halo = exp(-(miss * miss) / (rad * rad * 14.0)) * 0.22;
+                let one_pixel = s * pixel_angle;
+                let ox = abs(dot(perp, axis_r)) / one_pixel;
+                let oy = abs(dot(perp, axis_u)) / one_pixel;
+
+                // Brightness is stepped, like palette-swapped sprite frames.
                 var col = vec3<f32>(0.0);
-                var glint = 0.0;
+                var glint = false;
                 let tone = fract(ph * 0.37);
                 if kind == 0 {
-                    // Fireflies breathe slowly and mostly stay dark. Six stepped
-                    // brightness frames keep the pixel-sprite feel.
-                    let breath = floor(pow(0.5 + 0.5 * sin(t * (0.8 + fract(ph) * 0.9) + ph), 3.0) * 6.0) / 6.0;
-                    col = mix(vec3<f32>(0.62, 1.0, 0.22), vec3<f32>(0.25, 1.0, 0.62), tone)
-                        * (0.12 + 0.88 * breath) * 3.4;
-                    glint = breath * breath;
+                    let breath = 0.5 + 0.5 * sin(t * (0.8 + fract(ph) * 0.9) + ph);
+                    let step_level = floor(breath * breath * breath * 3.0 + 0.5) / 3.0;
+                    col = select(MOTE_HIGHLIGHT, MOTE_TEAL, tone > 0.78) * step_level * 3.4;
+                    glint = step_level >= 0.99;
                 } else if kind == 1 {
-                    // Pollen: warm, pale, a slow shimmer.
-                    col = mix(vec3<f32>(1.0, 0.92, 0.58), vec3<f32>(1.0, 0.80, 0.72), tone)
-                        * (0.75 + 0.25 * sin(t * 1.3 + ph)) * 1.25 * vis;
+                    let level = select(0.55, 1.0, sin(t * 1.3 + ph) > 0.0);
+                    col = MOTE_PAPER * level * 1.5 * select(0.0, 1.0, vis > 0.4);
                 } else if kind == 2 {
-                    // Diamond dust: a brief, hard glint with a four-point star.
                     let flash = pow(max(sin(t * 1.7 + ph), 0.0), 10.0);
-                    col = mix(vec3<f32>(0.80, 0.93, 1.0), vec3<f32>(0.95, 0.88, 1.0), tone) * flash * 3.4;
-                    glint = flash;
+                    let level = floor(flash * 3.0 + 0.5) / 3.0;
+                    col = select(MOTE_PAPER, MOTE_TEAL, tone > 0.5) * level * 3.6;
+                    glint = level >= 0.99;
                 } else {
-                    // Embers cool from white-yellow to deep orange as they rise.
-                    let heat = vis;
-                    col = mix(vec3<f32>(1.0, 0.30, 0.07), vec3<f32>(1.0, 0.78, 0.38), heat)
-                        * (0.65 + 0.35 * sin(t * 6.0 + ph)) * 2.4 * vis;
+                    // Embers cool through three palette steps as they rise.
+                    let step_colour = select(select(MOTE_EMBER, MOTE_GOLD, vis > 0.45), MOTE_HIGHLIGHT, vis > 0.8);
+                    col = step_colour * 2.8;
                 }
-                var shape = core + halo;
-                if glint > 0.02 {
-                    let px = dot(perp, axis_r);
-                    let py = dot(perp, axis_u);
-                    let arm_x = exp(-abs(px) / (rad * 7.0)) * exp(-abs(py) / (rad * 0.45));
-                    let arm_y = exp(-abs(py) / (rad * 7.0)) * exp(-abs(px) / (rad * 0.45));
-                    shape += (arm_x + arm_y) * 0.55 * glint;
+                // The pixel itself, plus a one-pixel plus sign when it glints.
+                var shape = select(0.0, 1.0, ox <= 0.5 && oy <= 0.5);
+                if glint {
+                    let arm_x = ox <= 1.5 && oy <= 0.5;
+                    let arm_y = oy <= 1.5 && ox <= 0.5;
+                    shape = select(shape, 0.7, (arm_x || arm_y) && shape < 0.5);
                 }
                 let fade = smoothstep(0.15, 1.2, s) * (1.0 - smoothstep(far * 0.7, far, s));
-                acc += col * shape * energy * fade * 1.35;
+                acc += col * shape * fade;
             }
         }
         // Step into the next cell along the ray; stop once past the draw range.
@@ -326,19 +331,67 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
     return acc;
 }
 
-// Facet glints for crystals and ore: a sparse set of points on each face that
-// flare as the view angle sweeps past, like light catching a gem.
-fn mood_glint(p: vec3<f32>, normal: vec3<f32>, view: vec3<f32>, t: f32, scale: f32) -> f32 {
+// Pixel glimmer for crystals and ore. Each voxel face is a grid of texels.
+// A texel is a glint candidate only if its hash says so (about one in six),
+// and it carries a tilted facet normal that re-rolls on a stepped clock. The
+// texel lights for a single frame when that facet's normal lines up with the
+// half vector between the eye and the sun, so glints are hard one-texel
+// flashes that blink on and off instead of a soft view-locked haze.
+// One glint texel: x is the flash level (0 off, else 1/3, 2/3 or 1) and y the
+// same level if the flash is bright enough to throw a cross.
+//
+// Facets are static per texel, so a glint sits still on its texel and the set
+// of lit texels sweeps across the surface as the camera moves, like a real cut
+// stone. Each candidate texel then twinkles on its own slow cycle in three
+// stepped levels. Nothing re-rolls per frame, so there is no strobing.
+// `sheen` (0..1) also lights candidates without needing sun alignment, which
+// lets a travelling band of sparkle work at night.
+fn mood_glint_texel(cell: vec2<f32>, normal: vec3<f32>, half_dir: vec3<f32>, t: f32, sheen: f32) -> vec2<f32> {
+    let key = vec3<f32>(cell, dot(normal, vec3<f32>(1.0, 2.0, 3.0)));
+    var align = 0.0;
+    if mood_hash31(key) >= 0.6 {
+        let tilt = vec3<f32>(
+            mood_hash31(key + vec3<f32>(3.1, 1.7, 0.0)),
+            mood_hash31(key + vec3<f32>(3.1, 4.1, 2.9)),
+            mood_hash31(key + vec3<f32>(3.1, 6.3, 5.2))) - vec3<f32>(0.5);
+        // Wide facet spread: the sun-eye half vector sits 30 degrees or more
+        // off a vertical face at noon, so a narrow tilt never reached it.
+        align = max(dot(normalize(normal + tilt * 1.6), half_dir), 0.0);
+    }
+    let pick = mood_hash31(key + vec3<f32>(5.5, 9.9, 1.1));
+    let sheen_on = step(pick, sheen * 0.07);
+    let flash = max(step(0.985, align), sheen_on);
+    let cross = max(step(0.995, align), sheen_on * step(0.75, mood_hash31(key + vec3<f32>(2.2, 7.7, 3.3))));
+    // Triangle envelope on a per-texel phase, quantised to three levels.
+    let phase = fract(t * 0.8 + mood_hash31(key + vec3<f32>(8.3, 2.2, 6.1)));
+    let env = 1.0 - abs(phase * 2.0 - 1.0);
+    let level = select(0.0, ceil(env * 3.0) / 3.0, env > 0.12);
+    return vec2<f32>(flash * level, cross * level);
+}
+
+// Returns the flash level on a flashing texel and 0.6 of the neighbour's level
+// on the four arm texels of a cross, so the brightest glints read as a
+// one-texel plus sign.
+fn mood_glint(p: vec3<f32>, normal: vec3<f32>, toward_eye: vec3<f32>, sun: vec3<f32>, t: f32, scale: f32, sheen: f32) -> f32 {
     var uv = p.xz;
     if abs(normal.x) > 0.5 { uv = p.zy; }
     else if abs(normal.z) > 0.5 { uv = p.xy; }
-    let q = uv * scale;
-    let cell = floor(q);
-    let h = mood_hash31(vec3<f32>(cell, dot(normal, vec3<f32>(1.0, 2.0, 3.0))));
-    let j = vec2<f32>(mood_hash31(vec3<f32>(cell, 5.0)), mood_hash31(vec3<f32>(cell, 9.0)));
-    let d = length(fract(q) - (vec2<f32>(0.2) + j * 0.6));
-    let spark = 1.0 - smoothstep(0.04, 0.14, d);
-    // View-locked and soft. A clock-driven spike made standing ore glitter.
-    let sweep = pow(clamp(abs(dot(view, normal)), 0.0, 1.0), 2.0) * (0.97 + 0.03 * sin(t * 0.2));
-    return spark * sweep * step(0.82, h) * 0.35;
+    let cell = floor(uv * scale);
+    let half_dir = normalize(toward_eye + sun);
+    let centre = mood_glint_texel(cell, normal, half_dir, t, sheen).x;
+    if centre > 0.0 { return centre; }
+    var arm = 0.0;
+    arm = max(arm, mood_glint_texel(cell + vec2<f32>(1.0, 0.0), normal, half_dir, t, sheen).y);
+    arm = max(arm, mood_glint_texel(cell - vec2<f32>(1.0, 0.0), normal, half_dir, t, sheen).y);
+    arm = max(arm, mood_glint_texel(cell + vec2<f32>(0.0, 1.0), normal, half_dir, t, sheen).y);
+    arm = max(arm, mood_glint_texel(cell - vec2<f32>(0.0, 1.0), normal, half_dir, t, sheen).y);
+    return arm * 0.6;
+}
+
+// A slow diagonal band of light that sweeps across crystal in world space,
+// one band every five metres, a bit under a metre wide. Smooth, not stepped.
+fn crystal_sheen(world_m: vec3<f32>, t: f32) -> f32 {
+    let s = dot(world_m, vec3<f32>(0.62, 0.30, 0.72)) - t * 0.55;
+    let d = (fract(s / 5.0) - 0.5) * 5.0;
+    return exp(-d * d / 0.5);
 }

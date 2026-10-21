@@ -48,7 +48,10 @@ fn mist_mean_density(y0: f32, y1: f32) -> f32 {
 // 12-step shadow march cost 102 ms in the terrain pass due to overdraw.
 fn local_mist(ray: vec3<f32>, distance_m: f32, sky_access: f32, environment: vec3<f32>) -> vec4<f32> {
     let length_m = min(max(distance_m-MIST_NEAR_CLEARANCE_M,0.0),MIST_RANGE_M);
-    if MIST_STRENGTH == 0.0 || cam.scene_seed.z != 0u || length_m < 0.1 || cam.camera_pos.w > 0.5 || sky_access < 0.001 {
+    // Smooth vertex-baked sky access at cave mouths and overhangs.
+    let access = smoothstep(0.0, 0.42, sky_access);
+    let near_fade = smoothstep(MIST_NEAR_CLEARANCE_M, MIST_NEAR_CLEARANCE_M + 5.0, distance_m);
+    if MIST_STRENGTH == 0.0 || cam.scene_seed.z != 0u || length_m < 0.1 || cam.camera_pos.w > 0.5 || access < 0.001 {
         return vec4<f32>(0.0,0.0,0.0,1.0);
     }
     let y0 = cam.camera_pos.y+ray.y*MIST_NEAR_CLEARANCE_M;
@@ -58,7 +61,7 @@ fn local_mist(ray: vec3<f32>, distance_m: f32, sky_access: f32, environment: vec
     let cover = clamp(light.weather_clip_summaries[0].y,0.0,1.0);
     let low_sun = 1.0-smoothstep(0.08,0.45,sun.y);
     let extinction = 0.00014+cover*0.00085+low_sun*0.00032;
-    let optical_depth = min(extinction*length_m*density*sky_access*MIST_STRENGTH,0.22);
+    let optical_depth = min(extinction*length_m*density*access*MIST_STRENGTH*near_fade,0.22);
     let transmission = exp(-optical_depth);
     // Use the same atmospheric radiance as terrain/sky; no independent gray
     // palette or unshadowed directional term that brightens enclosed spaces.

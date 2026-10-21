@@ -16,7 +16,7 @@ fn view_position(uv:vec2<f32>)->vec3<f32>{
  // an arbitrary gather UV with a rounded depth bent flat planes into bands.
  let at=depth_pixel(uv);
  let center=(vec2<f32>(at)+0.5)/vec2<f32>(textureDimensions(depth_tex));
- let d=textureLoad(depth_tex,at,0);let linear=cam.ray_up.w/min(d+cam.ray_right.w,-1e-7);
+ let d=textureLoad(depth_tex,at,0);let linear=cam.ray_up.w/max(d+cam.ray_right.w,1e-7);
  let ndc=vec2<f32>(center.x*2.0-1.0,1.0-center.y*2.0);
  return (cam.camera_forward.xyz+cam.ray_right.xyz*ndc.x+cam.ray_up.xyz*ndc.y)*linear;
 }

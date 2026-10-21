@@ -41,9 +41,11 @@ fn march_rain_volume(dir: vec3<f32>, max_distance: f32, cone: f32, pixel: vec2<f
     let rain_phase=textureLoad(blue_noise_tex,vec2<i32>(pixel)%noise_size,0).r;
     // Quadratic spacing resolves nearby curtains without a distance cutoff.
     // Frame-stable stratification avoids coherent horizontal rain slices.
-    for (var i = 0; i < 40; i += 1) {
-        let u0 = f32(i) / 40.0;
-        let u1 = f32(i + 1) / 40.0;
+    // 40 quadratic steps made far segments ~600 m long, so the per-pixel
+    // phase turned distant shafts into static. More, shorter steps.
+    for (var i = 0; i < 64; i += 1) {
+        let u0 = f32(i) / 64.0;
+        let u1 = f32(i + 1) / 64.0;
         let t0 = mix(entry, exit_distance, u0 * u0);
         let t1 = mix(entry, exit_distance, u1 * u1);
         let t = mix(t0,t1,fract(rain_phase+f32(i)*0.618033989));

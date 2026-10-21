@@ -167,9 +167,12 @@ fn sample_atmosphere_aerial_perspective(view_dir: vec3<f32>, distance_m: f32, ma
     
     let u = fract(azimuth / ATMOSPHERE_TAU + 0.5 + 1.0);
     let v = view_dir.y * 0.5 + 0.5;
-    // Clouds extend beyond the terrain draw distance. Keep this domain in sync
-    // with generate_aerial_perspective; the first depth slice is exactly zero.
-    let depth = sqrt(clamp(distance_m / max(max_dist_m, 16000.0), 0.0, 1.0));
+    // Clouds extend beyond the terrain draw distance. The cubic depth mapping
+    // spends more slices on near/mid terrain, where fog gradients are steep;
+    // a square-root mapping put the first useful slice tens of metres away and
+    // made distant surfaces shift haze as they crossed a slice boundary.
+    // Keep this domain exactly in sync with generate_aerial_perspective.
+    let depth = pow(clamp(distance_m / max(max_dist_m, 16000.0), 0.0, 1.0), 0.33333334);
     let slices = f32(textureDimensions(atmosphere_aerial_perspective).z);
     let w = (depth * (slices - 1.0) + 0.5) / slices;
     

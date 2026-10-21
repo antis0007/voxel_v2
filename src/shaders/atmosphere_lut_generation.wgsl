@@ -305,7 +305,9 @@ fn generate_aerial_perspective(@builtin(global_invocation_id) id: vec3<u32>) {
     
     let z_frac = f32(id.z) / max(dims.z - 1.0, 1.0);
     let max_dist = max(camera.world_params.w * 0.82, 16000.0);
-    let target_dist = max_dist * (z_frac * z_frac);
+    // Cubic depth mapping: near slices resolve the steep aerial-perspective
+    // gradient; runtime sampling uses pow(distance/max_dist, 1/3).
+    let target_dist = max_dist * (z_frac * z_frac * z_frac);
     
     let sun_dir = normalize(params.sun_dir_daylight.xyz);
     let daylight = params.sun_dir_daylight.w;

@@ -20,4 +20,8 @@ struct Lighting {
     material_tints: array<vec4<f32>,256>,
     material_properties: array<vec4<f32>,256>,
     surface_weather: vec4<f32>,
+    // x: cosmos chamber, y: aurora, z: meteor shower, w: rainbow.
+    mood: vec4<f32>,
+    // x: fireflies, y: pollen, z: diamond dust, w: embers.
+    ambience: vec4<f32>,
 };

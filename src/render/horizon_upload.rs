@@ -24,8 +24,16 @@ pub(super) struct Upload {
 
 impl Upload {
     pub fn new(pages: Vec<Page>, samples: Samples, center: Option<(i32, i32)>) -> Self {
-        Self { waiting: pages.into(), current: None, finished: Vec::new(), samples,
-            center, frames: 0, bytes: 0, started: Instant::now() }
+        Self {
+            waiting: pages.into(),
+            current: None,
+            finished: Vec::new(),
+            samples,
+            center,
+            frames: 0,
+            bytes: 0,
+            started: Instant::now(),
+        }
     }
 
     pub fn advance(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
@@ -33,18 +41,37 @@ impl Upload {
         let mut budget = FRAME_BYTES;
         while budget > 0 {
             if self.current.is_none() {
-                let Some(source) = self.waiting.pop_front() else { return true; };
-                let buffer = |label, size, usage| device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label), size, usage: usage | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
+                let Some(source) = self.waiting.pop_front() else {
+                    return true;
+                };
+                let buffer = |label, size, usage| {
+                    device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(label),
+                        size,
+                        usage: usage | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    })
+                };
                 let gpu = GpuPage {
-                    vertices: buffer("horizon vertices", std::mem::size_of_val(source.mesh.vertices.as_slice()) as u64, wgpu::BufferUsages::VERTEX),
-                    indices: buffer("horizon indices", std::mem::size_of_val(source.mesh.indices.as_slice()) as u64, wgpu::BufferUsages::INDEX),
+                    vertices: buffer(
+                        "horizon vertices",
+                        std::mem::size_of_val(source.mesh.vertices.as_slice()) as u64,
+                        wgpu::BufferUsages::VERTEX,
+                    ),
+                    indices: buffer(
+                        "horizon indices",
+                        std::mem::size_of_val(source.mesh.indices.as_slice()) as u64,
+                        wgpu::BufferUsages::INDEX,
+                    ),
                     count: source.mesh.indices.len() as u32,
                     batches: source.batches.clone(),
                 };
-                self.current = Some(Current { source, gpu, vertex_offset: 0, index_offset: 0 });
+                self.current = Some(Current {
+                    source,
+                    gpu,
+                    vertex_offset: 0,
+                    index_offset: 0,
+                });
             }
             let current = self.current.as_mut().unwrap();
             let vertices: &[u8] = bytemuck::cast_slice(&current.source.mesh.vertices);
@@ -71,8 +98,21 @@ impl Upload {
     }
 
     pub fn finish(self) -> (GpuMesh, Samples, Option<(i32, i32)>) {
-        println!("[horizon] upload_complete pages={} bytes={} frames={} staging_limit_bytes={} elapsed_ms={:.1}",
-            self.finished.len(), self.bytes, self.frames, FRAME_BYTES, self.started.elapsed().as_secs_f64() * 1000.0);
-        (GpuMesh { pages: self.finished, cull: std::env::var("VOXEL_HORIZON_CULL").as_deref() != Ok("0") }, self.samples, self.center)
+        println!(
+            "[horizon] upload_complete pages={} bytes={} frames={} staging_limit_bytes={} elapsed_ms={:.1}",
+            self.finished.len(),
+            self.bytes,
+            self.frames,
+            FRAME_BYTES,
+            self.started.elapsed().as_secs_f64() * 1000.0
+        );
+        (
+            GpuMesh {
+                pages: self.finished,
+                cull: std::env::var("VOXEL_HORIZON_CULL").as_deref() != Ok("0"),
+            },
+            self.samples,
+            self.center,
+        )
     }
 }

@@ -30,7 +30,10 @@ fn validate() {
         ("diffuse resolve", indirect_shader_source(true)),
         ("sky", sky_shader_source()),
         ("cloud", cloud_shader_source()),
-        ("cloud hardware filtering", cloud_shader_source_for_filtering(true)),
+        (
+            "cloud hardware filtering",
+            cloud_shader_source_for_filtering(true),
+        ),
         ("cloud composite", cloud_composite_shader_source()),
         ("cloud temporal", cloud_temporal_shader_source()),
         ("atmosphere LUT", ATMOSPHERE_LUT_GENERATION_WGSL.to_owned()),
@@ -38,6 +41,7 @@ fn validate() {
         ("shadow", SHADOW_SHADER.to_owned()),
         ("UI", UI_SHADER.to_owned()),
         ("postprocess", POSTPROCESS_SHADER.to_owned()),
+        ("present", PRESENT_SHADER.to_owned()),
         ("terrain", TERRAIN_COMPUTE_SHADER.to_owned()),
         ("fluid", FLUID_SHADER.to_owned()),
     ];

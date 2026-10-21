@@ -63,6 +63,8 @@ pub(super) fn apply(
     mesh: &mut ChunkMesh,
     snapshot: &WorldSnapshot,
     center: (i32, i32),
+    eye: Vec3,
+    hidden: f32,
     cancel: &AtomicBool,
 ) -> Option<()> {
     let scale = snapshot.cfg.voxel_meters();
@@ -73,8 +75,82 @@ pub(super) fn apply(
     ));
     let radius = (17000.0 / (32.0 * scale)).ceil() as i32;
     let mut coords: Vec<_> = snapshot
-        .edited_coords_near(c, radius)
-        .filter(|q| (q.x - c.x).abs().max((q.z - c.z).abs()) <= radius)
+        .chunks
+        .keys()
+        .copied()
+        .filter(|q| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            if (q.x - c.x).abs().max((q.z - c.z).abs()) > radius {
+                return false;
+            }
+            let lo = q.as_vec3() * (32.0 * scale);
+            let hi = lo + Vec3::splat(32.0 * scale);
+            let dx = (eye.x - lo.x).abs().max((eye.x - hi.x).abs());
+            let dz = (eye.z - lo.z).abs().max((eye.z - hi.z).abs());
+            if dx.hypot(dz) + 2.0 < hidden {
+                return false;
+            }
+            // Only inspect in-memory chunks in the active snapshot (or within 24 chunks)
+            // so we don't decompress thousands of cold disk region chunks on the horizon worker.
+            let Some(chunk_data) = snapshot.chunks.get(q).cloned() else {
+                return false;
+            };
+            // Only replace the smooth distant heightfield where the chunk's
+            // top surface column actually differs from procedural generation.
+            let base = *q * 32;
+            let surface_range = (base.y - 4)..=(base.y + 36);
+            let mut has_surface = false;
+            for z in (0..32).step_by(4) {
+                for x in (0..32).step_by(4) {
+                    let h = crate::world::terrain_height(&snapshot.cfg, base.x + x, base.z + z)
+                        .max(snapshot.cfg.water_level());
+                    if surface_range.contains(&h) {
+                        has_surface = true;
+                        break;
+                    }
+                }
+                if has_surface {
+                    break;
+                }
+            }
+            if !has_surface {
+                return false;
+            }
+            // Skip chunks whose voxels only differ via settled water/sand or
+            // underground caves and have no architectural/player surface changes.
+            for z in 0..32 {
+                for x in 0..32 {
+                    let col_h = crate::world::terrain_height(&snapshot.cfg, base.x + x, base.z + z);
+                    for y in 0..32 {
+                        let wy = base.y + y;
+                        if wy < col_h - 1 {
+                            continue;
+                        }
+                        let b = chunk_data.blocks[ChunkData::local_index(x, y, z)];
+                        let proc_b = crate::world::sample_block(
+                            &snapshot.cfg,
+                            IVec3::new(base.x + x, wy, base.z + z),
+                        );
+                        if b != proc_b
+                            && !matches!(
+                                (b, proc_b),
+                                (B::Water, B::Air)
+                                    | (B::Air, B::Water)
+                                    | (B::Sand, B::Air)
+                                    | (B::Air, B::Sand)
+                                    | (B::Sand, B::Water)
+                                    | (B::Water, B::Sand)
+                            )
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        })
         .collect();
     coords.sort_by_key(|q| (q.x, q.z, q.y));
     coords.dedup();
@@ -93,7 +169,11 @@ pub(super) fn apply(
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let triangle = [mesh.vertices[tri[0] as usize], mesh.vertices[tri[1] as usize], mesh.vertices[tri[2] as usize]];
+        let triangle = [
+            mesh.vertices[tri[0] as usize],
+            mesh.vertices[tri[1] as usize],
+            mesh.vertices[tri[2] as usize],
+        ];
         let min = triangle.iter().fold(Vec3::splat(f32::INFINITY), |a, v| {
             a.min(Vec3::from_array(v.pos))
         });
@@ -104,11 +184,17 @@ pub(super) fn apply(
             });
         let xmin = (min.x.floor() as i32).div_euclid(32);
         let xmax = (max.x.ceil() as i32).div_euclid(32);
-        let intersects = columns.range((xmin, i32::MIN)..=(xmax, i32::MAX)).any(|(&(x,z),ys)| {
-            min.x <= (x*32+32) as f32 && max.x >= (x*32) as f32
-                && min.z <= (z*32+32) as f32 && max.z >= (z*32) as f32
-                && ys.iter().any(|&y| min.y <= (y*32+32) as f32 && max.y >= (y*32) as f32)
-        });
+        let intersects = columns
+            .range((xmin, i32::MIN)..=(xmax, i32::MAX))
+            .any(|(&(x, z), ys)| {
+                min.x <= (x * 32 + 32) as f32
+                    && max.x >= (x * 32) as f32
+                    && min.z <= (z * 32 + 32) as f32
+                    && max.z >= (z * 32) as f32
+                    && ys
+                        .iter()
+                        .any(|&y| min.y <= (y * 32 + 32) as f32 && max.y >= (y * 32) as f32)
+            });
         if !intersects {
             mesh.indices.extend_from_slice(tri);
             continue;
@@ -250,12 +336,7 @@ pub(super) fn apply(
                                 pos: p.as_vec3().to_array(),
                                 normal: normal.as_vec3().to_array(),
                                 color: b.color(p),
-                                surface: [
-                                    surf.roughness,
-                                    surf.specular,
-                                    surf.shader_key(),
-                                    0.0,
-                                ],
+                                surface: [surf.roughness, surf.specular, surf.shader_key(), 0.0],
                                 ao_strength: -2.0,
                             });
                             append(mesh, &face);
@@ -279,21 +360,22 @@ pub(super) fn visible_fingerprint(snapshot: &WorldSnapshot, eye: Vec3, hidden: f
     use std::hash::{Hash, Hasher};
     let scale = snapshot.cfg.voxel_meters();
     let mut result = 0u64;
-    for q in snapshot.chunks.keys().chain(snapshot.regions.records.keys().filter(|q| !snapshot.chunks.contains_key(q))) {
+    for q in snapshot.chunks.keys() {
         let lo = q.as_vec3() * (32.0 * scale);
         let hi = lo + Vec3::splat(32.0 * scale);
-        if (lo.x - eye.x).abs().max((lo.z - eye.z).abs()) > 17512.0 + 32.0 * scale { continue; }
-        let dx = (eye.x-lo.x).abs().max((eye.x-hi.x).abs());
-        let dz = (eye.z-lo.z).abs().max((eye.z-hi.z).abs());
+        if (lo.x - eye.x).abs().max((lo.z - eye.z).abs()) > 17512.0 + 32.0 * scale {
+            continue;
+        }
+        let dx = (eye.x - lo.x).abs().max((eye.x - hi.x).abs());
+        let dz = (eye.z - lo.z).abs().max((eye.z - hi.z).abs());
         // Two metres cover the one-metre camera key and face-neighbour changes.
-        if dx.hypot(dz) + 2.0 < hidden { continue; }
+        if dx.hypot(dz) + 2.0 < hidden {
+            continue;
+        }
         let mut h = std::collections::hash_map::DefaultHasher::new();
         q.hash(&mut h);
         if let Some(data) = snapshot.chunks.get(q) {
             (Arc::as_ptr(data) as usize).hash(&mut h);
-        } else if let Some(record) = snapshot.regions.records.get(q) {
-            record.version.hash(&mut h);
-            record.checksum.hash(&mut h);
         }
         result ^= h.finish();
     }

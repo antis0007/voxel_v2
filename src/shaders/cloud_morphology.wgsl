@@ -23,10 +23,48 @@ fn cloud_smooth_max(a: f32, b: f32, radius: f32) -> f32 {
     return max(a, b) + h * h * radius * 0.25;
 }
 
+// Kilometer-scale masses. A second, coarser lattice than the puffs, with its
+// own holes, stretches and heights, so a sky can hold one huge bank beside
+// empty air. Cheap ellipsoids only: the puff lattice supplies the silhouette.
+fn broad_cloud_mass(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32, size: f32,
+    thick_m: f32) -> f32 {
+    let cell_size = size * 2.7;
+    let cell = vec2<i32>(floor(xz / cell_size));
+    var field = -2.0;
+    for (var z = -1; z <= 1; z += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            let id = cell + vec2<i32>(x, z);
+            let seed = hash_cell1(id, 2203);
+            let jitter = hash_cell2(id, 901);
+            let center = (vec2<f32>(id) + jitter) * cell_size;
+            let local = xz - center;
+            let reach = cell_size * mix(0.28, 0.82, hash_cell1(id, 77));
+            if dot(local, local) > reach * reach { continue; }
+            // Coverage raises the odds. It does not turn every cell on, so a
+            // deck still has corridors and one-sided storms stay one-sided.
+            let odds = saturate1(coverage * mix(0.35, 1.25, bank) + storm * 0.28);
+            if seed > odds { continue; }
+            let axis = safe_normalize2(jitter - vec2<f32>(0.5), vec2<f32>(1.0, 0.0));
+            let side = vec2<f32>(-axis.y, axis.x);
+            let stretch = mix(0.28, 1.25, hash_cell1(id, 15));
+            // A mass is never much taller than it is wide: narrow cells with a
+            // tall draw stood up as kilometre-high pillars.
+            let height = min(mix(0.18, 0.72, hash_cell1(id, 44)) + storm * 0.22,
+                reach * min(stretch, 1.0) * 2.4 / max(thick_m, 1.0));
+            let d = vec2<f32>(dot(local, axis), dot(local, side)) / vec2<f32>(reach, reach * stretch);
+            let hh = (h - mix(0.02, 0.16, seed)) / max(height, 0.12);
+            let dome = 1.0 - dot(d, d) - hh * hh;
+            field = cloud_smooth_max(field, dome, 0.30);
+        }
+    }
+    return field;
+}
+
 // Cloud geometry in meters. Overlapping, tilted thermals form a connected
 // three-dimensional field. A thermal has a ragged foot, offset mid-level
 // shoulders and an independently lifting crown instead of a single ball.
-fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32, size: f32) -> f32 {
+fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32, size: f32,
+    thick_m: f32) -> f32 {
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0);
     // The field below is rotated into the cloud-bank frame at its call site.
@@ -47,15 +85,21 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // around every cell. Compact support below is exactly one cell,
             // so an omitted cell outside this 3x3 cannot contribute.
             let center = (vec2<f32>(id) + jitter) * size;
-            let presence = smoothstep(seed - 0.12, seed + 0.12,
-                cell_coverage * 1.12 + storm * 0.30);
+            // A per-cell lottery. High coverage makes clouds likely, and unlucky
+            // cells stay empty so the spacing is not a filled grid.
+            let luck = hash_cell1(id, 4099);
+            let odds = saturate1(cell_coverage * mix(0.55, 1.20, cluster) + storm * 0.22);
+            let presence = smoothstep(0.34, 0.72, odds * mix(0.40, 1.20, luck));
             // No possible contribution: avoid axes, turrets and divisions for
             // absent cells and cells beyond their compact support.
             let local = xz - center;
             if presence <= 0.001 || dot(local, local) >= size * size { continue; }
-            let radius = size * mix(0.20, 0.42, hash_cell1(id, 947))
-                * mix(0.84, 1.08, cluster) * mix(0.78, 1.12, presence)
-                * (1.0 + storm * 0.34);
+            // Squared class biases the field toward scraps and puffs, with a
+            // few cells growing into a distinctly larger neighbour.
+            let scale_class = hash_cell1(id, 2811);
+            let radius = size * mix(0.07, 0.58, scale_class * scale_class)
+                * mix(0.88, 1.10, cluster) * mix(0.80, 1.08, presence)
+                * (1.0 + storm * 0.16);
             let random_axis = safe_normalize2(jitter - vec2<f32>(0.5), vec2<f32>(1.0, 0.0));
             // Use a wind-aligned long axis with per-cell angular variation.
             // The wider flow-aligned lobes make neighboring thermals join into
@@ -72,25 +116,43 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // Silhouettes evolve slowly while the advected medium moves with
             // the wind. Faster phase rotation looked like jittering blobs.
             let flow_phase = time * wspd * 0.0035 + seed * 6.2831853 + local_phase;
-            let roll = sin(flow_phase + h * 4.7 + jitter.y * 2.7) * 0.44
-                + sin(flow_phase * 0.37 - h * 7.4 + jitter.x * 5.0) * 0.19;
-            let twist = base_angle + (h - 0.38) * (mix(-2.0, 2.0, jitter.x) + roll)
-                + sin(h * 7.3 + seed * 19.0 + flow_phase * 0.35) * 0.48;
-            let bend = (h - 0.35) * (0.20 + storm * 0.28)
-                + sin(flow_phase + h * 3.6 + jitter.x * 3.0) * 0.16;
+            // Real towers do not corkscrew. Rotation through height was up to
+            // ~2.5 rad per tower and read as twisted taffy; keep only a slight
+            // lean of the lobes so stacked billows do not line up exactly.
+            let roll = sin(flow_phase + h * 2.3 + jitter.y * 2.7) * 0.12;
+            let twist = base_angle + (h - 0.38) * mix(-0.22, 0.22, jitter.x);
+            // Shear leans the crown downwind in one smooth arc, no S-bends.
+            let bend = (h - 0.35) * (0.12 + storm * 0.10);
             // Vertical wind shear pushes the crown downwind, while a slower
             // cross-flow roll curls it back around the rising thermal. Keep the
             // deformation cell-local: a world-origin rotation would amplify
             // tiny time changes into large motion far from the origin.
-            let updraft = smoothstep(0.08, 0.92, h) * size * (0.12 + storm * 0.13);
-            let cross_roll = sin(flow_phase * 0.29 + h * 3.7 + jitter.y * 4.9) * 0.62;
-            let shear = wind * updraft + side * (updraft * cross_roll + size * roll * 0.055);
+            let updraft = smoothstep(0.08, 0.92, h) * size * (0.10 + storm * 0.06);
+            let shear = wind * updraft + side * (size * roll * 0.04);
             let twisted = rotate2(local - axis * (size * bend) - shear, twist);
-            let delta = vec2<f32>(dot(twisted, axis), dot(twisted, side))
-                / vec2<f32>(radius, radius * mix(0.60, 1.70, jitter.y));
+            // Puff, long roll, flat shred, or narrow tower. One formula was
+            // drawing the same cauliflower in every cell.
+            let kind = hash_cell1(id, 947);
+            var stretch = mix(0.50, 1.40, jitter.y);
             let growth = hash_cell1(id, 1733);
-            let height = mix(0.38, 0.98, growth) + cluster * 0.08
-                + storm * smoothstep(0.42, 0.90, growth) * 0.25;
+            var height = mix(0.26, 0.92, growth) + cluster * 0.06
+                + storm * smoothstep(0.42, 0.90, growth) * 0.30;
+            if kind > 0.80 {
+                stretch = mix(0.20, 0.40, jitter.x);
+                height = mix(0.16, 0.38, growth);
+            } else if kind < 0.14 {
+                stretch = mix(0.80, 1.08, jitter.y);
+                height = mix(0.75, 1.20, growth) + storm * 0.18;
+            } else if kind < 0.28 {
+                height = mix(0.12, 0.28, growth);
+                stretch = mix(0.55, 1.30, jitter.y);
+            }
+            // Cap the aspect ratio at about 1.5 tall to 1 wide. Small radii
+            // under a multi-kilometre storm layer drew pencil-thin columns;
+            // real congestus and Cb grow wider as they grow taller.
+            height = min(height, radius * min(stretch, 1.0) * 3.0 / max(thick_m, 1.0));
+            let delta = vec2<f32>(dot(twisted, axis), dot(twisted, side))
+                / vec2<f32>(radius, radius * stretch);
             // Keep the lifting condensation level coherent across a bank; large
             // per-cell foot offsets made each thermal read as a floating ball.
             let foot = hash_cell1(id, 2309) * mix(0.035, 0.12, 1.0 - storm);
@@ -106,8 +168,10 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // sides torn cauliflower folds instead of a stack of smooth balls.
             let azimuth = atan2(delta.y, delta.x);
             let radial_lobes = 1.0
-                + 0.13 * sin(azimuth * 3.2 + local_h * 10.0 + flow_phase)
-                + 0.07 * sin(azimuth * 5.3 - local_h * 16.0 + jitter.y * 6.2831853);
+                + 0.13 * sin(azimuth * 3.0 + local_h * 10.0 + flow_phase)
+                + 0.07 * sin(azimuth * 5.0 - local_h * 16.0 + jitter.y * 6.2831853);
+            // Integer azimuth frequencies: a fractional one jumps at the atan2
+            // wrap and cut a vertical seam down the back of every tower.
             let tower_xy = delta / (waist * radial_lobes);
             // Close each thermal below its shoulder. A core centred at zero
             // extended below the layer and was sliced into a horizontal shelf.
@@ -148,6 +212,18 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // multiplying by zero manufactured a flat slab outside the tower.
             dome = cloud_smooth_max(dome,
                 arm - (1.0 - smoothstep(0.42, 0.78, growth)) * 4.0, 0.13);
+            // A smaller companion sits beside many puffs, so a large cloud
+            // keeps scraps around it instead of standing alone on the grid.
+            let crumb = hash_cell1(id, 3001);
+            if crumb > 0.42 && radius < size * 0.48 {
+                let crumb_r = radius * mix(0.30, 0.62, hash_cell1(id, 311));
+                let crumb_offset = axis * radius * mix(0.75, 1.55, crumb)
+                    + side * radius * (jitter.y - 0.5);
+                let crumb_delta = (twisted - crumb_offset) / max(crumb_r, 1.0);
+                let crumb_h = (local_h - height * 0.32) / max(height * 0.42, 0.08);
+                let crumb_dome = 1.0 - dot(crumb_delta, crumb_delta) - crumb_h * crumb_h;
+                dome = cloud_smooth_max(dome, crumb_dome, 0.16);
+            }
             // Compact support keeps even noise-inflated storm lobes inside
             // the 3x3 neighborhood, so changing cells cannot drop a lobe.
             // Keep the support compact at the actual cell edge, but let the
@@ -202,11 +278,15 @@ fn photographic_low_density(
     // to the density masks too; warping only the interior left flat layer caps.
     let height_warp = (shape.b - 0.5) * 0.38 + organization.y * 0.20;
     let shaped_h = clamp(h + height_warp * convective, 0.0, 1.0);
-    var envelope = 0.0;
+    var envelope = -1.0;
     if convective > 0.001 {
         envelope = cumulus_envelope(rotate2(xz, 0.43) + organization * size * 1.35 + warp,
-            shaped_h, coverage, bank, storm, size);
+            shaped_h, coverage, bank, storm, size, top_y - base_y);
     }
+    // Big masses live on their own lattice, then the puff field breaks them up.
+    let mass = broad_cloud_mass(rotate2(xz, 0.17) + organization * size * 0.80,
+        shaped_h, coverage, bank, storm, size, top_y - base_y);
+    envelope = cloud_smooth_max(envelope, mass, 0.24);
     // Preserve rounded macro volumes at distance: excessive noise inflation
     // pushed the whole body back through the layer's flat altitude bounds.
     let lobes = (shape.r - 0.5) * 1.18 + (shape.g - 0.5) * 0.48;
@@ -216,9 +296,14 @@ fn photographic_low_density(
     // cumulus through the same flat top and bottom height mask.
     // A sheet still needs varying water content and thickness: the old field
     // saturated everywhere in overcast weather, erasing its lighting structure.
-    let sheet_field = (coverage - 0.50) * 1.8 + (shape.r - 0.5) * 1.2
-        + (bank - 0.5) * 0.8 - smoothstep(0.18, 0.95, h) * 1.1;
-    let deck = (coverage - 0.32) * 2.0 + (shape.r - 0.5) * 0.65
+    // Rolls and holes at a scale between the banks and the puff grid, so an
+    // overcast deck is a field of uneven lumps rather than one ceiling.
+    let rolls = weather_bank_noise(xz / vec2<f32>(520.0, 240.0) + vec2<f32>(11.0, -6.0));
+    let sheet_field = (coverage - 0.50) * 1.8 + (shape.r - 0.5) * 1.35
+        + (bank - 0.5) * 1.15 + (rolls - 0.5) * 1.25
+        - smoothstep(0.18, 0.95, h) * 1.1;
+    let deck = (coverage - 0.38) * 2.0 + (shape.r - 0.5) * 0.85
+        + (rolls - 0.55) * 0.9
         - smoothstep(0.35, 0.95, h) * 1.2;
     field = mix(deck, field, convective);
     // Fair-weather cumulus must not acquire a second blanket underneath it.
@@ -238,12 +323,17 @@ fn photographic_low_density(
     var detail = vec4<f32>(0.5);
     if detail_keep > 0.01 && !shadow_lod {
         detail = sample_detail_global(xz + warp, evolving_y, detail_freq, detail_freq, detail_lod);
-        let erosion = (1.0 - dot(detail.rgb, vec3<f32>(0.55, 0.30, 0.15)))
-            * light.weather_globals[1].w * light.weather_globals[2].y * 0.65;
+        // Weight the coarse detail channels; the finest Worley channel made grainy,
+        // cauliflower-like fringes that do not belong to the scene's soft lighting.
+        let erosion = (1.0 - dot(detail.rgb, vec3<f32>(0.62, 0.30, 0.08)))
+            * light.weather_globals[1].w * light.weather_globals[2].y * 0.46;
         field -= erosion * detail_keep;
     }
-    let softness = 0.09 + smoothstep(8.0, 90.0, footprint) * 0.20;
-    let body = smoothstep(-softness, softness + 0.14, field);
+    let softness = 0.15 + smoothstep(8.0, 90.0, footprint) * 0.22;
+    // Sheets thin out over hundreds of metres; a narrow ramp cut stratus into
+    // flat, hard-edged cut-outs that read as a map pasted on the sky.
+    let sheet_ramp = (1.0 - convective) * 0.55;
+    let body = smoothstep(-softness - sheet_ramp * 0.4, softness + 0.14 + sheet_ramp, field);
     // Condensation-floor relief lives at a broader scale than edge turbulence.
     // Driving it from the fine Worley channel flattened the whole underside
     // as its mip level increased, leaving a visible plane across distant decks.
