@@ -5,6 +5,23 @@ use super::*;
 pub const EMPTY: u32 = 8;
 pub const MAX_SLOTS: usize = 8;
 
+pub use super::spell_defs::spell_audio;
+
+/// Fires a bolt that flies and impacts.
+pub fn projectile(spell: u32) -> bool {
+    spell_class(spell) == Class::Projectile
+}
+
+/// A card that changes the next bolt, or the deck's control flow.
+pub fn is_modifier(spell: u32) -> bool {
+    spell_class(spell) == Class::Modifier
+}
+
+/// A growth or summon effect delivered by a Touch or a trigger.
+pub fn is_effect(spell: u32) -> bool {
+    spell_class(spell) == Class::Effect
+}
+
 /// Accumulated projectile modifiers evaluated left-to-right across a cast block.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShotMods {
@@ -208,40 +225,9 @@ pub fn seed_unlocked_slots_known(loadout: &mut Loadout, tier: u32, known: &dyn F
     }
 }
 
-pub fn projectile(spell: u32) -> bool {
-    matches!(spell, 0 | 2 | 3 | 5 | 6 | 10 | 11 | 12 | 13 | 14 | 15 | 28 | 29)
-}
 
-pub fn is_modifier(spell: u32) -> bool {
-    matches!(spell, 16..=23 | 26 | 27 | 37 | 38 | 40..=70)
-}
 
-pub fn is_effect(spell: u32) -> bool {
-    matches!(spell, 35 | 36 | 39)
-}
 
-/// Projectile spell -> audio family and pitch. Keeping this here gives each
-/// element a recognizable voice instead of every bolt using the same Spark cue.
-pub fn spell_audio(spell: u32) -> (Cue, f32) {
-    match spell {
-        2 | 13 => (Cue::Frost, 0.88),
-        3 => (Cue::Burst, 0.80),
-        11 => (Cue::Burst, 0.92),
-        12 => (Cue::CinderStrike, 0.76),
-        28 => (Cue::CinderStrike, 0.98),
-        29 => (Cue::Burst, 0.66),
-        14 => (Cue::Clang, 0.84),
-        15 => (Cue::Treasure, 0.78),
-        5 => (Cue::Bloom, 1.16),
-        6 | 10 => (Cue::Rift, 0.62),
-        7 => (Cue::Echo, 1.32),
-        9 => (Cue::Spark, 1.12),
-        18 => (Cue::Echo, 1.08),
-        22 => (Cue::Spark, 0.92),
-        16 | 17 => (Cue::Spark, 1.24),
-        _ => (Cue::Spark, 1.0),
-    }
-}
 
 pub fn stats(tier: u32, mode: u32, rank: u32) -> WandStats {
     let cap = capacity(tier);

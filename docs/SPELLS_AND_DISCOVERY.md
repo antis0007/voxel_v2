@@ -5,17 +5,33 @@ update, how a player finds spells, and the save-format change that persists it.
 
 ## How a spell is wired
 
-A spell is a plain `u32` id (`0..=MAX_SPELL_ID`, currently 95). There is no
-single registry yet, so a new spell touches these places. A test guards the ones
-marked (T).
+A spell is a plain `u32` id (`0..=MAX_SPELL_ID`, currently 95). Everything that
+describes it lives in **one row** of the table in
+`src/world/adventure/spell_defs.rs`: name, flavor, hover hint, badge, colour,
+mana cost, cooldown, cast-delay / recharge / spread deltas, base damage and
+speed, sound family and pitch, its `Class` (projectile, modifier, effect,
+other) and its `Unlock` rule. The old per-field `match` functions
+(`spell_name`, `spell_cost`, ...) are now lookups into that table; the
+migration was proved value-for-value over ids 0..=100.
 
-| Where | What |
-| --- | --- |
-| `src/world/adventure.rs` | `spell_name`, `spell_flavor`, `spell_hint`, `spell_cost`, `spell_cooldown`, `spell_cast_delay_delta`, `spell_recharge_delta`, `spell_spread_delta`, `spell_base_damage`, `spell_base_speed`, `spell_kind_tag`, `spell_color`, `spell_available` (T: complete, unique, reachable) |
-| `src/world/adventure/wands.rs` | `projectile()` / `is_modifier()` / `is_effect()` classification (T: must agree with the kind tag), `paint_shot` for stat-only modifiers, control-flow cards in `evaluate_programmed`, `spell_audio`, and the cast `match` in `cast_wand` |
-| `src/world/adventure.rs` `update` | projectile flight and impact effects |
-| `src/egui_ui/wands.rs` | the palette tab lists `BOLTS`, `EFFECTS`, `SHOT_MODIFIERS`, `PROGRAM_MODIFIERS` (T: every defined spell must be on a tab, or it can never be placed) |
-| `tools/gen_spell_icons.py` | icon art; run it to regenerate `src/egui_ui/icons_spells.rs` (T: readable icons) |
+To add a spell:
+
+1. Add a row to `SPELLS`, keeping it sorted by id.
+2. If it needs new behaviour, add it where the behaviour lives:
+   - bolts and utility casts: the cast `match` in `wands.rs` `cast_wand`;
+   - stat-only modifiers: `paint_shot` in `wands.rs`; control-flow cards in
+     `evaluate_programmed`; new `ShotMods` fields if needed;
+   - flight and impact effects: the projectile loop in `adventure.rs` `update`.
+3. Put it on a palette tab in `src/egui_ui/wands.rs` (`BOLTS`, `EFFECTS`,
+   `SHOT_MODIFIERS`, `PROGRAM_MODIFIERS`). A spell on no tab can never be
+   placed; a test fails if you forget.
+4. Add icon art in `tools/gen_spell_icons.py` and run it to regenerate
+   `src/egui_ui/icons_spells.rs`.
+
+Tests check that rows are sorted and unique, complete, inside the id space,
+that classes agree with the wand predicates, that every spell is reachable from
+the palette and from the top wand, and that unknown ids fall back to documented
+defaults.
 
 Unknown ids read "Unknown spell". IDs in use: `0..=27`, `28..=32`, `34..=63`,
 `64..=70`. Free: `33`, `71..=95`.
@@ -88,5 +104,4 @@ and another version bump.
 ## Not done yet
 
 Identify-by-use runes, limited spell charges, shuffle wands, overheat, wand gem
-mods, oil and acid fluids, and a single data-driven `SpellDef` table replacing
-the parallel `match` tables above.
+mods, and oil and acid fluids.
