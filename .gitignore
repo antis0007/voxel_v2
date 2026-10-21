@@ -35,3 +35,6 @@ run-*.cmd
 
 # Tool scratch (brainstorm servers, pids)
 .superpowers/
+
+# Python bytecode
+__pycache__/
