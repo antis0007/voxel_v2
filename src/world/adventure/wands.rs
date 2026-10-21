@@ -1878,3 +1878,44 @@ mod new_spell_tests {
         assert!(a.projectiles[0].velocity.z > 1.0, "{:?}", a.projectiles[0].velocity);
     }
 }
+
+#[cfg(test)]
+mod time_snag_tests {
+    use super::*;
+    use crate::{fluid::VoxelScalePreset, world::WorldType};
+
+    #[test]
+    fn time_snag_slows_only_nearby_foes_and_crushes_hostile_bolts() {
+        let scale = VoxelScalePreset::OneMeter;
+        let mut w = World::with_seed(WorldType::Superflat, scale, 17);
+        let mut p = Player::new();
+        p.pos = Vec3::new(0.0, 150.0, 0.0);
+        p.flying = true;
+        let eye = p.eye(scale) * scale.meters();
+        let mut a = Adventure::default();
+        a.wand = 3;
+        a.rare_spells = !0;
+        a.mana = 100.0;
+        a.loadout.slots = [30, EMPTY, EMPTY, EMPTY];
+        a.loadout.aux_slots = [EMPTY; 4];
+
+        a.enemies
+            .push(Enemy::new(IVec3::ZERO, 0, 0, eye + Vec3::new(3.0, -1.5, 0.0), 1));
+        a.enemies
+            .push(Enemy::new(IVec3::ZERO, 1, 0, eye + Vec3::new(40.0, -1.5, 0.0), 1));
+        a.emit_spell(0, eye + Vec3::X * 4.0, Vec3::X, None);
+        a.projectiles[0].hostile = true;
+        let before = a.projectiles[0].velocity.length();
+
+        a.cast_wand(&mut w, &mut p, eye, Vec3::NEG_Z);
+
+        assert!(a.enemies[0].slow >= 3.5, "near foe slow {}", a.enemies[0].slow);
+        assert_eq!(a.enemies[1].slow, 0.0, "a distant foe must be untouched");
+        let after = a.projectiles[0].velocity.length();
+        assert!(
+            (after / before - 0.35).abs() < 0.01,
+            "hostile bolt went from {before} to {after}"
+        );
+        assert!(a.mana < 100.0, "the cast must cost mana");
+    }
+}

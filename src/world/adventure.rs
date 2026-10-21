@@ -2876,7 +2876,7 @@ impl Adventure {
         let mut death_blasts: Vec<Vec3> = Vec::new();
         // Spells found this frame: (salt, where). Applied after the loop, which
         // borrows the enemy list.
-        let mut finds: Vec<(u32, Vec3)> = Vec::new();
+        let mut finds: Vec<(u32, Vec3, bool)> = Vec::new();
         for e in &self.enemies {
             if e.health > 0.0 {
                 continue;
@@ -2909,7 +2909,7 @@ impl Adventure {
                     world.expedition.add(item, amount);
                 }
                 if let Some(salt) = discovery::drop_roll(e.site, e.slot, e.menace) {
-                    finds.push((salt, e.center()));
+                    finds.push((salt, e.center(), false));
                 }
                 if e.kind == 5 && self.weapons & 2 == 0 {
                     self.weapons |= 2;
@@ -2932,13 +2932,13 @@ impl Adventure {
                     }
                     self.reward = Some(reward);
                     // Clearing a whole site always teaches something.
-                    finds.push((discovery::site_salt(e.site), e.center()));
+                    finds.push((discovery::site_salt(e.site), e.center(), true));
                     sound(&mut self.sounds, Cue::Treasure, None, 0.75);
                 }
             }
         }
-        for (salt, at) in finds {
-            self.discover_spell(world, salt, at);
+        for (salt, at, guaranteed) in finds {
+            self.discover_spell(world, salt, at, guaranteed);
         }
         for at in death_blasts {
             self.blast_visual(at, 1.8, Vec3::Y, status::Affix::Volatile.color());

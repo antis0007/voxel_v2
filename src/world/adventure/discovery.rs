@@ -151,9 +151,27 @@ impl Adventure {
             .collect()
     }
 
-    /// Finds one spell, chosen deterministically from the pool by `salt`.
+    /// Undiscovered spells this wand tier can already hold.
+    fn current_tier_pool(&self) -> Vec<u32> {
+        let tier = self.wand.max(1);
+        self.discovery_pool()
+            .into_iter()
+            .filter(|&id| spell_tier(id) <= tier)
+            .collect()
+    }
+
+    /// Finds one spell, chosen deterministically by `salt`. Mostly it is a spell
+    /// this wand can use now; one find in six peeks a tier ahead, which gives a
+    /// reason to upgrade without flooding the player with unusable spells.
     pub fn discover_with(&mut self, salt: u32) -> Option<u32> {
-        let pool = self.discovery_pool();
+        let usable = self.current_tier_pool();
+        let ahead: Vec<u32> = self
+            .discovery_pool()
+            .into_iter()
+            .filter(|id| !usable.contains(id))
+            .collect();
+        let peek = !ahead.is_empty() && (usable.is_empty() || mix32(salt ^ 0xa11e) % 6 == 0);
+        let pool = if peek { &ahead } else { &usable };
         if pool.is_empty() {
             return None;
         }
@@ -162,9 +180,32 @@ impl Adventure {
         Some(id)
     }
 
+    /// A guardian drop. Rarer as the current tier's spells run out, so the
+    /// hunt stretches across the tier instead of ending in the first hours.
+    pub fn discover_drop(&mut self, salt: u32) -> Option<u32> {
+        let remaining = self.current_tier_pool().len() as f32;
+        let keep = (remaining / 24.0).clamp(0.35, 1.0);
+        let roll = (mix32(salt ^ 0x7e57) % 1000) as f32 / 1000.0;
+        if roll >= keep {
+            return None;
+        }
+        self.discover_with(salt)
+    }
+
     /// Finds a spell and tells the player about it.
-    pub(super) fn discover_spell(&mut self, world: &mut World, salt: u32, at: Vec3) {
-        let Some(id) = self.discover_with(salt) else {
+    pub(super) fn discover_spell(
+        &mut self,
+        world: &mut World,
+        salt: u32,
+        at: Vec3,
+        guaranteed: bool,
+    ) {
+        let found = if guaranteed {
+            self.discover_with(salt)
+        } else {
+            self.discover_drop(salt)
+        };
+        let Some(id) = found else {
             return;
         };
         world.expedition.say(format!(
@@ -386,5 +427,107 @@ mod tests {
         let back = Adventure::decode_spell_log(&mut read).unwrap();
         assert_eq!(back, a.spell_log);
         assert!(back.has(29) && back.has(70) && !back.has(3));
+    }
+}
+
+#[cfg(test)]
+mod pacing {
+    use super::*;
+
+    /// Defeats `kills` guardians at distinct sites and returns how many spells
+    /// were found, and how many of those were beyond the wand's own tier.
+    fn simulate(a: &mut Adventure, kills: u32, menace: u8) -> (u32, u32) {
+        let (mut found, mut ahead) = (0, 0);
+        let tier = a.wand.max(1);
+        for i in 0..kills {
+            let site = IVec3::new((i / 4) as i32 * 31, 2, (i / 4) as i32 * -17);
+            if let Some(salt) = drop_roll(site, i % 4, menace) {
+                // Only count a peek while the wand's own tier still had spells
+                // left; once it is drained, tier-ahead finds are all that remain.
+                let usable_left = !a.current_tier_pool().is_empty();
+                if let Some(id) = a.discover_drop(salt) {
+                    found += 1;
+                    if usable_left && spell_tier(id) > tier {
+                        ahead += 1;
+                    }
+                }
+            }
+        }
+        (found, ahead)
+    }
+
+    fn fresh(wand: u32) -> Adventure {
+        let mut a = Adventure::default();
+        a.wand = wand;
+        a.begin_journey();
+        a
+    }
+
+    #[test]
+    fn the_opening_hook_is_quick_but_not_instant() {
+        let (found, _) = simulate(&mut fresh(1), 12, 1);
+        assert!((4..=9).contains(&found), "{found} spells in the first 12 kills");
+    }
+
+    #[test]
+    fn the_hunt_stretches_across_the_tier() {
+        let mut a = fresh(1);
+        let (mid, _) = simulate(&mut a, 60, 1);
+        assert!(mid <= 24, "{mid} found by 60 kills: too fast");
+        assert!(!a.current_tier_pool().is_empty(), "tier drained by 60 kills");
+
+        // Continue from kill 60 so the sites are not rolled twice.
+        let mut kills = 60u32;
+        while !a.current_tier_pool().is_empty() {
+            simulate_one(&mut a, kills);
+            kills += 1;
+            assert!(kills < 600, "the tier never drains");
+        }
+        assert!((110..=260).contains(&kills), "tier drained in {kills} kills");
+    }
+
+    fn simulate_one(a: &mut Adventure, i: u32) {
+        let site = IVec3::new((i / 4) as i32 * 31, 2, (i / 4) as i32 * -17);
+        if let Some(salt) = drop_roll(site, i % 4, 1) {
+            a.discover_drop(salt);
+        }
+    }
+
+    #[test]
+    fn peeking_a_tier_ahead_is_the_exception() {
+        let mut a = fresh(1);
+        let (found, ahead) = simulate(&mut a, 300, 2);
+        assert!(found > 20);
+        assert!(
+            (ahead as f32) / (found as f32) < 0.35,
+            "{ahead} of {found} finds were beyond the wand"
+        );
+        assert!(ahead > 0, "a tier-ahead find should be possible");
+    }
+
+    #[test]
+    fn guaranteed_finds_ignore_the_slowdown() {
+        // With almost nothing left in the tier, drops are throttled, but a site
+        // clear or wand upgrade must always teach something while any spell is
+        // still undiscovered.
+        let mut a = fresh(1);
+        while a.current_tier_pool().len() > 1 {
+            let n = a.current_tier_pool().len() as u32;
+            a.discover_with(n);
+        }
+        let throttled = (0..200u32).filter(|&s| a.clone_log_drop(s).is_none()).count();
+        assert!(throttled > 60, "drops should thin out, got {throttled}/200 misses");
+        assert!(a.discover_with(1).is_some());
+    }
+
+    impl Adventure {
+        /// Test helper: would this salt find a spell, without keeping the find.
+        fn clone_log_drop(&self, salt: u32) -> Option<u32> {
+            let saved = self.spell_log;
+            let mut probe = Adventure::default();
+            probe.wand = self.wand;
+            probe.spell_log = saved;
+            probe.discover_drop(salt)
+        }
     }
 }
