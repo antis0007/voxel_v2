@@ -213,7 +213,7 @@ impl SaveService {
         }
         let result = (|| -> Result<Option<Job>> {
             let header = session_header(w, player, day)?;
-            let footer = session_footer(w);
+            let footer = session_footer(w, super::SAVE_VERSION);
             let Some(edits) = w.capture_edits()? else {
                 return Ok(None);
             };
@@ -268,7 +268,8 @@ pub(super) fn write_atomic(path: &Path, bytes: &[u8], serial: u64) -> Result<()>
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(&temporary, path).with_context(|| format!("Cannot publish checkpoint {}", path.display()))?;
+    fs::rename(&temporary, path)
+        .with_context(|| format!("Cannot publish checkpoint {}", path.display()))?;
     Ok(())
 }
 fn persist(job: Job) -> Result<Completed> {
@@ -377,7 +378,7 @@ fn references(bytes: &[u8]) -> Result<(String, HashSet<(IVec3, u64)>)> {
     }
     let mut d = Decoder {
         bytes: &bytes[..bytes.len() - 8],
-        offset: if version >= 12 {176} else {164},
+        offset: if version >= 12 { 176 } else { 164 },
     };
     let len = d.u32()? as usize;
     ensure!((1..=96).contains(&len), "Invalid world identity");

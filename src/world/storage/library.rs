@@ -74,7 +74,10 @@ fn header(path: &Path) -> Result<Header> {
     let mut prefix = vec![0u8; 168];
     file.read_exact(&mut prefix)?;
     let version = save_version(&prefix)?;
-    if version >= 12 { prefix.resize(180,0); file.read_exact(&mut prefix[168..])?; }
+    if version >= 12 {
+        prefix.resize(180, 0);
+        file.read_exact(&mut prefix[168..])?;
+    }
     let word = |offset| u32::from_le_bytes(prefix[offset..offset + 4].try_into().unwrap());
     let kind = match word(16) {
         0 => WorldType::Superflat,
@@ -101,7 +104,7 @@ fn header(path: &Path) -> Result<Header> {
             word(164),
         )
     } else {
-        let count = word(if version >= 12 {176} else {164}) as usize;
+        let count = word(if version >= 12 { 176 } else { 164 }) as usize;
         ensure!((1..=96).contains(&count), "Invalid world identity length");
         let mut name = vec![0; count];
         file.read_exact(&mut name)?;

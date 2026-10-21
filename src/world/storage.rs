@@ -11,7 +11,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV16";
+const MAGIC: &[u8; 8] = b"VXWSAV19";
+/// Current writer version. Companion bytes follow the adventure block from 18;
+/// the found-spell log (3 words) follows the companion from 19.
+pub(crate) const SAVE_VERSION: u8 = 19;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -24,7 +27,7 @@ fn save_version(bytes: &[u8]) -> Result<u8> {
     } else {
         anyhow::bail!("Unsupported save format")
     };
-    ensure!((1..=16).contains(&version), "Unsupported save version");
+    ensure!((1..=19).contains(&version), "Unsupported save version");
     Ok(version)
 }
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -71,8 +74,8 @@ impl Decoder<'_> {
 }
 
 mod paths;
-pub use paths::save_directory;
 pub(crate) use paths::preference_read_path;
+pub use paths::save_directory;
 mod background;
 mod library;
 pub use background::{
@@ -113,9 +116,21 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
         player.pos.x,
         player.pos.y,
         player.pos.z,
-        if player.precise_pos.as_vec3() == player.pos { (player.precise_pos.x - player.pos.x as f64) as f32 } else { 0.0 },
-        if player.precise_pos.as_vec3() == player.pos { (player.precise_pos.y - player.pos.y as f64) as f32 } else { 0.0 },
-        if player.precise_pos.as_vec3() == player.pos { (player.precise_pos.z - player.pos.z as f64) as f32 } else { 0.0 },
+        if player.precise_pos.as_vec3() == player.pos {
+            (player.precise_pos.x - player.pos.x as f64) as f32
+        } else {
+            0.0
+        },
+        if player.precise_pos.as_vec3() == player.pos {
+            (player.precise_pos.y - player.pos.y as f64) as f32
+        } else {
+            0.0
+        },
+        if player.precise_pos.as_vec3() == player.pos {
+            (player.precise_pos.z - player.pos.z as f64) as f32
+        } else {
+            0.0
+        },
         player.yaw,
         player.pitch,
         player.scale,
@@ -164,7 +179,7 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
     }
     Ok(bytes)
 }
-fn session_footer(world: &World) -> Vec<u8> {
+fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     let mut bytes = Vec::new();
     for amount in world.expedition.resources {
         push(&mut bytes, amount);
@@ -174,13 +189,26 @@ fn session_footer(world: &World) -> Vec<u8> {
     push(&mut bytes, u32::from(world.expedition.lamp));
     world.factory.encode(&mut bytes);
     world.adventure.encode(&mut bytes);
+    if save_version >= 18 {
+        world.adventure.encode_companion(&mut bytes);
+    }
+    if save_version >= 19 {
+        world.adventure.encode_spell_log(&mut bytes);
+    }
+    if save_version >= 17 {
+        world.undercrown.encode(&mut bytes);
+    }
     world.sandbox.encode(&mut bytes);
     world.inventory.encode(&mut bytes);
     push(&mut bytes, world.inventory.dropped.len() as u32);
     for drop in &world.inventory.dropped {
-        for v in drop.pos.to_array() { push(&mut bytes, v.to_bits()); }
+        for v in drop.pos.to_array() {
+            push(&mut bytes, v.to_bits());
+        }
         let (kind, payload) = drop.stack.item.encode_u32();
-        for v in [kind, payload, drop.stack.count] { push(&mut bytes, v); }
+        for v in [kind, payload, drop.stack.count] {
+            push(&mut bytes, v);
+        }
     }
     bytes
 }
@@ -286,8 +314,11 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
     player.pos = Vec3::new(input.float()?, input.float()?, input.float()?);
     player.precise_pos = player.pos.as_dvec3();
     if version_twelve {
-        let residual=Vec3::new(input.float()?,input.float()?,input.float()?);
-        ensure!(residual.abs().max_element()<=0.125,"Invalid player coordinate residual");
+        let residual = Vec3::new(input.float()?, input.float()?, input.float()?);
+        ensure!(
+            residual.abs().max_element() <= 0.125,
+            "Invalid player coordinate residual"
+        );
         player.precise_pos += residual.as_dvec3();
     }
     ensure!(
@@ -457,12 +488,28 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                 version_eleven,
                 version >= 16,
             )?;
+            if version >= 18 {
+                world.adventure.companion =
+                    super::adventure::Adventure::decode_companion(&mut || input.u32())?;
+            }
+            // Saves before 19 predate discovery: every spell stays found, so a
+            // player never loses access to something they already owned.
+            if version >= 19 {
+                world.adventure.spell_log =
+                    super::adventure::Adventure::decode_spell_log(&mut || input.u32())?;
+            }
+        }
+        if version >= 17 {
+            world.undercrown = super::undercrown::State::decode(&mut || input.u32())?;
         }
         if version_twelve {
             world.sandbox = crate::simulation::sandbox::Sandbox::decode(&mut || input.u32())?;
         }
         if version_thirteen {
-            world.inventory = super::inventory::SurvivalInventory::decode_at_scale(&mut || input.u32(), world.voxel_scale.meters())?;
+            world.inventory = super::inventory::SurvivalInventory::decode_at_scale(
+                &mut || input.u32(),
+                world.voxel_scale.meters(),
+            )?;
             if version >= 16 {
                 let count = input.u32()?;
                 ensure!(count <= 1024, "Too many dropped stacks");
@@ -470,13 +517,29 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                     let pos = Vec3::new(input.float()?, input.float()?, input.float()?);
                     let item = super::inventory::Item::decode_u32(input.u32()?, input.u32()?)?;
                     let count = input.u32()?;
-                    ensure!(count > 0 && count <= world.inventory.stack_limit(item), "Invalid dropped stack");
-                    world.inventory.dropped.push(super::inventory::DroppedStack { pos, stack: super::inventory::ItemStack { item, count } });
+                    ensure!(
+                        count > 0 && count <= world.inventory.stack_limit(item),
+                        "Invalid dropped stack"
+                    );
+                    world
+                        .inventory
+                        .dropped
+                        .push(super::inventory::DroppedStack {
+                            pos,
+                            stack: super::inventory::ItemStack { item, count },
+                        });
                 }
             }
             world.sync_from_inventory();
         } else {
             world.migrate_legacy_save_to_inventory();
+        }
+        if world.ensure_starter_wand() {
+            // Pre-wand saves could load without any discoverable route to
+            // spellcasting. Grant the same Lumen Twig a fresh world receives.
+            world.expedition.say(
+                "Lumen Twig attuned. Hold R to cast, T cycles spells, and E → Gear arranges the deck.",
+            );
         }
         if version_nine {
             world.activity = super::activity::Activity::decode(&mut || input.u32(), version_ten)?;
@@ -626,7 +689,10 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
 }
 
 /// Explicit opt-in runtime review uses the production checkpoint decoder.
-pub(crate) fn load_review_checkpoint()->Result<SavedSession>{let path=quicksave_path();load_exact(&path,&path)}
+pub(crate) fn load_review_checkpoint() -> Result<SavedSession> {
+    let path = quicksave_path();
+    load_exact(&path, &path)
+}
 
 #[cfg(test)]
 mod tests {
@@ -638,10 +704,7 @@ mod tests {
 
     #[test]
     fn save_and_load_preserves_survival_inventory_and_migrates_v12() {
-        let dir = std::env::temp_dir().join(format!(
-            "voxel_inv_save_test_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("voxel_inv_save_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let save_path = dir.join("world.dat");
@@ -656,10 +719,20 @@ mod tests {
             1,
         ));
         world.inventory.craft_grid[0] = Some(ItemStack::new(Item::Block(BlockId::Planks), 3));
-        world.inventory.pack[11] = Some(ItemStack { item: Item::Block(BlockId::Stone), count: 512 });
-        world.inventory.dropped.push(super::super::inventory::DroppedStack {
-            pos: Vec3::new(2.0, 4.0, -3.0), stack: ItemStack {item: Item::Block(BlockId::Stone), count: 400},
+        world.inventory.pack[11] = Some(ItemStack {
+            item: Item::Block(BlockId::Stone),
+            count: 512,
         });
+        world
+            .inventory
+            .dropped
+            .push(super::super::inventory::DroppedStack {
+                pos: Vec3::new(2.0, 4.0, -3.0),
+                stack: ItemStack {
+                    item: Item::Block(BlockId::Stone),
+                    count: 400,
+                },
+            });
         world.sync_from_inventory();
 
         let player = Player::new();
@@ -672,7 +745,7 @@ mod tests {
         bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
         bytes.extend_from_slice(region_name);
         bytes.extend_from_slice(&0u32.to_le_bytes()); // 0 regions
-        let mut footer = session_footer(&world);
+        let mut footer = session_footer(&world, SAVE_VERSION);
         world.activity.snapshot().encode(&mut footer);
         bytes.extend_from_slice(&footer);
         bytes.extend_from_slice(&1u64.to_le_bytes()); // commit_id
@@ -684,7 +757,10 @@ mod tests {
         assert_eq!(loaded.world.inventory.pack[11].unwrap().count, 512);
         assert_eq!(loaded.world.inventory.dropped.len(), 1);
         assert_eq!(loaded.world.inventory.dropped[0].stack.count, 400);
-        assert_eq!(loaded.world.inventory.dropped[0].pos, Vec3::new(2.0,4.0,-3.0));
+        assert_eq!(
+            loaded.world.inventory.dropped[0].pos,
+            Vec3::new(2.0, 4.0, -3.0)
+        );
         assert_eq!(
             loaded.world.inventory.hotbar[0],
             Some(ItemStack::new(Item::Weapon(2), 1))
@@ -712,6 +788,36 @@ mod tests {
             loaded.world.inventory.craft_grid[0],
             Some(ItemStack::new(Item::Block(BlockId::Planks), 3))
         );
+        assert!(loaded.world.undercrown.is_empty());
+
+        // A synthetic v17 manifest proves the Undercrown state layout before
+        // production starts writing version 17.
+        let mut v17_world = World::new(WorldType::Superflat, VoxelScalePreset::HalfMeter);
+        let record = crate::world::undercrown::ObjectId::new(2, 3, 4).unwrap();
+        assert!(v17_world.undercrown.set(
+            record,
+            crate::world::undercrown::flags::DISCOVERED | crate::world::undercrown::flags::OPEN
+        ));
+        let mut v17_bytes = Vec::with_capacity(512);
+        let mut v17_header = session_header(&v17_world, &player, &day_night).unwrap();
+        v17_header[..8].copy_from_slice(b"VXWSAV17");
+        v17_bytes.extend_from_slice(&v17_header);
+        v17_bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
+        v17_bytes.extend_from_slice(region_name);
+        v17_bytes.extend_from_slice(&0u32.to_le_bytes());
+        let mut v17_footer = session_footer(&v17_world, 17);
+        v17_world.activity.snapshot().encode(&mut v17_footer);
+        v17_bytes.extend_from_slice(&v17_footer);
+        v17_bytes.extend_from_slice(&3u64.to_le_bytes());
+        let v17_crc = checksum(&v17_bytes);
+        v17_bytes.extend_from_slice(&v17_crc.to_le_bytes());
+        let v17_path = dir.join("world_v17.dat");
+        std::fs::write(&v17_path, &v17_bytes).unwrap();
+        let loaded_v17 = load_exact(&v17_path, &dir).unwrap();
+        assert_eq!(
+            loaded_v17.world.undercrown.get(record),
+            crate::world::undercrown::flags::DISCOVERED | crate::world::undercrown::flags::OPEN
+        );
 
         // Now construct a legacy V12 save (without the V13 inventory section) and verify migration
         let mut v12_world = World::new(WorldType::Superflat, VoxelScalePreset::HalfMeter);
@@ -730,7 +836,10 @@ mod tests {
             push(&mut v12_bytes, amount);
         }
         push(&mut v12_bytes, v12_world.expedition.tool_tier);
-        push(&mut v12_bytes, u32::from(v12_world.expedition.workshop_found));
+        push(
+            &mut v12_bytes,
+            u32::from(v12_world.expedition.workshop_found),
+        );
         push(&mut v12_bytes, u32::from(v12_world.expedition.lamp));
         v12_world.factory.encode(&mut v12_bytes);
         v12_world.adventure.encode(&mut v12_bytes);
@@ -763,5 +872,65 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
 
+    /// Builds a manifest the way the production writer does, but at an explicit
+    /// footer version, so older layouts can be loaded through the real decoder.
+    fn synth_save(world: &World, version: u8, dir: &Path, name: &str) -> PathBuf {
+        let player = Player::new();
+        let day_night = DayNightCycle::default();
+        let mut bytes = Vec::with_capacity(512);
+        let mut header = session_header(world, &player, &day_night).unwrap();
+        header[..8].copy_from_slice(format!("VXWSAV{version:02}").as_bytes());
+        bytes.extend_from_slice(&header);
+        let region_name = b"test-world";
+        bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(region_name);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let mut footer = session_footer(world, version);
+        world.activity.snapshot().encode(&mut footer);
+        bytes.extend_from_slice(&footer);
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        let crc = checksum(&bytes);
+        bytes.extend_from_slice(&crc.to_le_bytes());
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn found_spells_are_saved_from_v19_and_older_saves_keep_every_spell() {
+        use crate::world::adventure::discovery::SpellLog;
+        let dir = std::env::temp_dir().join(format!("voxel_spell_log_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut world = World::new(WorldType::Superflat, VoxelScalePreset::HalfMeter);
+        world.adventure.begin_journey();
+        world.adventure.spell_log.add(29);
+        assert_ne!(world.adventure.spell_log, SpellLog::all());
+
+        let current = synth_save(&world, 19, &dir, "world_v19.dat");
+        let loaded = load_exact(&current, &dir).unwrap();
+        assert_eq!(loaded.world.adventure.spell_log, world.adventure.spell_log);
+        assert!(loaded.world.adventure.spell_log.has(29));
+        assert!(!loaded.world.adventure.spell_log.has(3));
+
+        // A v18 file has no log block. It must still decode, and the player
+        // must keep everything: discovery never takes spells away.
+        let legacy = synth_save(&world, 18, &dir, "world_v18.dat");
+        let old = load_exact(&legacy, &dir).unwrap();
+        assert_eq!(old.world.adventure.spell_log, SpellLog::all());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_version_17_is_accepted_and_magic_agrees() {
+        assert_eq!(save_version(b"VXWSAV17").unwrap(), 17);
+        assert_eq!(save_version(b"VXWSAV18").unwrap(), 18);
+        assert_eq!(save_version(b"VXWSAV19").unwrap(), 19);
+        assert!(save_version(b"VXWSAV20").is_err());
+        let magic_version = ((MAGIC[6] - b'0') * 10 + (MAGIC[7] - b'0')) as u8;
+        assert_eq!(magic_version, SAVE_VERSION);
+    }
+}
