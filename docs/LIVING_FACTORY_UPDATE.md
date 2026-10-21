@@ -29,6 +29,31 @@ The factory simulation remains capped at 1,024 assemblies; detailed model select
 is distance ordered and bounded. Machine chassis retain conservative collision
 envelopes. Moving parts are visual, not rigid-body crushing hazards.
 
+## Smelting interface
+
+Electric furnaces and alloy kilns now open a dedicated smelting panel instead of
+the generic machine card. It shows the active recipe, input dust/ore, output
+ingots, energy, batch progress, the next available recipe, and the machine's
+operating state. Furnaces expose the copper/tin/iron smelting recipes directly;
+alloy kilns retain their bronze/steel mode selector. Load, unload, pause, and
+drive upgrades remain available without leaving the panel.
+
+## Fluid and gas cost controls
+
+The cellular simulation keeps its fixed-step, conservative behavior but no
+longer spends a full catch-up budget every rendered frame on fine worlds:
+
+- The tick floor is 30 Hz, with a 2.5 ms shared simulation budget and a
+  768-cell cap per tick.
+- The near-active chunk list is rebuilt when the player crosses a chunk or
+  every 500 ms, rather than every 125 ms.
+- Hydraulic outlet searches are staggered across water cells instead of
+  running from every still pool cell on every tick.
+- Smoke and steam advance on alternating ticks; fire, lava and phase changes
+  remain on every tick.
+- Thermal neighbour data uses a fixed stack array, and unheated water skips the
+  sandbox temperature lookup.
+
 ## Production beyond ingots
 
 Use **F** to inspect a machine, then **E** for its inventory, recipe, upgrades and

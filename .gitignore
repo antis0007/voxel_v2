@@ -23,9 +23,15 @@ target
 # Local world saves
 saves/
 
+# Local downloads (yt-dlp media, reference videos)
+downloads/
+
 # Local run scratch
 *.log
 out.txt
 run_error.txt
 *.exe
 run-*.cmd
+
+# Tool scratch (brainstorm servers, pids)
+.superpowers/

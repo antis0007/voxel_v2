@@ -47,8 +47,9 @@ powered machines continue their normal independent operation.
 | Source jobs | Eight outstanding, including queued, running and completed results; 4 MiB reserved per job |
 | Source workers | One or two, with epoch cancellation and restart backoff |
 | Machine source admission | Leaves two outstanding-job slots for cellular fronts |
-| Cellular service | At most 1,024 cells / 128 chunk visits per update, with an approximately 3 ms total scheduler cutoff checked between operations |
-| World-facing machine service | Approximately 1 ms within that scheduler update |
+| Cellular service | At most 768 cells / 128 chunk visits per update, sharing a 2.5 ms total scheduler deadline checked between operations |
+| World-facing machine service | At most 750 µs within the shared scheduler deadline |
+| Rigid assemblies | At most 600 µs within the shared scheduler deadline |
 | Source integration | At most eight results / approximately 0.5 ms between integrations |
 | Recovery enumeration | One on-demand worker and a two-coordinate result channel; one chunk admitted per update |
 
@@ -144,6 +145,12 @@ retain their existing node cap and are not fully incremental. Distant activity
 is budgeted, not guaranteed to run at the same rate as nearby activity under
 overload. Actual throughput, conservation during runtime pressure, long-flight
 behaviour and save/recovery acceptance remain unmeasured.
+
+The follow-up water/fire pass adds paired water commits, a shared frame
+deadline, hash-backed thermal cells and surface-contact splashes. See
+[WATER_FIRE_PHYSICS_PASS.md](WATER_FIRE_PHYSICS_PASS.md). The solver is still a
+conservative quantised voxel-volume model, not an SPH or incompressible
+pressure-projection solver.
 
 Local verification: `cargo check --offline --target-dir target` and
 `cargo build --release --offline --target-dir target`. Diagnostics are in

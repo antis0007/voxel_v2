@@ -1,0 +1,12 @@
+# Canonical pixel-art palette shared by Rust sprites and Python generators.
+# Colors are sRGB hex. Surface shading uses channel multipliers, not linear
+# gamma tricks, so every generator produces the same six-role ramp.
+outline=1d1f22
+paper=ebe1c5
+gold=daad60
+ember=c16631
+teal=65b7af
+highlight=f7e49f
+shade=0.62
+bottom_shade=0.76
+top_light_mix=0.20

@@ -12,7 +12,24 @@ Craft the first lumen wand, open **E → Gear**, choose a slot, then choose its 
 
 Hold **R** to cast; **T** moves to the next filled slot. The compact HUD shows the actual deck and next slot. The deck, cursor and mode persist in save format 16; earlier saves start with their previously selected spell in the first slot. That format also contains the concurrent inventory/drop changes.
 
-Useful combinations: **Frost → Spark** in Impact mode chills and then shatters an enemy; **Spark → Burst** carries an explosive payload. Burst now queues a two-metre terrain crater and damages the player within its three-metre combat blast. Craters use the same bounded editing path as tools, allowing existing water/sediment systems to respond. Material edits are applied over frames rather than forcing a large synchronous world rebuild.
+Useful combinations: **Frost → Spark** in Impact mode chills and then shatters an enemy; **Spark → Burst** carries an explosive payload. Burst now queues a two-metre terrain crater and damages the player within its three-metre combat blast. Spell craters use the bounded editing path but skip the mining/inventory pipeline: ordinary stone is removed, not auto-collected, so a multi-projectile burst cannot fill the pack or stall on per-voxel inventory work. Direct area spells (freeze, heat, transmute) submit one `set_many` transaction per cast instead of one world write per voxel.
+
+## Combination limits
+
+The ordered deck still rewards stacking, but no longer compounds without bounds:
+
+- Bifurcate/Trifurcate cap at **four draws per cast**.
+- Orbit/Ricochet, Heavy Bore and Elemental Wake add **+22% / +35% / +12%** damage under a **2.6× damage cap**; ricochets cap at four.
+- Rapid Flux refunds at most **20 mana per cast**; repeated copies do not stack the refund, and cast-delay/recharge reductions stop at one copy's allowance.
+- At most four explosive terrain craters may be pending at once.
+
+## Tree felling and additional magic
+
+- **Timberfall (24)** finds a nearby trunk, removes the connected canopy immediately, and converts the remaining logs into a rigid assembly with a sideways impulse. Once that assembly settles, every log is returned as an item; a full pack leaves recoverable world drops.
+- The same felling path is used by hand chopping, drills, black holes, spell craters, and player explosive tools.
+- **Gale (25)** applies the shared rigid-body/enemy radial impulse, giving a non-damaging movement option that can relocate loose assemblies.
+- **Volatile edge (26)** adds a small impact crater and radial impulse.
+- **Siphon (27)** restores a little health on a direct projectile hit.
 
 ## Scale and targeting fixes
 
@@ -37,6 +54,8 @@ Runtime findings and repairs:
 - Tool explosions queued sound after the audio drain, then the next simulation tick erased it. Audio drains after all producers. Native follow-up reports the Windows audio device ready; this is not a subjective listening assessment.
 - Blast feedback now has a pressure ring, flash lighting, material fragments and dust in metre coordinates. The committed preview stays fixed during execution and for a short recovery interval. Detonation requires a fresh click.
 - Ordinary blast harvesting no longer rebuilds every legacy inventory/resource counter per tiny voxel. It synchronizes once per frame, with a bounded 4 ms blast edit budget (ordinary edits retain 2 ms). At quarter scale the 8 m fixture blast dropped from about 1,881 ms to 140 ms to drain the edit queue; 4 m dropped from about 350 ms to 20 ms. These are observed edit-completion times, not frame-rate or mesh-presentation guarantees.
+- Spell craters use a separate no-harvest path and do not call `sync_from_inventory` every edit frame. Drill/singularity carving harvests only ore/cache blocks; ordinary terrain is a direct removal.
+- Freeze, heat and transmutation spells batch their block changes through `World::set_many`, keeping one world revision per cast rather than one per voxel.
 - A full pack no longer prevents ordinary terrain destruction. Overflow remains as recoverable world stacks, respecting saved-stack size/count limits. Cache and machine inventory safeguards remain in place.
 - Hand/brush/area idle previews match left-click removal; Alt previews right-click placement. Tool HUD corners are square and explosive size is displayed as a radius.
 

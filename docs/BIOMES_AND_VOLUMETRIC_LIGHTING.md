@@ -10,7 +10,7 @@
 
 Launch `run-biomes-volumetric.cmd`. The separate executable leaves an already-running game untouched.
 
-New worlds use terrain generator 10. Existing saves retain their generator version and terrain; create a new world to see the new biome regions. Generator versions 1–10 remain loadable.
+New worlds use terrain generator 22. Existing saves retain their generator version and terrain; create a new world to see the reworked beaches and surf profile. Generator versions 1–22 remain loadable.
 
 - Savanna: warm, moderately dry grassland, bare soil patches, sparse flat-crowned trees.
 - Rainforest: warm, wet forest, clustered tall broadleaf canopies and muddy patches.

@@ -8,6 +8,11 @@
   Strong positive noise inflation made this worse. Cores and shoulders now
   close above their local floor; cell-scale height offsets and restrained noise
   preserve rounded silhouettes. Stratiform weather retains its own deck mask.
+- Aerial-perspective LUT depth now uses a cubic meter-distance mapping with
+  48×48×32 texels, keeping more resolution on near/mid terrain and reducing
+  fog quantization as surfaces cross depth-slice boundaries.
+- Local mist smooths vertex-baked sky access at cave mouths and fades in over
+  the first few metres instead of switching on at the near-clearance ring.
 - `src/shaders/atmosphere_shared.wgsl::runtime_sky_view_atmosphere_color`:
   the planetary LUT's downward ground intersection formed a dark rim behind
   the local landscape. A smooth continuation of tangent sky radiance now covers
