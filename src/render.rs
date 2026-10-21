@@ -896,12 +896,6 @@ const REVERSE_Z: Mat4 = Mat4::from_cols(
     Vec4::new(0.0, 0.0, 1.0, 1.0),
 );
 
-fn unproject_clip(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
-    let clip = Vec4::new(ndc.x, ndc.y, ndc.z, 1.0);
-    let world = inv_view_proj * clip;
-    world.truncate() / world.w.max(1e-6)
-}
-
 struct DynamicVertexBuffer {
     buffer: wgpu::Buffer,
     capacity: usize,
@@ -2978,15 +2972,6 @@ impl Gpu {
         &self.adapter_summary
     }
 
-    pub async fn new(window: Arc<Window>) -> Result<Self> {
-        let bootstrap = GpuBootstrap::new(window).await?;
-        let mut pending = bootstrap.into_pending_init();
-        loop {
-            if let Some(gpu) = pending.step()? {
-                return Ok(gpu);
-            }
-        }
-    }
     fn create_world_surface_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -3193,64 +3178,6 @@ impl Gpu {
                 },
             ],
         })
-    }
-
-    fn hash_u32(mut x: u32) -> u32 {
-        x ^= x >> 16;
-        x = x.wrapping_mul(0x7feb352d);
-        x ^= x >> 15;
-        x = x.wrapping_mul(0x846ca68b);
-        x ^= x >> 16;
-        x
-    }
-
-    fn hash01(x: u32) -> f32 {
-        Self::hash_u32(x) as f32 / u32::MAX as f32
-    }
-
-    fn smoothstep01(x: f32) -> f32 {
-        let x = x.clamp(0.0, 1.0);
-        x * x * (3.0 - 2.0 * x)
-    }
-
-    fn value_noise_2d(x: f32, y: f32, seed: u32) -> f32 {
-        fn lattice(ix: i32, iy: i32, seed: u32) -> f32 {
-            let v = (ix as u32).wrapping_mul(374_761_393)
-                ^ (iy as u32).wrapping_mul(668_265_263)
-                ^ seed.wrapping_mul(2_246_822_519);
-            Gpu::hash_u32(v) as f32 / u32::MAX as f32
-        }
-
-        let x0 = x.floor() as i32;
-        let y0 = y.floor() as i32;
-        let fx = x - x.floor();
-        let fy = y - y.floor();
-        let sx = Self::smoothstep01(fx);
-        let sy = Self::smoothstep01(fy);
-
-        let a = lattice(x0, y0, seed);
-        let b = lattice(x0 + 1, y0, seed);
-        let c = lattice(x0, y0 + 1, seed);
-        let d = lattice(x0 + 1, y0 + 1, seed);
-
-        let x1 = a + (b - a) * sx;
-        let x2 = c + (d - c) * sx;
-        x1 + (x2 - x1) * sy
-    }
-
-    fn fbm_noise_2d(x: f32, y: f32, seed: u32, octaves: usize) -> f32 {
-        let mut sum = 0.0f32;
-        let mut amp = 0.5f32;
-        let mut freq = 1.0f32;
-        let mut norm = 0.0f32;
-        for octave in 0..octaves.max(1) {
-            sum += Self::value_noise_2d(x * freq, y * freq, seed.wrapping_add(octave as u32 * 977))
-                * amp;
-            norm += amp;
-            freq *= 2.03;
-            amp *= 0.5;
-        }
-        if norm > 0.0 { sum / norm } else { 0.0 }
     }
 
     /// Upload pre-computed shape noise data (128³, RGBA8) to a GPU texture.
@@ -3466,68 +3393,6 @@ impl Gpu {
             },
         );
         tex.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    /// True 2D gradient (Perlin) noise with quintic interpolation.
-    /// Returns a value in [0, 1] (remapped from the raw [-~0.7, ~0.7] range).
-    fn perlin_2d(x: f32, y: f32, seed: u32) -> f32 {
-        // 8 unit-circle gradient directions
-        const GRADS: [[f32; 2]; 8] = [
-            [1.0, 0.0],
-            [-1.0, 0.0],
-            [0.0, 1.0],
-            [0.0, -1.0],
-            [0.707, 0.707],
-            [-0.707, 0.707],
-            [0.707, -0.707],
-            [-0.707, -0.707],
-        ];
-        let x0 = x.floor() as i32;
-        let y0 = y.floor() as i32;
-        let xf = x - x.floor();
-        let yf = y - y.floor();
-        // Quintic smoothstep for C2 continuity
-        let sx = xf * xf * xf * (xf * (xf * 6.0 - 15.0) + 10.0);
-        let sy = yf * yf * yf * (yf * (yf * 6.0 - 15.0) + 10.0);
-
-        let corner_hash = |cx: i32, cy: i32| -> usize {
-            let mut h = (cx as u32).wrapping_mul(374_761_393)
-                ^ (cy as u32).wrapping_mul(668_265_263)
-                ^ seed;
-            h ^= h >> 13;
-            h = h.wrapping_mul(0x5bd1e995);
-            h ^= h >> 15;
-            (h % 8) as usize
-        };
-        let dot = |cx: i32, cy: i32, dx: f32, dy: f32| -> f32 {
-            let g = GRADS[corner_hash(cx, cy)];
-            g[0] * dx + g[1] * dy
-        };
-        let n00 = dot(x0, y0, xf, yf);
-        let n10 = dot(x0 + 1, y0, xf - 1.0, yf);
-        let n01 = dot(x0, y0 + 1, xf, yf - 1.0);
-        let n11 = dot(x0 + 1, y0 + 1, xf - 1.0, yf - 1.0);
-        let ix0 = n00 + (n10 - n00) * sx;
-        let ix1 = n01 + (n11 - n01) * sx;
-        let v = ix0 + (ix1 - ix0) * sy;
-        // Perlin range ~[-0.7, 0.7] → remap to [0, 1]
-        (v / 0.7 * 0.5 + 0.5).clamp(0.0, 1.0)
-    }
-
-    /// FBM using perlin_2d with INCOMMENSURABLE frequency ratios.
-    /// Exact powers-of-2 cause constructive interference that reinstates the
-    /// fundamental tiling period — incommensurable ratios prevent this.
-    fn fbm_perlin_2d(x: f32, y: f32, seed: u32, octaves: usize) -> f32 {
-        const FREQS: [f32; 6] = [1.0, 2.13, 4.31, 8.73, 17.11, 34.37];
-        const AMPS: [f32; 6] = [0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625];
-        let n = octaves.min(6);
-        let norm: f32 = AMPS[..n].iter().sum();
-        let mut sum = 0.0f32;
-        for i in 0..n {
-            let s = seed ^ (i as u32).wrapping_mul(0x9e3779b9);
-            sum += Self::perlin_2d(x * FREQS[i], y * FREQS[i], s) * AMPS[i];
-        }
-        (sum / norm).clamp(0.0, 1.0)
     }
 
     /// Create a weather clipmap texture array.
@@ -3984,10 +3849,6 @@ impl Gpu {
         self.config.width as f32 / self.config.height.max(1) as f32
     }
 
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.config.format
-    }
-
     pub fn size(&self) -> PhysicalSize<u32> {
         self.size
     }
@@ -4057,25 +3918,6 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         Ok(())
-    }
-    pub fn render_cached(
-        &mut self,
-        chunk_cache: &ChunkCache,
-        draw_list: &[ChunkKey],
-        outline_vertices: &[LineVertex],
-        invert_outline_vertices: &[LineVertex],
-        ui_vertices: &[UiVertex],
-        paused: bool,
-    ) -> Result<(), wgpu::SurfaceError> {
-        self.render_cached_with_overlay(
-            chunk_cache,
-            draw_list,
-            outline_vertices,
-            invert_outline_vertices,
-            ui_vertices,
-            paused,
-            |_, _, _, _, _, _| {},
-        )
     }
 
     pub fn render_cached_with_overlay<F>(

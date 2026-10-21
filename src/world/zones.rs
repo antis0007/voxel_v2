@@ -134,18 +134,6 @@ const ASPECTS: [Aspect; 8] = [
 ];
 
 impl Aspect {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Breathing => "breathing",
-            Self::Updraft => "updraft",
-            Self::Resonant => "resonant",
-            Self::Muffled => "muffled",
-            Self::Washed => "washed",
-            Self::Guttering => "guttering",
-            Self::Drifting => "drifting",
-            Self::Hungry => "hungry",
-        }
-    }
 
     fn bit(self) -> u8 {
         1 << ASPECTS.iter().position(|a| *a == self).unwrap_or(0)
@@ -159,10 +147,6 @@ pub struct Aspects(u8);
 impl Aspects {
     pub fn has(self, aspect: Aspect) -> bool {
         self.0 & aspect.bit() != 0
-    }
-
-    pub fn list(self) -> Vec<Aspect> {
-        ASPECTS.iter().copied().filter(|a| self.has(*a)).collect()
     }
 
     fn with(self, aspect: Aspect) -> Self {

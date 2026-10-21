@@ -203,7 +203,11 @@ fn vs_main(in: VsIn) -> VsOut {
     }
     var world_pos = model_pos * scale;
     let horiz_dist = length((world_pos - cam.camera_pos.xyz).xz);
-    if geometry_kind == 8.0 && in.normal.y > 0.5 && in.ao_strength >= 0.0 {
+    // A side wall's surface-level vertices (fractional y) ride the same waves as
+    // the top face they share a corner with, so the two never split apart.
+    let water_surface_side = geometry_kind == 8.0 && abs(in.normal.y) < 0.5
+        && in.ao_strength >= 0.0 && fract(in.pos.y) > 0.002;
+    if geometry_kind == 8.0 && (in.normal.y > 0.5 || water_surface_side) && in.ao_strength >= 0.0 {
         // Linear shoaling: wave height grows as the bed shallows, then the
         // displacement is damped in the last few centimetres of run-up so the
         // surface does not intersect the beach. The old gate did the opposite
@@ -1614,7 +1618,10 @@ fn fs_main(in: VsOut) -> WorldOutput {
     var water_depth = 10.0;
     var water_foam = 0.0;
     var water_jacobian = 1.0;
-    if kind == 8 && n.y > 0.5 {
+    // Walls of a pool or a flowing step get the same water body colour as the
+    // surface, without waves or foam. They used to be a flat teal albedo.
+    let water_side = kind == 8 && n.y <= 0.5 && in.surface.w >= 8.0 && in.ao_strength >= 0.0;
+    if kind == 8 && (n.y > 0.5 || water_side) {
         let t = light.torch_meta.y;
         let p = world_pos.xz;
         let fp = footprint * cam.world_params.x;
@@ -1700,7 +1707,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
                      + (rot1 * (n3.yz + cap_b.yz * 0.65)) * (0.021 * w3);
 
         let gradient = gerstner_grad + fbm_grad;
-        n = normalize(n + vec3<f32>(gradient.x, 0.0, gradient.y));
+        n = normalize(n + select(vec3<f32>(gradient.x, 0.0, gradient.y), vec3<f32>(0.0), water_side));
 
         let jac_compress = (0.34 * cos(ph0) + 0.31 * cos(ph1)) * w0
                          + (0.27 * cos(ph2) + 0.24 * cos(ph3)) * w1;
@@ -1728,7 +1735,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
             let bed_ripple = sin(dot(bed_p, vec2<f32>(0.82, 0.57)) * 3.6 + surface_noise(bed_p * 0.9) * 3.2)
                 * surface_detail_weight(fp * 3.0);
             let bed_grain = surface_noise_filtered(bed_p * 4.2, fp * 6.5);
-            let bed_detail = (0.91 + 0.09 * bed_ripple + 0.06 * (bed_grain - 0.5)) * (0.94 + 0.08 * cusp_x * w2);
+            // Bed and caustic patterns are functions of xz only: on a wall they would
+            // smear into vertical streaks, so walls keep the flat body colour.
+            let bed_detail = select((0.91 + 0.09 * bed_ripple + 0.06 * (bed_grain - 0.5)) * (0.94 + 0.08 * cusp_x * w2), 1.0, water_side);
             let refracted_bed = albedo * bed_detail;
 
             // Physical Beer-Lambert spectral absorption along the refracted ray + solar path.
@@ -1737,23 +1746,17 @@ fn fs_main(in: VsOut) -> WorldOutput {
             water_col = mix(water_col, water_col * (vec3<f32>(1.0) - transmission) + refracted_bed * transmission, local_water);
         }
 
-        // Dual-layer refracted sun caustics with subtle R/G/B chromatic dispersion.
-        let shallow_vis = exp(-depth * 0.52) * w2;
-        let c_uv = bed_p * 1.52 + n.xz * (refract_depth * 0.85);
-        let ca_r = surface_noise(c_uv + vec2<f32>(t * 0.44 + 0.035, -t * 0.32));
-        let cb_r = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38, t * 0.49 - 0.035));
-        let ca_g = surface_noise(c_uv + vec2<f32>(t * 0.44, -t * 0.32));
-        let cb_g = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38, t * 0.49));
-        let ca_b = surface_noise(c_uv + vec2<f32>(t * 0.44 - 0.035, -t * 0.32 + 0.025));
-        let cb_b = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38 - 0.025, t * 0.49 + 0.035));
-        let caustic_rgb = vec3<f32>(
-            smoothstep(0.58, 0.93, 1.0 - abs(ca_r - cb_r) * 2.25),
-            smoothstep(0.58, 0.93, 1.0 - abs(ca_g - cb_g) * 2.25),
-            smoothstep(0.58, 0.93, 1.0 - abs(ca_b - cb_b) * 2.25)
-        );
-        // Continuous caustic web: smoothstep already gives focused cores with
-        // soft chromatic falloff, and no tonal banding.
-        water_col += caustic_rgb * vec3<f32>(0.105, 0.145, 0.125) * shallow_vis;
+        // Dual-layer refracted sun caustics. One luminance web tinted by a fixed
+        // sun colour: per-channel offsets drew rainbow fringes along every
+        // caustic edge, which real shallow water does not show at this scale.
+        if !water_side {
+            let shallow_vis = exp(-depth * 0.52) * w2;
+            let c_uv = bed_p * 1.52 + n.xz * (refract_depth * 0.85);
+            let ca = surface_noise(c_uv + vec2<f32>(t * 0.44, -t * 0.32));
+            let cb = surface_noise((rot1 * c_uv) * 1.14 + vec2<f32>(-t * 0.38, t * 0.49));
+            let caustic = smoothstep(0.58, 0.93, 1.0 - abs(ca - cb) * 2.25);
+            water_col += caustic * vec3<f32>(0.105, 0.145, 0.125) * shallow_vis;
+        }
 
         // Cellular perforated shoreline swash foam & Jacobian-driven breaking whitecaps.
         let bubble_fine = surface_noise_filtered(bed_p * 5.8 + n1.yz * 1.1 + vec2<f32>(t * 0.25, -t * 0.19), fp * 12.0);
@@ -1797,7 +1800,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
             waterline * 0.35,
         );
 
-        let shore_band = (1.0 - smoothstep(0.06, 0.92, depth)) * mix(0.30, 1.0, local_water);
+        // Swash foam hugs the contact line (about 40 cm of depth), not every shallow.
+        let shore_band = (1.0 - smoothstep(0.04, 0.40, depth)) * mix(0.30, 1.0, local_water);
         let surf_ripple = sin(depth * 14.0 - t * 3.2 + alongshore * 0.18 + n0.x * 5.0 + n1.x * 3.2);
         let swash_crest = smoothstep(-0.12, 0.58, surf_ripple + (n2.x - 0.45) * 0.85);
         let run_up = 0.5 + 0.5 * sin(alongshore * 0.085 + t * 0.88 + n2.y * 1.8);
@@ -1810,16 +1814,25 @@ fn fs_main(in: VsOut) -> WorldOutput {
         ) * (0.45 + 0.55 * w1);
 
         let crest_strain = max(1.0 - water_jacobian, 0.0) + length(gradient) * 2.7;
-        let crest_whitecap = smoothstep(0.22, 0.40, crest_strain)
+        let crest_whitecap = smoothstep(0.34, 0.62, crest_strain)
             * (0.38 + 0.62 * foam_lace) * (1.0 - shore_band) * 0.44 * w1;
         let whitecap = crest_whitecap
             + break_front * (0.34 + 0.66 * foam_lace) * 0.55 * w1;
-        // Keep the water body on a limited palette and snap the foam to a small
-        // set of hard steps. The optics stay physical, but the visible surface
-        // joins the same authored pixel language as the terrain.
-        let water_step = floor(water_col * 14.0 + 0.5) / 14.0;
-        water_col = mix(water_col, water_step, 0.34);
-        water_foam = min(floor(clamp(shore_foam * 0.62 + whitecap, 0.0, 0.90) * 5.0 + 0.5) / 5.0, 0.90);
+        // The water body keeps its continuous optical colour: posterizing it
+        // produced visible contour bands across smooth depth gradients.
+        // Continuous foam: a smoothstep keeps the lace crisp without the five hard
+        // coverage steps, which showed as contour bands across shallow water.
+        // Walls read as a water body, not a flat slab: deeper toward the bed,
+        // a bright meniscus under the surface. voxel_pos is in voxel units, so
+        // the fraction is the height inside one voxel at any voxel scale.
+        if water_side {
+            let wall_h = fract(in.voxel_pos.y);
+            let body_fade = mix(0.58, 1.0, smoothstep(0.0, 0.9, wall_h));
+            let meniscus = smoothstep(0.80, 0.99, wall_h);
+            water_col = water_col * body_fade;
+            water_col = mix(water_col, vec3<f32>(0.66, 0.84, 0.84), meniscus * 0.55);
+        }
+        water_foam = select(0.90 * smoothstep(0.10, 0.90, shore_foam * 0.62 + whitecap), 0.0, water_side);
         albedo = mix(water_col, vec3<f32>(0.60, 0.66, 0.67), water_foam);
         roughness = mix(select(0.075, material_tint.w, material_tint.w >= 0.0), 0.48, water_foam);
     }

@@ -1517,14 +1517,6 @@ impl BlockId {
             || matches!(self.material().physics.matter_state, MatterState::Liquid)
     }
 
-    pub fn contributes_to_heightmap(self) -> bool {
-        self.material().tags.contributes_to_heightmap
-    }
-
-    pub fn render_in_lod_decor(self) -> bool {
-        self.material().tags.render_in_lod_decor
-    }
-
     pub fn is_torch(self) -> bool {
         matches!(
             self,
@@ -1593,13 +1585,6 @@ pub fn cycle_hotbar_block(current: BlockId, dir: i32) -> BlockId {
     blocks[next]
 }
 
-#[derive(Clone, Copy)]
-pub struct TerrainGenerationIds {
-    pub block_ids0: [u32; 4],
-    pub block_ids1: [u32; 4],
-    pub block_ids2: [u32; 4],
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1616,25 +1601,3 @@ mod tests {
     }
 }
 
-pub const fn terrain_generation_ids() -> TerrainGenerationIds {
-    TerrainGenerationIds {
-        block_ids0: [
-            BlockId::Air.as_u32(),
-            BlockId::Grass.as_u32(),
-            BlockId::Dirt.as_u32(),
-            BlockId::Stone.as_u32(),
-        ],
-        block_ids1: [
-            BlockId::Sand.as_u32(),
-            BlockId::Sandstone.as_u32(),
-            BlockId::SnowGrass.as_u32(),
-            BlockId::Water.as_u32(),
-        ],
-        block_ids2: [
-            BlockId::Log.as_u32(),
-            BlockId::Leaves.as_u32(),
-            BlockId::Bush.as_u32(),
-            BlockId::Gravel.as_u32(),
-        ],
-    }
-}

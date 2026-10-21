@@ -6,33 +6,6 @@ use super::{
 use crate::world::{adventure::View, expedition::NAMES};
 use egui::{Align2, Color32, Rect, RichText, vec2};
 
-pub(super) fn ward(ui: &mut egui::Ui, view: &View) {
-    if view.ward <= 0.0 || view.ward_hits == 0 {
-        return;
-    }
-    ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
-        icons::paint(ui.painter(), r, Icon::Spell(4));
-        for i in 0..3 {
-            let (r, _) = ui.allocate_exact_size(vec2(12.0, 8.0), egui::Sense::hover());
-            ui.painter().rect_filled(
-                r,
-                0,
-                if i < view.ward_hits {
-                    style::MANA
-                } else {
-                    style::INK
-                },
-            );
-        }
-        ui.label(
-            RichText::new(format!("Mirror ward  {:.1}s", view.ward))
-                .size(11.0)
-                .color(style::MUTED),
-        );
-    });
-}
-
 pub(super) fn reward(ctx: &egui::Context, view: &View) {
     if view.boss.is_some() {
         return;

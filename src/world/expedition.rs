@@ -178,15 +178,6 @@ impl Expedition {
         }
         true
     }
-    pub fn inventory(&self) -> String {
-        NAMES
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| self.resources[*i] > 0)
-            .map(|(i, name)| format!("{name}: {:.2}", self.resources[i] as f32 / UNIT as f32))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 }
 pub(crate) fn resource(block: B) -> Option<usize> {
     Some(match block {

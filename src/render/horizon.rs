@@ -910,3 +910,49 @@ mod sample_speed {
         );
     }
 }
+
+#[cfg(test)]
+mod seam_measure {
+    use crate::fluid::VoxelScalePreset;
+    use crate::world::{World, WorldType, distant_surface};
+
+    /// `cargo test --release seam_measure -- --ignored --nocapture`
+    /// Height step where a finer ring meets a coarser one. The coarse edge is
+    /// linearly interpolated between its nodes; the fine ring has real nodes
+    /// along the same line.
+    #[test]
+    #[ignore]
+    fn ring_boundary_steps() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        for coarse in [8i32, 16, 32] {
+            let fine = coarse / 2;
+            let (mut worst, mut sum, mut n) = (0.0f32, 0.0f32, 0);
+            // Boundary line x = 1000 m, z sweeps 0..1000 m.
+            for zi in 0..(1000 / fine) {
+                let z = zi * fine;
+                let a = distant_surface(&cfg, 1000, z).0;
+                let b = distant_surface(&cfg, 1000, z + fine).0;
+                let _ = (a, b);
+            }
+            // Coarse nodes every `coarse`; sample the fine nodes between them.
+            for zi in 0..(1000 / coarse) {
+                let z0 = zi * coarse;
+                let z1 = z0 + coarse;
+                let h0 = distant_surface(&cfg, 1000, z0).0;
+                let h1 = distant_surface(&cfg, 1000, z1).0;
+                let mut z = z0 + fine;
+                while z < z1 {
+                    let t = (z - z0) as f32 / coarse as f32;
+                    let lerp = h0 + (h1 - h0) * t;
+                    let exact = distant_surface(&cfg, 1000, z).0;
+                    let d = (lerp - exact).abs();
+                    worst = worst.max(d);
+                    sum += d;
+                    n += 1;
+                    z += 2 * fine;
+                }
+            }
+            println!("coarse {coarse} m vs fine {fine} m: mean step {:.2} m, worst {:.2} m ({n} nodes)", sum / n as f32, worst);
+        }
+    }
+}

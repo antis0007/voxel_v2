@@ -25,9 +25,6 @@ impl MeshPlan {
     pub fn bytes(&self) -> usize {
         self.vertices * std::mem::size_of::<Vertex3>() + self.indices * 4 + PLANNING_BYTES
     }
-    pub fn build(&self, chunk: &GeneratedChunk) -> ChunkMesh {
-        self.build_lod(chunk, 0)
-    }
     pub fn build_lod(&self, chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
         let mut mesh = self.plan.build(
             chunk,
@@ -45,10 +42,18 @@ impl MeshPlan {
                 let normal = glam::Vec3::from_array(vertex.normal);
                 // Decode these two values in the vertex shader, before
                 // interpolation. Preserve roof occlusion for cave water.
-                let (depth, bed_color) = chunk.water_optics(pos, normal);
-                if normal.y > 0.5 {
-                    vertex.color = bed_color;
-                }
+                // Every face meeting a water corner samples optics as the top
+                // face would, so the side wall and the surface agree on depth and
+                // bed colour at their shared edge. Vertices on a cell boundary
+                // (integer y) belong to the column above them.
+                let at_surface = pos.y - pos.y.floor() > 0.002;
+                let sample = if normal.y > 0.5 || at_surface {
+                    pos
+                } else {
+                    pos + glam::Vec3::Y * 0.02
+                };
+                let (depth, bed_color) = chunk.water_optics(sample, glam::Vec3::Y);
+                vertex.color = bed_color;
                 vertex.surface[3] =
                     8.0 + (depth.min(48.0) * 4.0).ceil() + 0.5 * chunk.sky_visibility(pos, normal);
             } else if vertex.surface[3] >= 0.0 && vertex.surface[2] % 64.0 != 40.0 {

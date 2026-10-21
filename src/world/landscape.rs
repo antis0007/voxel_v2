@@ -170,10 +170,6 @@ pub(crate) fn tectonic_zoom(generator_version: u32) -> f32 {
     if generator_version >= 15 { 2.4 } else { 1.0 }
 }
 
-pub fn sample_tectonics(wx: f32, wz: f32, seed: u32) -> TectonicSample {
-    sample_tectonics_zoomed(wx, wz, seed, 1.0)
-}
-
 thread_local! {
     // Tectonics depend only on XZ. Cave-column generation used to recompute the
     // full plate solve for every solid voxel; this keeps it to once per column
@@ -612,7 +608,11 @@ pub(crate) fn preview_surface_lod(
         + smoothstep(104.0, 158.0, h) * 0.62
         + patch * 0.28
         - slope * 0.22;
-    let far_override = if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
+    // Before generator 23 the shore surfaces switched on at a hard 110 m ring
+    // around the origin, which showed as concentric colour bands. From 23 they
+    // follow the shore field alone, so the ring is gone.
+    let far_gate = cfg.generator_version >= 23 || wx.hypot(wz) > 110.0;
+    let far_override = if cfg.generator_version >= 15 && far_gate {
         use super::terrain_variety as tv;
         let shore = tv::shore(wx, wz, cfg.seed, temperature, moisture);
         tv::shore_surface(wx, wz, cfg.seed, h, slope, shore, cfg.generator_version)
@@ -1119,10 +1119,27 @@ fn apply_macro_shaping(
         slope +=
             ((b_eff - 0.5).abs() * 0.25 + chute_furrow * alpine_relief * 0.14) * exposed * strength;
     }
-    if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
+    if cfg.generator_version >= 23 {
+        // Generator 23 blends the far-field shore treatment in across 100..120 m
+        // instead of switching it on at 110 m, which left a step in the ground.
+        let gate = smoothstep(100.0, 120.0, wx.hypot(wz));
+        if cfg.generator_version >= 15 && gate > 0.0 {
+            let h0 = h;
+            let mut h1 = h;
+            if let Some(a) = super::terrain_variety::anomaly(wx, wz, cfg.seed) {
+                let (dh, ds) = super::terrain_variety::anomaly_shape(&a, wx, wz, cfg.seed, h, cfg.generator_version);
+                h1 += dh;
+                slope += ds * gate;
+            }
+            let shore = super::terrain_variety::shore(wx, wz, cfg.seed, temperature, moisture);
+            h1 = super::terrain_variety::reprofile(h1, shore, cfg.generator_version);
+            h1 = super::terrain_variety::strand(h1, shore, wx, wz, cfg.seed, cfg.generator_version);
+            h = h0 + (h1 - h0) * gate;
+        }
+    } else if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
         let tv = super::terrain_variety::anomaly(wx, wz, cfg.seed);
         if let Some(a) = tv {
-            let (dh, ds) = super::terrain_variety::anomaly_shape(&a, wx, wz, cfg.seed, h);
+            let (dh, ds) = super::terrain_variety::anomaly_shape(&a, wx, wz, cfg.seed, h, cfg.generator_version);
             h += dh;
             slope += ds;
         }

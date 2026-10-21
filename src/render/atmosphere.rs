@@ -182,27 +182,6 @@ impl AtmosphereLut {
         }
     }
 
-    fn write(&self, queue: &wgpu::Queue, data: &[[f32; 4]]) {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(data),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(self.width * std::mem::size_of::<[f32; 4]>() as u32),
-                rows_per_image: Some(self.height),
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
 }
 
 struct AtmosphereLut3D {
@@ -919,25 +898,6 @@ impl AtmosphereRuntime {
                 self.surface_height,
             )),
         );
-    }
-}
-
-fn analytic_sun_transmittance_at_altitude(sun_height: f32, altitude_m: f32) -> Vec3 {
-    let altitude_m = altitude_m.max(0.0);
-    let rayleigh_density = (-altitude_m / 8_000.0).exp();
-    let mie_density = (-altitude_m / 1_200.0).exp();
-    let beta_r = Vec3::new(0.00529, 0.01235, 0.03022) * rayleigh_density;
-    let beta_m = 0.00100 * mie_density;
-    let path = (1.0 / (sun_height + 0.08).max(0.015)).min(38.0);
-    let tau = (beta_r + Vec3::splat(beta_m)) * path;
-    Vec3::new((-tau.x).exp(), (-tau.y).exp(), (-tau.z).exp())
-}
-
-fn normalized_coordinate(index: u32, size: u32) -> f32 {
-    if size <= 1 {
-        0.0
-    } else {
-        index as f32 / (size - 1) as f32
     }
 }
 

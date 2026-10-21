@@ -1,5 +1,7 @@
 //! Scale presets and the active conservative world simulation.
 
+pub mod ripples;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoxelScalePreset {
     OneMeter,

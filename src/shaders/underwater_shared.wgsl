@@ -45,8 +45,7 @@ fn uw_noise(p: vec2<f32>) -> f32 {
 }
 
 // Bright web where two drifting noise layers cross, like light focused by
-// waves. The focused core is quantized into five steps so it reads as
-// illuminated pixel art rather than a smooth photographic blob.
+// waves. Kept continuous: stepping the core drew contour bands in the light.
 fn uw_caustic(p: vec2<f32>, t: f32) -> f32 {
     let r = mat2x2<f32>(0.80, -0.60, 0.60, 0.80);
     let a = uw_noise(p * 0.85 + vec2<f32>(t * 0.31, -t * 0.22));
@@ -56,9 +55,8 @@ fn uw_caustic(p: vec2<f32>, t: f32) -> f32 {
         uw_noise(p * 0.33 + vec2<f32>(-t * 0.11, t * 0.17)) -
         uw_noise((r * p) * 0.41 + vec2<f32>(t * 0.09, -t * 0.13))) * 1.8);
     let focused = max(web, broad_web * 0.72);
-    let stepped = floor(focused * 5.0 + 0.5) / 5.0;
     let fine = uw_noise(p * 2.6 + vec2<f32>(-t * 0.5, t * 0.4));
-    return mix(focused, stepped, 0.45) * (0.65 + 0.7 * fine);
+    return focused * (0.65 + 0.7 * fine);
 }
 
 // Smoother web for volumetric shafts, where fine detail would only read as noise.

@@ -398,14 +398,6 @@ pub fn extract_planes(view_proj: Mat4) -> [Vec4; 6] {
     planes
 }
 
-pub fn is_chunk_visible_frustum(chunk: IVec3, view_proj: Mat4) -> bool {
-    let planes = extract_planes(view_proj);
-    let (center, radius) = chunk_bounds_sphere(chunk);
-    planes
-        .iter()
-        .all(|plane| plane.truncate().dot(center) + plane.w >= -radius)
-}
-
 pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
     let planes = extract_planes(view_proj);
     let mut out = Vec::new();

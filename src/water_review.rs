@@ -13,9 +13,25 @@ pub struct WaterReview {
     flew: bool,
     reported: u8,
     captured_jump: bool,
+    /// Open-air block scene instead of the walled pool.
+    block: bool,
 }
+/// Metres above the local ground. Above the streamed surface, so the scene's
+/// chunks are meshed fresh; ground-level edits to resident chunks did not show.
+pub const OPEN_BLOCK_ELEVATION: i32 = 79;
+
 impl WaterReview {
+    pub fn open_block() -> Self {
+        Self {
+            block: true,
+            ..Self::default()
+        }
+    }
+
     pub fn install(&mut self, world: &mut World, player: &mut Player) {
+        if self.block {
+            return Self::install_block(world, player);
+        }
         let n = (1.0 / world.voxel_scale.meters()).round() as i32;
         let mut edits = Vec::new();
         for y in 95 * n..108 * n {
@@ -39,6 +55,33 @@ impl WaterReview {
         }
         world.set_many(&edits);
         Self::reset(player, world.voxel_scale.meters());
+    }
+
+    /// A stone floor with one free-standing 3×2 water block in open air: the
+    /// case where a water cell's side faces are exposed to the sky.
+    fn install_block(world: &mut World, player: &mut Player) {
+        let n = (1.0 / world.voxel_scale.meters()).round() as i32;
+        // Sit on the local ground, not at a fixed Y: a floor below the grass is
+        // invisible and the block then looks like it never spawned.
+        let base = world.terrain_height_at(0, 0) + OPEN_BLOCK_ELEVATION;
+        let mut edits = Vec::new();
+        for z in -5 * n..6 * n {
+            for x in -5 * n..6 * n {
+                edits.push((IVec3::new(x, base * n, z), BlockId::Stone));
+            }
+        }
+        world.set_many(&edits);
+        for z in -n..n {
+            for x in 0..3 * n {
+                world.set_water_volume(IVec3::new(x, (base + 1) * n, z), 8);
+            }
+        }
+        let scale = world.voxel_scale.meters();
+        *player = Player::new();
+        player.pos = Vec3::new(-2.5, (base + 2) as f32 + 0.4, 0.5) / scale;
+        player.precise_pos = player.pos.as_dvec3();
+        player.fly_mode = FlyMode::Creative;
+        player.pitch = -0.12;
     }
     fn reset(player: &mut Player, scale: f32) {
         *player = Player::new();
@@ -94,5 +137,22 @@ impl WaterReview {
             return Some("flight-exit");
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod block_scene_tests {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+    use crate::world::WorldType;
+
+    #[test]
+    fn open_block_scene_has_water_in_air() {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        let mut player = Player::new();
+        WaterReview::open_block().install(&mut world, &mut player);
+        let y = world.terrain_height_at(0, 0) + OPEN_BLOCK_ELEVATION + 1;
+        assert_eq!(world.get(IVec3::new(1, y, 0)), BlockId::Water);
+        assert_eq!(world.water_volume(IVec3::new(1, y, 0)), 8);
     }
 }

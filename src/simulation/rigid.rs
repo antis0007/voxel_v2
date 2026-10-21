@@ -145,8 +145,9 @@ pub(super) fn tick(
                         / body.occupied.len() as f32;
                     let centre = centre_cells * scale;
                     if let Some(surface) = w.water_surface_at(centre) {
-                        w.adventure
-                            .splash(surface, ((-body.velocity.y * scale) / 9.0).clamp(0.22, 1.0));
+                        let strength = ((-body.velocity.y * scale) / 9.0).clamp(0.22, 1.0);
+                        w.adventure.splash(surface, strength);
+                        w.disturb_water_surface(surface, strength);
                     }
                 }
                 let fraction = submerged as f32 / sampled as f32;

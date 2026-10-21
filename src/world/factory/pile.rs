@@ -7,8 +7,6 @@ use super::{Kind, Node};
 /// Resource index of arcane cores.
 pub const FUEL: usize = 17;
 pub const MAX_HEAT: u32 = 1000;
-/// A tripped pile will not run again until it has cooled below this.
-pub const SCRAM_HEAT: u32 = 400;
 pub const WARN_HEAT: u32 = 750;
 /// Fuel taken per fission portion, and energy that portion yields.
 pub const PORTION: u32 = 8;

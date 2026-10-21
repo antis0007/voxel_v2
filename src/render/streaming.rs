@@ -276,45 +276,6 @@ impl ChunkCache {
         (self.coverage_stable_meters / QUANTUM).floor() * QUANTUM
     }
 
-    pub fn new_with_snapshot(center_chunk: IVec3, snapshot: &WorldSnapshot) -> Self {
-        // Start with small local set — expand incrementally each frame.
-        let mut cache = Self {
-            voxel_allocations: Arc::default(),
-            residency_limits: residency::limits(),
-            budget_center: center_chunk,
-            budget_deferred: HashMap::new(),
-            cpu_evictions: 0,
-            gpu_evictions: 0,
-            lod_meshes: LodMeshCache::default(),
-            gpu_bytes: 0,
-            visible: Vec::new(),
-            visible_keys: HashSet::new(),
-            visible_coords: HashSet::new(),
-            gpu_meshes: HashMap::new(),
-            gpu_mesh_revision: 0,
-            dirty_meshes: HashSet::new(),
-            cpu_chunks: HashMap::new(),
-            center_chunk,
-            column_y_cache: ColumnPlans::new(),
-            simulation_seeds: Vec::new(),
-            expansion_radius: 2,
-            fully_expanded: false,
-            spawn_ready: false,
-            coverage_stable_meters: -1.0,
-            coverage_drop_since: None,
-            coverage_last_tick: None,
-            coverage_center: None,
-        };
-        cache.visible = desired_chunk_keys_with_snapshot_cached(
-            center_chunk,
-            snapshot,
-            &mut cache.column_y_cache,
-            cache.expansion_radius,
-        );
-        cache.rebuild_visible_sets();
-        cache
-    }
-
     fn rebuild_visible_sets(&mut self) {
         for index in 0..self.visible.len() {
             self.visible[index].lod = self.desired_lod(self.visible[index].coord);
@@ -422,25 +383,6 @@ impl ChunkCache {
         self.coverage_drop_since = None;
         self.coverage_last_tick = None;
         self.coverage_center = None;
-    }
-
-    pub fn update_center_chunk(&mut self, center_chunk: IVec3) -> bool {
-        if self.center_chunk == center_chunk {
-            return false;
-        }
-
-        let old_center = self.center_chunk;
-        self.center_chunk = center_chunk;
-        self.visible = desired_chunk_keys(center_chunk);
-        self.rebuild_visible_sets();
-        // Shrink expansion radius by movement distance, keep at least 4 rings.
-        let move_dist = (center_chunk.x - old_center.x)
-            .abs()
-            .max((center_chunk.y - old_center.y).abs())
-            .max((center_chunk.z - old_center.z).abs());
-        self.expansion_radius = (self.expansion_radius - move_dist).max(4);
-        self.fully_expanded = false;
-        true
     }
 
     pub fn update_center_chunk_with_snapshot(

@@ -7,6 +7,18 @@ mod thermal;
 mod world;
 pub use world::WorldSimulation;
 pub(crate) use world::discover;
+
+/// True when a later tick can change the cell at `p`: a fluid, grain, rigid
+/// core, thermal cell or sandbox cell. Every other block is inert until an edit
+/// touches it, so the scheduler does not wake it. Waking inert neighbours of
+/// each edit filled the queue with stone and air that never step.
+pub(crate) fn acts(world: &crate::world::World, p: glam::IVec3) -> bool {
+    use crate::world::BlockId as B;
+    let block = world.get(p);
+    matches!(block, B::Water | B::Sand | B::Gravel | B::Ash | B::RigidCore)
+        || thermal::active(block)
+        || world.sandbox.cells.contains_key(&sandbox::key(p))
+}
 pub const STEP_SECONDS: f32 = 1.0 / 120.0;
 const MAX_STEPS: u32 = 16;
 

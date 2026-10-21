@@ -51,7 +51,7 @@ pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
 pub const CHUNK_SIZE: i32 = 32;
 /// New-world generator and maximum readable version. Keep historical version
 /// gates literal: bumping this must never change how an older save generates.
-pub const CURRENT_GENERATOR_VERSION: u32 = 22;
+pub const CURRENT_GENERATOR_VERSION: u32 = 23;
 pub const PLAYER_WIDTH: f32 = 0.6;
 pub const PLAYER_HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;
@@ -1849,9 +1849,11 @@ pub(crate) fn tree_visual(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> 
     let tree = tree_profile_for_cell(cfg, cell_x, cell_z)?;
     let scale = cfg.voxel_meters();
     Some(TreeVisual {
+        // The first trunk voxel sits one cell above the surface voxel, so the
+        // visible trunk base is the top face of ground_y, not its centre.
         base: Vec3::new(
             tree.anchor_x as f32,
-            tree.ground_y as f32,
+            (tree.ground_y + 1) as f32,
             tree.anchor_z as f32,
         ) * scale,
         height: tree.trunk_h as f32 * scale,
@@ -1859,7 +1861,9 @@ pub(crate) fn tree_visual(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> 
         // Lobes reach well past `canopy_radius`, so a proxy sized from the
         // radius alone shrinks the tree when its LOD changes.
         radius: trees::crown_reach(cfg, &tree),
-        crown_height: tree.canopy_height as f32 * scale,
+        // Proxy crown height is set so base + height + crown_height is the true
+        // leaf top, measured from the same base the proxy is drawn from.
+        crown_height: (trees::crown_top(cfg, &tree) - tree.trunk_h as f32 * scale).max(scale),
         conifer: tree.conifer,
         seed: (cell_x as u32).wrapping_mul(73856093)
             ^ (cell_z as u32).wrapping_mul(19349663)
@@ -2104,17 +2108,18 @@ impl Profiles for CachedProfiles {
 /// Every air voxel above ground checks 25 tree cells and 9 bush cells. Through
 /// the hashed thread-local cache that was ~19 ms per padded chunk, and the
 /// river surface (which depends only on x/z) was re-evaluated for every voxel
-/// of the column. Here each is computed once per chunk or column.
+/// of the column. Each cell is filled on first use and then reused, so a chunk
+/// pays only for the cells its voxels actually reach.
 struct RegionProfiles {
     tree_min: (i32, i32),
     tree_w: i32,
-    trees: Vec<Option<TreeProfile>>,
+    trees: Vec<std::cell::OnceCell<Option<TreeProfile>>>,
     bush_min: (i32, i32),
     bush_w: i32,
-    bushes: Vec<Option<BushProfile>>,
+    bushes: Vec<std::cell::OnceCell<Option<BushProfile>>>,
     column_min: (i32, i32),
     column_w: i32,
-    rivers: Vec<Option<f32>>,
+    rivers: Vec<std::cell::OnceCell<Option<f32>>>,
 }
 
 impl RegionProfiles {
@@ -2122,68 +2127,45 @@ impl RegionProfiles {
     fn new(cfg: &WorldSampleConfig, min_x: i32, min_z: i32, size: i32) -> Self {
         // Cell ranges match `structure_block`: trees +-2 cells, bushes +-1.
         let grid = |cell: i32, reach: i32| {
-            let lo = (
-                floor_div(min_x, cell) - reach,
-                floor_div(min_z, cell) - reach,
-            );
+            let lo = (floor_div(min_x, cell) - reach, floor_div(min_z, cell) - reach);
             let w = floor_div(min_x + size - 1, cell) + reach - lo.0 + 1;
             let h = floor_div(min_z + size - 1, cell) + reach - lo.1 + 1;
             (lo, w, h)
         };
         let (tree_min, tree_w, tree_h) = grid(cfg.blocks_for_span(12.0), 2);
         let (bush_min, bush_w, bush_h) = grid(cfg.blocks_for_span(8.0), 1);
-        let structures = cfg.world_type != WorldType::Superflat;
-        let trees = (0..tree_w * tree_h)
-            .map(|i| {
-                structures
-                    .then(|| {
-                        tree_profile_for_cell(cfg, tree_min.0 + i % tree_w, tree_min.1 + i / tree_w)
-                    })
-                    .flatten()
-            })
-            .collect();
-        let bushes = (0..bush_w * bush_h)
-            .map(|i| {
-                structures
-                    .then(|| {
-                        bush_profile_for_cell(cfg, bush_min.0 + i % bush_w, bush_min.1 + i / bush_w)
-                    })
-                    .flatten()
-            })
-            .collect();
-        let rivers = if cfg.generator_version >= 14 {
-            (0..size * size)
-                .map(|i| CachedProfiles.river_top(cfg, min_x + i % size, min_z + i / size))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let rivers_on = cfg.generator_version >= 14;
         Self {
             tree_min,
             tree_w,
-            trees,
+            trees: (0..tree_w * tree_h).map(|_| std::cell::OnceCell::new()).collect(),
             bush_min,
             bush_w,
-            bushes,
+            bushes: (0..bush_w * bush_h).map(|_| std::cell::OnceCell::new()).collect(),
             column_min: (min_x, min_z),
             column_w: size,
-            rivers,
+            rivers: (0..if rivers_on { size * size } else { 0 })
+                .map(|_| std::cell::OnceCell::new())
+                .collect(),
         }
     }
 }
 
 impl Profiles for RegionProfiles {
-    fn tree(&self, _: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
+    fn tree(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
         let (x, z) = (cell_x - self.tree_min.0, cell_z - self.tree_min.1);
-        self.trees[(z * self.tree_w + x) as usize]
+        *self.trees[(z * self.tree_w + x) as usize]
+            .get_or_init(|| tree_profile_for_cell(cfg, cell_x, cell_z))
     }
-    fn bush(&self, _: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
+    fn bush(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
         let (x, z) = (cell_x - self.bush_min.0, cell_z - self.bush_min.1);
-        self.bushes[(z * self.bush_w + x) as usize]
+        *self.bushes[(z * self.bush_w + x) as usize]
+            .get_or_init(|| bush_profile_for_cell(cfg, cell_x, cell_z))
     }
-    fn river_top(&self, _: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
+    fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
         let (x, z) = (x - self.column_min.0, z - self.column_min.1);
-        self.rivers[(z * self.column_w + x) as usize]
+        *self.rivers[(z * self.column_w + x) as usize]
+            .get_or_init(|| CachedProfiles.river_top(cfg, x + self.column_min.0, z + self.column_min.1))
     }
 }
 
@@ -2477,6 +2459,8 @@ pub struct World {
     pub expedition: expedition::Expedition,
     pub regions: regions::RegionStream,
     pub water_levels: water::WaterLevels,
+    /// Runtime-only surface ripples. Not saved; rebuilt from impacts.
+    pub ripples: crate::fluid::ripples::RippleField,
     pub activity: activity::Activity,
     pub generator_version: u32,
     sample_cache: std::cell::RefCell<sample_cache::SampleCache>,
@@ -2513,6 +2497,7 @@ impl World {
             sandbox: Default::default(),
             generator_version: CURRENT_GENERATOR_VERSION,
             water_levels: water::WaterLevels::default(),
+            ripples: Default::default(),
             activity: activity::Activity::default(),
             sample_cache: Default::default(),
             chunks: resident::ResidentEdits::default(),
@@ -2943,8 +2928,8 @@ impl World {
                 }
             }
             self.regions.mark_dirty(from_chunk);
-            self.activity.wake_neighbors(from);
-            self.activity.wake_neighbors(to);
+            self.wake_acting(from);
+            self.wake_acting(to);
             self.invalidate_snapshot_at(from_chunk);
             self.revision = self.revision.wrapping_add(1);
             return;
@@ -2958,8 +2943,8 @@ impl World {
             self.write_water_cell(from, from_volume.saturating_add(moved));
             return;
         };
-        self.activity.wake_neighbors(from);
-        self.activity.wake_neighbors(to);
+        self.wake_acting(from);
+        self.wake_acting(to);
         self.invalidate_snapshot_at(from_chunk);
         if to_chunk != from_chunk {
             self.invalidate_snapshot_at(to_chunk);
@@ -2972,6 +2957,40 @@ impl World {
     /// rings sit on partial cells and cave pools as well as the ocean.
     pub(crate) fn water_surface_at(&self, point: Vec3) -> Option<Vec3> {
         water::surface_at(self, point, self.voxel_scale.meters())
+    }
+
+    /// Y of the exposed water surface voxel at `column`, searching `hint` and
+    /// its vertical neighbours. Roofed or submerged water is not a surface.
+    pub(crate) fn water_surface_top(&self, column: glam::IVec2, hint: i32) -> Option<i32> {
+        [hint, hint + 1, hint - 1].into_iter().find(|&y| {
+            let p = IVec3::new(column.x, y, column.y);
+            if self.get(p) != BlockId::Water || self.water_volume(p) == 0 {
+                return false;
+            }
+            let above = self.get(p + IVec3::Y);
+            above != BlockId::Water && !above.is_solid()
+        })
+    }
+
+    /// Put a ripple on the water surface under a metric point. `strength` is
+    /// a 0..1 impact magnitude. Returns `false` if there is no exposed water
+    /// there or the ripple field is full.
+    pub(crate) fn disturb_water_surface(&mut self, point: Vec3, strength: f32) -> bool {
+        let voxel = point / self.voxel_scale.meters();
+        let column = glam::IVec2::new(voxel.x.floor() as i32, voxel.z.floor() as i32);
+        let Some(top) = self.water_surface_top(column, voxel.y.floor() as i32) else {
+            return false;
+        };
+        let amount = crate::fluid::ripples::IMPACT_VOXELS * strength.clamp(0.0, 1.0);
+        self.ripples.disturb(column, top, amount)
+    }
+
+    /// Advance surface ripples by `dt` seconds against the live water.
+    pub(crate) fn advance_ripples(&mut self, dt: f32) {
+        // Take the field out so its closure can read the rest of the world.
+        let mut ripples = std::mem::take(&mut self.ripples);
+        ripples.advance(dt, |column, hint| self.water_surface_top(column, hint));
+        self.ripples = ripples;
     }
 
     pub(crate) fn water_velocity(&self, p: IVec3) -> glam::Vec2 {
@@ -2994,9 +3013,23 @@ impl World {
         let Some(coord) = self.write_water_cell(p, volume) else {
             return;
         };
-        self.activity.wake_neighbors(p);
+        self.wake_acting(p);
         self.invalidate_snapshot_at(coord);
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Wakes `p` and each neighbour the scheduler can act on (`simulation::acts`).
+    /// Neighbours in chunks that are not resident are woken unconditionally:
+    /// classifying them would load their region from disk on every edit.
+    fn wake_acting(&mut self, p: IVec3) {
+        for d in std::iter::once(IVec3::ZERO).chain(activity::WAKE_NEIGHBORS) {
+            let q = p + d;
+            if !self.chunks.contains_key(&chunk_coord_from_world_block(q))
+                || crate::simulation::acts(self, q)
+            {
+                self.activity.wake(q);
+            }
+        }
     }
 
     pub fn set_many(&mut self, edits: &[(IVec3, BlockId)]) {
@@ -3051,7 +3084,7 @@ impl World {
                 }
             }
 
-            self.activity.wake_neighbors(p);
+            self.wake_acting(p);
             self.invalidate_snapshot_at(chunk_coord_from_world_block(p));
             if id.is_torch() {
                 propagate_light(self, p, 14);
@@ -3517,6 +3550,7 @@ mod tree_lod_accuracy {
             let (mut n, mut top_err, mut rad_err, mut base_err, mut rad_bias) = (0, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
             let (mut ratio_c, mut ratio_b) = ((0.0f32, 0.0f32), (0.0f32, 0.0f32));
             let mut under = 0;
+            let mut top_bias = 0.0f32;
             let mut worst_under = 0.0f32;
             let mut worst = (0.0f32, IVec3::ZERO);
             for cz in -30..30 {
@@ -3550,6 +3584,7 @@ mod tree_lod_accuracy {
                     n += 1;
                     let true_top = (top + 1) as f32 * m;
                     let proxy_top = v.base.y + v.height + v.crown_height;
+                    top_bias += proxy_top - true_top;
                     let terr = (proxy_top - true_top).abs();
                     top_err += terr;
                     if terr > worst.0 {
@@ -3569,11 +3604,124 @@ mod tree_lod_accuracy {
                     }
                 }
             }
-            println!("{scale:?}: under-covered {under}/{n}, worst short by {worst_under:.2} m");
+            println!("{scale:?}: under-covered {under}/{n}, worst short by {worst_under:.2} m, top bias {:+.2} m", top_bias / n as f32);
             println!(
                 "{scale:?}: {n} trees, mean |top| err {:.2} m, |radius| err {:.2} m (bias {:+.2}), |trunk base| err {:.2} m, worst top {:.2} m at {:?}",
                 top_err / n as f32, rad_err / n as f32, rad_bias / n as f32, base_err / n as f32, worst.0, worst.1
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod v16_stage_split {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+
+    /// `cargo test --release v16_stage_split -- --ignored --nocapture`
+    /// Where generator v16 spends its time, with the same per-chunk profile
+    /// grids `generate_padded` uses, on the seed the cost test uses.
+    #[test]
+    #[ignore]
+    fn v16_stage_split() {
+        for version in [15u32, 16] {
+            let cfg = WorldSampleConfig {
+                generator_version: version,
+                seed: 424242,
+                world_type: WorldType::Hills,
+                voxel_scale: VoxelScalePreset::OneMeter,
+            };
+            let mut chunks = Vec::new();
+            for cz in -2..2 {
+                for cx in 6..10 {
+                    for cy in -2..3 {
+                        let origin = IVec3::new(cx * CHUNK_SIZE - 1, cy * CHUNK_SIZE - 1, cz * CHUNK_SIZE - 1);
+                        let profiles = RegionProfiles::new(&cfg, origin.x, origin.z, 34);
+                        let mut voxels = Vec::new();
+                        for z in 0..34 {
+                            for x in 0..34 {
+                                let column = sample_column(&cfg, origin.x + x, origin.z + z);
+                                for y in 0..34 {
+                                    voxels.push((origin + IVec3::new(x, y, z), column));
+                                }
+                            }
+                        }
+                        chunks.push((profiles, voxels));
+                    }
+                }
+            }
+            let run = |f: &dyn Fn(IVec3, ColumnSample, &RegionProfiles) -> u32| {
+                let mut acc = 0u32;
+                for (profiles, voxels) in &chunks {
+                    for &(p, c) in voxels {
+                        acc = acc.wrapping_add(f(p, c, profiles));
+                    }
+                }
+                acc
+            };
+            let time = |name: &str, f: &dyn Fn(IVec3, ColumnSample, &RegionProfiles) -> u32| {
+                run(f);
+                let t = std::time::Instant::now();
+                let acc = run(f);
+                println!("v{version} {name:>10}: {:8.1} ms ({acc})", t.elapsed().as_secs_f64() * 1e3);
+            };
+            time("column", &|p, _, _| sample_column(&cfg, p.x, p.z).height as u32);
+            time("uncached", &|p, _, _| landscape::column(&cfg, p.x, p.z).height as u32);
+            time("undercrown", &|p, c, _| undercrown::block(&cfg, p, c.height).is_some() as u32);
+            time("sites", &|p, c, _| sites::block(&cfg, p, c.height).is_some() as u32);
+            time("cavern", &|p, c, _| sites::cavern(&cfg, p, c.height).is_some() as u32);
+            time("structure", &|p, c, pr| structure_block(&cfg, p, c, pr).as_u32());
+            time("cave", &|p, c, _| cave_carves(&cfg, p, &c) as u32);
+            time("full", &|p, c, pr| sample_block_with(&cfg, p, c, pr).as_u32());
+        }
+    }
+}
+
+#[cfg(test)]
+mod spawn_profile {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+
+    /// `cargo test --release spawn_profile -- --ignored --nocapture`
+    /// Height profile of the spawn area, to see whether the visible slabs are generator steps.
+    #[test]
+    #[ignore]
+    fn spawn_height_profile() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 2738958700).sample_config();
+        let mut line = Vec::new();
+        for x in (-120..=120).step_by(2) {
+            line.push(terrain_height(&cfg, x, 40));
+        }
+        let steps: Vec<i32> = line.windows(2).map(|w| w[1] - w[0]).collect();
+        let big = steps.iter().filter(|s| s.abs() >= 3).count();
+        println!("heights {:?}", &line[..20]);
+        println!("steps>=3 voxels: {big} of {}; max step {}", steps.len(), steps.iter().map(|s| s.abs()).max().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod far_ring_seam {
+    use super::*;
+    use crate::fluid::VoxelScalePreset;
+
+    /// Generator 23 has no step where the far-field shore treatment used to
+    /// switch on at 110 m. Heights either side of that radius must agree.
+    #[test]
+    fn no_step_at_the_old_far_field_ring() {
+        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 2738958700).sample_config();
+        assert!(cfg.generator_version >= 23);
+        let mut worst = 0;
+        for i in 0..64 {
+            let a = i as f32 / 64.0 * std::f32::consts::TAU;
+            let at = |r: f32| {
+                let (x, z) = ((a.cos() * r).round() as i32, (a.sin() * r).round() as i32);
+                terrain_height(&cfg, x, z)
+            };
+            // Every adjacent radius pair from 100 m to 120 m, so the old 110 m ring is straddled.
+            for r in 100..120 {
+                worst = worst.max((at(r as f32 + 1.0) - at(r as f32)).abs());
+            }
+        }
+        assert!(worst <= 1, "ring step of {worst} voxels around the 110 m radius");
     }
 }

@@ -283,7 +283,7 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             config.duration_seconds = 65.0;
             continue;
         }
-        if arg == "--benchmark-water-review" {
+        if arg == "--benchmark-water-review" || arg == "--benchmark-water-block" {
             config.enabled = true;
             config.water_review = true;
             config.world_type = WorldType::Superflat;
@@ -1373,9 +1373,14 @@ fn main() -> Result<()> {
         .sandbox_review
         .then(sandbox_review::SandboxReview::default);
     let mut wand_review = wand_review::Review::from_env(benchmark_config.enabled);
-    let mut water_review = benchmark_config
-        .water_review
-        .then(water_review::WaterReview::default);
+    let open_block_scene = std::env::args().any(|arg| arg == "--benchmark-water-block");
+    let mut water_review = benchmark_config.water_review.then(|| {
+        if open_block_scene {
+            water_review::WaterReview::open_block()
+        } else {
+            water_review::WaterReview::default()
+        }
+    });
     let mut benchmark = benchmark_config.enabled.then(|| BenchmarkState {
         config: benchmark_config,
         auto_started: false,
@@ -1757,6 +1762,7 @@ fn main() -> Result<()> {
                                 }
                                 Err(wgpu::SurfaceError::OutOfMemory) => {
                                     egui_ui.end_frame_no_paint(window.as_ref());
+                                    eprintln!("[exit] surface out of memory; closing");
                                     elwt.exit();
                                     return;
                                 }
@@ -2222,6 +2228,52 @@ fn main() -> Result<()> {
                                             }
                                         }
                                         w.set_many(&edits);
+                                    }
+                                }
+                                // VOXEL_REVIEW_WATER=<metres ahead>: a flowing-water test bed
+                                // (yaw 0). Partial levels are written directly because the
+                                // fixed-pose review does not step the water simulation.
+                                static WATER_PLACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                if let (Some(w), Some(metres)) = (world.as_mut(), std::env::var("VOXEL_REVIEW_WATER").ok().and_then(|v| v.parse::<f32>().ok())) {
+                                    if !WATER_PLACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                        let scale = w.voxel_scale.meters();
+                                        let eye = player.eye(w.voxel_scale);
+                                        let cx = eye.x.floor() as i32;
+                                        let cz = (eye.z - metres / scale).floor() as i32;
+                                        let floor_y = w.terrain_height_at(cx, cz) + 1;
+                                        let mut edits = Vec::new();
+                                        let mut partial = Vec::new();
+                                        for x in -7..=7 {
+                                            for z in -4..=4 {
+                                                let p = |y: i32| glam::IVec3::new(cx + x, floor_y + y, cz + z);
+                                                for y in 0..=4 {
+                                                    edits.push((p(y), BlockId::Air));
+                                                }
+                                                edits.push((p(0), BlockId::StoneBricks));
+                                                match z {
+                                                    // Pool, then a ramp of falling levels.
+                                                    -4..=-3 => {
+                                                        edits.push((p(1), BlockId::Water));
+                                                        if x < 0 { edits.push((p(2), BlockId::Water)); }
+                                                        else { partial.push((p(1), (7 - x).clamp(1, 7) as u8)); }
+                                                    }
+                                                    // Step: a two-high column beside a shallow cell.
+                                                    -1..=0 => {
+                                                        if x <= 2 { edits.push((p(1), BlockId::Water)); edits.push((p(2), BlockId::Water)); }
+                                                        else if x <= 5 { edits.push((p(1), BlockId::Water)); partial.push((p(1), 3)); }
+                                                    }
+                                                    // Shore: a shallow film against a solid bank.
+                                                    2..=4 => {
+                                                        if x < -1 { edits.push((p(1), BlockId::Water)); }
+                                                        else if x < 3 { edits.push((p(1), BlockId::Water)); partial.push((p(1), (1 + (x + 1) * 2).clamp(1, 7) as u8)); }
+                                                        else { edits.push((p(1), BlockId::StoneBricks)); }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                        w.set_many(&edits);
+                                        for (p, v) in partial { w.set_water_volume(p, v); }
                                     }
                                 }
                                 if let Ok(spec) = std::env::var("VOXEL_REVIEW_STYLE") {
@@ -3745,7 +3797,6 @@ fn main() -> Result<()> {
                                                     .map(std::path::PathBuf::from)
                                                     .unwrap_or_else(|| "target/benchmark-frames".into());
                                                 let path = root.join(format!("bench-{shot:03}.png"));
-                                                eprintln!("[bench-shot] {shot} {}", path.display());
                                                 if !path.exists() && benchmark_state.last_capture_key != shot {
                                                     benchmark_state.last_capture_key = shot;
                                                     gpu.request_capture(path);

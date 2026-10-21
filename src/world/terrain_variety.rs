@@ -296,7 +296,7 @@ pub(super) fn anomaly(wx: f32, wz: f32, seed: u32) -> Option<Anomaly> {
 }
 
 /// Height change in metres and extra slope for an anomaly at a land column.
-pub(super) fn anomaly_shape(a: &Anomaly, wx: f32, wz: f32, seed: u32, h: f32) -> (f32, f32) {
+pub(super) fn anomaly_shape(a: &Anomaly, wx: f32, wz: f32, seed: u32, h: f32, version: u32) -> (f32, f32) {
     let land = smoothstep(20.0, 34.0, h);
     if land <= 0.0 {
         return (0.0, 0.0);
@@ -308,7 +308,7 @@ pub(super) fn anomaly_shape(a: &Anomaly, wx: f32, wz: f32, seed: u32, h: f32) ->
         slope += a.weights[0] * 0.30;
     }
     if a.weights[1] > 0.01 {
-        delta += a.weights[1] * mesa(wx, wz, seed, h);
+        delta += a.weights[1] * mesa(wx, wz, seed, h, version);
         slope += a.weights[1] * 0.22;
     }
     if a.weights[2] > 0.01 {
@@ -331,8 +331,12 @@ fn karst(wx: f32, wz: f32, seed: u32) -> f32 {
     tower * height - sink
 }
 
-/// Stepped plateaus with sheer terrace walls.
-fn mesa(wx: f32, wz: f32, seed: u32, h: f32) -> f32 {
+/// Stepped plateaus. Before generator 23 the riser was the last 23% of each
+/// step, which made sheer 3-voxel walls that read as banding from the spawn
+/// view. From 23 the riser spans the whole step as a smooth S-curve, so the
+/// plateaus stay but the walls become gentle benches. Old worlds keep their
+/// walls because their stored version is below 23.
+fn mesa(wx: f32, wz: f32, seed: u32, h: f32, version: u32) -> f32 {
     let rise = smoothstep(
         0.46,
         0.60,
@@ -340,7 +344,8 @@ fn mesa(wx: f32, wz: f32, seed: u32, h: f32) -> f32 {
     ) * 30.0;
     let raised = h + rise;
     let t = raised / 8.0;
-    let stepped = (t.floor() + smoothstep(0.72, 0.95, t.fract())) * 8.0;
+    let riser = if version >= 23 { (0.0, 1.0) } else { (0.72, 0.95) };
+    let stepped = (t.floor() + smoothstep(riser.0, riser.1, t.fract())) * 8.0;
     stepped - h
 }
 

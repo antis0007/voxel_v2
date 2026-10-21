@@ -67,7 +67,11 @@ fn voxel_sphere(
     let radius = radius.clamp(WAND_PIXEL * 0.6, 0.07);
     let n = (radius / WAND_PIXEL).ceil() as i32;
     let hollow = radius > WAND_PIXEL * 2.6;
-    let inner = if hollow { radius - WAND_PIXEL * 1.1 } else { -1.0 };
+    let inner = if hollow {
+        radius - WAND_PIXEL * 1.1
+    } else {
+        -1.0
+    };
     for x in -n..=n {
         for y in -n..=n {
             for z in -n..=n {
@@ -97,7 +101,10 @@ fn voxel_orb(m: &mut Model, rot: Quat, centre: Vec3, radius: f32, colour: [f32; 
 /// `WAND_PIXEL` cube shaded by its surface normal against a fixed key light. The
 /// shading is continuous (no bands), so the gem reads as a volume rather than the
 /// flat disc a single colour gives. A small specular cap sits on the upper facet.
-fn voxel_gem(m: &mut Model, rot: Quat, centre: Vec3, radius: f32, colour: [f32; 3], glow: f32) {
+fn voxel_gem(m: &mut Model, rot: Quat, centre: Vec3, radius: f32, colour: [f32; 3]) {
+    // Lit enamel kind: solid, shaded by normal, no wand-wood grain or bands.
+    let prev_kind = m.surface_kind;
+    m.set_surface_kind(41.0);
     let radius = radius.clamp(WAND_PIXEL * 1.2, 0.05);
     let stretch = 1.25;
     let n = (radius * stretch / WAND_PIXEL).ceil() as i32;
@@ -116,22 +123,28 @@ fn voxel_gem(m: &mut Model, rot: Quat, centre: Vec3, radius: f32, colour: [f32; 
                 }
                 // Gradient of the ellipsoid: y is divided by stretch squared.
                 let normal = Vec3::new(p.x, p.y / (stretch * stretch), p.z).normalize_or_zero();
-                let normal = if normal == Vec3::ZERO { Vec3::Y } else { normal };
+                let normal = if normal == Vec3::ZERO {
+                    Vec3::Y
+                } else {
+                    normal
+                };
                 let diffuse = normal.dot(light).max(0.0);
                 let spec = normal.dot(half).max(0.0).powf(18.0);
                 let shade = mix(deep, lit, diffuse);
                 let col = mix(shade, [1.0, 1.0, 1.0], spec * 0.6);
-                m.glow_voxel(
+                // glow must stay 0: any glow > 0 makes `Model::triangle` pick the
+                // emissive particle kind 40, which ignores this per-cube shading.
+                m.cuboid(
                     centre + rot * p,
                     Vec3::splat(WAND_PIXEL * 0.94),
                     rot,
                     col,
-                    glow * (0.05 + 0.25 * diffuse),
-                    0.98,
+                    0.0,
                 );
             }
         }
     }
+    m.set_surface_kind(prev_kind);
 }
 
 fn voxel_glow_orb(
@@ -495,8 +508,7 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
                     0.2,
                 );
             }
-            voxel_gem(m, rot, crown, 0.030 + cast * 0.006, glow, power);
-            voxel_glow_orb(m, rot, crown, 0.066 + cast * 0.022, glow, power * 0.3, 0.12);
+            voxel_gem(m, rot, crown, 0.030 + cast * 0.006, glow);
         }
         1 => {
             for k in 0..2 {
@@ -510,13 +522,22 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
                     0.78,
                 );
             }
-            voxel_orb(m, rot, crown + dir * 0.02, 0.020, [1.0, 1.0, 1.0], power + 1.0);
+            voxel_orb(
+                m,
+                rot,
+                crown + dir * 0.02,
+                0.020,
+                [1.0, 1.0, 1.0],
+                power + 1.0,
+            );
             voxel_glow_orb(m, rot, crown + dir * 0.02, 0.070, glow, power, 0.34);
         }
         2 => {
             for k in 0..3 {
                 let a = v.time * 1.4 + k as f32 * 2.094;
-                voxel_orb(m, rot, 
+                voxel_orb(
+                    m,
+                    rot,
                     crown + dir * 0.012 + ring(a) * 0.046,
                     0.021,
                     glow,
@@ -589,7 +610,15 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
                     0.0,
                 );
             } else {
-                voxel_glow_orb(m, rot, c + v.forward * 0.022, 0.025, glow, power + 0.6, 0.92);
+                voxel_glow_orb(
+                    m,
+                    rot,
+                    c + v.forward * 0.022,
+                    0.025,
+                    glow,
+                    power + 0.6,
+                    0.92,
+                );
                 m.cuboid(
                     c + v.forward * 0.040,
                     Vec3::new(0.008, 0.032, 0.008),
@@ -636,7 +665,7 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
         let a = seed * tau + ph * (2.6 + seed * 2.0);
         let r = 0.018 + 0.07 * ph * (0.5 + seed);
         let p = crown
-            + dir * (0.01 + ph * (0.20 + 0.10 * seed))
+            + dir * (0.05 + ph * (0.20 + 0.10 * seed))
             + ring(a) * r
             + Vec3::Y * (ph * ph * 0.05);
         let e = life(ph);
@@ -654,7 +683,7 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
     for k in 0..8u32 {
         let seed = hash01(k * 13 + 5);
         let ph = (v.time * (0.42 + 0.2 * seed) + k as f32 * 0.125 + seed).fract();
-        let p = crown + dir * 0.02 + ring(seed * tau * 3.0) * (0.015 + 0.05 * ph)
+        let p = crown + dir * 0.06 + ring(seed * tau * 3.0) * (0.04 + 0.05 * ph)
             - Vec3::Y * (ph * ph * 0.28);
         let e = life(ph);
         m.glow_voxel(
@@ -696,7 +725,15 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
                 0.9,
             );
         }
-        voxel_glow_orb(m, rot, centre, 0.024 + 0.03 * burst, [1.0, 1.0, 1.0], 3.5 * burst, 0.9);
+        voxel_glow_orb(
+            m,
+            rot,
+            centre,
+            0.024 + 0.03 * burst,
+            [1.0, 1.0, 1.0],
+            3.5 * burst,
+            0.9,
+        );
         let ring_r = 0.05 + 0.32 * (1.0 - (1.0 - burst) * (1.0 - burst));
         for k in 0..20 {
             let a = k as f32 * tau / 20.0 + 0.2;
@@ -711,8 +748,8 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
         }
         for k in 0..10u32 {
             let seed = hash01(k * 11 + 1);
-            let spread = (v.right * (seed * 2.0 - 1.0) + v.up * (hash01(k * 17 + 9) * 2.0 - 1.0))
-                * 0.35;
+            let spread =
+                (v.right * (seed * 2.0 - 1.0) + v.up * (hash01(k * 17 + 9) * 2.0 - 1.0)) * 0.35;
             let d = (v.forward + spread).normalize();
             m.glow_voxel(
                 crown + d * (0.06 + 0.55 * burst * (0.5 + seed)),
@@ -750,8 +787,22 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
                 let a = v.time * 1.8 + k as f32 * 2.094;
                 let c = crown + dir * 0.02 + ring(a) * 0.10;
                 let r = Quat::from_rotation_z(a);
-                m.glow_voxel(c, Vec3::new(0.034, 0.007, 0.007), r, [1.0, 0.97, 0.85], 2.6 * strength, 0.8);
-                m.glow_voxel(c, Vec3::new(0.007, 0.034, 0.007), r, [0.86, 0.78, 0.58], 2.6 * strength, 0.8);
+                m.glow_voxel(
+                    c,
+                    Vec3::new(0.034, 0.007, 0.007),
+                    r,
+                    [1.0, 0.97, 0.85],
+                    2.6 * strength,
+                    0.8,
+                );
+                m.glow_voxel(
+                    c,
+                    Vec3::new(0.007, 0.034, 0.007),
+                    r,
+                    [0.86, 0.78, 0.58],
+                    2.6 * strength,
+                    0.8,
+                );
                 m.glow_voxel(c, Vec3::splat(0.008), r, glow, 3.0 * strength, 0.8);
             }
         }
@@ -851,7 +902,13 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
     }
     // Leather bracer near the wrist, with a gold buckle.
     let bracer = sleeve_end + arm_dir * (arm_len * 0.80);
-    m.cuboid(bracer, Vec3::new(0.118, 0.060, 0.104), arm_rot, glove_dark, 0.0);
+    m.cuboid(
+        bracer,
+        Vec3::new(0.118, 0.060, 0.104),
+        arm_rot,
+        glove_dark,
+        0.0,
+    );
     m.cuboid(
         bracer + arm_back * 0.052,
         Vec3::new(0.050, 0.030, 0.012),
@@ -928,4 +985,3 @@ mod tests {
         );
     }
 }
-

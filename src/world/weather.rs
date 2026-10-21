@@ -204,18 +204,6 @@ impl WeatherClipmapLevel {
         level
     }
 
-    fn descriptor(&self) -> WeatherClipmapDescriptor {
-        self.descriptor
-    }
-
-    fn region(&self) -> WeatherRegion {
-        self.region
-    }
-
-    fn summary(&self) -> WeatherFieldSummary {
-        self.summary
-    }
-
     fn gpu_meta(&self) -> WeatherClipmapGpuMeta {
         WeatherClipmapGpuMeta {
             origin_x: self.region.origin_m.x,
@@ -480,66 +468,6 @@ impl WeatherClipmapLevel {
             .push(WeatherUploadRect::full_level(self.region.resolution));
     }
 
-    fn push_dirty_rect(&mut self, rect: WeatherUploadRect) {
-        if rect.is_empty() {
-            return;
-        }
-
-        let full_level_rect = WeatherUploadRect::full_level(self.region.resolution);
-        if self.pending_gpu_uploads.first() == Some(&full_level_rect) {
-            return;
-        }
-        if rect == full_level_rect {
-            self.mark_full_level_dirty();
-            return;
-        }
-        if self
-            .pending_gpu_uploads
-            .iter()
-            .any(|existing| *existing == rect)
-        {
-            return;
-        }
-        self.pending_gpu_uploads.push(rect);
-    }
-
-    fn mark_scroll_dirty_uploads(&mut self, texel_offset: IVec2) {
-        let resolution = self.region.resolution;
-        let dirty_width = texel_offset.x.abs() as u32;
-        let dirty_height = texel_offset.y.abs() as u32;
-
-        if dirty_width > 0 {
-            let texel_x = if texel_offset.x > 0 {
-                resolution - dirty_width
-            } else {
-                0
-            };
-            self.push_dirty_rect(WeatherUploadRect {
-                texel_x,
-                texel_y: 0,
-                texel_width: dirty_width,
-                texel_height: resolution,
-            });
-        }
-
-        if dirty_height > 0 {
-            // Avoid duplicating the newly exposed corner when the clipmap scrolls diagonally.
-            let texel_x = if texel_offset.x < 0 { dirty_width } else { 0 };
-            let texel_width = resolution.saturating_sub(dirty_width);
-            let texel_y = if texel_offset.y > 0 {
-                resolution - dirty_height
-            } else {
-                0
-            };
-            self.push_dirty_rect(WeatherUploadRect {
-                texel_x,
-                texel_y,
-                texel_width,
-                texel_height: dirty_height,
-            });
-        }
-    }
-
     fn take_gpu_upload_batch(&mut self) -> Option<WeatherClipmapUploadBatch> {
         if self.pending_gpu_uploads.is_empty() {
             return None;
@@ -704,22 +632,6 @@ impl CloudWeatherField {
 
     pub fn reset(&mut self, seed: u32) {
         *self = Self::new(seed);
-    }
-
-    pub fn clipmap_count(&self) -> usize {
-        self.levels.len()
-    }
-
-    pub fn descriptor(&self, level: usize) -> WeatherClipmapDescriptor {
-        self.levels[level].descriptor()
-    }
-
-    pub fn region(&self, level: usize) -> WeatherRegion {
-        self.levels[level].region()
-    }
-
-    pub fn summary(&self, level: usize) -> WeatherFieldSummary {
-        self.levels[level].summary()
     }
 
     pub fn gpu_meta(&self) -> [WeatherClipmapGpuMeta; WEATHER_CLIPMAP_LEVEL_COUNT] {
