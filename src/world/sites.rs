@@ -1711,28 +1711,6 @@ pub fn reward_kind(cfg: &WorldSampleConfig, id: IVec3) -> u32 {
     }
 }
 
-/// A readable environmental clue; the route accepts building, climbing, and digging.
-pub fn inscription(cfg: &WorldSampleConfig, p: IVec3) -> Option<&'static str> {
-    if cfg.generator_version < 12 {
-        return None;
-    }
-    let m = (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
-    let gx = (m.x / 72.0).round() as i32;
-    let gz = (m.z / 72.0).round() as i32;
-    if (hash2(gx, gz, cfg.seed.wrapping_add(1187)) * 4.0) as u32 % 4 != 2 {
-        return None;
-    }
-    let floor = cavern_floor(cfg, gx, gz)?;
-    let q = m - Vec3::new(gx as f32 * 72.0, floor, gz as f32 * 72.0);
-    if (-15.0..17.0).contains(&q.x) && (6.0..12.0).contains(&q.z) && (0.0..7.0).contains(&q.y) {
-        Some(
-            "The carved road ends in midair. Across the gap, a survey chest rests on pale stone. The inscription reads: The doorway has no lock; the missing road is the key.",
-        )
-    } else {
-        None
-    }
-}
-
 /// Opt-in native review spawn: uses the real generator, without modifying terrain.
 pub fn review_causeway_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
     if cfg.generator_version < 12 || cfg.world_type == WorldType::Superflat {
@@ -2112,7 +2090,10 @@ mod stage_bench {
     #[test]
     #[ignore]
     fn site_stage_costs() {
-        let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        for version in [15u32, 16] {
+        let mut cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        cfg.generator_version = version;
+        println!("--- generator v{version}");
         let origin = IVec3::new(64, 32, 64);
         let mut voxels = Vec::new();
         for z in 0..34 {
@@ -2153,5 +2134,6 @@ mod stage_bench {
             super::super::surface::block(&cfg, p, h, top(h)).is_some()
         });
         time("all", &|p, h| block(&cfg, p, h).is_some());
+        }
     }
 }

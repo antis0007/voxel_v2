@@ -1753,6 +1753,7 @@ impl Adventure {
                         1.0
                     };
                 self.splash(surface, strength);
+                world.disturb_water_surface(surface, strength);
             }
         }
         let (player_min, player_max) =

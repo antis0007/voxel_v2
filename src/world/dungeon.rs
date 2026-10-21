@@ -2132,14 +2132,16 @@ mod tests {
             }
             (start.elapsed().as_secs_f64(), solid)
         };
-        // Column caches are per configuration, so warm both versions before timing either.
-        let _ = (time(15), time(16));
-        // Alternate and keep the best of five so background load cannot favour either side.
-        let (mut old, mut new) = (f64::MAX, f64::MAX);
-        for _ in 0..5 {
-            old = old.min(time(15).0);
-            new = new.min(time(16).0);
-        }
+        // Each version is timed in its own block. Alternating versions made them
+        // evict each other from the shared landscape tile cache, which measured
+        // cache thrash instead of generator cost. Best of three per version
+        // keeps background load from favouring either side.
+        let best = |version| {
+            let _ = time(version);
+            (0..3).map(|_| time(version).0).fold(f64::MAX, f64::min)
+        };
+        let old = best(15);
+        let new = best(16);
         println!(
             "terrain generation: v15 {old:.3}s, v16 {new:.3}s ({:.2}x)",
             new / old

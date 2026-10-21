@@ -14,15 +14,6 @@ pub enum Element {
 }
 
 impl Element {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Fire => "fire",
-            Self::Frost => "frost",
-            Self::Shock => "shock",
-            Self::Toxic => "toxin",
-            Self::Wet => "water",
-        }
-    }
 
     pub fn color(self) -> [f32; 3] {
         match self {
