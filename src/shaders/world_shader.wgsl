@@ -715,6 +715,15 @@ fn flame_lift(surface_w: f32) -> f32 {
     return clamp(-surface_w - 2.0, 0.0, 1.0);
 }
 
+// Light cast by a torch: a slow sway plus a quicker flutter, +/-8% around the
+// same 0.96 mean as torch_flicker, so the average brightness of lights is kept.
+fn torch_light_flicker(seed: vec3<f32>, time: f32) -> f32 {
+    let phase = dot(seed, vec3<f32>(0.173, 0.697, 0.357));
+    let sway = sin(time * 6.1 + phase);
+    let flutter = sin(time * 11.3 + phase * 1.6);
+    return clamp(0.96 + sway * 0.05 + flutter * 0.03, 0.88, 1.04);
+}
+
 fn eval_torch_light(
     torch_pos_radius: vec4<f32>, torch_color_strength: vec4<f32>,
     time: f32, world_pos: vec3<f32>, n: vec3<f32>, to_eye: vec3<f32>,
@@ -730,7 +739,7 @@ fn eval_torch_light(
     let l = terrain_safe_unit3(to_torch, n);
     let cutoff = clamp(1.0 - pow(distance_m / radius, 4.0), 0.0, 1.0);
     let falloff = cutoff * cutoff / (1.0 + dist2 * 0.045);
-    let flicker = torch_flicker(torch_pos_radius.xyz * 0.23 + vec3<f32>(0.0, 1.7, 0.0), time);
+    let flicker = torch_light_flicker(torch_pos_radius.xyz * 0.23 + vec3<f32>(0.0, 1.7, 0.0), time);
     let radiance = max(torch_color_strength.rgb, vec3<f32>(0.0))
         * (max(torch_color_strength.w, 0.0) * falloff * flicker);
     let no_l = clamp(dot(n, l), 0.0, 1.0);
