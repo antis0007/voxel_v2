@@ -28,7 +28,28 @@
 struct VsOut {
     @builtin(position) pos : vec4<f32>,
     @location(0)       ndc : vec2<f32>,
+    @location(1) @interpolate(flat) sky_zenith : vec3<f32>,
+    @location(2) @interpolate(flat) sky_upper : vec3<f32>,
+    @location(3) @interpolate(flat) sky_horizon : vec3<f32>,
+    @location(4) @interpolate(flat) sky_low : vec3<f32>,
 };
+
+struct CloudHemisphere {
+    zenith: vec3<f32>,
+    upper: vec3<f32>,
+    horizon: vec3<f32>,
+    low: vec3<f32>,
+};
+
+fn cloud_frame_hemisphere(sun_dir: vec3<f32>) -> CloudHemisphere {
+    let zenith = atmosphere_color(vec3<f32>(0.0, 1.0, 0.0));
+    let sun_az = safe_normalize2(sun_dir.xz, vec2<f32>(1.0, 0.0));
+    let side_az = vec2<f32>(-sun_az.y, sun_az.x);
+    let upper = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.50, 0.72, side_az.y * 0.50)));
+    let horizon = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.92, 0.16, side_az.y * 0.92)));
+    let low = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.98, 0.035, side_az.y * 0.98)));
+    return CloudHemisphere(zenith, upper, horizon, low);
+}
 
 struct CloudSample {
     radiance     : vec3<f32>,
@@ -441,6 +462,11 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     let ndc = pos[vi];
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
     out.ndc = ndc;
+    let sky = cloud_frame_hemisphere(normalize(light.sun_dir_intensity.xyz));
+    out.sky_zenith = sky.zenith;
+    out.sky_upper = sky.upper;
+    out.sky_horizon = sky.horizon;
+    out.sky_low = sky.low;
     return out;
 }
 
@@ -1112,6 +1138,7 @@ fn march_layer_core(
     mid_layer    : bool,
     cirrus_transmittance_atten : f32,
     cone_spread  : f32,
+    frame_sky    : CloudHemisphere,
 ) -> CloudSample {
     // ---- Coarse early-out using global envelope ----
     // When the camera is inside the slab, slab_intersection returns (1e9, -1e9) for
@@ -1207,22 +1234,12 @@ fn march_layer_core(
         camera_max_dist * 0.90
     );
 
-    // ---- Hoist per-ray constants outside the DDA loop ----
-    // atmosphere_color() routes through the runtime sky-view LUT which involves
-    // texture sampling — calling it per step is wasteful. Sky radiance is constant
-    // per ray direction; only cloud depth (h_frac) modulates how it is blended.
-    // Pre-compute the three hemisphere directions and their sky radiance here.
-    // The per-step code then just does a weighted blend of these three constants.
-    let sky_zenith_precomp  = atmosphere_color(vec3<f32>(0.0, 1.0, 0.0));
-    // Fill comes from the sky beside the sun, not the average of the solar
-    // aureole and the opposite belt. Averaging those two cancelled the warm
-    // key and the cool fill into one grey. The low sample is the afterglow
-    // that reaches cloud bases at dusk.
-    let sun_az = safe_normalize2(sun_dir.xz, vec2<f32>(1.0, 0.0));
-    let side_az = vec2<f32>(-sun_az.y, sun_az.x);
-    let sky_upper_precomp = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.50, 0.72, side_az.y * 0.50)));
-    let sky_horizon_precomp = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.92, 0.16, side_az.y * 0.92)));
-    let sky_low_precomp = atmosphere_color(normalize(vec3<f32>(side_az.x * 0.98, 0.035, side_az.y * 0.98)));
+    // The identical frame-uniform hemisphere samples arrive from the vertex
+    // stage. Local depth, phase and all per-step lighting weights stay here.
+    let sky_zenith_precomp = frame_sky.zenith;
+    let sky_upper_precomp = frame_sky.upper;
+    let sky_horizon_precomp = frame_sky.horizon;
+    let sky_low_precomp = frame_sky.low;
 
     // ---- Accumulated march state ----
     var trans          = 1.0;
@@ -1324,20 +1341,23 @@ fn march_layer_core(
         // taps together. The latter leaves correlated gaps which show up as
         // horizontal shelves through thin, distant storm condensation floors.
         let quadrature = smoothstep(8.0, 22.0, integration_length);
-        var raw_density = 0.0;
-        if quadrature < 1.0 {
-            raw_density = segment_density(p, layer_id, sample_footprint_m, wx_offset_march, step_weather);
-        }
+        var raw_density: f32;
         if quadrature > 0.0 {
             let start_p=p-ray_dir*integration_length*jitter;
             let stratum=fract(phase + f32(i)*0.754877666);
-            let q0=start_p+ray_dir*integration_length*(stratum*0.5);
+            // Nest the one-tap rule in the two-tap rule. Move its first tap
+            // continuously into the lower stratum while the upper tap gains
+            // weight. The endpoints retain the original rules, without a
+            // third complete density evaluation throughout the transition.
+            let q0=start_p+ray_dir*integration_length*mix(jitter,stratum*0.5,quadrature);
             let q1=start_p+ray_dir*integration_length*(0.5+fract(stratum+0.5)*0.5);
-            let integrated=(segment_density(q0,layer_id,sample_footprint_m,wx_offset_march,
-                    weather_at_world(q0.xz+wx_offset_march))
-                +segment_density(q1,layer_id,sample_footprint_m,wx_offset_march,
-                    weather_at_world(q1.xz+wx_offset_march)))*0.5;
-            raw_density=mix(raw_density,integrated,quadrature);
+            let d0=segment_density(q0,layer_id,sample_footprint_m,wx_offset_march,
+                    weather_at_world(q0.xz+wx_offset_march));
+            let d1=segment_density(q1,layer_id,sample_footprint_m,wx_offset_march,
+                    weather_at_world(q1.xz+wx_offset_march));
+            raw_density=mix(d0,d1,quadrature*0.5);
+        } else {
+            raw_density=segment_density(p,layer_id,sample_footprint_m,wx_offset_march,step_weather);
         }
         let sample_density = raw_density * dist_fade;
         debug_density_max = max(debug_density_max, sample_density);
@@ -1493,7 +1513,7 @@ fn march_layer_core(
     );
 }
 
-// ---- Per-layer march wrappers (signatures unchanged) ----
+// ---- Per-layer march wrappers ----
 
 fn march_low_layer(
     ray_origin: vec3<f32>,
@@ -1507,13 +1527,14 @@ fn march_low_layer(
     max_dist  : f32,
     cirrus_transmittance_atten: f32,
     cone_spread: f32,
+    frame_sky: CloudHemisphere,
 ) -> CloudSample {
     // extinction=0.022: calibrated for ~12-22m step sizes. density=0.5, dt=15m →
     // per-step alpha=0.154. Over 15 steps (225m cloud) → ~90% opaque. Realistic.
     return march_layer_core(
         ray_origin, ray_dir, cam_dist_offset, sun_dir, moon_dir, frag_coord,
         base_y, top_y, max_dist, 0.022, 0.72, 0.74,
-        false, false, cirrus_transmittance_atten, cone_spread
+        false, false, cirrus_transmittance_atten, cone_spread, frame_sky
     );
 }
 
@@ -1529,12 +1550,13 @@ fn march_mid_layer(
     max_dist  : f32,
     cirrus_transmittance_atten: f32,
     cone_spread: f32,
+    frame_sky: CloudHemisphere,
 ) -> CloudSample {
     // extinction=0.016: mid clouds are thinner/less dense than low cumulus.
     return march_layer_core(
         ray_origin, ray_dir, cam_dist_offset, sun_dir, moon_dir, frag_coord,
         base_y, top_y, max_dist, 0.016, 0.75, 0.70,
-        false, true, cirrus_transmittance_atten, cone_spread
+        false, true, cirrus_transmittance_atten, cone_spread, frame_sky
     );
 }
 
@@ -1549,12 +1571,13 @@ fn march_high_layer(
     top_y     : f32,
     max_dist  : f32,
     cone_spread: f32,
+    frame_sky: CloudHemisphere,
 ) -> CloudSample {
     // extinction=0.010: cirrus ice crystals have lower volumetric density than water droplets.
     return march_layer_core(
         ray_origin, ray_dir, cam_dist_offset, sun_dir, moon_dir, frag_coord,
         base_y, top_y, max_dist, 0.010, 0.75, 0.86,
-        true, false, 1.0, cone_spread
+        true, false, 1.0, cone_spread, frame_sky
     );
 }
 
@@ -1604,6 +1627,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sun_dir  = normalize(light.sun_dir_intensity.xyz);
     let moon_dir = normalize(light.moon_dir_intensity.xyz);
 
+    let frame_sky = CloudHemisphere(in.sky_zenith, in.sky_upper, in.sky_horizon, in.sky_low);
     let bounds = cloud_layer_bounds();
 
     if debug_mode == i32(DEBUG_VIEW_ATMOSPHERE_TRANSMITTANCE)
@@ -1661,7 +1685,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         low = march_low_layer(
             low_ro.origin, dir, low_offset, sun_dir, moon_dir, pixel_jitter,
             bounds.low_base, bounds.low_top, low_max_dist,
-            cirrus_trans, cone_spread,
+            cirrus_trans, cone_spread, frame_sky,
         );
     } else {
         low = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);
@@ -1673,7 +1697,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         mid = march_mid_layer(
             mid_ro.origin, dir, mid_offset, sun_dir, moon_dir, pixel_jitter,
             bounds.mid_base, bounds.mid_top, mid_max_dist,
-            cirrus_trans, cone_spread,
+            cirrus_trans, cone_spread, frame_sky,
         );
     } else {
         mid = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);
@@ -1685,7 +1709,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         high = march_high_layer(
             high_ro.origin, dir, high_offset, sun_dir, moon_dir, pixel_jitter,
             bounds.high_base, bounds.high_top, high_max_dist,
-            cone_spread,
+            cone_spread, frame_sky,
         );
     } else {
         high = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);

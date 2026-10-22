@@ -4,6 +4,15 @@ use glam::Vec3Swizzles;
 
 pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
     let climate = landscape::sample(cfg, tree.anchor_x, tree.anchor_z);
+    profile_from_landscape(cfg, tree, climate);
+}
+
+pub(super) fn profile_lod(cfg: &WorldSampleConfig, tree: &mut TreeProfile, footprint: f32) {
+    let climate = landscape::preview_landscape_lod(cfg, tree.anchor_x, tree.anchor_z, footprint);
+    profile_from_landscape(cfg, tree, climate);
+}
+
+fn profile_from_landscape(cfg: &WorldSampleConfig, tree: &mut TreeProfile, climate: landscape::Landscape) {
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
     let species = hash2(
         tree.cell_x.div_euclid(3),

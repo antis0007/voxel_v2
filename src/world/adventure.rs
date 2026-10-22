@@ -5,11 +5,27 @@ use crate::{mesh::models::Model, player::Player};
 use glam::{IVec3, Quat, Vec3};
 use std::collections::HashMap;
 mod bestiary;
+mod enemy_presentation;
+mod enemy_review;
+pub use enemy_review::camera as enemy_review_camera;
+pub use enemy_review::install as install_enemy_review;
+pub use enemy_review::arm as arm_enemy_review;
+pub use enemy_review::{input as enemy_review_input, casting as enemy_review_casting, automated as enemy_review_automated, manual as enemy_review_manual};
+pub use enemy_review::checkpoint as enemy_review_checkpoint;
 mod bosses;
+mod action;
+mod matron;
+mod tollkeeper;
+pub use tollkeeper::{install_review as install_tollkeeper_review, observe_review as observe_tollkeeper_review,
+    review_cast as tollkeeper_review_cast, review_input as tollkeeper_review_input,
+    review_checkpoint as tollkeeper_review_checkpoint};
+mod hart;
+mod hart_crown;
+pub use hart::{install_review as install_hart_review, observe_review as observe_hart_review, review_camera as hart_review_camera, review_cast as hart_review_cast};
 pub mod discovery;
 pub mod spell_defs;
 pub use spell_defs::{
-    Class, Unlock, spell_available, spell_base_damage, spell_base_speed, spell_cast_delay_delta,
+    Class, spell_available, spell_base_damage, spell_base_speed, spell_cast_delay_delta,
     spell_class, spell_color, spell_cooldown, spell_cost, spell_flavor, spell_hint, spell_hit_damage,
     spell_kind_tag, spell_name, spell_recharge_delta, spell_spread_delta,
 };
@@ -22,6 +38,9 @@ mod rewards;
 mod spells;
 pub mod status;
 mod tactics;
+mod navigation;
+mod encounters;
+mod boss_patterns;
 pub mod tinkering;
 pub mod wands;
 
@@ -119,13 +138,13 @@ pub fn enemy_name(kind: u32) -> &'static str {
     match kind {
         2 => "Arcane Wisp",
         3 => "Burrow Beetle",
-        6..=8 => bosses::name(kind),
+        6..=8 | tollkeeper::KIND => bosses::name(kind),
         9 => "Gravelback Colossus",
         _ => "Sanctum Guardian",
     }
 }
 fn is_boss(kind: u32) -> bool {
-    matches!(kind, 6..=8)
+    matches!(kind, 6..=8 | tollkeeper::KIND | matron::KIND)
 }
 fn enemy_health(kind: u32) -> f32 {
     if let Some(species) = bestiary::species(kind) {
@@ -134,12 +153,12 @@ fn enemy_health(kind: u32) -> f32 {
     match kind {
         3 => 54.0,
         9 => 210.0,
-        6..=8 => bosses::health(kind),
+        6..=8 | tollkeeper::KIND => bosses::health(kind),
         _ => 35.0,
     }
 }
 fn tall(kind: u32) -> bool {
-    bestiary::species(kind).map_or(matches!(kind, 9 | 6..=8), |s| s.tall)
+    bestiary::species(kind).map_or(matches!(kind, 9 | 6..=8 | tollkeeper::KIND), |s| s.tall)
 }
 fn flying(kind: u32) -> bool {
     bestiary::species(kind).map_or(matches!(kind, 2), |s| s.flying)
@@ -167,6 +186,8 @@ pub fn rank_name(rank: u32) -> &'static str {
     }
 }
 pub struct Enemy {
+    /// Source identity owns recurrence; these actors never enter site-clear records.
+    pub(crate) habitat: Option<u32>,
     pub site: IVec3,
     pub slot: u32,
     pub kind: u32,
@@ -178,6 +199,10 @@ pub struct Enemy {
     pub phase: f32,
     yaw: f32,
     velocity: Vec3,
+    navigation: navigation::Navigation,
+    gait: f32,
+    recovery: f32,
+    encounter: encounters::State,
     cooldown: f32,
     sight: f32,
     visible: bool,
@@ -200,12 +225,19 @@ pub struct Enemy {
     /// Warden's carried shield. Breaking it removes the visible shield and its
     /// frontal block without touching saved encounter records.
     pub guard: bool,
+    hart: hart::State,
+    toll: tollkeeper::State,
+    matron: matron::State,
 }
 impl Enemy {
+    pub(crate) fn preparing_stamp(&self)->bool {
+        self.kind==matron::KIND && self.matron.run.as_ref().is_some_and(|r|r.kind==matron::Action::Stamp && r.phase()==action::Phase::Prepare)
+    }
     fn new(site: IVec3, slot: u32, kind: u32, pos: Vec3, menace: u8) -> Self {
         let menace = menace.min(3);
         Self {
             site,
+            habitat: None,
             slot,
             kind,
             pos,
@@ -216,6 +248,10 @@ impl Enemy {
             phase: 0.0,
             yaw: 0.0,
             velocity: Vec3::ZERO,
+            navigation: navigation::Navigation::default(),
+            gait: 0.0,
+            recovery: 0.0,
+            encounter: encounters::State::new(site, slot, kind, pos),
             cooldown: 2.0,
             sight: 0.0,
             visible: false,
@@ -235,6 +271,9 @@ impl Enemy {
             status: status::Status::default(),
             shield: 0.0,
             guard: kind == 5,
+            hart: hart::State::default(),
+            toll: tollkeeper::State::default(),
+            matron: matron::State::default(),
         }
     }
     fn with_affixes(mut self, affixes: status::Affixes) -> Self {
@@ -264,16 +303,14 @@ impl Enemy {
 
     /// Damage lands on the shield first, then health.
     fn hurt(&mut self, amount: f32) {
+        if self.kind==matron::KIND {matron::hurt(self,amount);}
+        let amount = amount * if self.encounter.exposed > 0.0 { 1.25 } else { 1.0 };
+        if self.kind == tollkeeper::KIND { tollkeeper::pressure(self, amount); }
+        let amount = amount * if self.kind == 8 { hart::damage_taken(self) } else { 1.0 };
         let absorbed = amount.min(self.shield).max(0.0);
         self.shield -= absorbed;
         self.health -= amount - absorbed;
         self.check_guard_break();
-    }
-    pub fn display_name(&self) -> String {
-        match self.affixes.first() {
-            Some(a) => format!("{} {}", a.name(), enemy_name(self.kind)),
-            None => enemy_name(self.kind).to_string(),
-        }
     }
     fn windup(&self) -> f32 {
         if let Some(species) = bestiary::species(self.kind) {
@@ -287,7 +324,9 @@ impl Enemy {
         }
     }
     fn center(&self) -> Vec3 {
-        let height = if is_boss(self.kind) {
+        let height = if self.kind == 8 {
+            1.65
+        } else if is_boss(self.kind) {
             1.2
         } else if self.kind == 9 {
             1.35
@@ -301,13 +340,19 @@ impl Enemy {
         self.pos + Vec3::Y * height
     }
     pub fn model(&self, m: &mut Model, time: f32) {
+        if encounters::disguise(self, m, time) { return; }
         if is_boss(self.kind) {
             bosses::model(self, m, time);
             return;
         }
         let mark = m.mark();
-        let wind = (1.0 - self.tell / self.windup()).clamp(0.0, 1.0)
-            * if self.tell > 0.0 { 1.0 } else { 0.0 };
+        let wind = if self.tell > 0.0 {
+            let t = (1.0 - self.tell / self.windup()).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        } else {
+            let t = (self.recovery / 0.24).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
         let hit = if self.flash > 0.0 {
             [1.0, 0.94, 0.69]
         } else if self.slow > 0.0 {
@@ -317,228 +362,17 @@ impl Enemy {
         } else {
             [0.49, 0.32, 0.63]
         };
-        if matches!(self.kind, 0 | 1 | 4 | 5 | 10..=13) {
-            // Shared articulated family rigs. Health bar, affixes and the
-            // crouch/flash/yaw transform below still wrap the body.
+        if matches!(self.kind, 0 | 1 | 4 | 5 | 10..=13 | 15) {
             bestiary::draw_body(self, m, time, wind, hit);
-        } else if self.kind == 9 {
-            // Gravelback Colossus: a two-metre, four-legged quarry brute.
-            // Its height is authored in the model, while `free()` reserves the
-            // matching collision volume so it cannot squeeze through doorways.
-            let stride = (self.phase * 4.0).sin() * 0.08;
-            for (x, z) in [
-                (-0.42_f32, -0.30_f32),
-                (0.42, -0.30),
-                (-0.42, 0.34),
-                (0.42, 0.34),
-            ] {
-                m.cuboid(
-                    self.pos + Vec3::new(x, 0.36 + stride * z.signum(), z),
-                    Vec3::new(0.25, 0.70, 0.28),
-                    Quat::IDENTITY,
-                    [0.27, 0.25, 0.22],
-                    0.0,
-                );
-            }
-            m.cuboid(
-                self.pos + Vec3::Y * 1.10,
-                Vec3::new(1.02, 0.72, 0.72),
-                Quat::from_rotation_y((time * 0.35).sin() * 0.06),
-                [0.35, 0.30, 0.26],
-                0.0,
-            );
-            for x in [-0.34, 0.0, 0.34] {
-                m.cuboid(
-                    self.pos + Vec3::new(x, 1.48, 0.10),
-                    Vec3::new(0.22, 0.16, 0.52),
-                    Quat::IDENTITY,
-                    [0.24, 0.36, 0.30],
-                    0.18,
-                );
-            }
-            m.cuboid(
-                self.pos + Vec3::new(0.0, 1.78, -0.22),
-                Vec3::new(0.64, 0.42, 0.46),
-                Quat::IDENTITY,
-                [0.40, 0.34, 0.27],
-                0.0,
-            );
-            for x in [-0.19, 0.19] {
-                m.orb(self.pos + Vec3::new(x, 1.82, -0.46), 0.065, hit, 2.4);
-            }
-            for x in [-0.66, 0.66] {
-                m.beam(
-                    self.pos + Vec3::new(x, 1.30, 0.0),
-                    self.pos + Vec3::new(x * 1.45, 0.58 + wind * 0.2, -0.20),
-                    0.13,
-                    [0.32, 0.28, 0.24],
-                    0.0,
-                );
-                m.cuboid(
-                    self.pos + Vec3::new(x * 1.45, 0.52 + wind * 0.2, -0.20),
-                    Vec3::new(0.30, 0.28, 0.34),
-                    Quat::IDENTITY,
-                    hit,
-                    0.18,
-                );
-            }
-        } else if self.kind == 3 {
-            // Low, armoured burrow beetle with six skittering legs.
-            m.cuboid(
-                self.pos + Vec3::Y * 0.36,
-                Vec3::new(0.64, 0.44, 0.70),
-                Quat::IDENTITY,
-                [0.28, 0.17, 0.12],
-                0.0,
-            );
-            m.cuboid(
-                self.pos + Vec3::Y * 0.60,
-                Vec3::new(0.54, 0.12, 0.65),
-                Quat::IDENTITY,
-                hit,
-                0.2,
-            );
-            for x in [-0.27, 0.27] {
-                for j in 0..3 {
-                    let z = j as f32 * 0.23 - 0.23;
-                    m.beam(
-                        self.pos + Vec3::new(x, 0.3, z),
-                        self.pos
-                            + Vec3::new(
-                                x * 1.75,
-                                0.06,
-                                z + (self.phase * 12.0 + j as f32).sin() * 0.06,
-                            ),
-                        0.045,
-                        [0.41, 0.30, 0.16],
-                        0.0,
-                    );
-                }
-            }
-            for x in [-0.15, 0.15] {
-                m.orb(self.pos + Vec3::new(x, 0.4, -0.38), 0.07, hit, 2.0);
-            }
-        } else if self.kind == 0 {
-            let bob = (self.phase * 8.0).sin().abs() * 0.05;
-            m.beam(
-                self.pos + Vec3::Y * 0.08,
-                self.pos + Vec3::Y * (0.58 + bob),
-                0.15,
-                [0.64, 0.61, 0.42],
-                0.0,
-            );
-            m.cuboid(
-                self.pos + Vec3::Y * (0.61 + bob),
-                Vec3::new(0.76, 0.22, 0.68),
-                Quat::from_rotation_z((self.phase * 5.0).sin() * 0.08),
-                hit,
-                0.08,
-            );
-            for x in [-0.16, 0.16] {
-                m.orb(
-                    self.pos + Vec3::new(x, 0.49 + bob, -0.21),
-                    0.055,
-                    [0.55, 0.98, 0.42],
-                    1.8,
-                );
-                m.cuboid(
-                    self.pos + Vec3::new(x, 0.08, (self.phase * 9.0 + x * 5.0).sin() * 0.12),
-                    Vec3::new(0.16, 0.15, 0.28),
-                    Quat::IDENTITY,
-                    [0.27, 0.32, 0.20],
-                    0.0,
-                );
-            }
-        } else if tall(self.kind) {
-            m.cuboid(
-                self.pos + Vec3::Y * 0.82,
-                Vec3::new(0.66, 0.70, 0.46),
-                Quat::IDENTITY,
-                [0.33, 0.39, 0.43],
-                0.0,
-            );
-            m.cuboid(
-                self.pos + Vec3::Y * 1.34,
-                Vec3::new(0.50, 0.35, 0.44),
-                Quat::from_rotation_y((time * 0.7).sin() * 0.2),
-                [0.48, 0.41, 0.30],
-                0.0,
-            );
-            m.orb(self.pos + Vec3::new(0.0, 1.34, -0.23), 0.105, hit, 2.0);
-            for x in [-0.23, 0.23] {
-                m.cuboid(
-                    self.pos + Vec3::new(x, 0.25, 0.0),
-                    Vec3::new(0.19, 0.5, 0.22),
-                    Quat::from_rotation_x((self.phase * 6.0 + x * 6.0).sin() * 0.24),
-                    [0.22, 0.27, 0.29],
-                    0.0,
-                );
-                m.beam(
-                    self.pos + Vec3::new(x * 1.9, 0.5 + wind * 0.42, -wind * 0.42),
-                    self.pos + Vec3::new(x * 1.9, 1.03, 0.0),
-                    0.11,
-                    [0.40, 0.31, 0.19],
-                    0.0,
-                );
-            }
-            if self.kind == 1 {
-                for x in [-0.28, 0.28] {
-                    m.cuboid(
-                        self.pos + Vec3::new(x, 1.62, 0.0),
-                        Vec3::new(0.34, 0.12, 0.34),
-                        Quat::IDENTITY,
-                        [0.42, 0.62, 0.28],
-                        0.35,
-                    );
-                    m.orb(self.pos + Vec3::new(x, 1.74, 0.0), 0.08, hit, 1.4);
-                }
-            } else if self.kind == 5 {
-                m.cuboid(
-                    self.pos + Vec3::new(-0.42, 0.82, -0.28),
-                    Vec3::new(0.40, 0.84, 0.14),
-                    Quat::IDENTITY,
-                    [0.20, 0.31, 0.36],
-                    0.0,
-                );
-                m.beam(
-                    self.pos + Vec3::new(-0.42, 0.55, -0.37),
-                    self.pos + Vec3::new(-0.42, 1.1, -0.37),
-                    0.035,
-                    hit,
-                    1.0,
-                );
-            }
         } else {
-            let c = self.center() + Vec3::Y * (time * 2.0 + self.slot as f32).sin() * 0.12;
-            m.orb(c, 0.26, hit, 1.4);
-            if self.kind == 4 {
-                for x in [-1.0, 1.0] {
-                    m.cuboid(
-                        c + Vec3::new(x * 0.35, 0.1, 0.0),
-                        Vec3::new(0.55, 0.055, 0.44),
-                        Quat::from_rotation_z(x * (time * 12.0).sin() * 0.55),
-                        [0.50, 0.61, 0.29],
-                        0.4,
-                    );
-                }
-            }
-            for i in 0..3 {
-                let a = time * 0.7 + i as f32 * 2.094;
-                m.orb(
-                    c + Vec3::new(a.cos(), (a * 0.6).sin() * 0.35, a.sin()) * 0.36,
-                    0.055,
-                    PALETTE_MANA,
-                    0.45,
-                );
-            }
+            enemy_presentation::fallback(self, m, time, wind, hit);
         }
         if self.tell > 0.0 {
-            m.orb(
-                self.center() + Vec3::Y * 0.7,
-                0.11 + 0.015 * (time * 2.2).sin(),
-                PALETTE_CORAL,
-                1.15,
-            );
+            let c = self.center() + Vec3::Y * 0.7;
+            let vertices = [Vec3::new(0.0, 0.15, 0.0), Vec3::new(-0.13, -0.10, 0.0), Vec3::new(0.13, -0.10, 0.0)];
+            for i in 0..3 {
+                m.beam(c + vertices[i], c + vertices[(i + 1) % 3], 0.05, PALETTE_CORAL, 0.8);
+            }
         }
         let maximum = self.max_health();
         if self.health < maximum {
@@ -576,6 +410,7 @@ impl Enemy {
             Quat::from_rotation_x(-wind * 0.10 + self.flash * 0.9),
         );
         m.rotate_since(mark, self.pos, Quat::from_rotation_y(self.yaw));
+        enemy_presentation::threat(self, m, wind);
         // Affix motes orbit the body in the affix colour; a ward shows as a
         // faint bubble that thins as it is broken.
         let mid = self.center();
@@ -591,17 +426,18 @@ impl Enemy {
         }
         if self.shield > 0.0 {
             let strength = (self.shield / (self.max_health() * 0.45).max(1.0)).clamp(0.0, 1.0);
-            m.glow_orb(
-                mid,
-                0.72,
-                status::Affix::Warded.color(),
-                0.9,
-                0.08 + 0.14 * strength,
-            );
+            for i in 0..6 {
+                let point = |j: usize| {
+                    let a = j as f32 * std::f32::consts::TAU / 6.0;
+                    mid + Vec3::new(a.cos() * 0.65, a.sin() * 0.65, 0.0)
+                };
+                m.beam(point(i), point(i + 1), 0.025 + strength * 0.025, status::Affix::Warded.color(), 0.65);
+            }
         }
     }
 }
 pub struct Projectile {
+    pub farm: Option<u32>,
     pub pos: Vec3,
     pub velocity: Vec3,
     pub hostile: bool,
@@ -807,6 +643,9 @@ pub struct Adventure {
     cast_pose: f32,
     // One bit per defeated guardian; bit 8 records the one-time clear reward.
     pub records: HashMap<IVec3, u32>,
+    farm_mastery: usize,
+    farm_shots_restored: bool,
+    tollkeepers: HashMap<IVec3, tollkeeper::Saved>,
     pub companion: Option<growth::Companion>,
     cast_cd: f32,
     queued_cast: bool,
@@ -884,6 +723,9 @@ impl Default for Adventure {
             strike_delay: 0.0,
             cast_pose: 0.0,
             records: HashMap::new(),
+            farm_mastery: 0,
+            farm_shots_restored: false,
+            tollkeepers: HashMap::new(),
             companion: None,
             cast_cd: 0.0,
             queued_cast: false,
@@ -902,7 +744,11 @@ impl Default for Adventure {
 }
 fn free(world: &World, pos: Vec3, kind: u32) -> bool {
     let s = world.voxel_scale.meters();
-    let (h, width) = if is_boss(kind) {
+    let (h, width) = if kind==matron::KIND {
+        (2.5,1.1)
+    } else if kind == 8 {
+        (2.9, 1.0)
+    } else if is_boss(kind) {
         (2.6, 0.52)
     } else if kind == 9 {
         (2.1, 0.64)
@@ -925,7 +771,7 @@ fn line(world: &World, a: Vec3, b: Vec3) -> bool {
 
 impl Adventure {
     pub fn rank(&self) -> u32 {
-        mastery(self.records.values().filter(|n| **n & 256 != 0).count())
+        mastery(self.records.values().filter(|n| **n & 256 != 0).count() + self.farm_mastery)
     }
     pub fn max_health(&self) -> f32 {
         100.0 + self.rank() as f32 * 20.0
@@ -1047,15 +893,6 @@ impl Adventure {
     pub fn has_modifier(&self, bit: u8) -> bool {
         self.tool_mods & bit != 0
     }
-    pub fn eat_ration(&mut self) -> bool {
-        if self.rations == 0 || self.hunger >= 99.0 {
-            return false;
-        }
-        self.rations -= 1;
-        self.hunger = (self.hunger + 38.0).min(100.0);
-        self.health = (self.health + 8.0).min(self.max_health());
-        true
-    }
     fn effect(&mut self, pos: Vec3, color: [f32; 3], radius: f32) {
         if self.effects.len() < 64 {
             self.effects.push(Effect {
@@ -1089,7 +926,7 @@ impl Adventure {
             self.damage_amount = amount * if blocked { 0.35 } else { 1.0 };
         }
     }
-    fn spawn(&mut self, world: &World, player: Vec3) {
+    fn spawn(&mut self, world: &mut World, player: Vec3) {
         for (id, center, kind) in sites::encounters(&world.sample_config(), player) {
             if self.records.len() >= MAX_RECORDS && !self.records.contains_key(&id) {
                 continue;
@@ -1101,13 +938,10 @@ impl Adventure {
                 }
                 *record
             };
-            let count = if id == IVec3::ZERO {
-                2
-            } else if id.z == 2 || id.z == 3 || id.y.abs() >= 500 {
-                1
-            } else {
-                3
-            };
+            let count = encounters::slots(id);
+            if record & ((1 << count) - 1) == (1 << count) - 1 && record & 256 == 0 {
+                self.complete_site(world, id, center);
+            }
             for slot in 0..count {
                 let variation = (id.x.wrapping_mul(31) ^ id.y.wrapping_mul(17) ^ world.seed as i32)
                     .unsigned_abs();
@@ -1140,7 +974,7 @@ impl Adventure {
                 if menace >= 2 && slot == 0 && variation % 3 == 0 {
                     kind = 9;
                 }
-                if self.enemies.len() >= MAX_ENEMIES
+                if self.enemies.iter().filter(|e|e.habitat.is_none()).count() >= MAX_ENEMIES
                     || record & (1 << slot) != 0
                     || self.enemies.iter().any(|e| e.site == id && e.slot == slot)
                 {
@@ -1380,10 +1214,11 @@ impl Adventure {
                     self.hit = 0.18;
                     let e = &mut self.enemies[i];
                     let shatter = e.slow > 0.0;
-                    let shield = e.kind == 5
+                    let shield = (e.kind == 5
                         && e.guard
                         && !shatter
-                        && forward.dot(Vec3::new(-e.yaw.sin(), 0.0, -e.yaw.cos())) < -0.3;
+                        && forward.dot(Vec3::new(-e.yaw.sin(), 0.0, -e.yaw.cos())) < -0.3)
+                        || (!shatter && tollkeeper::guarded(e, forward));
                     let base = match self.weapon {
                         1 => 22.0,
                         2 => 32.0,
@@ -1398,7 +1233,9 @@ impl Adventure {
                         + if self.tool_mods & 16 != 0 { 4.0 } else { 0.0 })
                         * tinkering::head_multiplier(self.tool_head)
                         * if self.tool_mods & 1 != 0 { 1.08 } else { 1.0 };
-                    e.health -= damage * if shield { 0.35 } else { 1.0 };
+                    e.health -= damage * if e.encounter.exposed > 0.0 { 1.25 } else { 1.0 }
+                        * if shield { 0.35 } else if e.kind == 8 { hart::damage_taken(e) } else { 1.0 };
+                    if e.kind == tollkeeper::KIND { tollkeeper::pressure(e, damage); }
                     if let Some(element) = tinkering::edge(self.tool_head) {
                         let affixes = e.affixes;
                         let reaction = e.status.apply(element, affixes);
@@ -1545,6 +1382,7 @@ impl Adventure {
             .filter(|e| e.health > 0.0 && e.visible)
             .map(|e| (e.pos, e.site, e.last_seen))
             .collect();
+        let mut navigation_budget = 1;
         for e in &mut self.enemies {
             if !e.visible {
                 if let Some((_, _, seen)) = alerts
@@ -1578,6 +1416,8 @@ impl Adventure {
                     e.flash = e.flash.max(0.06);
                 }
             }
+            if !is_boss(e.kind) { navigation::gravity(e, world, dt); }
+            if encounters::ambush(e, world, feet, eye, forward, dt, &mut self.sounds) { continue; }
             if e.status.any() || !e.affixes.is_empty() {
                 // One mote when the half-second changes. The old gate was true
                 // for every frame inside a 24 Hz bin, so statuses strobed.
@@ -1613,6 +1453,10 @@ impl Adventure {
                 }
             }
             e.stagger = (e.stagger - dt).max(0.0);
+            if e.stagger > 0.0 || e.tell > 0.0 {
+                e.gait *= (-dt * 10.0).exp();
+            }
+            e.recovery = (e.recovery - dt).max(0.0);
             // Sweep knockback and charges; neither may teleport through thin walls.
             let impulse = if e.charge > 0.0 {
                 e.lunge * 8.0
@@ -1651,16 +1495,21 @@ impl Adventure {
             let d = eye - e.center();
             let distance = d.length();
             if e.sight <= 0.0 {
-                e.sight = 0.3;
+                e.sight = 0.12 + (e.slot % 4) as f32 * 0.025;
                 e.visible = distance < 27.0 && line(world, e.center(), eye);
                 if e.visible {
                     e.last_seen = feet;
                     e.alert = 4.0;
                 }
             }
+            if e.visible {
+                // Refresh remembered position each frame while sight remains clear.
+                e.last_seen = feet;
+                e.encounter.observe(feet, dt);
+            }
             e.alert = (e.alert - dt).max(0.0);
             if is_boss(e.kind) {
-                bosses::tick(
+                let (boss_damage, boss_direction) = bosses::tick(
                     e,
                     world,
                     feet,
@@ -1669,7 +1518,12 @@ impl Adventure {
                     &mut self.projectiles,
                     &mut self.hazards,
                     &mut self.sounds,
+                    &mut self.dirty_voxels,
+                    &mut navigation_budget,
+                    self.ward > 0.0 && self.ward_hits > 0,
                 );
+                incoming += boss_damage;
+                incoming_direction += boss_direction;
                 continue;
             }
             if e.stagger > 0.0 {
@@ -1678,12 +1532,14 @@ impl Adventure {
             if e.tell > 0.0 {
                 e.tell -= dt;
                 if e.tell <= 0.0 {
-                    if e.kind == 3 {
+                    e.recovery = 0.24;
+                    if e.kind == 3 || e.encounter.mechanic() == encounters::Mechanic::Interceptor {
                         e.charge = 0.42;
-                    } else if e.kind == 0 {
-                        if distance < 2.2 && e.visible && line(world, e.center(), eye) {
-                            incoming += 10.0;
-                            incoming_direction += (e.center() - eye).normalize_or_zero() * 10.0;
+                    } else if e.kind == 0 || (brawler(e.kind) && e.attack == 3) {
+                        if distance < 2.6 && e.visible && line(world, e.center(), eye) {
+                            let damage = if e.kind == 10 {18.0} else {10.0} * (1.0 + e.menace as f32*0.2);
+                            incoming += damage;
+                            incoming_direction += (e.center() - eye).normalize_or_zero() * damage;
                         }
                     } else if e.visible || e.attack == 2 {
                         tactics::release(e, &mut self.projectiles, &mut self.hazards);
@@ -1703,7 +1559,8 @@ impl Adventure {
                 }
                 continue;
             }
-            let attack_range = bestiary::species(e.kind).map_or(
+            let attack_range = if e.encounter.mechanic() == encounters::Mechanic::Hexer {9.0}
+            else if e.encounter.mechanic() == encounters::Mechanic::Interceptor {6.0} else { bestiary::species(e.kind).map_or(
                 if e.kind == 3 {
                     7.0
                 } else if e.kind == 9 {
@@ -1712,27 +1569,36 @@ impl Adventure {
                     18.0
                 },
                 |s| s.attack_range,
-            );
+            ) };
             if e.visible && e.cooldown <= 0.0 && distance < attack_range {
                 e.attacks = e.attacks.wrapping_add(1);
-                e.attack = if (e.kind == 5 && distance < 4.5)
+                e.attack = if e.encounter.mechanic() == encounters::Mechanic::Hexer {2}
+                else if e.encounter.mechanic() == encounters::Mechanic::Suppressor {0}
+                else if brawler(e.kind) && !matches!(e.kind,3|9) { 3 }
+                else if (e.kind == 5 && distance < 4.5)
                     || (e.kind == 9 && distance < 6.5)
                     || (matches!(e.kind, 10..=13) && distance < 3.4)
                     || (e.kind == 4 && e.attacks % 2 == 0)
+                    || (e.kind == 15 && e.attacks % 2 == 0)
                 {
                     2
                 } else {
                     0
                 };
                 e.aim = if e.attack == 2 {
-                    feet
+                    feet + if e.encounter.mechanic() == encounters::Mechanic::Hexer {
+                        (e.encounter.motion*0.45).clamp_length_max(1.8)
+                    } else {Vec3::ZERO}
                 } else {
                     eye + (player.vel * scale).clamp_length_max(6.0)
-                        * if e.kind == 1 { 0.3 } else { 0.0 }
+                        * (distance / if e.kind == 1 { 16.0 } else { 11.0 }).clamp(0.0, 0.65)
                 };
                 e.tell = e.windup();
                 sound(&mut self.sounds, Cue::Warning, Some(e.center()), 0.55);
-                e.lunge = ((feet - e.pos) * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
+                let intercept = feet + if e.encounter.mechanic() == encounters::Mechanic::Interceptor {
+                    (e.encounter.motion*0.35).clamp_length_max(1.8)
+                } else {Vec3::ZERO};
+                e.lunge = ((intercept - e.pos) * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
                 continue;
             }
             let chasing = (e.visible || e.alert > 0.0) && (e.pos - e.home).length() < 30.0;
@@ -1746,15 +1612,21 @@ impl Adventure {
                         (self.time * 0.22 + e.slot as f32).cos(),
                     ) * 2.0
             };
-            let direction = tactics::heading(
+            let tactical_direction = tactics::heading(
                 e,
                 goal,
                 distance,
                 chasing,
                 &neighbors,
                 &self.projectiles,
+                &self.hazards,
                 self.time,
             );
+            // Route toward a tactical destination, preserving ranged spacing and flanks.
+            let destination = if e.visible && chasing {
+                e.pos + tactical_direction * (distance * 0.5).clamp(2.0, 7.0)
+            } else { goal };
+            let direction = e.navigation.heading(world, e.pos, destination, e.kind, dt, e.slot, &mut navigation_budget);
             let speed = if e.slow > 0.0 {
                 0.5
             } else {
@@ -1769,11 +1641,12 @@ impl Adventure {
                 } else {
                     direction.normalize_or_zero() * speed * e.affixes.speed_mul() * dt
                 };
-            if movement.length_squared() > 1e-8 {
-                e.yaw = (-movement.x).atan2(-movement.z);
-            }
-            if e.visible {
-                e.yaw = (-d.x).atan2(-d.z);
+            let facing = if e.visible { d } else { movement };
+            if facing.x * facing.x + facing.z * facing.z > 1e-8 {
+                let target = (-facing.x).atan2(-facing.z);
+                let delta = (target - e.yaw + std::f32::consts::PI)
+                    .rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                e.yaw += delta.clamp(-dt * 6.0, dt * 6.0);
             }
             let before = e.pos;
             let mut blocked = false;
@@ -1783,7 +1656,7 @@ impl Adventure {
                 let supported = flying(e.kind)
                     || e.velocity.y.abs() > 0.01
                     || factory::solid_point(world, q - Vec3::Y * 0.65);
-                if free(world, q, e.kind) && supported {
+                if free(world, q, e.kind) && supported && navigation::safe_floor(world, q) {
                     e.pos = q;
                 } else if !flying(e.kind)
                     && e.velocity.y.abs() < 0.01
@@ -1800,13 +1673,15 @@ impl Adventure {
             // actually meets a wall. This keeps the common AI tick cheap.
             if blocked && movement.length_squared() > 1e-8 {
                 let desired = movement.normalize_or_zero();
-                let reach = movement.length();
+                let advanced = ((e.pos - before) * Vec3::new(1.0, 0.0, 1.0)).length();
+                let reach = (movement.length() - advanced).max(0.0);
                 let mut best: Option<(Vec3, f32)> = None;
                 for angle in [0.65_f32, -0.65, 1.2, -1.2, 2.2, -2.2] {
                     let candidate = Quat::from_rotation_y(angle) * desired;
                     let progress = candidate.dot(desired);
                     if progress > 0.0
                         && free(world, e.pos + candidate * reach, e.kind)
+                        && navigation::safe_floor(world, e.pos + candidate * reach)
                         && (flying(e.kind)
                             || e.velocity.y.abs() > 0.01
                             || factory::solid_point(
@@ -1835,21 +1710,11 @@ impl Adventure {
                 if free(world, q, e.kind) {
                     e.pos = q;
                 }
-            } else {
-                e.velocity.y = (e.velocity.y - dt * 14.0).max(-14.0);
-                let dy = e.velocity.y * dt;
-                let steps = (dy.abs() / 0.18).ceil().max(1.0) as usize;
-                for _ in 0..steps {
-                    let q = e.pos + Vec3::Y * (dy / steps as f32);
-                    if free(world, q, e.kind) {
-                        e.pos = q;
-                    } else {
-                        e.velocity.y = 0.0;
-                        break;
-                    }
-                }
             }
-            e.phase += (e.pos - before).length();
+            let walked = ((e.pos - before) * Vec3::new(1.0, 0.0, 1.0)).length();
+            e.phase += walked;
+            let moving = (walked / dt.max(0.001) / speed.max(0.1)).clamp(0.0, 1.0);
+            e.gait += (moving - e.gait) * (1.0 - (-dt * 16.0).exp());
         }
         self.tick_hazards(world, feet, eye, dt);
         if incoming > 0.0 {
@@ -2027,6 +1892,11 @@ impl Adventure {
                         if let Some(node) = world.factory.nodes.get_mut(&anchor) {
                             if node.kind.powered() {
                                 node.energy = (node.energy + 48).min(64);
+                            } else if node.kind == factory::Kind::Battery {
+                                // Thaumic induction: a Spark banks 60 kJ.
+                                node.energy = (node.energy + 240)
+                                    .min(factory::power::battery_capacity(node.upgrade));
+                                node.activity = 1.0;
                             }
                         }
                     }
@@ -2103,15 +1973,15 @@ impl Adventure {
                     }
                 } else if let Some(e) = self.enemies.iter_mut().find(|e| {
                     e.health > 0.0
-                        && (e.center() - shot.pos).length()
+                        && if e.kind == 8 { hart::hit(e, shot.pos, if shot.mods.orbit { 0.24 } else { 0.0 }) } else { (e.center() - shot.pos).length()
                             < if tall(e.kind) { 0.8 } else { 0.58 }
-                                + if shot.mods.orbit { 0.24 } else { 0.0 }
+                                + if shot.mods.orbit { 0.24 } else { 0.0 } }
                 }) {
                     if matches!(shot.spell, 0 | 14) || shot.mods.chain {
                         spark_target = Some((e.site, e.slot));
                     }
                     let shatter = e.slow > 0.0 && !matches!(shot.spell, 2 | 13);
-                    let shield = e.kind == 5
+                    let shield = (e.kind == 5
                         && e.guard
                         && shot.spell == 0
                         && !shatter
@@ -2120,7 +1990,8 @@ impl Adventure {
                             -e.yaw.sin(),
                             0.0,
                             -e.yaw.cos(),
-                        )) < -0.3;
+                        )) < -0.3)
+                        || (!shatter && !shot.mods.bore && tollkeeper::guarded(e, shot.velocity));
                     sound(
                         &mut self.sounds,
                         if shield {
@@ -2450,13 +2321,25 @@ impl Adventure {
         // Spells found this frame: (salt, where). Applied after the loop, which
         // borrows the enemy list.
         let mut finds: Vec<(u32, Vec3, bool)> = Vec::new();
-        for e in &self.enemies {
+        let mut cleared_sites = Vec::new();
+        for e in &mut self.enemies {
             if e.health > 0.0 {
+                continue;
+            }
+            if let Some(id) = e.habitat {
+                if settle_habitat_death(world,e,id) {
+                    sound(&mut self.sounds, Cue::Defeat, Some(e.center()), 0.7);
+                }
                 continue;
             }
             let mask = self.records.entry(e.site).or_default();
             if *mask & (1 << e.slot) == 0 {
+                if e.kind == tollkeeper::KIND {
+                    tollkeeper::release_stock(e, world);
+                    self.tollkeepers.remove(&e.site);
+                }
                 *mask |= 1 << e.slot;
+                world.habitats.release(e.pos, 0, if is_boss(e.kind) { 80 } else { 8 });
                 if e.affixes.has(status::Affix::Volatile) {
                     death_blasts.push(e.center());
                 }
@@ -2493,23 +2376,21 @@ impl Adventure {
                 if is_boss(e.kind) {
                     world.expedition.say("The guardian has fallen. Return to the reliquary and claim its relic with F.");
                 }
-                let all = if e.site == IVec3::ZERO { 3 } else { 7 };
-                if *mask & all == all && *mask & 256 == 0 {
-                    *mask |= 256;
-                    let reward = rewards::sanctum(&world.sample_config(), e.site);
-                    world
-                        .expedition
-                        .say("The reliquary is unsealed. Approach its floating relic and press F.");
-                    for &(i, n) in &reward.items {
-                        world.expedition.add(i, n);
+                if let Some(recipe) = e.encounter.recipe {
+                    for &(item, amount) in encounters::RECIPES[recipe].loot {
+                        world.expedition.add(item, amount);
                     }
-                    self.reward = Some(reward);
-                    // Clearing a whole site always teaches something.
-                    finds.push((discovery::site_salt(e.site), e.center(), true));
-                    sound(&mut self.sounds, Cue::Treasure, None, 0.75);
+                }
+                if is_boss(e.kind) {
+                    finds.push((discovery::site_salt(e.site).wrapping_add(e.kind * 193), e.center(), true));
+                }
+                let all = (1 << encounters::slots(e.site)) - 1;
+                if *mask & all == all && *mask & 256 == 0 {
+                    cleared_sites.push((e.site, e.center()));
                 }
             }
         }
+        for (id, at) in cleared_sites { self.complete_site(world, id, at); }
         for (salt, at, guaranteed) in finds {
             self.discover_spell(world, salt, at, guaranteed);
         }
@@ -2536,8 +2417,26 @@ impl Adventure {
                 rank_name(self.rank())
             ));
         }
+        for e in &self.enemies {
+            if let Some(id) = e.habitat {
+                // A volatile chain reaction may kill after the main death pass.
+                // Settle it before saving the resident, never encode dead health.
+                if e.health <= 0.0 || e.pos.y <= -256.0 {
+                    settle_habitat_death(world,e,id);
+                    continue;
+                }
+                if let Some(resident) = world.habitats.sources.iter_mut().find(|s| s.id == id).and_then(|s| s.resident.as_mut()) {
+                    resident.pos = e.pos;
+                    resident.health = e.health;
+                    if e.kind==matron::KIND {resident.pods=e.matron.pods;resident.spores=e.matron.spores;resident.work=e.matron.work;}
+                }
+            }
+            if e.kind == tollkeeper::KIND && e.health > 0.0 && ((e.pos-feet).length()>=90.0 || e.pos.y<=-256.0) {
+                self.tollkeepers.insert(e.site, tollkeeper::snapshot(e));
+            }
+        }
         self.enemies
-            .retain(|e| e.health > 0.0 && (e.pos - feet).length() < 90.0 && e.pos.y > -256.0);
+            .retain(|e| e.health > 0.0 && (e.habitat.is_some() || (e.pos - feet).length() < 90.0) && e.pos.y > -256.0);
         for e in &mut self.effects {
             e.life -= dt;
         }
@@ -2566,13 +2465,13 @@ impl Adventure {
             self.mana = (self.max_mana() * 0.65).max(50.0);
             self.hunger = self.hunger.max(65.0);
             self.invulnerable = 5.0;
-            self.projectiles.clear();
+            self.projectiles.retain(|p|p.farm.is_some());
             self.hazards.clear();
             self.wells.clear();
             self.melee_buffer = 0.0;
             self.strike_delay = 0.0;
             self.melee_cd = 0.0;
-            self.enemies.clear();
+            self.enemies.retain(|e|e.habitat.is_some());
             self.blooms.clear();
             self.arcs.clear();
             self.crosses.clear();
@@ -2598,6 +2497,7 @@ impl Adventure {
             }
         }
         self.refresh_focus(world, player.eye(world.voxel_scale) * scale, forward);
+        world.habitats.shots=self.projectiles.iter().filter_map(|s|s.farm.map(|owner|super::habitats::FarmShot {owner,pos:s.pos,velocity:s.velocity,life:s.life})).collect();
         consumed
     }
     pub fn take_terrain_blast(&mut self) -> Option<(Vec3, f32)> {
@@ -2809,12 +2709,92 @@ pub fn tick(
     cycle: bool,
     melee: bool,
 ) -> bool {
+    if super::habitats::review::paused() {return false;}
+    let feet = player.pos * world.voxel_scale.meters();
+    super::habitats::tick(world, feet, dt.clamp(0.0, 0.1));
+    let old_rank = world.adventure.rank();
+    world.adventure.farm_mastery = world.habitats.mastered.count_ones() as usize;
+    if world.adventure.rank() > old_rank {
+        world.adventure.health = world.adventure.max_health();
+        world.adventure.mana = world.adventure.max_mana();
+        world.expedition.say("Matron farm mastered. A reliable paid harvesting cycle counts toward mastery like an expedition victory.");
+    }
+    // Reactivate the saved individual. An obstructed body waits; construction is
+    // never erased and health/material state is never reset on re-entry.
+    for source in &world.habitats.sources {
+        let Some(resident) = &source.resident else { continue; };
+        if world.adventure.enemies.len() >= MAX_ENEMIES+64 { break; }
+        if world.adventure.enemies.iter().any(|e| e.habitat == Some(source.id))
+            || !free(world, resident.pos, source.family.kind()) { continue; }
+        let mut enemy = Enemy::new(IVec3::new(source.id as i32, 0, -27), 0, source.family.kind(), resident.pos, 0);
+        enemy.habitat = Some(source.id);
+        enemy.health = resident.health;
+        enemy.matron.pods=resident.pods;enemy.matron.spores=resident.spores;enemy.matron.work=resident.work;
+        enemy.home = source.pos.unwrap_or(resident.pos);
+        enemy.encounter.recipe = None;
+        enemy.encounter.concealed = false;
+        world.adventure.enemies.push(enemy);
+    }
     let mut adventure = std::mem::take(&mut world.adventure);
+    if !adventure.farm_shots_restored {
+        adventure.farm_shots_restored=true;
+        for shot in &world.habitats.shots {
+            adventure.emit_spell_modified(0,shot.pos,shot.velocity.normalize_or_zero(),None,Default::default());
+            if let Some(p)=adventure.projectiles.last_mut() {p.farm=Some(shot.owner);p.velocity=shot.velocity;p.life=shot.life;}
+        }
+    }
+    adventure.habitat_emitters(world);
     let consumed = adventure.update(world, player, dt, cast, cycle, melee);
     world.adventure = adventure;
+    enemy_review::after(world, player);
     world.reconcile_legacy_to_inventory();
     world.sync_from_inventory();
     consumed
+}
+
+pub(crate) fn habitat_space(world: &World, pos: Vec3, kind: u32) -> bool { free(world, pos, kind) }
+pub(crate) fn habitat_health(kind: u32) -> f32 { enemy_health(kind) }
+fn settle_habitat_death(world: &mut World,e: &Enemy,id:u32) -> bool {
+    if let Some(resident)=world.habitats.sources.iter_mut().find(|s|s.id==id).and_then(|s|s.resident.as_mut()) {
+        resident.pods=e.matron.pods; resident.spores=e.matron.spores; resident.work=e.matron.work;
+    }
+    if let Some((resource,amount))=world.habitats.death(id,e.pos) {
+        world.expedition.add(resource,amount); true
+    } else {false}
+}
+impl Adventure {
+    pub(crate) fn restore_farm_mastery(&mut self, flags: u32) {
+        self.farm_mastery = flags.count_ones() as usize;
+    }
+}
+
+impl Adventure {
+    fn habitat_emitters(&mut self, world: &mut World) {
+        for index in 0..world.habitats.sources.len() {
+            let source = &world.habitats.sources[index];
+            if !source.emitter || source.reserve || source.emit_ticks > 0 || self.projectiles.len() >= 96 { continue; }
+            let Some(p) = source.pos else { continue; };
+            let Some(target) = self.enemies.iter().find(|e| e.habitat == Some(source.id) && e.health > 0.0 && e.pos.distance(p) < 6.0) else { continue; };
+            let origin = p + Vec3::new(-0.7, 1.1, 0.0);
+            let aim = target.center();
+            // Reserve the next Matron's charging input; production buffers and
+            // supplied surplus are the only fuel for a paid ordinary spell.
+            let held = if source.family == super::habitats::Family::Matron { 32 } else { 0 };
+            let cost = spell_cost(0).ceil() as u32;
+            if source.mana + source.charge.saturating_sub(held) < cost { continue; }
+            // World geometry remains authoritative for both the shot and its target.
+            let blocked = trace::solid(world, origin, aim).is_some();
+            if blocked { continue; }
+            let source = &mut world.habitats.sources[index];
+            let from_buffer = source.mana.min(cost);
+            source.mana -= from_buffer;
+            source.charge -= cost-from_buffer;
+            source.mana_used = source.mana_used.saturating_add(cost);
+            source.emit_ticks = (spell_cooldown(0)*4.0).ceil().max(1.0) as u32;
+            self.emit_spell_modified(0,origin,(aim-origin).normalize_or_zero(),None,Default::default());
+            if let Some(shot)=self.projectiles.last_mut() {shot.farm=Some(source.id);}
+        }
+    }
 }
 
 #[cfg(test)]

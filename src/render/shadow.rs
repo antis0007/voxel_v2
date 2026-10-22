@@ -3,6 +3,10 @@ use glam::{Mat4, Vec3, Vec4};
 use crate::mesh::Vertex3;
 use crate::render::{ChunkCache, render_distance_settings};
 use crate::world::CHUNK_SIZE;
+#[cfg(test)]
+#[path = "shadow_contract.rs"]
+mod contract;
+use super::{coverage::ResidentCoverage, horizon::GpuMesh};
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub fn enabled() -> bool {
     ENABLED.load(std::sync::atomic::Ordering::Relaxed)
@@ -12,8 +16,10 @@ pub fn set_enabled(value: bool) {
 }
 
 pub const SHADOW_MAP_SIZE: u32 = 2048;
-pub const CASCADE_COUNT: usize = 4;
+pub const NEAR_CASCADE_COUNT: usize = 4;
+pub const CASCADE_COUNT: usize = NEAR_CASCADE_COUNT + 1;
 pub const SHADOW_UPDATE_EPSILON: f32 = 2.0e-4;
+pub const FAR_SHADOW_DISTANCE: f32 = 8192.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -35,14 +41,21 @@ pub struct ShadowUniform {
     pub world_scale: f32,
     pub _padding: u32,
 }
+const _: [(); 80] = [(); std::mem::size_of::<CascadeData>()];
+const _: [(); 416] = [(); std::mem::size_of::<ShadowUniform>()];
+const _: [(); 400] = [(); std::mem::offset_of!(ShadowUniform, cascade_count)];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadowGenUniform {
     light_view_proj: [[f32; 4]; 4],
     world_scale: f32,
-    _padding: [u32; 3],
+    time: f32,
+    wind: [f32; 2],
+    resident_coverage: ResidentCoverage,
 }
+const _: [(); 10400] = [(); std::mem::size_of::<ShadowGenUniform>()];
+const _: [(); 80] = [(); std::mem::offset_of!(ShadowGenUniform, resident_coverage)];
 
 pub struct ShadowRenderer {
     pub uniform_buffer: wgpu::Buffer,
@@ -70,6 +83,10 @@ pub struct ShadowRenderer {
     cascade_centers: [Vec3; CASCADE_COUNT],
     cascade_radii: [f32; CASCADE_COUNT],
     pub draw_lists: [Vec<glam::IVec3>; CASCADE_COUNT],
+    wind_time: [f32; 3],
+    horizon_generation: u64,
+    resident_coverage: ResidentCoverage,
+    parent_draw_lists: [Vec<(usize, std::ops::Range<u32>)>; CASCADE_COUNT],
 }
 
 fn unproject_clip(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
@@ -139,7 +156,7 @@ impl ShadowRenderer {
             label: Some("shadow gen layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -165,10 +182,19 @@ impl ShadowRenderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex3>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 52, shader_location: 4 },
+                    ],
                 }],
             },
-            fragment: None,
+            fragment: Some(wgpu::FragmentState {
+                module: shadow_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
             primitive: wgpu::PrimitiveState {
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
@@ -238,7 +264,11 @@ impl ShadowRenderer {
             desired_light_dirs: [Vec3::ZERO; CASCADE_COUNT],
             cascade_centers: [Vec3::ZERO; CASCADE_COUNT],
             cascade_radii: [0.0; CASCADE_COUNT],
-            draw_lists: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            draw_lists: std::array::from_fn(|_| Vec::new()),
+            wind_time: [0.0; 3],
+            horizon_generation: u64::MAX,
+            resident_coverage: ResidentCoverage::default(),
+            parent_draw_lists: std::array::from_fn(|_| Vec::new()),
         }
     }
 
@@ -247,7 +277,6 @@ impl ShadowRenderer {
         light_dir: Vec3,
         inv_view_proj: Mat4,
         camera_near: f32,
-        camera_far: f32,
         world_scale: f32,
     ) {
         let safe_dir = if light_dir.length_squared() > 1e-6 {
@@ -265,12 +294,16 @@ impl ShadowRenderer {
 
         let mut splits = [0.0; CASCADE_COUNT + 1];
         splits[0] = n_world;
-        for i in 1..=CASCADE_COUNT {
-            let p = i as f32 / CASCADE_COUNT as f32;
+        for i in 1..=NEAR_CASCADE_COUNT {
+            let p = i as f32 / NEAR_CASCADE_COUNT as f32;
             let log = n_world * (f_world / n_world).powf(p);
             let uni = n_world + (f_world - n_world) * p;
             splits[i] = lambda * log + (1.0 - lambda) * uni;
         }
+        // Keep all four existing receiver intervals and their resolution.
+        // One additional layer supplies broad terrain/canopy occlusion; the
+        // receiver fades its final 22% smoothly to avoid a hard range edge.
+        splits[CASCADE_COUNT] = FAR_SHADOW_DISTANCE;
 
         let up = if safe_dir.y.abs() > 0.96 {
             Vec3::X
@@ -420,6 +453,31 @@ impl ShadowRenderer {
         }
     }
 
+    pub fn set_detail_wind(&mut self, time: f32, wind: [f32; 2]) {
+        if self.wind_time != [time, wind[0], wind[1]]
+            && (wind[0].abs() + wind[1].abs() + self.wind_time[1].abs() + self.wind_time[2].abs()) > 0.001
+        {
+            // Tuft shadows only belong to the two near cascades. Refresh both
+            // with the same time as color/depth; distant cascades omit tufts.
+            self.pending_cascades |= 3;
+            self.urgent_cascades |= 3;
+        }
+        self.wind_time = [time, wind[0], wind[1]];
+    }
+
+    pub fn set_horizon_source(&mut self, generation: u64, coverage: &ResidentCoverage) {
+        if self.horizon_generation != generation
+            || self.resident_coverage != *coverage
+        {
+            self.horizon_generation = generation;
+            self.resident_coverage = *coverage;
+            // A parent publication or ownership handoff invalidates every
+            // layer together. Do not retain shadows from an obsolete owner.
+            self.shadow_map_dirty = true;
+            self.force_refresh = true;
+        }
+    }
+
     pub fn apply_update_if_needed(&mut self, queue: &wgpu::Queue, mesh_revision: u64) -> bool {
         const ALL: u8 = (1 << CASCADE_COUNT) - 1;
         if self.shadow_map_dirty || self.last_mesh_revision != mesh_revision {
@@ -456,7 +514,9 @@ impl ShadowRenderer {
             let gen_uni = ShadowGenUniform {
                 light_view_proj: self.active_uniform.cascades[i].light_view_proj,
                 world_scale: self.active_uniform.world_scale,
-                _padding: [0; 3],
+                time: if i < 2 { self.wind_time[0] } else { -1.0 },
+                wind: [self.wind_time[1], self.wind_time[2]],
+                resident_coverage: self.resident_coverage,
             };
             queue.write_buffer(&self.gen_buffers[i], 0, bytemuck::bytes_of(&gen_uni));
         }
@@ -477,21 +537,28 @@ impl ShadowRenderer {
     pub fn renders_cascade(&self, i: usize) -> bool {
         self.frame_cascades & (1 << i) != 0
     }
-    pub fn build_cascade_draw_lists(&mut self, cache: &ChunkCache) {
+    pub fn build_cascade_draw_lists(&mut self, cache: &ChunkCache, horizon: Option<&GpuMesh>) {
         // Rebuild and submit lists only for layers selected this frame.
         for i in 0..CASCADE_COUNT {
             if !self.renders_cascade(i) {
                 continue;
             }
             self.draw_lists[i].clear();
-            let planes = crate::render::extract_planes(Mat4::from_cols_array_2d(
-                &self.active_uniform.cascades[i].light_view_proj,
-            ));
+            self.parent_draw_lists[i].clear();
+            let matrix = Mat4::from_cols_array_2d(&self.active_uniform.cascades[i].light_view_proj);
+            let planes = crate::render::extract_planes(matrix);
             for (&coord, mesh) in &cache.gpu_meshes {
+                if !cache.published_coords.contains(&coord) {continue;}
+                if self.resident_coverage.header[3] != 0
+                    && !self.resident_coverage.contains_column(coord.x, coord.z)
+                {
+                    continue;
+                }
                 if mesh.index_count == 0 {
                     continue;
                 }
                 let (center, radius) = crate::render::chunk_bounds_sphere(coord);
+                let radius = radius + 0.04 / self.active_uniform.world_scale.max(0.0001);
                 let center = center * self.active_uniform.world_scale;
                 let radius = radius * self.active_uniform.world_scale;
                 if !planes
@@ -501,12 +568,37 @@ impl ShadowRenderer {
                     self.draw_lists[i].push(coord);
                 }
             }
+            // Depth is LessEqual in this pass. Fill the light's nearer surfaces
+            // first so buried cave/fluid geometry can fail early depth testing.
+            // Hash-map order otherwise changes after resident mesh updates.
+            let scale = self.active_uniform.world_scale;
+            let depth = |coord| {
+                let (center, _) = crate::render::chunk_bounds_sphere(coord);
+                (matrix * (center * scale).extend(1.0)).z
+            };
+            self.draw_lists[i].sort_unstable_by(|a, b| depth(*a).total_cmp(&depth(*b))
+                .then_with(|| (a.x, a.y, a.z).cmp(&(b.x, b.y, b.z))));
+            if let Some(horizon) = horizon {
+                for (page_index, page) in horizon.pages.iter().enumerate() {
+                    if !horizon.cull && !page.batches.iter().any(|b|b.conditional()) {
+                        if page.count != 0 {
+                            self.parent_draw_lists[i].push((page_index, 0..page.count));
+                        }
+                    } else {
+                        for batch in &page.batches {
+                            if batch.selected(horizon.collared) && (!horizon.cull || batch.visible(Vec3::ZERO, &planes)) {
+                                self.parent_draw_lists[i].push((page_index, batch.indices.clone()));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     pub fn draw_call_count(&self) -> usize {
         (0..CASCADE_COUNT)
             .filter(|&i| self.renders_cascade(i))
-            .map(|i| self.draw_lists[i].len())
+            .map(|i| self.draw_lists[i].len() + self.parent_draw_lists[i].len())
             .sum()
     }
 
@@ -514,6 +606,7 @@ impl ShadowRenderer {
         &'a self,
         encoder: &mut wgpu::CommandEncoder,
         cache: &'a ChunkCache,
+        horizon: Option<&'a GpuMesh>,
         timestamp_query_set: Option<&'a wgpu::QuerySet>,
         timestamp_queries: &[Option<(u32, u32)>; CASCADE_COUNT],
     ) {
@@ -548,6 +641,14 @@ impl ShadowRenderer {
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            }
+            if let Some(horizon) = horizon {
+                for (page_index, indices) in &self.parent_draw_lists[i] {
+                    let page = &horizon.pages[*page_index];
+                    pass.set_vertex_buffer(0, page.vertices.slice(..));
+                    pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(indices.clone(), 0, 0..1);
                 }
             }
         }

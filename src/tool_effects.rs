@@ -104,21 +104,27 @@ pub fn draw_blasts(mesh: &mut Model, blasts: &[Blast]) {
                     5.0 * glow,
                 );
             }
-            mesh.orb(
-                origin + n * t * 2.0,
-                b.radius * 0.26 * (1.0 - t / 0.38),
-                [1.0, 0.83, 0.42],
-                8.0 * glow,
-            );
+            // Keep the pressure ring, but leave its centre open after a brief
+            // pixel flash so an enemy's next tell stays readable through a hit.
+            if t < 0.10 {
+                mesh.glow_voxel(
+                    origin + n * t * 2.0,
+                    Vec3::splat((b.radius * 0.08).min(0.15) * (1.0-t/0.10)),
+                    Quat::IDENTITY,
+                    [1.0,0.83,0.42],
+                    1.8*glow,
+                    0.8,
+                );
+            }
         }
-        for i in 0..40 {
+        for i in 0..24 {
             let a = i as f32 * 2.39996;
             let ring = tangent * a.cos() + bitangent * a.sin();
             let speed = b.radius * (1.2 + (i % 5) as f32 * 0.22);
             let velocity =
                 (ring * 0.7 + n * (0.45 + (i % 3) as f32 * 0.18) + Vec3::Y * 0.3) * speed;
             let p = origin + ring * b.radius * 0.12 + velocity * t - Vec3::Y * 4.9 * t * t;
-            let size = (0.045 + (i % 4) as f32 * 0.025) * b.radius.sqrt() * fade;
+            let size = ((0.035 + (i % 4) as f32 * 0.015) * b.radius.sqrt()).min(0.12) * fade;
             mesh.cuboid(
                 p,
                 Vec3::splat(size),
@@ -132,7 +138,7 @@ pub fn draw_blasts(mesh: &mut Model, blasts: &[Blast]) {
                     + n * t * b.radius * 0.6
                     + Vec3::Y * t * 0.8;
                 let c = b.color.map(|v| v * 0.65 + 0.16);
-                mesh.orb(dust, (0.10 + t * 0.22) * b.radius.sqrt() * fade, c, 0.0);
+                mesh.glow_voxel(dust,Vec3::splat(0.05*fade),Quat::IDENTITY,c,0.0,0.45*fade);
             }
         }
     }

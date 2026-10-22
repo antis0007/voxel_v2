@@ -14,17 +14,21 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-#[derive(Debug)]
 struct Job {
     id: u64,
     key: ChunkKey,
     cfg: WorldSampleConfig,
     cancelled: Arc<AtomicBool>,
+    seed_activity: bool,
+    source: Option<Arc<super::ResidentChunk>>,
 }
 struct Pending {
     key: ChunkKey,
     revision: u64,
     cancelled: Arc<AtomicBool>,
+    seed_activity: bool,
+    seed_only: bool,
+    cached_seed_source: bool,
 }
 // Pending jobs include running arrays and completed results awaiting collection.
 // Reserve this window from the CPU source budget before admission, rather than
@@ -71,12 +75,15 @@ impl TerrainGenerator {
                         let Ok(job) = job else {
                             break;
                         };
-                        let chunk = std::panic::catch_unwind(|| {
+                        let chunk = if job.source.is_some() { None } else { std::panic::catch_unwind(|| {
                             crate::world::generate_padded(&job.cfg, job.key.coord, &job.cancelled)
                         })
                         .ok()
-                        .flatten();
-                        let activity = chunk.as_ref().and_then(crate::simulation::discover);
+                        .flatten() };
+                        let activity = if job.seed_activity {
+                            job.source.as_ref().map(|source| &***source)
+                                .or(chunk.as_ref()).and_then(crate::simulation::discover)
+                        } else { None };
                         if completed.send((job.id, chunk, activity)).is_err() {
                             break;
                         }
@@ -119,14 +126,14 @@ impl TerrainGenerator {
             }
         }
     }
-    pub(super) fn schedule_many<I: IntoIterator<Item = ChunkKey>>(
+    pub(super) fn schedule_many<I: IntoIterator<Item = (ChunkKey, bool)>>(
         &mut self,
         _gpu: &Gpu,
         keys: I,
         cfg: WorldSampleConfig,
         revision: u64,
     ) {
-        for key in keys {
+        for (key, seed_activity) in keys {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
             let cancelled = Arc::new(AtomicBool::new(false));
@@ -136,17 +143,31 @@ impl TerrainGenerator {
                     key,
                     cfg,
                     cancelled: cancelled.clone(),
+                    seed_activity, source: None,
                 })
-                .expect("terrain admission exceeded worker capacity");
+                .unwrap_or_else(|_| panic!("terrain admission exceeded worker capacity"));
             self.pending.insert(
                 id,
                 Pending {
                     key,
                     revision,
                     cancelled,
+                    seed_activity, seed_only: false, cached_seed_source: false,
                 },
             );
         }
+    }
+    pub(super) fn seed_pending(&self, coord: IVec3) -> bool {
+        self.pending.values().any(|job| job.seed_only && job.key.coord == coord && !job.cancelled.load(Ordering::Relaxed))
+    }
+    pub(super) fn schedule_seed(&mut self, key: ChunkKey, cfg: WorldSampleConfig, revision: u64, source: Option<Arc<super::ResidentChunk>>) {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cached_seed_source = source.is_some();
+        self.sender.try_send(Job { id, key, cfg, cancelled: cancelled.clone(), seed_activity: true, source })
+            .unwrap_or_else(|_| panic!("seed admission exceeded terrain capacity"));
+        self.pending.insert(id, Pending { key, revision, cancelled, seed_activity: true, seed_only: true, cached_seed_source });
     }
     pub(super) fn collect_finished(
         &mut self,
@@ -157,6 +178,8 @@ impl TerrainGenerator {
         u64,
         Option<GeneratedChunk>,
         Option<Box<crate::world::activity::Mask>>,
+        bool,
+        bool,
     )> {
         let start = Instant::now();
         let mut output = Vec::new();
@@ -173,13 +196,18 @@ impl TerrainGenerator {
             if job.cancelled.load(Ordering::Relaxed) {
                 continue;
             }
+            if job.seed_only {
+                if chunk.is_none() && !job.cached_seed_source { continue; }
+                output.push((job.key, job.revision, None, activity, true, job.seed_activity));
+                continue;
+            }
             let chunk = chunk
                 .filter(|_| snapshot.edits_ready(job.key.coord))
                 .map(|mut chunk| {
                     apply_snapshot_edits_cubic(&mut chunk, snapshot);
                     chunk
                 });
-            output.push((job.key, job.revision, chunk, activity));
+            output.push((job.key, job.revision, chunk, activity, false, job.seed_activity));
         }
         output
     }

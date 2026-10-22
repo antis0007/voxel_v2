@@ -1,14 +1,14 @@
 //! Per-worker bounded caches. No locks are held while evaluating dependencies.
 use super::{BushProfile, ColumnSample, TreeProfile, WorldSampleConfig};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fast_hash::FastMap;
 
 #[derive(Default)]
 struct Cache {
     cfg: Option<WorldSampleConfig>,
-    columns: HashMap<(i32, i32), ColumnSample>,
-    trees: HashMap<(i32, i32), Option<TreeProfile>>,
-    bushes: HashMap<(i32, i32), Option<BushProfile>>,
+    columns: FastMap<(i32, i32), ColumnSample>,
+    trees: FastMap<(i32, i32), Option<TreeProfile>>,
+    bushes: FastMap<(i32, i32), Option<BushProfile>>,
 }
 thread_local! { static CACHE: RefCell<Cache> = RefCell::new(Cache::default()); }
 

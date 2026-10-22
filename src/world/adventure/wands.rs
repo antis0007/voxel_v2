@@ -202,13 +202,9 @@ pub fn capacity(tier: u32) -> usize {
     }
 }
 
-/// Fills newly unlocked empty slots when a wand is assembled or upgraded.
-/// Existing spells stay put so a player's deck is never overwritten.
-pub fn seed_unlocked_slots(loadout: &mut Loadout, tier: u32) {
-    seed_unlocked_slots_known(loadout, tier, &|_| true);
-}
-
-/// Like [`seed_unlocked_slots`], but only places spells the player has found.
+/// Fills newly unlocked empty slots when a wand is assembled or upgraded, placing
+/// only spells the player has found. Existing spells stay put so a player's deck
+/// is never overwritten.
 pub fn seed_unlocked_slots_known(loadout: &mut Loadout, tier: u32, known: &dyn Fn(u32) -> bool) {
     let offers: &[u32] = match tier {
         1 => &[0, 2, 1, 4],
@@ -747,6 +743,7 @@ impl Adventure {
         self.prepare_wand();
     }
 
+    #[cfg(test)]
     pub(super) fn emit_spell(&mut self, spell: u32, pos: Vec3, dir: Vec3, payload: Option<u32>) {
         self.emit_spell_modified(spell, pos, dir, payload, ShotMods::default());
     }
@@ -775,6 +772,7 @@ impl Adventure {
             _ => Vec3::ZERO,
         };
         self.projectiles.push(Projectile {
+            farm: None,
             pos,
             velocity: dir * speed + arc_lift,
             hostile: false,
@@ -943,7 +941,7 @@ impl Adventure {
                 }
                 4 => {
                     self.ward = if self.knows(9) { 9.0 } else { 6.0 };
-                    self.ward_hits = 3;
+                    self.ward_hits = if self.knows(10) {4} else {3};
                     self.effect(eye + forward * 0.7, spell_color(4), 0.7);
                     self.spawn_voxel_burst(eye + forward * 0.7, spell_color(4), 16, 1.1, 0.04);
                     played_cue.get_or_insert(Cue::Ward);
@@ -1056,8 +1054,12 @@ impl Adventure {
                     if spell == 14 && !player.flying {
                         player.vel -= dir * 1.4;
                     }
-                    self.effect(eye + forward * 0.5, spell_color(spell), 0.14);
-                    self.spawn_voxel_burst(eye + forward * 0.55, spell_color(spell), 8, 1.2, 0.032);
+                    // The viewmodel already supplies the muzzle flash. The old
+                    // ten-orb burst at the aiming point covered distant tells.
+                    // Keep a few small departing sparks beside the wand instead.
+                    let muzzle = eye + forward * 0.65
+                        + forward.cross(up_axis).normalize_or_zero() * 0.22 - up_axis * 0.14;
+                    self.spawn_voxel_burst(muzzle, spell_color(spell), 4, 0.6, 0.02);
                     let (cue, pitch) = spell_audio(spell);
                     played_cue.get_or_insert(cue);
                     played_pitch = pitch;

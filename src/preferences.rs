@@ -1,4 +1,5 @@
 //! Versioned preferences with bounded decoding and a debounced, atomic background writer.
+
 use crate::{
     egui_ui::EguiUi,
     fluid::VoxelScalePreset,
@@ -13,8 +14,8 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-const MAGIC: &[u8; 8] = b"VXPRF006";
-const WORDS: usize = 25;
+const MAGIC: &[u8; 8] = b"VXPRF008";
+const WORDS: usize = 26 + crate::egui_ui::magic_style::WORDS;
 fn path() -> PathBuf {
     storage::save_directory().join("preferences.vxp")
 }
@@ -23,6 +24,13 @@ fn hash(b: &[u8]) -> u64 {
         (h ^ v as u64).wrapping_mul(0x100000001b3)
     })
 }
+/// UI scale bounds and default. The old default of 1.0 was too small for the
+/// recipe, production and factory screens on a 720p window, so 1.0 saved by an
+/// older build is treated as unchosen and migrates to the new default.
+pub const UI_SCALE_MIN: f32 = 0.75;
+pub const UI_SCALE_MAX: f32 = 2.5;
+pub const UI_SCALE_DEFAULT: f32 = 1.5;
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct Preferences {
     pub fov: f32,
@@ -51,6 +59,8 @@ pub struct Preferences {
     pub indirect_lighting: bool,
     /// Menu and HUD zoom on top of the native DPI correction.
     pub ui_scale: f32,
+    pub hotbar_scale: f32,
+    pub magic: crate::egui_ui::magic_style::Settings,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -82,7 +92,9 @@ impl Default for Preferences {
             effects_volume: 0.65,
             cloud_scale: 3,
             indirect_lighting: true,
-            ui_scale: 1.0,
+            ui_scale: UI_SCALE_DEFAULT,
+            hotbar_scale: 1.0,
+            magic: Default::default(),
         }
     }
 }
@@ -135,6 +147,8 @@ impl Preferences {
         ui.invert_mouse = self.invert;
         ui.show_hud = self.hud;
         ui.ui_scale = self.ui_scale;
+        ui.hotbar_scale = self.hotbar_scale;
+        crate::egui_ui::magic_style::set(&ui.ctx, self.magic);
     }
     pub fn capture(
         ui: &EguiUi,
@@ -183,11 +197,13 @@ impl Preferences {
             effects_volume: crate::audio::volume(),
             cloud_scale: render::cloud_render_scale(),
             indirect_lighting: render::indirect_lighting_enabled(),
-            ui_scale: ui.ui_scale.clamp(0.75, 1.75),
+            ui_scale: ui.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX),
+            hotbar_scale: ui.hotbar_scale.clamp(0.7, 1.6),
+            magic: crate::egui_ui::magic_style::get(&ui.ctx),
         }
     }
     fn words(self) -> [u32; WORDS] {
-        [
+        let base = [
             self.fov.to_bits(),
             self.sensitivity.to_bits(),
             self.invert as u32,
@@ -213,13 +229,22 @@ impl Preferences {
             self.cloud_scale,
             self.indirect_lighting as u32,
             self.ui_scale.to_bits(),
-        ]
+            self.hotbar_scale.to_bits(),
+        ];
+        let mut words = [0; WORDS];
+        words[..26].copy_from_slice(&base);
+        words[26..].copy_from_slice(&self.magic.words());
+        words
     }
     fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             (bytes.len() == 8 + WORDS * 4 + 8 && bytes.get(..8) == Some(MAGIC.as_slice()))
+                || (bytes.len() == 8 + 26 * 4 + 8
+                    && bytes.get(..8) == Some(b"VXPRF007".as_slice()))
                 || (bytes.len() == 8 + 24 * 4 + 8
                     && bytes.get(..8) == Some(b"VXPRF005".as_slice()))
+                || (bytes.len() == 8 + 25 * 4 + 8
+                    && bytes.get(..8) == Some(b"VXPRF006".as_slice()))
                 || (bytes.len() == 8 + 24 * 4 + 8
                     && bytes.get(..8) == Some(b"VXPRF004".as_slice()))
                 || (bytes.len() == 8 + 23 * 4 + 8
@@ -266,6 +291,8 @@ impl Preferences {
             // silently pin upgraded installations to the broken 512 MiB cap.
             gpu: if w[13] == 0
                 || (bytes.get(..8) != Some(MAGIC.as_slice())
+                    && bytes.get(..8) != Some(b"VXPRF007".as_slice())
+                    && bytes.get(..8) != Some(b"VXPRF006".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF005".as_slice())
                     && w[13] == 512)
             {
@@ -286,9 +313,17 @@ impl Preferences {
             ui_scale: w
                 .get(24)
                 .map(|n| f32::from_bits(*n))
+                // 1.0 was the old default, so it counts as unchosen.
+                .filter(|n| n.is_finite() && (*n - 1.0).abs() > 1.0e-6)
+                .unwrap_or(UI_SCALE_DEFAULT)
+                .clamp(UI_SCALE_MIN, UI_SCALE_MAX),
+            hotbar_scale: w
+                .get(25)
+                .map(|n| f32::from_bits(*n))
                 .filter(|n| n.is_finite())
                 .unwrap_or(1.0)
-                .clamp(0.75, 1.75),
+                .clamp(0.7, 1.6),
+            magic: crate::egui_ui::magic_style::Settings::decode(w.get(26..).unwrap_or(&[])),
         })
     }
     fn bytes(self) -> Vec<u8> {
@@ -326,7 +361,15 @@ mod tests {
         body[..8].copy_from_slice(b"VXPRF005");
         body.extend_from_slice(&hash(&body).to_le_bytes());
         let decoded = Preferences::decode(&body).expect("legacy preferences must decode");
-        assert_eq!(decoded.ui_scale, 1.0);
+        assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
+    }
+
+    #[test]
+    fn a_saved_one_point_zero_scale_migrates_to_the_default() {
+        let mut preferences = Preferences::default();
+        preferences.ui_scale = 1.0;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
     }
 
     #[test]
@@ -334,7 +377,7 @@ mod tests {
         let mut preferences = Preferences::default();
         preferences.ui_scale = 9.0;
         let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
-        assert_eq!(decoded.ui_scale, 1.75);
+        assert_eq!(decoded.ui_scale, UI_SCALE_MAX);
     }
 }
 

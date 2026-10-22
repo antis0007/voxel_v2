@@ -139,7 +139,7 @@ fn stat_bar(ui: &mut egui::Ui, label: &str, multiplier: f32, color: Color32) {
             egui::ProgressBar::new(normal)
                 .desired_width((ui.available_width() - 12.0).clamp(68.0, 180.0))
                 .fill(color)
-                .text(RichText::new(format!("×{multiplier:.2}")).size(10.0)),
+                .text(RichText::new(format!("×{multiplier:.2}")).size(11.0)),
         );
     });
 }
@@ -171,14 +171,14 @@ fn part_card(
                     );
                     ui.label(
                         RichText::new(format!("{} · {}", material.name(), part.stat_label()))
-                            .size(10.0)
+                            .size(11.0)
                             .color(accent),
                     );
                 });
             });
             ui.label(
                 RichText::new(part.blurb())
-                    .size(10.0)
+                    .size(11.0)
                     .color(presentation::MUTED),
             );
             ui.add_space(3.0);
@@ -189,7 +189,7 @@ fn part_card(
             };
             ui.label(
                 RichText::new(format!("Currently ×{value:.2}"))
-                    .size(10.5)
+                    .size(11.0)
                     .color(presentation::PAPER),
             );
             ui.small(material.trait_detail());
@@ -200,7 +200,7 @@ fn part_card(
                     let cost = tinkering::part_cost(part, option);
                     let can_buy = affordable(inventory, cost);
                     let enabled = bench && has_weapon && !selected && can_buy;
-                    let mut text = RichText::new(option.name()).size(10.0);
+                    let mut text = RichText::new(option.name()).size(11.0);
                     if selected {
                         let [r, g, b] = option.color();
                         text = text.color(Color32::from_rgb(r, g, b));
@@ -313,11 +313,11 @@ fn modifier_card(
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new(modifier.detail)
-                            .size(10.0)
+                            .size(11.0)
                             .color(presentation::MUTED),
                     );
                     if !installed {
-                        ui.label(RichText::new(cost_text(modifier.cost)).size(9.0).color(
+                        ui.label(RichText::new(cost_text(modifier.cost)).size(11.0).color(
                             if can_buy {
                                 presentation::MUTED
                             } else {
@@ -360,14 +360,14 @@ pub(super) fn draw(
             } else {
                 ("Find a workbench", presentation::AMBER)
             };
-            ui.label(RichText::new(text).size(10.5).color(color));
+            ui.label(RichText::new(text).size(11.0).color(color));
         });
     });
     ui.label(
         RichText::new(
             "Fit a head, binding and grip, then bolt on modifiers. Fittings follow the equipped melee tier.",
         )
-        .size(10.5)
+        .size(11.0)
         .color(presentation::MUTED),
     );
 
@@ -395,13 +395,13 @@ pub(super) fn draw(
                     if has_weapon {
                         ui.label(
                             RichText::new(&tool_summary)
-                                .size(10.5)
+                                .size(11.0)
                                 .color(presentation::MUTED),
                         );
                     } else {
                         ui.label(
                             RichText::new("Recover or craft a blade, then equip it in Gear.")
-                                .size(10.5)
+                                .size(11.0)
                                 .color(presentation::AMBER),
                         );
                     }
@@ -414,7 +414,7 @@ pub(super) fn draw(
                                 .stroke(egui::Stroke::new(1.0, presentation::EDGE))
                                 .inner_margin(egui::Margin::symmetric(5, 1))
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(name).size(9.5).color(icons::GOLD))
+                                    ui.label(RichText::new(name).size(11.0).color(icons::GOLD))
                                         .on_hover_text(detail);
                                 });
                         }
@@ -493,7 +493,7 @@ pub(super) fn draw(
         if view.tool_mods != 0 {
             ui.label(
                 RichText::new(format!("{} installed", view.tool_mods.count_ones()))
-                    .size(10.0)
+                    .size(11.0)
                     .color(presentation::JADE),
             );
         }
@@ -501,7 +501,7 @@ pub(super) fn draw(
             if ui
                 .add_enabled(
                     bench && has_weapon,
-                    egui::Button::new(RichText::new("Strip fittings").size(10.0)),
+                    egui::Button::new(RichText::new("Strip fittings").size(11.0)),
                 )
                 .on_hover_text("Return all three parts to copper. Modifiers are kept.")
                 .clicked()

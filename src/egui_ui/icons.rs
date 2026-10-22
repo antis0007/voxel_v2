@@ -13,6 +13,7 @@ pub enum Icon {
     Resource(usize),
     Machine(Kind),
     Spell(u32),
+    Wand(u8),
     Heart,
     Torch,
     Bore,
@@ -32,6 +33,28 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
         "      33      ",
     ][..];
     match icon {
+        Icon::Wand(tier) => (
+            &[
+                "          33  ",
+                "         3223 ",
+                "         3223 ",
+                "          33  ",
+                "         3553 ",
+                "        3663  ",
+                "       3663   ",
+                "      3663    ",
+                "     3663     ",
+                "    3663      ",
+                "   3663       ",
+                "  3663        ",
+                "   33         ",
+            ],
+            match tier {
+                4 => C::from_rgb(117, 208, 237),
+                5 => C::from_rgb(178, 140, 219),
+                _ => GOLD,
+            },
+        ),
         Icon::Torch => (
             &[
                 "       6     ",
@@ -441,6 +464,9 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
                 5 => C::from_rgb(130, 189, 235),
                 14 => GOLD,
                 16 => C::from_rgb(220, 139, 76),
+                19 => C::from_rgb(120, 118, 124),
+                20 => C::from_rgb(150, 92, 44),
+                21 => C::from_rgb(156, 210, 118),
                 _ => C::from_rgb(172, 126, 226),
             };
             let shape = match i {
@@ -490,6 +516,29 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
                     "   333333    ",
                 ][..],
                 5 | 17 | 18 => gem,
+                // Coke: a porous, glassy-grey lump.
+                19 => &[
+                    "    3333     ",
+                    "  33212333   ",
+                    " 3212221123  ",
+                    " 3221312223  ",
+                    "32122221213  ",
+                    " 3213122123  ",
+                    "  333221233  ",
+                    "     3333    ",
+                ][..],
+                // Liquids come in a stoppered flask.
+                20 | 21 => &[
+                    "    3333    ",
+                    "    3113    ",
+                    "     33     ",
+                    "    3223    ",
+                    "   322223   ",
+                    "  32222223  ",
+                    "  32211223  ",
+                    "  32222223  ",
+                    "   333333   ",
+                ][..],
                 _ => &[
                     "    333333   ",
                     "  333212233  ",
@@ -503,14 +552,95 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             (shape, color)
         }
         Icon::Machine(k) => {
-            let c = if k == Kind::FluidPipe || k.water_port() {
+            let c = if k == Kind::CokeBrick || k == Kind::CokeOven {
+                C::from_rgb(178, 98, 62)
+            } else if k == Kind::BlastBrick || k == Kind::BlastFurnace {
+                C::from_rgb(150, 132, 122)
+            } else if k == Kind::Battery || k == Kind::InductionCell {
+                C::from_rgb(110, 196, 226)
+            } else if matches!(k, Kind::InductionCasing | Kind::InductionPort) {
+                C::from_rgb(150, 170, 186)
+            } else if k == Kind::InductionProvider || k == Kind::Assembler {
+                C::from_rgb(214, 170, 82)
+            } else if k == Kind::Transformer {
+                C::from_rgb(196, 128, 70)
+            } else if k == Kind::FluidPipe || k.water_port() {
                 C::from_rgb(83, 162, 210)
             } else if k == Kind::Cable {
                 TEAL
             } else {
                 GOLD
             };
-            let shape = if k == Kind::Generator {
+            let shape = if k == Kind::Battery {
+                &[
+                    "  33    33  ",
+                    "  31    31  ",
+                    " 3333333333 ",
+                    " 3222222223 ",
+                    " 3211111123 ",
+                    " 3212222123 ",
+                    " 3211111123 ",
+                    " 3222222223 ",
+                    " 3333333333 ",
+                ][..]
+            } else if k == Kind::Transformer {
+                &[
+                    "   3    3   ",
+                    "  323  323  ",
+                    " 3333333333 ",
+                    " 3211331123 ",
+                    " 3212332123 ",
+                    " 3211331123 ",
+                    " 3212332123 ",
+                    " 3211331123 ",
+                    " 3333333333 ",
+                ][..]
+            } else if k == Kind::Assembler {
+                &[
+                    "    3333    ",
+                    "  33222233  ",
+                    " 3222332223 ",
+                    " 3223113223 ",
+                    " 3231111323 ",
+                    " 3223113223 ",
+                    " 3222332223 ",
+                    "  33222233  ",
+                    "    3333    ",
+                ][..]
+            } else if matches!(k, Kind::InductionCasing | Kind::InductionPort | Kind::InductionCell | Kind::InductionProvider) {
+                &[
+                    "333333333333",
+                    "322222222223",
+                    "321111111123",
+                    "321333333123",
+                    "321322223123",
+                    "321333333123",
+                    "321111111123",
+                    "322222222223",
+                    "333333333333",
+                ][..]
+            } else if k.structural() {
+                &[
+                    "333333333333",
+                    "322223222223",
+                    "333333333333",
+                    "322222232223",
+                    "333333333333",
+                    "322223222223",
+                    "333333333333",
+                ][..]
+            } else if k == Kind::CokeOven || k == Kind::BlastFurnace {
+                &[
+                    "333333333333",
+                    "322223222223",
+                    "333333333333",
+                    "322331133223",
+                    "323311113323",
+                    "323111111323",
+                    "323111111323",
+                    "333333333333",
+                ][..]
+            } else if k == Kind::Generator {
                 &[
                     "       333  ",
                     "       323  ",
@@ -666,34 +796,37 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
         }
         Icon::Food(kind) => {
             let color = match kind {
-                0 => C::from_rgb(207, 152, 88),
-                1 => C::from_rgb(205, 96, 68),
-                _ => C::from_rgb(122, 198, 154),
+                0 => C::from_rgb(196, 143, 75),
+                1 => C::from_rgb(174, 76, 52),
+                _ => C::from_rgb(113, 164, 105),
             };
             let shape: &[&str] = match kind {
                 0 => &[
-                    "   333333   ",
-                    "  32244223  ",
+                    "     33     ",
+                    "   332133   ",
+                    "  32222223  ",
+                    " 3224222223 ",
                     " 3222222223 ",
-                    " 3211221123 ",
-                    "  31111113  ",
+                    "  32222223  ",
                     "   333333   ",
                 ],
                 1 => &[
-                    "   333333   ",
+                    "     33     ",
+                    "   332133   ",
                     "  32222223  ",
-                    " 3224224223 ",
-                    " 3333223333 ",
-                    "    3113    ",
-                    "    3113    ",
-                    "    3333    ",
+                    " 3222222223 ",
+                    " 3224222223 ",
+                    "  32222223  ",
+                    "   333333   ",
                 ],
                 _ => &[
-                    "  33333333  ",
-                    " 3224224223 ",
-                    " 3222222223 ",
-                    " 3111111113 ",
-                    "  33333333  ",
+                    "      33    ",
+                    "    332133  ",
+                    "   32222223 ",
+                    "  3224222223",
+                    "  3222222223",
+                    "   32222223 ",
+                    "    333333  ",
                 ],
             };
             (shape, color)
@@ -708,16 +841,24 @@ pub fn paint(p: &egui::Painter, r: Rect, icon: Icon) {
 /// use this to make the held weapon read as steel, cinder, rime or polymer
 /// without duplicating every sprite.
 pub fn paint_tinted(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>) {
+    paint_styled(p, r, icon, accent, None);
+}
+
+/// Explicit presentation hook for future item affixes; does not create gameplay state.
+pub(super) fn paint_with_effect(p: &egui::Painter, r: Rect, icon: Icon, effect: super::magic_fx::Effect) {
+    paint_styled(p, r, icon, None, Some(effect));
+}
+
+fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, override_fx: Option<super::magic_fx::Effect>) {
     let (rows, base) = art(icon);
     let color = accent.unwrap_or(base);
     let width = rows.iter().map(|row| row.len()).max().unwrap_or(1) as f32;
     let extent = width.max(rows.len() as f32);
-    let dpi = p.ctx().pixels_per_point();
-    let unit = ((r.width().min(r.height()) * dpi / extent).floor().max(1.0)) / dpi;
+    let unit = (r.width().min(r.height()) / extent).floor().max(1.0);
     let raw_origin = r.center() - vec2(width, rows.len() as f32) * unit * 0.5;
     let origin = egui::pos2(
-        (raw_origin.x * dpi).round() / dpi,
-        (raw_origin.y * dpi).round() / dpi,
+        raw_origin.x.round(),
+        raw_origin.y.round(),
     );
     let mut mesh = egui::Mesh::default();
     for (y, row) in rows.iter().enumerate() {
@@ -748,7 +889,7 @@ pub fn paint_tinted(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>) {
                 rows[y - 1].as_bytes().get(x).copied().unwrap_or(b' ')
             };
             if ch == b'2' && above != b'2' && above != b'1' {
-                let h = Rect::from_min_size(q.min, vec2(unit, 1.0 / dpi));
+                let h = Rect::from_min_size(q.min, vec2(unit, 1.0));
                 mesh.add_colored_rect(h, pixel_art::top_light(color));
             }
             let below = rows
@@ -758,46 +899,27 @@ pub fn paint_tinted(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>) {
                 .unwrap_or(b' ');
             if ch == b'2' && below != b'2' && below != b'1' {
                 let h = Rect::from_min_size(
-                    egui::pos2(q.left(), q.bottom() - 1.0 / dpi),
-                    vec2(unit, 1.0 / dpi),
+                    egui::pos2(q.left(), q.bottom() - 1.0),
+                    vec2(unit, 1.0),
                 );
                 mesh.add_colored_rect(h, pixel_art::bottom_shadow(color));
             }
         }
     }
     p.add(egui::Shape::mesh(mesh));
+    let effect = override_fx.or(match icon {
+        Icon::Spell(26 | 46) => Some(super::magic_fx::Effect::Unstable),
+        Icon::Spell(67 | 68) => Some(super::magic_fx::Effect::Cursed),
+        Icon::Spell(_) | Icon::Wand(_) | Icon::Armor(_, 3) | Icon::Sword(3 | 4) => Some(super::magic_fx::Effect::Enchanted),
+        _ => None,
+    });
+    if let Some(effect) = effect {
+        let source=matches!(icon,Icon::Spell(_) | Icon::Wand(_) | Icon::Sword(3 | 4) | Icon::Armor(_,3)).then_some(color);
+        super::magic_fx::paint(p, Rect::from_min_size(origin, vec2(width, rows.len() as f32) * unit), rows, effect, source);
+    }
 }
 pub fn frame(p: &egui::Painter, r: Rect, selected: bool) {
-    use super::presentation as style;
-    p.rect_filled(r, 0, style::INK);
-    p.rect_stroke(
-        r,
-        0,
-        egui::Stroke::new(2.0, if selected { style::PAPER } else { style::EDGE }),
-        egui::StrokeKind::Inside,
-    );
-    let inner = r.shrink(2.0);
-    p.rect_filled(inner, 0, C::from_rgb(49, 42, 42));
-    p.line_segment(
-        [inner.left_bottom(), inner.left_top()],
-        egui::Stroke::new(2.0, C::from_rgb(20, 17, 23)),
-    );
-    p.line_segment(
-        [inner.left_top(), inner.right_top()],
-        egui::Stroke::new(2.0, C::from_rgb(20, 17, 23)),
-    );
-    p.line_segment(
-        [inner.left_bottom(), inner.right_bottom()],
-        egui::Stroke::new(1.0, C::from_rgb(126, 103, 80)),
-    );
-    if selected {
-        p.rect_stroke(
-            r.shrink(1.0),
-            0,
-            egui::Stroke::new(1.0, style::AMBER),
-            egui::StrokeKind::Inside,
-        );
-    }
+    super::grimoire::slot(p, r, selected);
 }
 pub fn slot(
     ui: &mut egui::Ui,
@@ -807,6 +929,7 @@ pub fn slot(
     label: &str,
 ) -> egui::Response {
     let (r, response) = ui.allocate_exact_size(vec2(56.0, 56.0), egui::Sense::click());
+    let r = super::grimoire::react(&response, r, selected);
     frame(ui.painter(), r, selected);
     paint(ui.painter(), r.shrink(5.0), icon);
     if let Some(n) = quantity {
@@ -880,7 +1003,7 @@ mod tests {
         for id in 0..=crate::world::adventure::MAX_SPELL_ID {
             assert_sprite(&format!("spell {id}"), Icon::Spell(id));
         }
-        for id in 0..=18 {
+        for id in 0..crate::world::factory::RESOURCE_COUNT {
             assert_sprite(&format!("resource {id}"), Icon::Resource(id));
         }
     }

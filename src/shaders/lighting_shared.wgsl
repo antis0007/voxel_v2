@@ -24,4 +24,5 @@ struct Lighting {
     mood: vec4<f32>,
     // x: fireflies, y: pollen, z: diamond dust, w: embers.
     ambience: vec4<f32>,
+    magic: array<vec4<f32>,5>,
 };

@@ -65,7 +65,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 0,
         name: "Spark",
-        flavor: "A small crackling mote. It is not much, but it is yours.",
+        flavor: "One spark, the old tithe unit. The wand logs it as given. It is not much, but it is yours.",
         hint: "Chains to nearby enemies. Shatters frost and charges factory machines.",
         tag: "PROJECTILE",
         color: PALETTE_AMBER,
@@ -83,7 +83,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 1,
         name: "Mend",
-        flavor: "Warmth rises through your hands. Your wounds close with a faint, embarrassed sigh.",
+        flavor: "A field-surgery routine from the anchor's work crews. Your wounds close with a faint, embarrassed sigh.",
         hint: "Circle of Vigour: restores health immediately and spawns sanctum motes.",
         tag: "UTILITY",
         color: PALETTE_OLIVE,
@@ -94,7 +94,7 @@ pub static SPELLS: &[SpellDef] = &[
         spread: 0.0,
         damage: 0.0,
         speed: 26.0,
-        audio: (Cue::Spark, 1.0),
+        audio: (Cue::Mend, 0.92),
         class: Class::Other,
         unlock: Unlock::FirstWand,
     },
@@ -137,7 +137,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 4,
         name: "Mirror ward",
-        flavor: "Crystal runes circle you. They have opinions about incoming bolts.",
+        flavor: "Crystal plates circle you, ground to the same tolerance as choir glass. They return what is sent at you.",
         hint: "Orbiting crystal runes reflect three enemy bolts into lightning.",
         tag: "UTILITY",
         color: PALETTE_MANA,
@@ -148,14 +148,14 @@ pub static SPELLS: &[SpellDef] = &[
         spread: 0.0,
         damage: 0.0,
         speed: 26.0,
-        audio: (Cue::Spark, 1.0),
+        audio: (Cue::Ward, 0.86),
         class: Class::Other,
         unlock: Unlock::FirstWand,
     },
     SpellDef {
         id: 5,
         name: "Spore bloom",
-        flavor: "Something soft and pale unfolds at your feet. It smells of rain and bad decisions.",
+        flavor: "A conservatory strain, licensed for wound care. It smells of rain. It is a cousin of the Bloom.",
         hint: "Bio-spore nebula harms guardians, heals you, and seeds fungal soil.",
         tag: "PROJECTILE",
         color: PALETTE_LEAF,
@@ -173,7 +173,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 6,
         name: "Rift well",
-        flavor: "A hole opens in the world. It is quietly hungry. You are advised not to feed it.",
+        flavor: "A ballast well, used to sink spare mass where the anchor needed weight. Nobody fitted it with an off switch.",
         hint: "Gravity singularity pulls guardians inward. Found in archives.",
         tag: "STATIC FIELD",
         color: PALETTE_PLUM,
@@ -191,7 +191,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 7,
         name: "Echo step",
-        flavor: "You are here. Then you are there. The in-between was brief and unremarkable.",
+        flavor: "A carriage handoff routine, scaled to one body. The in-between was brief and unremarkable.",
         hint: "Teleport blink along your aim ray onto safe ground. Found in cathedrals.",
         tag: "UTILITY",
         color: PALETTE_MANA,
@@ -209,7 +209,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 8,
         name: "Empty",
-        flavor: "An empty slot. A faint draught blows through it.",
+        flavor: "An empty slot. The contacts are clean. Someone pulled this card on purpose.",
         hint: "Empty wand slot.",
         tag: "PROJECTILE",
         color: PALETTE_AMBER,
@@ -227,7 +227,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 9,
         name: "Lumen drill",
-        flavor: "A needle of white light. It does not stop for stone, and it is rude about it.",
+        flavor: "A survey needle from the founders' prospecting kit. It does not stop for stone, and it is rude about it.",
         hint: "Pinpoint 6.5 m laser that carves solid rock/ore and slashes cast delay.",
         tag: "LASER DRILL",
         color: PALETTE_PAPER,
@@ -245,7 +245,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 10,
         name: "Black hole",
-        flavor: "The black hole is small and patient. It pulls, and everything near it complies.",
+        flavor: "Not truly a black hole: a ballast singularity the anchor kept for trimming load. Everything near it complies.",
         hint: "Slow void singularity that devours terrain along its path and pulls foes in.",
         tag: "STATIC FIELD",
         color: [0.32, 0.2, 0.34],
@@ -335,7 +335,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 15,
         name: "Touch of gold",
-        flavor: "Everything you touch turns to gold. This is less useful than the legends suggest.",
+        flavor: "An assay routine that reports in gold. The founders found it funnier than you will.",
         hint: "Alchemical transmutation: turns stone and dirt into crystal, ore, and glowcaps.",
         tag: "PROJECTILE",
         color: PALETTE_AMBER,
@@ -389,7 +389,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 18,
         name: "Trigger bolt",
-        flavor: "On impact, a second spell wakes up and looks around.",
+        flavor: "A conditional, card to card. On impact, the next routine wakes up and looks around.",
         hint: "Attaches the next spell in the deck as a 3D impact payload.",
         tag: "TRIGGER MOD",
         color: PALETTE_COPPER,
@@ -443,7 +443,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 21,
         name: "Heavy bore",
-        flavor: "A heavy bore chews through the rock. It does not hurry. It does not stop.",
+        flavor: "The tunnelling routine that dug the Undercrown. It does not hurry. It does not stop.",
         hint: "Matter Eater + Heavy Shot: +35% damage and bores through solid rock in flight.",
         tag: "MODIFIER",
         color: PALETTE_COPPER,
@@ -497,7 +497,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 24,
         name: "Timberfall",
-        flavor: "Somewhere above, a great deal of lumber has decided to arrive.",
+        flavor: "A freight drop request. Somewhere above, a manifest of lumber is being honoured.",
         hint: "Timberfall: shears a targeted tree. Leaves vanish; the trunk falls as a rigid body.",
         tag: "UTILITY",
         color: PALETTE_LEAF,
@@ -515,7 +515,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 25,
         name: "Gale",
-        flavor: "A wind with an agenda. It moves things that were not asking to be moved.",
+        flavor: "A ventilation routine for clearing spores from a hall. It moves things that were not asking to be moved.",
         hint: "Gale: a short radial wind burst that staggers foes and launches loose assemblies.",
         tag: "UTILITY",
         color: PALETTE_MANA,
@@ -551,7 +551,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 27,
         name: "Siphon",
-        flavor: "You take a little of what you strike. It is not generosity.",
+        flavor: "You take a little of what you strike. The wand records it as owed.",
         hint: "Siphon: direct hits restore a little health and add +5% damage.",
         tag: "MODIFIER",
         color: PALETTE_CORAL,
@@ -587,7 +587,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 29,
         name: "Meteor",
-        flavor: "Somewhere above, a rock has been informed of your intentions.",
+        flavor: "A deorbit request on a channel the braid still honours. Somewhere above, a rock has been informed.",
         hint: "Meteor: calls a rock down on your crosshair. Wide crater, fire, and a shove.",
         tag: "PROJECTILE",
         color: [0.95, 0.4, 0.12],
@@ -623,7 +623,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 31,
         name: "Grapple",
-        flavor: "A line of light, a hook of will, and the ground comes to you.",
+        flavor: "A cable-rigging routine from the chain lifts. A line, a hook, and the ground comes to you.",
         hint: "Grapple: hooks the block you aim at (32 m) and hauls you toward it.",
         tag: "UTILITY",
         color: PALETTE_PAPER,
@@ -659,7 +659,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 34,
         name: "Touch",
-        flavor: "No bolt, no flourish. You simply reach out. The world notices.",
+        flavor: "No bolt. The wand's bare contact plate, meant for testing a circuit by hand.",
         hint: "Touch: the next effect reads the body under your crosshair.",
         tag: "DELIVERY",
         color: PALETTE_PAPER,
@@ -695,7 +695,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 36,
         name: "Conjure lanterncap",
-        flavor: "A lanterncap blinks awake at your side and decides to like you.",
+        flavor: "A lanterncap: a walking fungal lamp the Ballast bred for dark halls. Docile, warm, and fond of people.",
         hint: "Conjure lanterncap: create your one owned juvenile where this cast lands.",
         tag: "EFFECT",
         color: PALETTE_AMBER,
@@ -929,7 +929,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 49,
         name: "Alpha",
-        flavor: "The first of the ordered things. Everything after it is a question of arrangement.",
+        flavor: "The first card in a program. Everything after it is a question of arrangement.",
         hint: "Alpha: copy the first projectile on the wand.",
         tag: "MODIFIER",
         color: PALETTE_PAPER,
@@ -1073,7 +1073,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 57,
         name: "Static charge",
-        flavor: "Blue light crawls along the bolt. It is looking for something wet.",
+        flavor: "Blue light crawls along the bolt. The watch used it to pass lightning between towers.",
         hint: "Static charge: hits stagger. A wet enemy is conducted for +80% damage.",
         tag: "ELEMENT",
         color: PALETTE_MANA_LIT,
@@ -1127,7 +1127,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 60,
         name: "Cold snap",
-        flavor: "Frost forms on the bolt in the space of a held breath.",
+        flavor: "Frost forms on the bolt in exactly one held breath, by the sluice tables.",
         hint: "Cold snap: hits chill the enemy. A wet enemy flash-freezes for longer.",
         tag: "ELEMENT",
         color: PALETTE_MANA,
@@ -1181,7 +1181,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 63,
         name: "Overcharge",
-        flavor: "Too much power for the wand. It sulks about it, afterward.",
+        flavor: "More sparks than the card is rated for. It sulks about it, afterward.",
         hint: "Overcharge: +45% damage, slower bolt, expensive.",
         tag: "MODIFIER",
         color: PALETTE_CORAL,
@@ -1217,7 +1217,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 65,
         name: "Gravity",
-        flavor: "Weight. The bolt develops opinions about the ground.",
+        flavor: "Adds mass to the bolt. Crews used it to seat a coupling without a hammer.",
         hint: "Gravity: the bolt arcs downward. Stack for a steeper fall.",
         tag: "MODIFIER",
         color: [0.48, 0.36, 0.26],
@@ -1235,7 +1235,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 66,
         name: "Phase",
-        flavor: "The wall is, for one bolt, a suggestion.",
+        flavor: "The bolt passes through one wall. The card's maker did not record how, and the founders never reproduced it.",
         hint: "Phase: the bolt passes through the next wall it meets.",
         tag: "MODIFIER",
         color: PALETTE_MANA,
@@ -1253,7 +1253,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 67,
         name: "Reckless",
-        flavor: "More damage. Fewer questions. Some of the cost is yours.",
+        flavor: "More damage. Fewer questions. The difference goes on your tally.",
         hint: "Reckless: +60% damage, but each cast costs you 4 health (never lethal).",
         tag: "MODIFIER",
         color: PALETTE_CORAL,
@@ -1271,7 +1271,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 68,
         name: "Blood price",
-        flavor: "The wand accepts payment in whatever you have left.",
+        flavor: "When the sparks run out, the wand accepts the old payment: whatever you have left.",
         hint: "Blood price: pay half the mana cost in health instead. Unusable when low.",
         tag: "MODIFIER",
         color: [0.72, 0.16, 0.22],
@@ -1325,7 +1325,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 71,
         name: "Chainsaw",
-        flavor: "A buzzing arc that lives for a breath. It has opinions about whatever is closest.",
+        flavor: "A cutting arc for root clearance. It lives for a breath and takes whatever is closest.",
         hint: "Chainsaw: a tiny rapid slicing bolt that only reaches a few metres. Nearly free to spam.",
         tag: "PROJECTILE",
         color: PALETTE_PAPER,
@@ -1343,7 +1343,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 72,
         name: "Teleport bolt",
-        flavor: "You and the bolt agree to trade places. The bolt does not get a vote.",
+        flavor: "A freight swap: you and the bolt trade places. The bolt does not get a vote.",
         hint: "Teleport bolt: on impact you swap to where it landed. Mind the drop.",
         tag: "PROJECTILE",
         color: [0.74, 0.55, 1.0],
@@ -1397,7 +1397,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 75,
         name: "Ice wall",
-        flavor: "A wall of frozen air. It is only polite to keep it between you and them.",
+        flavor: "A rime seal from the sluice works, for holding back a breach. Keep it between you and them.",
         hint: "Ice wall: raises a 3 m wide ice barrier in front of you. Fire and lava melt it.",
         tag: "UTILITY",
         color: [0.65, 0.9, 1.0],
@@ -1433,7 +1433,7 @@ pub static SPELLS: &[SpellDef] = &[
     SpellDef {
         id: 77,
         name: "Mana leech",
-        flavor: "The bolt drinks from what it hits and passes the cup back.",
+        flavor: "The bolt drinks from what it hits and passes the cup back. Every spark is accounted for.",
         hint: "Mana leech: each hit restores 4 mana. Pair it with a cheap fast bolt to keep casting.",
         tag: "MODIFIER",
         color: PALETTE_MANA,

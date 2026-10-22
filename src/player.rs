@@ -1,4 +1,17 @@
 use glam::{DVec3, IVec3, Vec2, Vec3};
+use winit::keyboard::KeyCode;
+
+pub const CAST_SPELL_KEY: KeyCode = KeyCode::KeyR;
+pub const NEXT_SPELL_KEY: KeyCode = KeyCode::KeyT;
+
+/// The HUD reads the same fixed bindings as input dispatch.
+pub fn spell_binding_hint() -> &'static str {
+    static HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HINT.get_or_init(|| {
+        let label = |key: KeyCode| format!("{key:?}").trim_start_matches("Key").to_owned();
+        format!("{} Cast / {} Next", label(CAST_SPELL_KEY), label(NEXT_SPELL_KEY))
+    })
+}
 
 use crate::world::{
     AIR_ACCEL, BlockId, CREATIVE_FLY_SPEED, CREATIVE_FLY_SPRINT_SPEED, FLY_ACCEL, GRAVITY,
@@ -14,14 +27,6 @@ pub enum FlyMode {
     Noclip,
 }
 
-impl FlyMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Creative => "Creative",
-            Self::Noclip => "Noclip",
-        }
-    }
-}
 
 #[derive(Default, Clone)]
 pub struct Input {
@@ -40,6 +45,8 @@ pub struct Input {
     pub pick_block: bool,
     pub interact: bool,
     pub cast_spell: bool,
+    /// Retain a quick press/release until gameplay consumes the input frame.
+    pub cast_pressed: bool,
     pub cycle_spell: bool,
     shift_keys: u8,
     control_keys: u8,
@@ -48,7 +55,6 @@ pub struct Input {
 
 impl Input {
     pub fn keyboard(&mut self, key: winit::keyboard::KeyCode, pressed: bool) {
-        use winit::keyboard::KeyCode;
         let modifier = match key {
             KeyCode::ShiftLeft => Some((&mut self.shift_keys, 1)),
             KeyCode::ShiftRight => Some((&mut self.shift_keys, 2)),
@@ -75,7 +81,10 @@ impl Input {
             KeyCode::KeyA => self.left = pressed,
             KeyCode::KeyD => self.right = pressed,
             KeyCode::Space => self.jump = pressed,
-            KeyCode::KeyR => self.cast_spell = pressed,
+            CAST_SPELL_KEY => {
+                self.cast_pressed |= pressed && !self.cast_spell;
+                self.cast_spell = pressed;
+            }
             _ => {}
         }
     }

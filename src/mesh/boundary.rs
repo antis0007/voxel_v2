@@ -16,7 +16,7 @@ pub(super) fn emit_conforming_face(
         return false;
     }
     let origin = chunk.chunk * crate::world::CHUNK_SIZE;
-    let detail = material.block.surface();
+    let detail = material.surface();
     let water_top = material.block == crate::world::BlockId::Water && normal[1] > 0.5;
     let vertex = |mut position: Vec3, occlusion: f32| {
         if water_top {

@@ -13,7 +13,7 @@ screenshot.
   with fine grain and metre-scaled dark bands.
 - Shaft, grip, pommel and collar glow values are zeroed; only the head, runes,
   trail, crystal shaft and cast flare remain emissive.
-- The first-person rig is scaled around the grip (`VIEWMODEL_SCALE = 0.74`),
+- The first-person rig is scaled around the grip (`VIEWMODEL_SCALE = 0.84`),
   moved farther right/down/forward, and shortened. The tip light follows the
   scaled tip.
 - A unit test asserts the hand uses `kind 54`, the wand body uses `kind 55`, and
@@ -26,8 +26,11 @@ screenshot.
   - caps each cue at four voices by replacing the voice furthest into its
     sample (least likely to click),
   - normalizes equal-cue voices into one shared bus,
-  - retains independent cues at full level,
-  - ducks repeated cues triggered within 24 ms.
+  - retains isolated cues at full level,
+  - ducks repeats to 36% gain: the same cue within a per-cue window
+    (`rapid_window_ms`: 70 ms for spark/frost/ward/swing, 110 ms for
+    burst/bloom/splash, 55 ms otherwise), or any cue of the same spell family
+    within 52 ms (`src/audio.rs`).
 - Every cue now has **three decorrelated synthesized variants**. The render
   seed, tonal phase and noise are varied, so a held rapid-fire stream does not
   produce an identical waveform on every shot.
@@ -38,7 +41,7 @@ screenshot.
   `docs/PIXEL_ART_DIRECTION.md`; `assets/pixel_palette.txt` is the shared source
   for Rust and Python art tools.
 - Each spell now selects a family cue and pitch through
-  `wands::spell_audio`: frost, burst, cinder, bloom, rift, echo, thunder/clang,
+  `world::adventure::spell_defs::spell_audio`: frost, burst, cinder, bloom, rift, echo, thunder/clang,
   treasure and spark.
 - Projectile bounce impacts use the same family cue instead of always Spark.
 - Event pitch is clamped and combined with the existing low-discrepancy rate

@@ -11,16 +11,26 @@ mod architecture;
 mod cistern;
 mod collision;
 mod dungeon;
+#[cfg(test)]
+mod gen_probe;
+#[cfg(test)]
+mod gen_golden;
 pub mod expedition;
 pub mod factory;
+pub mod habitats;
 mod generation_cache;
 pub mod interaction;
 pub mod inventory;
+pub mod recipe_index;
 pub mod landscape;
+pub mod lore;
 pub mod mood;
+pub mod orbital;
 pub mod regions;
 mod sample_cache;
 pub mod sites;
+pub(crate) mod prism_sanctum;
+pub(crate) mod toll_crossing;
 pub mod storage;
 mod surface;
 mod terrain_variety;
@@ -30,11 +40,12 @@ pub mod undercrown;
 mod valley;
 mod vegetation;
 mod water;
+pub(crate) use water::WaterSnapshot;
 mod weather;
 pub mod zones;
 pub use collision::{
     collides_world, collides_world_local, player_aabb, raycast_block, raycast_block_precise,
-    resolve_penetration_local, try_move, try_move_local, try_step_up, try_step_up_local,
+    resolve_penetration_local, try_move_local, try_step_up_local,
 };
 
 #[allow(unused_imports)]
@@ -51,12 +62,11 @@ pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
 pub const CHUNK_SIZE: i32 = 32;
 /// New-world generator and maximum readable version. Keep historical version
 /// gates literal: bumping this must never change how an older save generates.
-pub const CURRENT_GENERATOR_VERSION: u32 = 23;
+pub const CURRENT_GENERATOR_VERSION: u32 = 30;
 pub const PLAYER_WIDTH: f32 = 0.6;
 pub const PLAYER_HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;
 pub const STEP_HEIGHT: f32 = 0.6;
-pub const REACH_DISTANCE: f32 = 5.0;
 pub const WALK_SPEED: f32 = 5.5;
 pub const SPRINT_SPEED: f32 = 8.5;
 pub const SNEAK_SPEED: f32 = 2.2;
@@ -70,8 +80,6 @@ pub const CREATIVE_FLY_SPRINT_SPEED: f32 = 24.0;
 pub const NOCLIP_FLY_SPEED: f32 = 18.0;
 pub const NOCLIP_FLY_FAST_SPEED: f32 = 30.0;
 pub const FLY_ACCEL: f32 = 32.0;
-pub const WORLD_MIN_Y: i32 = -64;
-pub const WORLD_MAX_Y: i32 = 2048;
 pub const WORLD_MIN_Y_METERS: f32 = -16.0;
 pub const WORLD_MAX_Y_METERS: f32 = 512.0;
 pub const WATER_LEVEL_METERS: f32 = 12.0;
@@ -98,10 +106,6 @@ pub fn player_step_height_blocks(voxel_scale: VoxelScalePreset, player_scale: f3
     blocks_from_meters(voxel_scale, STEP_HEIGHT * player_scale.max(0.1))
 }
 
-pub fn reach_distance_blocks(voxel_scale: VoxelScalePreset) -> f32 {
-    blocks_from_meters(voxel_scale, REACH_DISTANCE)
-}
-
 pub fn speed_blocks(voxel_scale: VoxelScalePreset, meters_per_second: f32) -> f32 {
     blocks_from_meters(voxel_scale, meters_per_second)
 }
@@ -112,12 +116,25 @@ pub fn acceleration_blocks(voxel_scale: VoxelScalePreset, meters_per_second_sq: 
 
 #[derive(Clone)]
 pub struct ChunkData {
+    /// Derived, conservative local bounds since procedural generation. Cold
+    /// records use the full chunk; this metadata does not change the save ABI.
+    pub modified_bounds: Option<(IVec3, IVec3)>,
+    pub structural_bounds: Option<(IVec3, IVec3)>,
     pub blocks: Box<[BlockId; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]>,
     pub light: Box<[u8; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]>,
     pub torches: HashSet<IVec3>,
 }
 
 impl ChunkData {
+    pub fn note_modified(&mut self, p: IVec3, old: BlockId, new: BlockId) {
+        let p = p.rem_euclid(IVec3::splat(CHUNK_SIZE));
+        self.modified_bounds = Some(self.modified_bounds.map_or((p, p + IVec3::ONE), |(lo, hi)|
+            (lo.min(p), hi.max(p + IVec3::ONE))));
+        if !matches!(old,BlockId::Air|BlockId::Water) || !matches!(new,BlockId::Air|BlockId::Water) {
+            self.structural_bounds=Some(self.structural_bounds.map_or((p,p+IVec3::ONE),|(lo,hi)|
+                (lo.min(p),hi.max(p+IVec3::ONE))));
+        }
+    }
     pub fn local_index(x: i32, y: i32, z: i32) -> usize {
         let lx = x.rem_euclid(CHUNK_SIZE) as usize;
         let ly = y.rem_euclid(CHUNK_SIZE) as usize;
@@ -143,6 +160,8 @@ impl ChunkData {
 
         Self {
             blocks,
+            modified_bounds: None,
+            structural_bounds: None,
             light: Box::new([0; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]),
             torches: HashSet::new(),
         }
@@ -158,10 +177,6 @@ pub enum WorldType {
 
 pub fn hotbar_block(slot: usize) -> Option<BlockId> {
     crate::material::hotbar_block(slot)
-}
-
-pub fn cycle_hotbar_block(current: BlockId, dir: i32) -> BlockId {
-    crate::material::cycle_hotbar_block(current, dir)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -309,12 +324,10 @@ impl LightingState {
         let mid_layer_height = cloud_controls.mid_layer_height.clamp(0.20, 0.65);
         let layer_separation = cloud_controls.layer_separation.clamp(0.08, 0.72);
         let wind_shear = cloud_controls.wind_shear.clamp(0.0, 1.0);
-        let erosion = cloud_controls.erosion.clamp(0.0, 1.0);
         let advection = cloud_controls.advection.clamp(0.0, 1.0);
         let noise_scale = cloud_controls.noise_scale.clamp(0.0, 1.0);
         let wind_speed = cloud_controls.wind_speed.clamp(0.0, 1.0);
         let detail_strength = cloud_controls.detail_strength.clamp(0.0, 1.0);
-        let silver_lining = cloud_controls.silver_lining.clamp(0.0, 1.0);
 
         // Tiny non-authoritative day/seed modulation so skies are not perfectly static,
         // but it no longer defines the actual weather regime.
@@ -352,17 +365,7 @@ impl LightingState {
                 - detail_strength * 0.08,
         );
 
-        let cloud_grayness = saturate(
-            overcast * 0.42
-                + stratus * 0.20
-                + altostratus * 0.16
-                + storminess * 0.24
-                + (1.0 - silver_lining) * 0.10
-                + (1.0 - erosion) * 0.06
-                + day_variation * 0.04,
-        );
-
-        let haze = (low_cloudiness * 0.10
+        let haze =(low_cloudiness * 0.10
             + mid_cloudiness * 0.06
             + stratus * 0.08
             + altostratus * 0.08
@@ -1169,10 +1172,6 @@ impl DayNightCycle {
         .with_mood(self.weather_seed, self.day_index, self.time_of_day)
     }
 
-    pub fn day_index(&self) -> u32 {
-        self.day_index
-    }
-
     /// Review hook: jump to a calendar day (season, sky event, weather bucket).
     pub fn set_day_index(&mut self, day: u32) {
         self.day_index = day;
@@ -1181,10 +1180,6 @@ impl DayNightCycle {
     /// The sky event running right now, for the HUD announcement.
     pub fn sky_event(&self) -> Option<mood::ActiveEvent> {
         mood::active_event(self.weather_seed, self.day_index, self.time_of_day)
-    }
-
-    pub fn season_name(&self) -> &'static str {
-        mood::season_name(self.day_index, self.time_of_day)
     }
 }
 
@@ -1294,7 +1289,7 @@ struct BushProfile {
 #[derive(Clone)]
 pub struct WorldSnapshot {
     pub regions: regions::RegionView,
-    pub water_levels: Arc<HashMap<IVec3, u8>>,
+    pub water_levels: Arc<water::WaterSnapshot>,
     pub cfg: WorldSampleConfig,
     pub chunks: Arc<crate::fast_hash::FastMap<IVec3, Arc<ChunkData>>>,
 }
@@ -1338,10 +1333,6 @@ impl WorldSnapshot {
         } else {
             sample_block(&self.cfg, p)
         }
-    }
-
-    pub fn solid(&self, p: IVec3) -> bool {
-        self.get(p).is_solid()
     }
 }
 
@@ -1835,6 +1826,7 @@ fn tree_profile_for_cell(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> O
 
 /// Intermediate woodland uses the same cached spawn decision as editable trees.
 /// Dimensions are metres, so quarter-metre worlds do not lose their forest LOD.
+#[derive(Clone,Copy,Debug,PartialEq)]
 pub(crate) struct TreeVisual {
     pub base: Vec3,
     pub height: f32,
@@ -1847,8 +1839,19 @@ pub(crate) struct TreeVisual {
 
 pub(crate) fn tree_visual(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeVisual> {
     let tree = tree_profile_for_cell(cfg, cell_x, cell_z)?;
+    Some(tree_visual_from_profile(cfg, tree))
+}
+
+/// Same anchor, placement lottery, soil/biome policy and crown profile as the
+/// authoritative tree source. Only sub-footprint ground relief is filtered.
+pub(crate) fn tree_visual_lod(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footprint: f32) -> Option<TreeVisual> {
+    let tree = tree_profile_evaluated(cfg, cell_x, cell_z, Some(footprint))?;
+    Some(tree_visual_from_profile(cfg, tree))
+}
+
+fn tree_visual_from_profile(cfg: &WorldSampleConfig, tree: TreeProfile) -> TreeVisual {
     let scale = cfg.voxel_meters();
-    Some(TreeVisual {
+    TreeVisual {
         // The first trunk voxel sits one cell above the surface voxel, so the
         // visible trunk base is the top face of ground_y, not its centre.
         base: Vec3::new(
@@ -1865,20 +1868,25 @@ pub(crate) fn tree_visual(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> 
         // leaf top, measured from the same base the proxy is drawn from.
         crown_height: (trees::crown_top(cfg, &tree) - tree.trunk_h as f32 * scale).max(scale),
         conifer: tree.conifer,
-        seed: (cell_x as u32).wrapping_mul(73856093)
-            ^ (cell_z as u32).wrapping_mul(19349663)
+        seed: (tree.cell_x as u32).wrapping_mul(73856093)
+            ^ (tree.cell_z as u32).wrapping_mul(19349663)
             ^ cfg.seed,
-    })
+    }
 }
 
 fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
+    tree_profile_evaluated(cfg, cell_x, cell_z, None)
+}
+
+fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footprint: Option<f32>) -> Option<TreeProfile> {
     let cell_size = cfg.blocks_for_span(12.0);
     let offset_x = (hash2(cell_x, cell_z, cfg.seed.wrapping_add(401)) * cell_size as f32) as i32;
     let offset_z = (hash2(cell_x, cell_z, cfg.seed.wrapping_add(419)) * cell_size as f32) as i32;
     let anchor_x = cell_x * cell_size + offset_x.min(cell_size - 1);
     let anchor_z = cell_z * cell_size + offset_z.min(cell_size - 1);
 
-    let column = sample_column(cfg, anchor_x, anchor_z);
+    let column_at = |x, z| footprint.map_or_else(|| sample_column(cfg, x, z), |step| landscape::preview_column_lod(cfg, x, z, step));
+    let column = column_at(anchor_x, anchor_z);
     let ground_y = column.height;
     let woodland_soil = cfg.generator_version >= 11
         && matches!(
@@ -1905,10 +1913,10 @@ fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> O
         return None;
     }
 
-    let h_nx = terrain_height(cfg, anchor_x - 1, anchor_z);
-    let h_px = terrain_height(cfg, anchor_x + 1, anchor_z);
-    let h_nz = terrain_height(cfg, anchor_x, anchor_z - 1);
-    let h_pz = terrain_height(cfg, anchor_x, anchor_z + 1);
+    let h_nx = column_at(anchor_x - 1, anchor_z).height;
+    let h_px = column_at(anchor_x + 1, anchor_z).height;
+    let h_nz = column_at(anchor_x, anchor_z - 1).height;
+    let h_pz = column_at(anchor_x, anchor_z + 1).height;
     let slope = (h_nx - ground_y)
         .abs()
         .max((h_px - ground_y).abs())
@@ -1959,7 +1967,11 @@ fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> O
         lean_z,
     };
     if cfg.generator_version >= 6 {
-        trees::profile(cfg, &mut tree);
+        if let Some(step) = footprint {
+            trees::profile_lod(cfg, &mut tree, step);
+        } else {
+            trees::profile(cfg, &mut tree);
+        }
     } else if cfg.generator_version >= 5 {
         vegetation::shape_profile(cfg, &mut tree);
     }
@@ -2252,6 +2264,23 @@ pub fn generate_padded(
     }
     let mut chunk = GeneratedChunk::new(coord, blocks);
     chunk.voxel_meters = cfg.voxel_meters();
+    chunk.bed_height = sky_ceiling.clone();
+    if cfg.generator_version >= 30 && chunk.blocks.contains(&BlockId::Water) {
+        // Only columns that hold water need the fraction; it costs one extra
+        // landscape sample each and is identical on both sides of a chunk border.
+        let mut frac = vec![0.0f32; (size * size) as usize];
+        for z in 0..size {
+            for x in 0..size {
+                let wet = (0..size)
+                    .any(|y| chunk.blocks[((y * size + z) * size + x) as usize] == BlockId::Water);
+                if wet {
+                    frac[(z * size + x) as usize] =
+                        landscape::bed_fraction(cfg, origin.x + x, origin.z + z);
+                }
+            }
+        }
+        chunk.bed_frac = frac;
+    }
     for z in 0..size {
         for x in 0..size {
             let i = (z * size + x) as usize;
@@ -2451,6 +2480,8 @@ pub fn suggested_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
 mod resident;
 
 pub struct World {
+    pub habitats: habitats::State,
+    pub orbital: orbital::State,
     pub inventory: inventory::SurvivalInventory,
     pub sandbox: crate::simulation::sandbox::Sandbox,
     pub adventure: adventure::Adventure,
@@ -2476,6 +2507,7 @@ pub struct World {
 }
 
 impl World {
+    #[cfg(test)]
     pub fn new(world_type: WorldType, voxel_scale: VoxelScalePreset) -> Self {
         Self::with_seed(world_type, voxel_scale, default_seed(world_type))
     }
@@ -2484,6 +2516,8 @@ impl World {
         let regions = regions::RegionStream::new();
         let region_view = regions.view.clone();
         let mut world = Self {
+            habitats: habitats::State::default(),
+            orbital: orbital::State::default(),
             inventory: {
                 let mut inv = inventory::SurvivalInventory::default();
                 inv.voxel_m = voxel_scale.meters();
@@ -2503,7 +2537,7 @@ impl World {
             chunks: resident::ResidentEdits::default(),
             snapshot_cache: WorldSnapshot {
                 regions: region_view,
-                water_levels: Arc::new(HashMap::new()),
+                water_levels: Arc::default(),
                 cfg: WorldSampleConfig {
                     generator_version: CURRENT_GENERATOR_VERSION,
                     seed,
@@ -2730,9 +2764,7 @@ impl World {
                 self.revision,
                 WorldSnapshot {
                     regions: self.regions.view.clone(),
-                    water_levels: Arc::new(
-                        self.water_levels.iter().map(|(&p, &v)| (p, v)).collect(),
-                    ),
+                    water_levels: Arc::new(self.water_levels.snapshot_all()),
                     cfg,
                     chunks: Arc::new(self.chunks.clone()),
                 },
@@ -2818,7 +2850,9 @@ impl World {
         });
         if current != id {
             if let Some(mut chunk) = self.chunks.get_mut(&coord) {
-                Arc::make_mut(&mut chunk).blocks[ChunkData::local_index(p.x, p.y, p.z)] = id;
+                let chunk = Arc::make_mut(&mut chunk);
+                chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)] = id;
+                chunk.note_modified(p,current,id);
             }
             if current == BlockId::Fire {
                 self.sandbox.clear_fire(p);
@@ -2900,8 +2934,10 @@ impl World {
                         BlockId::Water
                     };
                     let index = ChunkData::local_index(p.x, p.y, p.z);
-                    block_changed[i] = chunk.blocks[index] != id;
+                    let previous=chunk.blocks[index];
+                    block_changed[i] = previous != id;
                     chunk.blocks[index] = id;
+                    if block_changed[i] { chunk.note_modified(p,previous,id); }
                 }
             }
             for (i, &(p, volume)) in entries.iter().enumerate() {
@@ -3077,6 +3113,7 @@ impl World {
             if let Some(mut chunk) = self.chunks.get_mut(&chunk_coord) {
                 let chunk_mut = Arc::make_mut(&mut chunk);
                 chunk_mut.blocks[ChunkData::local_index(p.x, p.y, p.z)] = id;
+                chunk_mut.note_modified(p,current,id);
                 if id.is_torch() {
                     chunk_mut.torches.insert(p);
                 } else {
@@ -3178,13 +3215,6 @@ pub fn propagate_light(world: &mut World, start_pos: IVec3, light_level: u8) {
     }
 }
 
-fn default_seed(world_type: WorldType) -> u32 {
-    match world_type {
-        WorldType::Superflat => 0x51f1_001,
-        WorldType::Hills => 0x51f1_002,
-        WorldType::Ridged => 0x51f1_003,
-    }
-}
 
 pub fn floor_div(a: i32, b: i32) -> i32 {
     let mut q = a / b;
@@ -3222,6 +3252,15 @@ pub fn mark_chunk_and_neighbors_dirty(dirty: &mut HashSet<IVec3>, block: IVec3) 
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+fn default_seed(world_type: WorldType) -> u32 {
+    match world_type {
+        WorldType::Superflat => 0x51f1_001,
+        WorldType::Hills => 0x51f1_002,
+        WorldType::Ridged => 0x51f1_003,
     }
 }
 
@@ -3548,7 +3587,6 @@ mod tree_lod_accuracy {
             let cfg = World::with_seed(WorldType::Hills, scale, 7).sample_config();
             let m = cfg.voxel_meters();
             let (mut n, mut top_err, mut rad_err, mut base_err, mut rad_bias) = (0, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-            let (mut ratio_c, mut ratio_b) = ((0.0f32, 0.0f32), (0.0f32, 0.0f32));
             let mut under = 0;
             let mut top_bias = 0.0f32;
             let mut worst_under = 0.0f32;
@@ -3596,8 +3634,6 @@ mod tree_lod_accuracy {
                         worst_under = worst_under.max(true_r - v.radius);
                     }
                     rad_bias += true_r - v.radius;
-                    let ratio = (max_r * m + m) / v.radius.max(0.01);
-                    if v.conifer { ratio_c.0 += ratio; ratio_c.1 += 1.0; } else { ratio_b.0 += ratio; ratio_b.1 += 1.0; }
                     rad_err += (max_r * m + m - v.radius).abs();
                     if trunk_base != i32::MAX {
                         base_err += (trunk_base as f32 * m - v.base.y).abs();
@@ -3672,6 +3708,10 @@ mod v16_stage_split {
             time("cavern", &|p, c, _| sites::cavern(&cfg, p, c.height).is_some() as u32);
             time("structure", &|p, c, pr| structure_block(&cfg, p, c, pr).as_u32());
             time("cave", &|p, c, _| cave_carves(&cfg, p, &c) as u32);
+            time("dungeon", &|p, c, _| {
+                let m = (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
+                (dungeon::block(&cfg, m, c.height).is_some() as u32) + (dungeon::reserved(&cfg, m) as u32)
+            });
             time("full", &|p, c, pr| sample_block_with(&cfg, p, c, pr).as_u32());
         }
     }

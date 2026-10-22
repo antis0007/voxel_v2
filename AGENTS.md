@@ -4,7 +4,8 @@ Read this first. It records things that are not obvious from the code and have a
 
 ## Building and running
 
-- `cargo build --release` writes to the directory in `cargo metadata --format-version 1 --no-deps | grep target_directory`. On the main dev machine that is `C:/AI/pyrenet-work/.cargo-target`, **not** `./target`. The `.exe` files in `./target/release/` are stale copies from earlier sessions. Run the binary from the cargo target directory.
+- `.cargo/config.toml` sets `target-dir = "target"`, so builds go to `./target`. This overrides a global `~/.cargo/config.toml` that points every project at Pyrenet's shared cache. Confirm with `cargo metadata --format-version 1 --no-deps | grep target_directory`. Older `.exe` copies made by earlier sessions (built when the global cache applied) may sit in `./target/release/`; rebuild before trusting one.
+- The disk is nearly full. `./target` can reach 4-16 GB; do not create extra worktrees or `CARGO_TARGET_DIR` copies without need.
 - `build.rs` parses and validates every composed WGSL program with naga. A shader mistake fails the *build*, not the run. The program lists are in `src/shader_sources.rs`; a new `.wgsl` file must be added there or it is silently unused.
 - The working tree is often edited by several sessions at once. A WGSL error naming code you did not touch is usually a peer's half-saved file: wait a minute and rebuild before fixing it.
 - HEAD does not build on its own. Tracked shaders reference files that are still untracked (for example `mood_shared.wgsl`, `underwater_shared.wgsl`). Do not trust a clean checkout of HEAD as a baseline until those are committed.
@@ -46,10 +47,9 @@ Everything procedural must sit on one pixel grid. Mixed resolutions are what mad
 
 - The look-at (HWYLA/Jade-style) panel is `src/egui_ui/look_at.rs`. It takes plain data (`LookAt`), reads no world state, and is driven from `egui_ui.rs` where `target_block` is set. The tool readout (`tool_hud.rs`) sits below the compass so the quest label under the compass bar does not run into it.
 
-Known and **not yet fixed**:
+Known open issues:
 
-- `eval_torch_light` seeds each light's flicker from the light's position. For moving lights (wand tip, held torch, spell lights) that re-rolls the flicker as you walk. The amplitude is only about ±5%, so it is minor, but it is real. Fix by seeding moving lights from time only.
-- Wand trail particles are driven by `fract(time)` and are born at full size, so they pop at each wrap instead of fading in.
+- Fixed in the working tree but **not yet committed or A/B-captured**: moving torch lights seed their flicker from time only (`moving` flag in `world_shader.wgsl`, `eval_torch_light`), and wand trail particles fade in over the first sixth of their life (`born` in `mesh/models/wand.rs`). Capture before/after before calling the look settled.
 - Scene models (wand, entities) store absolute world positions in `f32`. Far from the origin (several km) the vertex rounding no longer matches the camera's `f64` residual, so thin viewmodel parts can jitter by sub-millimetres. Near the spawn area this is invisible.
 
 ## Rendering map
@@ -65,6 +65,22 @@ Known and **not yet fixed**:
 
 ## Docs
 
-- `docs/` holds the current design notes. Start with `ATMOS_CLOUD_REWRITE_STATUS.md` for clouds and `ENGINE_AUDIT_AND_REFACTOR.md` for engine layout.
+- `docs/README.md` is the index. It says which notes are current, which are dated session notes (they describe the build they were written against), and which are superseded. Start with `ATMOS_CLOUD_REWRITE_STATUS.md` for clouds and `ENGINE_AUDIT_AND_REFACTOR.md` for engine layout.
 - `docs/legacy/` and `docs/legacy/root-2026-03/` describe **superseded** code (March 2026 cloud fixes and LOD plans). They are kept for history. Do not follow them.
 - Save-format constraint: new machines or resources need a save version bump. Prefer modes or fields on existing items.
+
+## Repo hygiene
+
+- The repo root holds only project entries. `src/repo_layout.rs` fails `cargo test repo_layout` on anything else. Scratch files, logs, zips, patches, run launchers, exes and review snapshots go outside the repo. Captures and logs go under `target/`.
+- Review evidence: `tools/Review-VisualDirection.ps1` writes to `target/visual-direction/<label>/` and records the git HEAD and a hash of the working-tree state. Never overwrite evidence; choose a new label.
+- Every `.wgsl` under `src/` must be included by `src/shader_sources.rs`. The same test enforces this. An unlisted shader is silently unused.
+- Code used only by tests is `#[cfg(test)]`, not dead code in the shipping build. Check `cargo check --all-targets` warnings before and after a change. Warnings for items used by no program, test or not, are real dead code.
+- `src/fluid/{catalog,containers,machine,network,processes,tank_view}.rs` are untracked and not wired into the game (`cargo check` reports them as dead). Their owner decides whether to finish or remove them. Do not delete or wire them on your own.
+- `.cargo/config.toml` is untracked. It pins `target-dir` (see above). Commit it with the rest of the build setup.
+
+@RTK.md
+
+## Local code advisor
+
+- RTK is enabled for this project, overriding the older user-global disabled default. Preserve raw benchmark JSON/traces and recover full failure logs when needed.
+- Kev supplies optional local review hints after Rust/WGSL `apply_patch` edits; read `docs/CODE_ADVISOR.md` for setup and manual final-patch review. Its scores never establish correctness or authorize actions. Keep existing test/CI restrictions.

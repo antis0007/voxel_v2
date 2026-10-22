@@ -40,7 +40,8 @@ pub fn draw(ctx: &egui::Context, tool: &CreativeState, feedback: &Feedback) {
         .show(ctx, |ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(220.0, 80.0), egui::Sense::hover());
             let p = ui.painter();
-            p.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(24, 23, 28, 220));
+            p.rect_filled(rect, 0.0, super::grimoire::LEATHER);
+            super::grimoire::binding(p, rect, false);
             let left = rect.left() + 10.0;
             let right = rect.right() - 10.0;
             let top = rect.top();

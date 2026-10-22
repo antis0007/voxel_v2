@@ -1,6 +1,12 @@
 //! Scale presets and the active conservative world simulation.
 
+pub mod catalog;
+pub mod machine;
+pub mod network;
+pub mod containers;
+pub mod processes;
 pub mod ripples;
+pub mod tank_view;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoxelScalePreset {
@@ -10,8 +16,6 @@ pub enum VoxelScalePreset {
 }
 
 impl VoxelScalePreset {
-    pub const ALL: [Self; 3] = [Self::OneMeter, Self::HalfMeter, Self::QuarterMeter];
-
     pub fn meters(self) -> f32 {
         match self {
             Self::OneMeter => 1.0,

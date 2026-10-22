@@ -1,6 +1,8 @@
 //! Chunk residency, prioritized terrain generation, bounded meshing, and GPU upload.
 //! Job IDs isolate cancelled work from replacements, including across world resets.
 mod lod_cache;
+mod shadow_casters;
+use super::horizon::collar;
 mod mesh_budget;
 pub use mesh_budget::{mesh_budget_mib, set_mesh_budget_mib};
 mod gpu_budget;
@@ -12,8 +14,30 @@ use residency::{ResidentChunk, VoxelAllocations};
 pub use residency::{set_world_residency_budgets_mib, world_residency_budgets_mib};
 mod columns;
 mod gpu_upload;
+mod pending_gpu;
+use pending_gpu::{PendingGpuLedger, PendingGpuUpload, PendingGpuLease};
 mod terrain;
+mod local_sources;
 mod visibility;
+mod edit_proxies;
+mod quality_proxies;
+#[cfg(test)]
+mod pin_tests;
+fn edited_mesh_is_stale(last_edit: Option<u64>, mesh_revision: u64) -> bool {
+    last_edit.is_some_and(|edited| edited > mesh_revision)
+}
+
+#[cfg(test)]
+mod terrain_revision_contract {
+    use super::edited_mesh_is_stale;
+    #[test]
+    fn terrain_contract_local_edits_reject_old_results_without_global_revision_churn() {
+        assert!(edited_mesh_is_stale(Some(8), 7));
+        assert!(!edited_mesh_is_stale(Some(8), 8));
+        assert!(!edited_mesh_is_stale(Some(8), 9));
+        assert!(!edited_mesh_is_stale(None, 1));
+    }
+}
 use super::{ChunkStreamerStats, Gpu, render_distance_settings};
 use columns::ColumnPlans;
 use lod_cache::LodMeshCache;
@@ -46,6 +70,7 @@ const MAX_READY_CHUNKS: usize = 128;
 const MAX_READY_MESHES: usize = 64;
 const UPLOAD_TIME_BUDGET: Duration = Duration::from_millis(3);
 pub struct ChunkGpuMesh {
+    boundary_profile: Option<Arc<collar::Installed>>,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub index_count: u32,
@@ -69,13 +94,28 @@ pub struct ChunkCache {
     gpu_evictions: usize,
     lod_meshes: LodMeshCache,
     gpu_bytes: usize,
+    pending_gpu: Arc<PendingGpuLedger>,
+    gpu_world_epoch: u64,
     pub visible: Vec<ChunkKey>,
     pub visible_keys: HashSet<ChunkKey>,
     pub visible_coords: HashSet<IVec3>,
+    /// Actual complete column members admitted to drawing. Desired vertical
+    /// expansion cannot revoke these while its additional meshes are pending.
+    pub(super) published_coords: HashSet<IVec3>,
+    published_columns: HashMap<(i32,i32),Vec<IVec3>>,
+    publication_dirty: bool,
+    horizon_pins: HashSet<(i32,i32)>,
+    horizon_pin_coords: HashSet<IVec3>,
+    edit_proxies: edit_proxies::EditProxies,
+    quality_proxies: quality_proxies::QualityProxies,
+    seeded_sources: HashSet<IVec3>,
     pub gpu_meshes: HashMap<IVec3, ChunkGpuMesh>,
-    /// Increments whenever the GPU mesh set changes so render passes can cache
-    /// derived work, such as shadow maps, without guessing.
+    /// Draw/list caches track every GPU mesh change. Shadow depth has a
+    /// separate revision so water-only replacements need not redraw it.
     pub gpu_mesh_revision: u64,
+    /// Only validated, exactly unchanged caster inputs may retain this revision.
+    pub shadow_caster_revision: u64,
+    shadow_casters: shadow_casters::Cache,
     dirty_meshes: HashSet<IVec3>,
     pub cpu_chunks: HashMap<IVec3, Arc<ResidentChunk>>,
     pub center_chunk: IVec3,
@@ -130,6 +170,185 @@ fn robust_coverage_from_missing(
 }
 
 impl ChunkCache {
+    /// Actual GPU-owned disc: every required vertical chunk in each column
+    /// must exist. Unlike the visual handoff estimate this never ignores holes,
+    /// holds an old radius, or counts requested/queued uploads as coverage.
+    pub fn strict_coverage_meters(&self, eye: Vec3, view_chunks: i32, scale: f32) -> f32 {
+        if !eye.is_finite() || !scale.is_finite() || scale<=0.0 {return 0.0;}
+        let span=CHUNK_SIZE as f32*scale;
+        let radius=view_chunks.clamp(1,64);
+        let cx=(eye.x/span).floor() as i32; let cz=(eye.z/span).floor() as i32;
+        let mut columns:HashMap<(i32,i32),bool>=HashMap::new();
+        for q in &self.published_coords {
+            let ready=self.gpu_meshes.contains_key(q);
+            columns.entry((q.x,q.z)).and_modify(|v|*v &= ready).or_insert(ready);
+        }
+        let mut limit=radius as f32*span;
+        for z in cz-radius..=cz+radius {for x in cx-radius..=cx+radius {
+            if columns.get(&(x,z))==Some(&true) {continue;}
+            let lo=glam::Vec2::new(x as f32*span,z as f32*span);
+            let p=glam::Vec2::new(eye.x,eye.z);
+            limit=limit.min(p.distance(p.clamp(lo,lo+glam::Vec2::splat(span))));
+        }}
+        (limit-2.0*scale).max(0.0)
+    }
+    pub fn resident_coverage(&self, eye: Vec3, view_chunks: i32, scale: f32) -> super::coverage::ResidentCoverage {
+        self.coverage_map(eye,view_chunks,scale,true)
+    }
+
+    /// Only complete, actually drawn bundles can supply a collar. A previously
+    /// selected edge is O(vertical members) to reuse; no mesh scan/allocation.
+    /// Caller memoizes a failed selection until gpu_mesh_revision/coverage changes.
+    pub(crate) fn collar_input(
+        &self,
+        previous: Option<&Arc<collar::Input>>,
+        coverage: &super::coverage::ResidentCoverage,
+        preferred:&[(i32,i32)],
+    ) -> Option<Arc<collar::Input>> {
+        let owned_edge = |column: (i32,i32), side| {
+            coverage.contains_column(column.0, column.1)
+                && collar::Input::outside_columns(column,side).is_some_and(|columns| columns.into_iter()
+                    .all(|(x,z)| !coverage.contains_column(x,z)))
+        };
+        let collect_dependencies = |column, dependencies: &mut Vec<Arc<collar::Installed>>| {
+            dependencies.clear();
+            let Some(members) = self.published_columns.get(&column) else {return false;};
+            if members.is_empty() || members.len() > 64 {return false;}
+            for q in members {
+                let Some(mesh) = self.gpu_meshes.get(q) else {return false;};
+                let Some(installed) = mesh.boundary_profile.as_ref() else {return false;};
+                if installed.scope.coord != *q || installed.scope.lod != mesh.lod
+                    || installed.scope.cache_epoch != self.gpu_world_epoch {return false;}
+                dependencies.push(Arc::clone(installed));
+            }
+            true
+        };
+        let mut dependencies = Vec::new();
+        if let Some(previous) = previous {
+            let current = self.published_columns.get(&previous.column).is_some_and(|members| {
+                members.len() == previous.dependencies.len()
+                    && previous.dependencies.iter().all(|dep| members.contains(&dep.scope.coord)
+                        && self.gpu_meshes.get(&dep.scope.coord).is_some_and(|mesh| {
+                            mesh.lod == dep.scope.lod && mesh.boundary_profile.as_ref()
+                                .is_some_and(|actual| Arc::ptr_eq(actual,dep))
+                        }))
+            });
+            if owned_edge(previous.column,previous.side)
+                && (preferred.is_empty() || preferred.contains(&previous.column)) {
+                if current {return Some(Arc::clone(previous));}
+                // Refresh the selected edge first. An identity-only replacement
+                // must not switch sides and force an unrelated parent rebuild.
+                if collect_dependencies(previous.column,&mut dependencies) {
+                    if let Some(input) = collar::Input::new(previous.column,previous.side,&dependencies) {
+                        return Some(input);
+                    }
+                }
+            }
+        }
+        // Retain only the best 64 candidates instead of sorting every column.
+        // The tuple preserves the previous deterministic priority ordering.
+        let mut columns = BinaryHeap::with_capacity(64);
+        for &(x,z) in self.published_columns.keys() {
+            if !(0..4).any(|side| owned_edge((x,z),side)) {continue;}
+            let key = (!preferred.contains(&(x,z)),
+                i64::from(x).abs_diff(i64::from(self.center_chunk.x))
+                    .saturating_add(i64::from(z).abs_diff(i64::from(self.center_chunk.z))),x,z);
+            if columns.len() < 64 {columns.push(key);}
+            else if let Some(mut worst) = columns.peek_mut() {
+                if key < *worst {*worst=key;}
+            }
+        }
+        for (_,_,x,z) in columns.into_sorted_vec() {
+            let column = (x,z);
+            if !collect_dependencies(column,&mut dependencies) {continue;}
+            for side in 0..4 {
+                if !owned_edge(column,side) {continue;}
+                if let Some(input) = collar::Input::new(column,side,&dependencies) {
+                    return Some(input);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn desired_resident_coverage(&self, eye: Vec3, view_chunks: i32, scale: f32) -> super::coverage::ResidentCoverage {
+        self.coverage_map(eye,view_chunks,scale,false)
+    }
+    fn coverage_map(&self, eye: Vec3, view_chunks: i32, scale: f32, include_pins: bool) -> super::coverage::ResidentCoverage {
+        let mut result = super::coverage::ResidentCoverage::default();
+        if !eye.is_finite() || !scale.is_finite() || scale <= 0.0 { return result; }
+        let radius = view_chunks.clamp(1,64);
+        // Use the draw-list centre, which can differ from an interpolated
+        // render eye at a chunk boundary. The mask must describe actual draws.
+        let cx = self.center_chunk.x;
+        let cz = self.center_chunk.z;
+        result.header = [cx.saturating_sub(64), cz.saturating_sub(64), 129, 1];
+        let mut columns: HashMap<(i32,i32),bool> = HashMap::new();
+        for q in if include_pins { &self.published_coords } else { &self.visible_coords } {
+            let ready = self.gpu_meshes.contains_key(q);
+            columns.entry((q.x,q.z)).and_modify(|v| *v &= ready).or_insert(ready);
+        }
+        let mut sparse = Vec::with_capacity(self.horizon_pins.len());
+        for ((x,z), ready) in columns {
+            let dx = i64::from(x) - i64::from(cx);
+            let dz = i64::from(z) - i64::from(cz);
+            let r = i64::from(radius);
+            let nearby = dx.abs() <= r && dz.abs() <= r && dx*dx + dz*dz <= r*r;
+            if !ready || !(nearby || (include_pins && (self.horizon_pins.contains(&(x,z)) || self.edit_proxies.admitted((x,z))))) { continue; }
+            if result.in_dense_window(x,z) {
+                // This branch cannot exhaust sparse capacity.
+                let inserted = result.set_column(x,z);
+                debug_assert!(inserted);
+            } else {
+                sparse.push((x,z));
+            }
+        }
+        // Linear-probe collision placement must not depend on HashMap iteration:
+        // byte-identical owners keep horizon/shadow invalidation stable.
+        sparse.sort_unstable();
+        for (x,z) in sparse {
+            if !result.set_column(x,z) {
+                // Every valid outside column is one of at most 512 admitted
+                // pins. A broken invariant must not publish a partial mask.
+                eprintln!("[resident-coverage] rejected incomplete owner map at ({x},{z}); sparse capacity={}", super::coverage::MAX_SPARSE_COLUMNS);
+                let header = result.header;
+                result = super::coverage::ResidentCoverage::default();
+                result.header = header; // Enabled empty: no radial fallback.
+                return result;
+            }
+        }
+        result
+    }
+    pub fn set_horizon_pins(&mut self, mut wanted: Vec<(i32,i32)>) {
+        self.refresh_published_columns();
+        // Existing GPU allocations only. Reserve at most 1 GiB/512 columns for
+        // last valid edited cover; speculative uploads cannot evict this set.
+        wanted.sort_unstable_by_key(|&(x,z)| (!self.horizon_pins.contains(&(x,z)),
+            (i64::from(x)-i64::from(self.center_chunk.x)).abs()+(i64::from(z)-i64::from(self.center_chunk.z)).abs(),x,z));
+        wanted.dedup();
+        let requested=wanted.len();
+        let mut pins=HashSet::new(); let mut coords=HashSet::new();
+        let mut reserved=self.edit_proxies.coords.clone();
+        let mut bytes=reserved.iter().filter_map(|q|self.gpu_meshes.get(q)).map(|m|m.bytes).sum::<usize>();
+        let proxy_columns=self.edit_proxies.columns().count(); let mut extra_pins=0usize;
+        for column in wanted {
+            let extra=!self.edit_proxies.wanted(&column);
+            if proxy_columns+extra_pins+usize::from(extra)>edit_proxies::COLUMN_LIMIT { continue; }
+            let required:Vec<_>=self.published_coords.iter().chain(self.horizon_pin_coords.iter())
+                .filter(|q|(q.x,q.z)==column).copied().collect::<HashSet<_>>().into_iter().collect();
+            if required.is_empty() || required.iter().any(|q| !self.gpu_meshes.contains_key(q)) { continue; }
+            let size=required.iter().filter(|q|!reserved.contains(*q)).map(|q|self.gpu_meshes[q].bytes).sum::<usize>();
+            if bytes.saturating_add(size)>1024*1024*1024 { continue; }
+            bytes+=size; extra_pins+=usize::from(extra); pins.insert(column); reserved.extend(required.iter().copied()); coords.extend(required);
+        }
+        if pins == self.horizon_pins && coords == self.horizon_pin_coords { return; }
+        if pins != self.horizon_pins {
+            println!("[horizon-pins] columns={} chunks={} bytes={} requested={} deferred={} reserve_limit_bytes={}",pins.len(),coords.len(),bytes,requested,requested.saturating_sub(pins.len()),1024u64*1024*1024);
+        }
+        self.horizon_pins=pins; self.horizon_pin_coords=coords;
+        self.rebuild_visible_sets();
+    }
+    pub fn has_horizon_pins(&self) -> bool { !self.horizon_pins.is_empty() || self.edit_proxies.columns().next().is_some() }
     pub fn new(center_chunk: IVec3) -> Self {
         let visible = desired_chunk_keys(center_chunk);
         let visible_keys = visible.iter().copied().collect();
@@ -144,11 +363,23 @@ impl ChunkCache {
             gpu_evictions: 0,
             lod_meshes: LodMeshCache::default(),
             gpu_bytes: 0,
+            pending_gpu: Arc::new(PendingGpuLedger::default()),
+            gpu_world_epoch: 0,
             visible,
             visible_keys,
             visible_coords,
+            published_coords:HashSet::new(),
+            published_columns:HashMap::new(),
+            publication_dirty:true,
+            horizon_pins: HashSet::new(),
+            horizon_pin_coords: HashSet::new(),
+            edit_proxies: edit_proxies::EditProxies::default(),
+            quality_proxies: quality_proxies::QualityProxies::default(),
+            seeded_sources: HashSet::new(),
             gpu_meshes: HashMap::new(),
             gpu_mesh_revision: 0,
+            shadow_caster_revision: 0,
+            shadow_casters: shadow_casters::Cache::default(),
             dirty_meshes: HashSet::new(),
             cpu_chunks: HashMap::new(),
             center_chunk,
@@ -277,14 +508,75 @@ impl ChunkCache {
     }
 
     fn rebuild_visible_sets(&mut self) {
-        for index in 0..self.visible.len() {
-            self.visible[index].lod = self.desired_lod(self.visible[index].coord);
+        self.visible_coords.clear();
+        self.visible_coords.extend(self.visible.iter().map(|key|key.coord));
+        for &coord in &self.horizon_pin_coords {
+            if !self.visible_coords.contains(&coord) {
+                if let Some(mesh)=self.gpu_meshes.get(&coord) {
+                    self.visible.push(ChunkKey { coord,lod:mesh.lod });
+                    self.visible_coords.insert(coord);
+                }
+            }
         }
-        self.visible_keys = self.visible.iter().copied().collect();
-        self.visible_coords = self.visible.iter().map(|key| key.coord).collect();
+        for index in 0..self.visible.len() {
+            let coord=self.visible[index].coord;
+            self.visible[index].lod = if self.edit_proxies.contains(&coord) { 0 } else if self.horizon_pin_coords.contains(&coord) {
+                self.gpu_meshes.get(&coord).map_or_else(||self.desired_lod(coord),|mesh|mesh.lod)
+            } else { self.desired_lod(coord) };
+        }
+        self.visible_keys.clear();
+        self.visible_keys.extend(self.visible.iter().copied());
+        self.visible_keys.extend(self.edit_proxies.coords.iter().map(|&coord| ChunkKey { coord, lod: 0 }));
+        self.publication_dirty=true;
+        self.refresh_published_columns();
     }
 
+    fn refresh_published_columns(&mut self) {
+        if !self.publication_dirty { return; }
+        self.publication_dirty=false;
+        let radius=render_distance_settings().view_distance_chunks.clamp(1,64);
+        let mut desired:HashMap<(i32,i32),Vec<IVec3>>=HashMap::new();
+        for &q in &self.visible_coords {
+            let dx=i64::from(q.x)-i64::from(self.center_chunk.x);let dz=i64::from(q.z)-i64::from(self.center_chunk.z);
+            if dx*dx+dz*dz<=i64::from(radius)*i64::from(radius) || self.horizon_pins.contains(&(q.x,q.z)) {
+                desired.entry((q.x,q.z)).or_default().push(q);
+            }
+        }
+        for (column,members) in self.quality_proxies.desired_columns() {
+            desired.insert(column,members.to_vec());
+        }
+        for (column, members) in self.edit_proxies.desired_columns() {
+            desired.insert(column, members.to_vec());
+        }
+        self.published_columns.retain(|column,members|desired.contains_key(column) && members.iter().all(|q|self.gpu_meshes.contains_key(q)));
+        for (column,mut members) in desired {
+            let quality_only=self.quality_proxies.contains_column(&column);
+            if members.iter().all(|q|self.gpu_meshes.get(q).is_some_and(|mesh| !self.edit_proxies.contains(q) || mesh.lod == 0))
+                && (!quality_only || members.iter().all(|q|!self.dirty_meshes.contains(q)
+                    && !self.edit_proxies.water_dirty.contains(q) && !self.pending_gpu.contains(q))) {
+                members.sort_unstable_by_key(|q|(q.y,q.x,q.z));
+                self.edit_proxies.mark_admitted(column);
+                self.quality_proxies.mark_admitted(column);
+                self.published_columns.insert(column,members);
+            }
+        }
+        self.edit_proxies.set_quality_admitted(self.quality_proxies.admitted_columns());
+        let published_coords=self.published_columns.values().flatten().copied().collect();
+        let membership_changed=self.published_coords!=published_coords;
+        self.published_coords=published_coords;
+        self.visible_keys.clear();
+        self.visible_keys.extend(self.visible.iter().copied());
+        self.visible_keys.extend(self.edit_proxies.coords.iter().map(|&coord| ChunkKey { coord, lod: 0 }));
+        for &coord in &self.published_coords {
+            let key=ChunkKey {coord,lod:self.desired_lod(coord)};
+            self.visible_keys.insert(key);
+        }
+        if membership_changed { self.mark_mesh_set_changed(); }
+    }
+    fn source_interested(&self,q:&IVec3)->bool { self.visible_coords.contains(q)||self.published_coords.contains(q)||self.edit_proxies.contains(q) }
+
     fn desired_lod(&self, coord: IVec3) -> u8 {
+        if self.edit_proxies.contains(&coord) { return 0; }
         let desired = lod_for_chunk(self.center_chunk, coord);
         let Some(mesh) = self.gpu_meshes.get(&coord) else {
             return desired;
@@ -333,6 +625,13 @@ impl ChunkCache {
     }
 
     pub fn reset(&mut self, center_chunk: IVec3) {
+        self.shadow_casters.clear();
+        self.gpu_world_epoch = self.gpu_world_epoch.wrapping_add(1);
+        // Outstanding upload leases remain charged until the streamer drops them.
+        self.edit_proxies=edit_proxies::EditProxies::default(); self.quality_proxies=quality_proxies::QualityProxies::default(); self.seeded_sources.clear();
+        self.published_columns.clear();self.published_coords.clear();
+        self.publication_dirty=true;
+        self.horizon_pins.clear(); self.horizon_pin_coords.clear();
         self.dirty_meshes.clear();
         self.budget_deferred.clear();
         self.lod_meshes.clear();
@@ -343,7 +642,7 @@ impl ChunkCache {
         self.rebuild_visible_sets();
         if !self.gpu_meshes.is_empty() {
             self.gpu_meshes.clear();
-            self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+            self.mark_mesh_set_changed();
         }
         self.cpu_chunks.clear();
         self.column_y_cache.clear();
@@ -357,6 +656,12 @@ impl ChunkCache {
     }
 
     pub fn reset_with_snapshot(&mut self, center_chunk: IVec3, snapshot: &WorldSnapshot) {
+        self.shadow_casters.clear();
+        self.gpu_world_epoch = self.gpu_world_epoch.wrapping_add(1);
+        // Outstanding upload leases remain charged until the streamer drops them.
+        self.edit_proxies=edit_proxies::EditProxies::default(); self.quality_proxies=quality_proxies::QualityProxies::default(); self.seeded_sources.clear();
+        self.published_columns.clear(); self.published_coords.clear(); self.publication_dirty=true;
+        self.horizon_pins.clear(); self.horizon_pin_coords.clear();
         self.dirty_meshes.clear();
         self.budget_deferred.clear();
         self.lod_meshes.clear();
@@ -376,7 +681,7 @@ impl ChunkCache {
         self.rebuild_visible_sets();
         if !self.gpu_meshes.is_empty() {
             self.gpu_meshes.clear();
-            self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+            self.mark_mesh_set_changed();
         }
         self.cpu_chunks.clear();
         self.coverage_stable_meters = -1.0;
@@ -437,8 +742,8 @@ impl ChunkCache {
             }
             for mut key in visibility::keys_for_column(self.center_chunk, c, range, &snapshot.cfg) {
                 key.lod = self.desired_lod(key.coord);
-                if self.visible_keys.insert(key) {
-                    self.visible_coords.insert(key.coord);
+                if self.visible_coords.insert(key.coord) {
+                    self.visible_keys.insert(key);
                     self.visible.push(key);
                     added.push(key);
                 }
@@ -473,8 +778,8 @@ impl ChunkCache {
         added.reserve(new_keys.len());
         for mut key in new_keys {
             key.lod = self.desired_lod(key.coord);
-            if self.visible_keys.insert(key) {
-                self.visible_coords.insert(key.coord);
+            if self.visible_coords.insert(key.coord) {
+                self.visible_keys.insert(key);
                 self.visible.push(key);
                 added.push(key);
             }
@@ -504,16 +809,17 @@ impl ChunkCache {
             dx.max(dz) <= hard_limit
         };
         let mesh_count_before = self.gpu_meshes.len();
-        self.gpu_meshes.retain(|coord, _| is_in_range(coord));
+        self.gpu_meshes.retain(|coord, _| is_in_range(coord) || self.horizon_pin_coords.contains(coord) || self.published_coords.contains(coord) || self.edit_proxies.contains(coord));
         self.gpu_bytes = self.gpu_meshes.values().map(|mesh| mesh.bytes).sum();
         self.lod_meshes.retain(|coord| is_in_range(&coord));
         if self.gpu_meshes.len() != mesh_count_before {
-            self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+            self.mark_mesh_set_changed();
         }
-        self.cpu_chunks.retain(|coord, _| is_in_range(coord));
-        self.dirty_meshes.retain(is_in_range);
+        self.cpu_chunks.retain(|coord, _| is_in_range(coord) || self.horizon_pin_coords.contains(coord) || self.published_coords.contains(coord) || self.edit_proxies.contains(coord));
+        self.dirty_meshes.retain(|q| is_in_range(q) || self.horizon_pin_coords.contains(q) || self.published_coords.contains(q) || self.edit_proxies.contains(q));
+        self.seeded_sources.retain(|q| is_in_range(q) || self.edit_proxies.contains(q));
         self.column_y_cache
-            .retain(|&(x, z), _| (x - center.x).abs().max((z - center.z).abs()) <= hard_limit);
+            .retain(|&(x, z), _| (x - center.x).abs().max((z - center.z).abs()) <= hard_limit || self.edit_proxies.wanted(&(x,z)));
     }
 
     pub fn spawn_progress(&mut self) -> (usize, usize) {
@@ -534,8 +840,28 @@ impl ChunkCache {
         (ready, 27)
     }
 
+    fn mark_mesh_set_changed(&mut self) {
+        self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+        self.shadow_caster_revision = self.shadow_caster_revision.wrapping_add(1);
+    }
+
     fn install_mesh(&mut self, coord: IVec3, mesh: ChunkGpuMesh) {
-        self.dirty_meshes.remove(&coord);
+        self.install_mesh_with_casters(coord, mesh, shadow_casters::Prepared::default());
+    }
+
+    /// The publication transaction calls this only after GPU validation succeeds.
+    fn install_mesh_with_casters(
+        &mut self,
+        coord: IVec3,
+        mesh: ChunkGpuMesh,
+        prepared: shadow_casters::Prepared,
+    ) {
+        let same_lod = self.gpu_meshes.get(&coord).is_some_and(|old| old.lod == mesh.lod);
+        let unchanged_casters = self.shadow_casters.install(coord, mesh.lod, same_lod, prepared);
+        // Column readiness depends on buffer presence and LOD, not geometry
+        // contents. Replacing an existing representation keeps the same owners.
+        let ownership_changed = !same_lod;
+        let edited_source = self.dirty_meshes.remove(&coord);
         drop(self.lod_meshes.take(ChunkKey {
             coord,
             lod: mesh.lod,
@@ -544,11 +870,19 @@ impl ChunkCache {
         let lod = mesh.lod;
         if let Some(previous) = self.gpu_meshes.insert(coord, mesh) {
             self.gpu_bytes -= previous.bytes;
-            if previous.lod != lod && !previous.lod_invariant {
+            // A different LOD is reusable only while its source/halo is unchanged.
+            // Dirty invalidation already removed inactive siblings; do not put
+            // the old edited source back into that cache during replacement.
+            if !edited_source && previous.lod != lod && !previous.lod_invariant {
                 self.lod_meshes.remember(coord, previous);
             }
         }
         self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+        if !unchanged_casters {
+            self.shadow_caster_revision = self.shadow_caster_revision.wrapping_add(1);
+        }
+        self.publication_dirty |= ownership_changed;
+        self.refresh_published_columns();
         self.trim_lod_budget();
     }
 
@@ -556,7 +890,16 @@ impl ChunkCache {
         if !self.dirty_meshes.contains(&key.coord) {
             if let Some(mesh) = self.gpu_meshes.get_mut(&key.coord) {
                 if mesh.lod_invariant || mesh.lod == key.lod {
+                    let ownership_changed = mesh.lod != key.lod;
+                    if ownership_changed {
+                        mesh.boundary_profile = mesh.boundary_profile.as_ref()
+                            .and_then(|profile| profile.relabel_empty_lod(key.lod));
+                    }
                     mesh.lod = key.lod;
+                    if ownership_changed {
+                        self.publication_dirty = true;
+                        self.refresh_published_columns();
+                    }
                     return true;
                 }
             }
@@ -574,7 +917,11 @@ pub struct CpuChunkMesh {
     pub key: ChunkKey,
     pub revision: u64,
     pub job_id: u64,
+    pub world_epoch: u64,
+    pub cache_epoch: u64,
     pub mesh: ChunkMesh,
+    shadow_casters: shadow_casters::Prepared,
+    boundary_profile: collar::Prepared,
     // Rust drops fields in declaration order: release the byte reservation
     // only after the mesh vectors have actually been freed.
     _lease: Option<MeshLease>,
@@ -591,7 +938,10 @@ struct MeshJob {
     key: ChunkKey,
     revision: u64,
     job_id: u64,
+    world_epoch: u64,
+    cache_epoch: u64,
     chunk: Arc<ResidentChunk>,
+    shadow_baseline: Option<shadow_casters::Baseline>,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -617,6 +967,9 @@ fn spawn_mesh_workers(
                     let key = job.key;
                     let job_id = job.job_id;
                     let revision = job.revision;
+                    let world_epoch = job.world_epoch;
+                    let cache_epoch = job.cache_epoch;
+                    let shadow_baseline = job.shadow_baseline;
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         if job.cancelled.load(Ordering::Relaxed) {
                             return None;
@@ -624,12 +977,15 @@ fn spawn_mesh_workers(
                         let planning = budget.begin_plan(&job.cancelled)?;
                         let mut lease = budget.acquire(PLANNING_BYTES, &job.cancelled)?;
                         if job.key.lod > 0 {
+                            let water_bytes=crate::mesh::exact_water_mesh_bytes_upper_bound(job.chunk.as_ref());
+                            lease.grow_to(PLANNING_BYTES.saturating_add(water_bytes), &job.cancelled)?;
                             drop(planning);
                             if job.cancelled.load(Ordering::Relaxed) {
                                 return None;
                             }
                             let mut mesh =
                                 crate::mesh::coarsened_mesh(job.chunk.as_ref(), job.key.lod);
+                            crate::mesh::encode_water(job.chunk.as_ref(), &mut mesh);
                             let lod_invariant = mesh.vertices.is_empty();
                             drop(job.chunk);
                             if mesh.vertices.len() * std::mem::size_of::<crate::mesh::Vertex3>()
@@ -643,11 +999,16 @@ fn spawn_mesh_workers(
                                 * std::mem::size_of::<crate::mesh::Vertex3>()
                                 + mesh.indices.capacity() * 4;
                             lease.finish(bytes);
+                            let shadow_casters = shadow_casters::Prepared::from_mesh(
+                                &mesh, shadow_baseline.as_ref(), &job.cancelled);
+                            let boundary_profile = collar::Prepared::from_mesh(key.coord, &mesh, &job.cancelled);
                             return Some(CpuChunkMesh {
                                 key,
                                 revision,
-                                job_id,
+                                job_id, world_epoch, cache_epoch,
                                 mesh,
+                                shadow_casters,
+                                boundary_profile,
                                 failed: false,
                                 lod_invariant,
                                 _lease: Some(lease),
@@ -684,11 +1045,16 @@ fn spawn_mesh_workers(
                             * std::mem::size_of::<crate::mesh::Vertex3>()
                             + mesh.indices.capacity() * 4;
                         lease.finish(bytes);
+                        let shadow_casters = shadow_casters::Prepared::from_mesh(
+                            &mesh, shadow_baseline.as_ref(), &job.cancelled);
+                            let boundary_profile = collar::Prepared::from_mesh(key.coord, &mesh, &job.cancelled);
                         Some(CpuChunkMesh {
                             key,
                             revision,
-                            job_id,
+                            job_id, world_epoch, cache_epoch,
                             mesh,
+                            shadow_casters,
+                            boundary_profile,
                             failed: false,
                             lod_invariant,
                             _lease: Some(lease),
@@ -700,8 +1066,10 @@ fn spawn_mesh_workers(
                         Err(_) => CpuChunkMesh {
                             key,
                             revision,
-                            job_id,
+                            job_id, world_epoch, cache_epoch,
                             mesh: ChunkMesh::empty(),
+                            shadow_casters: shadow_casters::Prepared::default(),
+                            boundary_profile: collar::Prepared::default(),
                             failed: true,
                             lod_invariant: true,
                             _lease: None,
@@ -718,8 +1086,19 @@ fn spawn_mesh_workers(
     Ok((job_tx, result_rx))
 }
 
+// Admission uses the same cover lane and whole-column age as dispatch/upload.
+// The existing radial key remains the fallback within each lane.
+type PendingSourcePriority = (
+    u8,
+    Option<(Instant, i32, i32)>,
+    (i32, i32, i32, i32, i32, i32, i32, u8),
+);
+
 pub struct ChunkStreamer {
-    upload_checks: Vec<gpu_upload::Check>,
+    pending_uploads: Vec<PendingGpuUpload>,
+    pending_gpu_coords: HashMap<IVec3,u64>,
+    upload_epoch: u64,
+    next_upload_token: u64,
     upload_retry_after: Instant,
     upload_error: Option<String>,
     worker_retry_after: Instant,
@@ -733,6 +1112,7 @@ pub struct ChunkStreamer {
     /// Latest edit while a mesh is being built. Publish that job before retrying
     /// so continuously simulated chunks cannot starve their first visible mesh.
     dirty_revisions: HashMap<IVec3, u64>,
+    source_observations: local_sources::Observations,
     generating: HashSet<ChunkKey>,
     meshing: HashMap<ChunkKey, (u64, Arc<AtomicBool>)>,
     ready_chunks: VecDeque<ChunkJob>,
@@ -744,11 +1124,12 @@ pub struct ChunkStreamer {
     /// Chunks that need to be scheduled but haven't been yet.
     /// Populated when new keys are added to the visible set, avoiding an
     /// O(visible) scan inside enqueue_missing every frame.
-    /// Stored as a min-heap keyed by radial XZ distance so near chunks are
-    /// scheduled before distant ones.
-    pending_schedule: BinaryHeap<Reverse<(i32, i32, i32, i32, i32, i32, i32, u8)>>,
+    /// Re-keyed before admission by missing ordinary cover, then oldest whole
+    /// incomplete proxy column, with radial distance as the fallback.
+    pending_schedule: BinaryHeap<Reverse<PendingSourcePriority>>,
     pending_keys: HashSet<ChunkKey>,
     pending_schedule_center: IVec3,
+    urgent_coords: HashSet<IVec3>,
     repair_cursor: usize,
     last_stats: ChunkStreamerStats,
 }
@@ -761,8 +1142,12 @@ impl ChunkStreamer {
         Ok(Self {
             worker_retry_after: Instant::now(),
             mesh_budget,
-            upload_checks: Vec::new(),
+            pending_uploads: Vec::new(),
+            pending_gpu_coords: HashMap::new(),
+            upload_epoch: 0,
+            next_upload_token: 0,
             dirty_revisions: HashMap::new(),
+            source_observations: local_sources::Observations::default(),
             upload_retry_after: Instant::now(),
             upload_error: None,
             empty_vertex: device.create_buffer(&wgpu::BufferDescriptor {
@@ -790,14 +1175,19 @@ impl ChunkStreamer {
             pending_schedule: BinaryHeap::new(),
             pending_keys: HashSet::new(),
             pending_schedule_center: IVec3::ZERO,
+            urgent_coords: HashSet::new(),
             repair_cursor: 0,
             last_stats: ChunkStreamerStats::default(),
         })
     }
 
     pub fn reset(&mut self) {
+        self.urgent_coords.clear();
         self.dirty_revisions.clear();
-        self.upload_checks.clear();
+        self.source_observations=local_sources::Observations::default();
+        self.upload_epoch=self.upload_epoch.wrapping_add(1);
+        self.pending_uploads.clear();
+        self.pending_gpu_coords.clear();
         self.upload_retry_after = Instant::now();
         self.upload_error = None;
         self.requested.clear();
@@ -837,15 +1227,39 @@ impl ChunkStreamer {
         let pending_keys: Vec<_> = self.pending_keys.iter().copied().collect();
         self.pending_schedule.clear();
         for key in pending_keys {
-            self.pending_schedule.push(pending_priority(center, key));
+            self.pending_schedule.push(Reverse((2, None, pending_priority(center, key, self.urgent_coords.contains(&key.coord)).0)));
         }
     }
 
     fn push_pending_key(&mut self, key: ChunkKey) {
         if self.pending_keys.insert(key) {
             self.pending_schedule
-                .push(pending_priority(self.pending_schedule_center, key));
+                .push(Reverse((2, None, pending_priority(self.pending_schedule_center, key, self.urgent_coords.contains(&key.coord)).0)));
         }
+    }
+
+    fn source_pending_priority(cache: &ChunkCache, key: ChunkKey, urgent: bool) -> Reverse<PendingSourcePriority> {
+        let (lane, column, _) = Self::ready_chunk_priority(cache, key);
+        Reverse((lane, column, pending_priority(cache.center_chunk, key, urgent).0))
+    }
+
+    fn reprioritize_pending_sources(&mut self, cache: &ChunkCache) {
+        // Reuse the heap allocation. Membership is unchanged, and priorities
+        // reflect admission/published-cover changes even at a stationary camera.
+        let mut entries = std::mem::take(&mut self.pending_schedule).into_vec();
+        for entry in &mut entries {
+            let (_, _, (_, _, _, _, x, y, z, lod)) = entry.0;
+            let key = ChunkKey { coord: IVec3::new(x, y, z), lod };
+            *entry = Self::source_pending_priority(cache, key, self.urgent_coords.contains(&key.coord));
+        }
+        self.pending_schedule = BinaryHeap::from(entries);
+    }
+
+    fn source_admission_has_capacity(&self) -> bool {
+        self.ready_chunks.len() < MAX_READY_CHUNKS
+            && self.ready_meshes.len() < MAX_READY_MESHES
+            && self.meshing.len() < MAX_MESH_JOBS
+            && self.generating.len() < MAX_GENERATING
     }
 
     fn dynamic_schedule_budget(&self) -> usize {
@@ -862,14 +1276,30 @@ impl ChunkStreamer {
         }
     }
 
-    fn ready_chunk_priority(cache: &ChunkCache, key: ChunkKey) -> (u8, u8, i32, i32, i32, i32) {
+    fn ready_chunk_priority(cache: &ChunkCache, key: ChunkKey) -> (u8, Option<(Instant, i32, i32)>, (u8, u8, i32, i32, i32, i32)) {
+        let pending_since = cache.edit_proxies.pending_since(&key.coord);
+        let quality_since=cache.quality_proxies.pending_since(&key.coord);
+        // Uncovered ordinary columns keep emergency priority. An added Y member
+        // over an existing complete published bundle is repair, not lost cover.
+        let missing_normal_cover = cache.ordinary_source_interested(key.coord)
+            && !cache.gpu_meshes.contains_key(&key.coord)
+            && !cache.published_columns.contains_key(&(key.coord.x, key.coord.z));
+        let persistent_dirty=cache.edit_proxies.persistent_contains(&key.coord) && cache.dirty_meshes.contains(&key.coord);
+        let ordinary_dirty=cache.ordinary_source_interested(key.coord) && cache.dirty_meshes.contains(&key.coord);
+        let lane = if missing_normal_cover {0} else if pending_since.is_some() || persistent_dirty {1}
+            else if ordinary_dirty {2} else if quality_since.is_some() {3} else {4};
         let mesh_state = match cache.gpu_meshes.get(&key.coord) {
-            None => 0u8,
-            Some(mesh) if mesh.lod > key.lod => 1u8,
-            _ => 2u8,
+            _ if cache.dirty_meshes.contains(&key.coord) => 0u8,
+            _ if cache.edit_proxies.contains(&key.coord) => 1u8,
+            None => 2u8,
+            Some(mesh) if mesh.lod > key.lod => 3u8,
+            _ => 4u8,
         };
         let base = chunk_sort_key(cache.center_chunk, key);
-        (mesh_state, base.0, base.1, base.2, base.3, base.4)
+        // One update can create several columns at the same Instant. Keep the
+        // column identity ahead of distance/Y so a tie cannot interleave bundles.
+        let pending_column = pending_since.or(quality_since).map(|since| (since, key.coord.x, key.coord.z));
+        (lane, pending_column, (mesh_state, base.0, base.1, base.2, base.3, base.4))
     }
 
     fn reprioritize_ready_chunks(&mut self, cache: &ChunkCache) {
@@ -894,7 +1324,7 @@ impl ChunkStreamer {
         if self.pending_schedule_center != center {
             self.rebuild_pending_schedule(center);
         }
-        for key in &cache.visible {
+        for key in &cache.visible_keys {
             if cache
                 .gpu_meshes
                 .get(&key.coord)
@@ -909,9 +1339,9 @@ impl ChunkStreamer {
     pub fn retain_visible(&mut self, visible: &HashSet<ChunkKey>) {
         let coords: HashSet<_> = visible.iter().map(|key| key.coord).collect();
         self.dirty_revisions
-            .retain(|coord, _| coords.contains(coord));
+            .retain(|coord, _| coords.contains(coord) || self.pending_gpu_coords.contains_key(coord));
         // Geometry detail changes do not invalidate source voxels or a reusable LOD.
-        self.requested.retain(|key| coords.contains(&key.coord));
+        self.requested.retain(|key| coords.contains(&key.coord) || self.pending_gpu_coords.contains_key(&key.coord));
         self.generating.retain(|key| coords.contains(&key.coord));
         self.retain_mesh_jobs(|key| coords.contains(&key.coord));
         self.ready_chunks
@@ -935,7 +1365,7 @@ impl ChunkStreamer {
             let dz = (coord.z - center.z).abs();
             dx.max(dz) <= hard_limit
         };
-        self.requested.retain(|key| in_range(&key.coord));
+        self.requested.retain(|key| in_range(&key.coord) || self.pending_gpu_coords.contains_key(&key.coord));
         self.generating.retain(|key| in_range(&key.coord));
         self.retain_mesh_jobs(|key| in_range(&key.coord));
         self.ready_chunks.retain(|job| in_range(&job.key.coord));
@@ -958,7 +1388,7 @@ impl ChunkStreamer {
         }
 
         self.requested
-            .retain(|key| !dirty_coords.contains(&key.coord));
+            .retain(|key| !dirty_coords.contains(&key.coord) || self.pending_gpu_coords.contains_key(&key.coord));
         self.generating
             .retain(|key| !dirty_coords.contains(&key.coord));
         self.retain_mesh_jobs(|key| !dirty_coords.contains(&key.coord));
@@ -981,7 +1411,7 @@ impl ChunkStreamer {
                 break;
             };
             collected += 1;
-            if self.meshing.get(&cpu_mesh.key).map(|(id, _)| *id) != Some(cpu_mesh.job_id) {
+            if cpu_mesh.world_epoch != self.upload_epoch || self.meshing.get(&cpu_mesh.key).map(|(id, _)| *id) != Some(cpu_mesh.job_id) {
                 continue;
             }
             if cpu_mesh.failed {
@@ -1016,7 +1446,7 @@ impl ChunkStreamer {
             // Only skip if the chunk is no longer in the visible set.
             // A stale revision means a world edit happened; rebuild_dirty() will
             // re-queue affected chunks so we don't need to drop work here.
-            if !cache.visible_coords.contains(&job.key.coord) {
+            if !cache.source_interested(&job.key.coord) {
                 self.requested.remove(&job.key);
                 self.requested_coords.remove(&job.key.coord);
                 continue;
@@ -1053,7 +1483,12 @@ impl ChunkStreamer {
                 key: job.key,
                 revision: job.revision,
                 job_id,
+                world_epoch: self.upload_epoch,
+                cache_epoch: cache.gpu_world_epoch,
                 chunk,
+                shadow_baseline: if cache.gpu_meshes.get(&job.key.coord).is_some_and(|m| m.lod == job.key.lod) {
+                    cache.shadow_casters.baseline(job.key.coord, job.key.lod)
+                } else { None },
                 cancelled: cancelled.clone(),
             }) {
                 Ok(()) => {
@@ -1164,7 +1599,7 @@ impl ChunkStreamer {
         }
 
         for &coord in dirty_coords {
-            if !cache.visible_coords.contains(&coord) {
+            if !cache.source_interested(&coord) {
                 continue;
             }
 
@@ -1236,15 +1671,32 @@ impl ChunkStreamer {
         revision: u64,
         cache: &mut ChunkCache,
     ) {
+        self.invalidate_changed_sources(snapshot,cache);
         cache.sync_residency_budget();
+        let water_dirty = std::mem::take(&mut cache.edit_proxies.water_dirty);
+        if !water_dirty.is_empty() {
+            self.rebuild_dirty(snapshot, cache, &HashSet::new(), &water_dirty, revision);
+        }
+        let urgent: HashSet<_> = cache.dirty_meshes.iter().chain(cache.edit_proxies.coords.iter()).copied().collect();
+        if urgent != self.urgent_coords {
+            self.urgent_coords = urgent;
+            self.rebuild_pending_schedule(cache.center_chunk);
+        }
         self.collect_finished_meshes();
         let mut terrain_to_schedule = Vec::new();
         let mut terrain_generated = 0usize;
 
-        for (key, _job_revision, chunk_data, activity) in self
+        for (key, _job_revision, chunk_data, activity, seed_only, seed_activity) in self
             .terrain_generator
             .collect_finished(&gpu.device, snapshot)
         {
+            if seed_only {
+                if cache.ordinary_source_interested(key.coord) && cache.seeded_sources.insert(key.coord) {
+                    cache.edit_proxies.normal_promotions += 1;
+                    if let Some(mask) = activity { cache.simulation_seeds.push((key.coord, mask)); }
+                }
+                continue;
+            }
             self.generating.remove(&key);
             let Some(chunk_data) = chunk_data else {
                 self.requested.remove(&key);
@@ -1255,13 +1707,14 @@ impl ChunkStreamer {
             // Accept terrain data as long as the chunk is still in the visible
             // range — don't discard on revision mismatch.  A world edit (which
             // bumps revision) will re-queue via rebuild_dirty anyway.
-            if !cache.visible_coords.contains(&key.coord) {
+            if !cache.source_interested(&key.coord) {
                 self.requested.remove(&key);
                 self.requested_coords.remove(&key.coord);
                 continue;
             }
-            if let Some(mask) = activity {
-                cache.simulation_seeds.push((key.coord, mask));
+            if !seed_activity { cache.edit_proxies.source_only_completed += 1; }
+            if seed_activity && cache.ordinary_source_interested(key.coord) && cache.seeded_sources.insert(key.coord) {
+                if let Some(mask) = activity { cache.simulation_seeds.push((key.coord, mask)); }
             }
             // A uniform volume INCLUDING its halo exposes no faces at any
             // detail level. Bypass source residency, workers and mesh scratch.
@@ -1278,7 +1731,11 @@ impl ChunkStreamer {
                     key,
                     revision,
                     job_id: 0,
+                    world_epoch: self.upload_epoch,
+                    cache_epoch: cache.gpu_world_epoch,
                     mesh: ChunkMesh::empty(),
+                    shadow_casters: shadow_casters::Prepared::default(),
+                            boundary_profile: collar::Prepared::Empty,
                     _lease: None,
                 });
                 terrain_generated += 1;
@@ -1308,17 +1765,16 @@ impl ChunkStreamer {
         let mut waiting_regions = Vec::new();
         // Limit how many entries we scan from the pending queue per frame so we
         // don't stall when a large ring arrives at once.
+        if self.source_admission_has_capacity() && !self.pending_schedule.is_empty() {
+            self.reprioritize_pending_sources(cache);
+        }
         let scan_limit = self.pending_schedule.len().min(schedule_budget * 4);
         let mut scanned = 0usize;
         while scheduled < schedule_budget && scanned < scan_limit {
-            if self.ready_chunks.len() >= MAX_READY_CHUNKS
-                || self.ready_meshes.len() >= MAX_READY_MESHES
-                || self.meshing.len() >= MAX_MESH_JOBS
-                || self.generating.len() >= MAX_GENERATING
-            {
+            if !self.source_admission_has_capacity() {
                 break;
             }
-            let Some(Reverse((_, _, _, _, kx, ky, kz, klod))) = self.pending_schedule.pop() else {
+            let Some(Reverse((_, _, (_, _, _, _, kx, ky, kz, klod)))) = self.pending_schedule.pop() else {
                 break;
             };
             let key = ChunkKey {
@@ -1327,6 +1783,7 @@ impl ChunkStreamer {
             };
             self.pending_keys.remove(&key);
             scanned += 1;
+            if self.source_observations.blocked && cache.edit_proxies.contains(&key.coord) {continue;}
 
             if !snapshot.edits_ready(key.coord) && !cache.cpu_chunks.contains_key(&key.coord) {
                 waiting_regions.push(key);
@@ -1403,7 +1860,20 @@ impl ChunkStreamer {
         }
         let terrain_scheduled = terrain_to_schedule.len();
         self.terrain_generator
-            .schedule_many(gpu, terrain_to_schedule, snapshot.cfg, revision);
+            .schedule_many(gpu, terrain_to_schedule.into_iter().map(|key| (key, cache.ordinary_source_interested(key.coord))), snapshot.cfg, revision);
+        // A render-only source may already have its final GPU mesh when it
+        // enters ordinary interest. Discover on workers once, without forcing
+        // a remesh or merging proxy-generated activity into the simulation.
+        let promotions: Vec<_> = cache.visible.iter().copied().filter(|key| {
+            cache.ordinary_source_interested(key.coord)
+                && cache.gpu_meshes.contains_key(&key.coord)
+                && !cache.seeded_sources.contains(&key.coord)
+                && !self.terrain_generator.seed_pending(key.coord)
+                && !self.requested_coords.contains(&key.coord)
+        }).take(self.terrain_generator.available_slots().min(4)).collect();
+        for key in promotions {
+            self.terrain_generator.schedule_seed(key, snapshot.cfg, revision, cache.cpu_chunks.get(&key.coord).cloned());
+        }
         self.last_stats.terrain_generated += terrain_generated;
         self.last_stats.terrain_scheduled += terrain_scheduled;
         self.last_stats.mesh_dispatched += mesh_dispatched;
@@ -1421,164 +1891,60 @@ impl ChunkStreamer {
     pub fn upload_finished(
         &mut self,
         gpu: &Gpu,
+        snapshot: &WorldSnapshot,
         cache: &mut ChunkCache,
         current_revision: u64,
         max_uploads: usize,
     ) {
+        self.invalidate_changed_sources(snapshot,cache);
         cache.sync_residency_budget();
-        let mut index = 0;
-        while index < self.upload_checks.len() {
-            match gpu_upload::poll(&mut self.upload_checks[index]) {
-                std::task::Poll::Pending => index += 1,
-                std::task::Poll::Ready(error) => {
-                    drop(self.upload_checks.swap_remove(index));
-                    if let Some(error) = error {
-                        eprintln!("Chunk GPU upload rejected: {error}");
-                        self.upload_error = Some(error);
-                        self.upload_retry_after = Instant::now() + Duration::from_secs(2);
-                    }
-                }
+        let started=Instant::now();
+        let (published,vertices,indices)=self.poll_pending_uploads(&gpu.device,&gpu.device_lost,cache,max_uploads,started);
+        self.last_stats.meshes_uploaded+=published;
+        self.last_stats.uploaded_vertices+=vertices;
+        self.last_stats.uploaded_indices+=indices;
+        if !gpu.device_usable() {self.upload_error=Some("GPU device loss reported".into());return;}
+        let mut staged=0usize;let mut staged_vertices=0usize;let mut staged_indices=0usize;
+        self.collect_finished_meshes();self.reprioritize_ready_meshes(cache);
+        while gpu.device_usable() && Instant::now()>=self.upload_retry_after && staged<max_uploads
+            && self.pending_uploads.len()<16
+            && ((staged==0 && published==0) || started.elapsed()<UPLOAD_TIME_BUDGET) {
+            let Some(cpu_mesh)=self.ready_meshes.pop_front() else {break;};
+            if self.pending_gpu_coords.contains_key(&cpu_mesh.key.coord) {
+                self.ready_meshes.push_back(cpu_mesh);break;
             }
-        }
-        if Instant::now() < self.upload_retry_after || self.upload_checks.len() >= 16 {
-            return;
-        }
-        let mut uploaded = 0usize;
-        let mut uploaded_vertices = 0usize;
-        let mut uploaded_indices = 0usize;
-        let started = Instant::now();
-        self.collect_finished_meshes();
-        self.reprioritize_ready_meshes(cache);
-
-        while uploaded < max_uploads
-            && self.upload_checks.len() < 16
-            && (uploaded == 0 || started.elapsed() < UPLOAD_TIME_BUDGET)
-        {
-            let Some(cpu_mesh) = self.ready_meshes.pop_front() else {
-                break;
+            let key=cpu_mesh.key;
+            let mesh_vertices=cpu_mesh.mesh.vertices.len();let mesh_indices=cpu_mesh.mesh.indices.len();
+            if staged+published>0 && (vertices+staged_vertices+mesh_vertices>CHUNK_UPLOAD_VERTEX_BUDGET
+                || indices+staged_indices+mesh_indices>CHUNK_UPLOAD_INDEX_BUDGET) {
+                self.ready_meshes.push_front(cpu_mesh);break;
+            }
+            if !self.cpu_world_current(cache,&cpu_mesh) || !cache.source_interested(&key.coord) {
+                self.retire_upload_request(key);continue;
+            }
+            let _=current_revision; // unrelated edits do not stale this dependency halo
+            let desired_lod=cache.desired_lod(key.coord);
+            if edited_mesh_is_stale(self.dirty_revisions.get(&key.coord).copied(),cpu_mesh.revision) {
+                self.retire_upload_request(key);cache.dirty_meshes.insert(key.coord);
+                self.push_pending_key(ChunkKey{coord:key.coord,lod:desired_lod});continue;
+            }
+            if desired_lod!=key.lod && cache.gpu_meshes.get(&key.coord)
+                .is_some_and(|m|m.lod==desired_lod&&!cache.dirty_meshes.contains(&key.coord)) {
+                self.retire_upload_request(key);continue;
+            }
+            let bytes=mesh_vertices*std::mem::size_of::<crate::mesh::Vertex3>()+mesh_indices*4;
+            if let Err(error)=gpu_upload::supported(&gpu.device,&cpu_mesh.mesh) {
+                eprintln!("Chunk GPU upload rejected: {error}");self.upload_error=Some(error);
+                cache.budget_deferred.insert(key,usize::MAX);self.retire_upload_request(key);continue;
+            }
+            let Some(reservation)=cache.reserve_pending_gpu(key,bytes) else {
+                self.retire_upload_request(key);continue;
             };
-            let mesh_vertices = cpu_mesh.mesh.vertices.len();
-            let mesh_indices = cpu_mesh.mesh.indices.len();
-            let would_exceed_budget = uploaded > 0
-                && (uploaded_vertices + mesh_vertices > CHUNK_UPLOAD_VERTEX_BUDGET
-                    || uploaded_indices + mesh_indices > CHUNK_UPLOAD_INDEX_BUDGET);
-            if would_exceed_budget {
-                self.ready_meshes.push_front(cpu_mesh);
-                break;
-            }
-
-            self.requested.remove(&cpu_mesh.key);
-            // requested_coords tracks any in-flight key for this coord.
-            // Since we enforce at most one key per coord in requested, removing
-            // unconditionally here is correct and O(1) instead of O(N).
-            self.requested_coords.remove(&cpu_mesh.key.coord);
-
-            // Only discard if the chunk is no longer visible.  Stale revision just
-            // means the world was edited while this mesh was in-flight; we still
-            // upload it — a subsequent rebuild_dirty() will re-mesh the affected
-            // chunks with the latest data.  Discarding here was the main cause of
-            // wasted work and blank-chunk flicker on every player chunk crossing.
-            if !cache.visible_coords.contains(&cpu_mesh.key.coord) {
-                continue;
-            }
-            // If the world was edited after this mesh started, the chunk will be
-            // re-queued by rebuild_dirty.  Upload what we have now so there's no gap.
-            let _ = current_revision;
-
-            let desired_lod = cache.desired_lod(cpu_mesh.key.coord);
-            // Avoid allocating an obsolete result when a current mesh is ready.
-            if desired_lod != cpu_mesh.key.lod
-                && cache
-                    .gpu_meshes
-                    .get(&cpu_mesh.key.coord)
-                    .is_some_and(|mesh| {
-                        mesh.lod == desired_lod && !cache.dirty_meshes.contains(&cpu_mesh.key.coord)
-                    })
-            {
-                continue;
-            }
-            let bytes =
-                mesh_vertices * std::mem::size_of::<crate::mesh::Vertex3>() + mesh_indices * 4;
-            if let Err(error) = gpu_upload::supported(&gpu.device, &cpu_mesh.mesh) {
-                self.upload_error = Some(error.clone());
-                eprintln!("Chunk GPU upload rejected: {error}");
-                cache.budget_deferred.insert(cpu_mesh.key, usize::MAX);
-                continue;
-            }
-            if !cache.admit_mesh(cpu_mesh.key, bytes) {
-                continue;
-            }
-            let (attempt, check) = gpu_upload::start(
-                &gpu.device,
-                &gpu.queue,
-                &cpu_mesh.mesh,
-                cpu_mesh.key,
-                cpu_mesh.lod_invariant,
-                &self.empty_vertex,
-                &self.empty_index,
-            );
-            self.upload_checks.push(check);
-            let gpu_mesh = match attempt {
-                Ok(mesh) => mesh,
-                Err(error) => {
-                    eprintln!("Chunk GPU upload delayed: {error}");
-                    self.upload_error = Some(error);
-                    self.upload_retry_after = Instant::now() + Duration::from_secs(2);
-                    self.ready_meshes.push_front(cpu_mesh);
-                    break;
-                }
-            };
-            if desired_lod == cpu_mesh.key.lod
-                || !cache.gpu_meshes.contains_key(&cpu_mesh.key.coord)
-            {
-                cache.install_mesh(cpu_mesh.key.coord, gpu_mesh);
-            } else {
-                // A useful completed old LOD must not replace the desired active one.
-                cache.lod_meshes.remember(cpu_mesh.key.coord, gpu_mesh);
-                cache.trim_lod_budget();
-            }
-            if desired_lod != cpu_mesh.key.lod
-                && cache
-                    .gpu_meshes
-                    .get(&cpu_mesh.key.coord)
-                    .is_none_or(|mesh| mesh.lod != desired_lod)
-            {
-                let desired = ChunkKey {
-                    coord: cpu_mesh.key.coord,
-                    lod: desired_lod,
-                };
-                if cache.activate_lod(desired) {
-                    self.last_stats.lod_cache_hits += 1;
-                } else {
-                    self.push_pending_key(desired);
-                }
-            }
-            if self
-                .dirty_revisions
-                .get(&cpu_mesh.key.coord)
-                .is_some_and(|&edited| edited > cpu_mesh.revision)
-            {
-                // install_mesh clears the dirty flag. Restore it when this is
-                // only a fallback, and never reuse a stale source or LOD.
-                cache.dirty_meshes.insert(cpu_mesh.key.coord);
-                cache.cpu_chunks.remove(&cpu_mesh.key.coord);
-                cache.lod_meshes.retain(|coord| coord != cpu_mesh.key.coord);
-                self.push_pending_key(ChunkKey {
-                    coord: cpu_mesh.key.coord,
-                    lod: desired_lod,
-                });
-            } else {
-                self.dirty_revisions.remove(&cpu_mesh.key.coord);
-            }
-            self.upload_error = None;
-            uploaded += 1;
-            uploaded_vertices += mesh_vertices;
-            uploaded_indices += mesh_indices;
+            let(attempt,check)=gpu_upload::start(&gpu.device,&gpu.queue,&cpu_mesh.mesh,key,
+                cpu_mesh.lod_invariant,&self.empty_vertex,&self.empty_index);
+            self.begin_pending_upload(cpu_mesh,attempt,check,reservation,cache.gpu_world_epoch);
+            staged+=1;staged_vertices+=mesh_vertices;staged_indices+=mesh_indices;
         }
-
-        self.last_stats.meshes_uploaded += uploaded;
-        self.last_stats.uploaded_vertices += uploaded_vertices;
-        self.last_stats.uploaded_indices += uploaded_indices;
         self.last_stats.cpu_resident_bytes =
             cache.cpu_bytes() + self.terrain_generator.buffer_bytes();
         self.last_stats.cpu_budget_bytes = cache.residency_limits.0;
@@ -1586,7 +1952,7 @@ impl ChunkStreamer {
         self.last_stats.budget_deferred = cache.budget_deferred.len();
         self.last_stats.cpu_evictions = cache.cpu_evictions;
         self.last_stats.gpu_evictions = cache.gpu_evictions;
-        self.last_stats.gpu_resident_bytes = cache.gpu_bytes + cache.lod_meshes.bytes();
+        self.last_stats.gpu_resident_bytes = cache.gpu_bytes + cache.lod_meshes.bytes() + cache.pending_gpu.bytes();
         gpu_budget::observe_residency(
             self.last_stats.gpu_resident_bytes,
             cache.budget_deferred.len(),
@@ -1608,6 +1974,7 @@ impl ChunkStreamer {
             + self.ready_chunks.len()
             + self.ready_meshes.len()
             + self.pending_keys.len()
+            + self.pending_uploads.len()
     }
 }
 
@@ -1647,8 +2014,7 @@ fn apply_snapshot_edits_cubic(chunk_data: &mut GeneratedChunk, snapshot: &WorldS
     let max = min + IVec3::splat(PADDED_CHUNK_SIZE);
     chunk_data.water_levels = snapshot
         .water_levels
-        .iter()
-        .filter(|(p, _)| p.cmpge(min).all() && p.cmplt(max).all())
+        .in_box(min, max)
         .map(|(&p, &v)| (p, v))
         .collect();
     if snapshot.chunks.is_empty() {

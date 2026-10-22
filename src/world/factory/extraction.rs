@@ -81,6 +81,40 @@ pub(super) fn route_water(factory: &mut Factory) {
     }
 }
 
+/// Battery banks in Mana font mode pour their charge into the wielder's mana
+/// while they stand within six metres: 1 mana costs 1 kJ (4 units), at up to
+/// 20 mana per second from the nearest font.
+fn mana_fonts(world: &mut World, player_m: Vec3, dt: f32, size: i32) {
+    let scale = world.voxel_scale.meters();
+    let deficit = world.adventure.max_mana() - world.adventure.mana;
+    if deficit <= 0.0 {
+        return;
+    }
+    let nearest = world
+        .factory
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.kind == Kind::Battery && n.enabled && n.mode == 3 && n.energy >= 4)
+        .map(|(p, _)| {
+            let centre = (p.as_vec3() + Vec3::splat(size as f32 * 0.5)) * scale;
+            (*p, (centre - player_m).length())
+        })
+        .filter(|(_, d)| *d <= 6.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let Some((p, _)) = nearest else {
+        return;
+    };
+    let n = world.factory.nodes.get_mut(&p).unwrap();
+    let wanted = (20.0 * dt).min(deficit);
+    n.work_clock += wanted * 4.0;
+    let units = (n.work_clock.floor() as u32).min(n.energy);
+    n.work_clock -= units as f32;
+    n.energy -= units;
+    world.factory.stats.power(0, units);
+    n.activity = 1.0;
+    world.adventure.mana = (world.adventure.mana + units as f32 / 4.0).min(world.adventure.max_mana());
+}
+
 pub(crate) fn tick_world(
     world: &mut World,
     player: &Player,
@@ -97,6 +131,7 @@ pub(crate) fn tick_world(
         return;
     }
     let scale = world.voxel_scale.meters();
+    mana_fonts(world, player.pos * scale, dt, size);
     let (lo, hi) =
         super::super::player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t);
     let mut machines: Vec<_> = world
@@ -201,6 +236,7 @@ pub(crate) fn tick_world(
                 }
                 if pumped {
                     n.energy -= cost;
+                    world.factory.stats.power(0, cost);
                     n.status = "Processing";
                 } else if waiting {
                     n.work_clock = (n.work_clock + interval).min(0.5);
@@ -287,8 +323,10 @@ pub(crate) fn tick_world(
                 }
                 if let Some(i) = resource {
                     n.output[i] += yield_n;
+                    world.factory.stats.made(i, yield_n);
                 }
                 n.energy -= cost;
+                world.factory.stats.power(0, cost);
                 if n.burn == 0 {
                     n.burn = (size * size * size) as u32;
                 }

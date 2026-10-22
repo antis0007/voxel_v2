@@ -190,24 +190,24 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
 pub(super) fn encounter(ctx: &egui::Context, view: &View) {
     if let Some(boss) = &view.boss {
         egui::Area::new("guardian_health".into())
-            .anchor(Align2::CENTER_TOP, [0.0, 78.0])
+            .anchor(Align2::LEFT_TOP, [12.0, 82.0])
             .interactable(false)
             .show(ctx, |ui| {
                 style::hud_frame().show(ui, |ui| {
-                    ui.set_width((ctx.content_rect().width() - 48.0).clamp(100.0, 360.0));
+                    ui.set_width((ctx.content_rect().width() - 48.0).clamp(100.0, 220.0));
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new(boss.name).color(style::AMBER).size(18.0));
+                        ui.label(RichText::new(boss.name).color(style::AMBER).size(12.0));
                         ui.label(
-                            RichText::new(if boss.health < boss.maximum * 0.5 {
+                            RichText::new(boss.action.unwrap_or(if boss.health < boss.maximum * 0.5 {
                                 "Enraged"
                             } else {
                                 "Awakened guardian"
-                            })
+                            }))
                             .color(style::MUTED)
                             .size(11.0),
                         );
                         let (r, _) = ui.allocate_exact_size(
-                            vec2(ui.available_width(), 7.0),
+                            vec2(ui.available_width(), 5.0),
                             egui::Sense::hover(),
                         );
                         ui.painter().rect_filled(r, 0, style::INK);

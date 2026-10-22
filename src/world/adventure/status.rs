@@ -170,15 +170,6 @@ impl Affixes {
     fn weakness(self, element: Element) -> bool {
         self.list().iter().any(|a| a.weak_to().contains(&element))
     }
-
-    /// Short comma-separated label, for example "Fiery, Swift".
-    pub fn label(self) -> String {
-        self.list()
-            .iter()
-            .map(|a| a.name())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 /// Live status on one enemy. Timers are seconds remaining.

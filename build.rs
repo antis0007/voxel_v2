@@ -3,15 +3,29 @@
 mod shader_sources;
 
 fn main() {
+    // Cargo can reuse a build-script executable when a frozen source copy has
+    // older timestamps. Text replacement can refresh WGSL bodies, but cannot
+    // repair a stale composition function or input table. Reject that case
+    // before issuing a misleading successful validation receipt.
+    let manifest = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    for (path, embedded) in [
+        ("build.rs", include_str!("build.rs")),
+        ("src/shader_sources.rs", include_str!("src/shader_sources.rs")),
+    ] {
+        let current = std::fs::read_to_string(manifest.join(path))
+            .unwrap_or_else(|error| panic!("cannot read shader validation source {path}: {error}"));
+        assert!(current == embedded,
+            "Cargo reused stale shader composition code ({path}); update build.rs and src/shader_sources.rs timestamps and rebuild using the same target directory");
+    }
     for path in [
         "build.rs",
         "src/shader_sources.rs",
         "src/shaders",
-        "src/terrain_compute.wgsl",
         "src/fluid_compute.wgsl",
     ] {
         println!("cargo:rerun-if-changed={path}");
     }
+    for path in shader_sources::shader_input_paths() { println!("cargo:rerun-if-changed={path}"); }
     // Naga's parser and validator can require more stack than a build worker.
     std::thread::Builder::new()
         .name("shader-compilation".into())
@@ -40,11 +54,15 @@ fn validate() {
         ("outline", LINE_SHADER.to_owned()),
         ("shadow", SHADOW_SHADER.to_owned()),
         ("UI", UI_SHADER.to_owned()),
+        ("UI magic", UI_MAGIC_SHADER.to_owned()),
         ("postprocess", POSTPROCESS_SHADER.to_owned()),
         ("present", PRESENT_SHADER.to_owned()),
-        ("terrain", TERRAIN_COMPUTE_SHADER.to_owned()),
         ("fluid", FLUID_SHADER.to_owned()),
     ];
+    let manifest=std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let programs=programs.map(|(name,source)|(name,current_validation_source(source,&manifest).expect("cannot read current shader input")));
+    let world_fingerprint=source_fingerprint(&programs[0].1);
+    let count=programs.len();
     let mut errors = Vec::new();
     for (name, source) in programs {
         match naga::front::wgsl::parse_str(&source) {
@@ -65,4 +83,6 @@ fn validate() {
         "Invalid WGSL programs:\n{}",
         errors.join("\n")
     );
+    println!("cargo:rustc-env=VOXEL_VALIDATED_WORLD_FNV={world_fingerprint:016x}");
+    println!("cargo:warning=Validated {count} composed WGSL programs; world_fnv1a64={world_fingerprint:016x}");
 }

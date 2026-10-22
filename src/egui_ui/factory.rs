@@ -2,9 +2,13 @@ use super::{
     UiAction,
     icons::{self, Icon},
 };
+use crate::egui_ui::presentation::MUTED;
 use crate::world::{
     expedition::{Expedition, NAMES},
-    factory::{Action, Kind, View, recipes},
+    factory::{
+        Action, Kind, Node, View, assembler, induction, multiblock, pile, power,
+        power::NetStats, recipes,
+    },
 };
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, vec2};
 use glam::IVec3;
@@ -335,9 +339,10 @@ fn pipe_panel(
         egui::Grid::new(("pipe-filter", pos))
             .spacing([2.0, 2.0])
             .show(ui, |ui| {
-                for index in 0..20 {
+                // One cell per resource, then "Any".
+                for index in 0..=NAMES.len() {
                     let item = (index < NAMES.len()).then_some(index);
-                    let selected = item.is_some_and(|i| node.filter == Some(i)) || (index == 19 && node.filter.is_none());
+                    let selected = item.is_some_and(|i| node.filter == Some(i)) || (item.is_none() && node.filter.is_none());
                     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
                     icons::frame(ui.painter(), rect, selected || response.hovered());
                     if let Some(item) = item {
@@ -357,7 +362,7 @@ fn pipe_panel(
                             *action = UiAction::Factory(Action::SetFilter(pos, None));
                         }
                     }
-                    if (index + 1) % 10 == 0 {
+                    if (index + 1) % 12 == 0 {
                         ui.end_row();
                     }
                 }
@@ -368,11 +373,11 @@ fn pipe_panel(
 fn detail(kind: Kind) -> &'static str {
     match kind {
         Kind::Generator => {
-            "Coal furnace: 64 power/s. Arcane pile: 256 power/s from arcane cores, hot, needs piped coolant water."
+            "Combustion: 16 kW from coke (800 kJ per item), coal (400 kJ), bio-ethanol or creosote. Arcane pile: 64 kW from arcane cores, hot, needs piped coolant water."
         }
-        Kind::Bioreactor => "Burns fungal biomass. 128 power/s. Cultivators supply renewable fuel.",
-        Kind::Crusher => "1 ore → 2 dust. 4 seconds. 128 power per batch.",
-        Kind::Furnace => "1 dust → 1 ingot. 3 seconds. 72 power per batch.",
+        Kind::Bioreactor => "Digests fungal biomass at 32 kW. Cultivators supply renewable fuel.",
+        Kind::Crusher => "1 ore → 2 dust. 4 s at 8 kW (32 kJ per batch).",
+        Kind::Furnace => "Dust mode: 1 dust → 1 ingot, 3 s at 6 kW. Ore mode: 1 ore → 1 ingot, 5 s.",
         Kind::Feeder => {
             "Load supplies, then export through copper item pipes. A filter selects the exported resource."
         }
@@ -389,10 +394,10 @@ fn detail(kind: Kind) -> &'static str {
             "Choose bronze or steel. Bronze opens components; steel opens advanced tools and extraction."
         }
         Kind::Fabricator => {
-            "Choose induction coils or arcane cores. Cores require wild essence recovered from guardians."
+            "Salvage circuits to build your first fabricator. Then manufacture circuits (copper + tin + crystal, 16 kW), coils, cores, or wild essence (crystal + biomass, 24 kW). Each crystal process takes 12 s; cores take 7 s."
         }
         Kind::Cultivator => {
-            "Grow biomass with a reusable culture and lumen fibre, or turn biomass into fibre."
+            "Grow biomass with a reusable culture and lumen fibre, turn biomass into fibre, or ferment it into bio-ethanol (Forestry-style liquid fuel)."
         }
         Kind::MiningDrill => {
             "Excavates a 3 × 3 metre shaft, 24 metres down. Requires power. Ore enters its output; waste rock is removed. Stops for players, structures, fluids and full output. Operates within 64 metres."
@@ -407,8 +412,25 @@ fn detail(kind: Kind) -> &'static str {
             "Buffers 16 m³ of water. Pumps fill tanks; tanks supply washers through fluid pipes. Does not need power."
         }
         Kind::Washer => {
-            "1 ore + 250 L water → 3 dust. 6 seconds, 288 power. Smelt dust for triple ore yield. Stops safely when water, power or output space runs out."
+            "1 ore + 250 L water → 3 dust. 6 s at 12 kW (72 kJ). Smelt dust for triple ore yield. Stops safely when water, power or output space runs out."
         }
+        Kind::Battery => {
+            "Stores grid energy: 1 kWh at 4 kW (lead-acid), 4 kWh at 16 kW (nickel-iron), 16 kWh at 64 kW (resonant cell). Covers shortfalls, banks surplus, or feeds your mana in Mana font mode."
+        }
+        Kind::CokeOven => {
+            "Railcraft-style coke oven door. Set it in the middle of one wall of a 3 × 3 × 3 shell of 26 coke oven bricks. Bakes 1 coal → 1 coke + 0.25 creosote in 10 s at ~1000 °C. No power."
+        }
+        Kind::BlastFurnace => {
+            "Blast furnace tuyere. Set it in the middle of a wall, second course up, of a 3 wide × 4 tall × 3 deep shell of 35 blast bricks. Burns coke to 1500 °C: 2 iron ore → 3 iron, or 2 iron → 2 steel. No power."
+        }
+        Kind::InductionCasing => "Induction matrix wall. A hollow box of casing, 3 to 9 metres a side, with ports in its walls.",
+        Kind::InductionPort => "Induction matrix port. Input mode charges the matrix from its cable; Output mode discharges into it.",
+        Kind::InductionCell => "Inside an induction matrix: 64 kWh of storage.",
+        Kind::InductionProvider => "Inside an induction matrix: 256 kW of transfer rate.",
+        Kind::Transformer => "Bridges two cable networks or cable tiers: 64 kW, 512 kW, then 4 MW.",
+        Kind::Assembler => "Factorio-style assembling machine. Pick a recipe; it crafts from piped ingredients at 5 kW, 2 s per craft.",
+        Kind::CokeBrick => "Coke oven shell brick. 26 make a coke oven around a door.",
+        Kind::BlastBrick => "Refractory blast furnace brick. 35 make a blast furnace around a tuyere.",
     }
 }
 fn affordable(inventory: &Expedition, cost: &[(usize, u32)]) -> bool {
@@ -453,18 +475,6 @@ fn smelter_panel(
     });
 
     ui.separator();
-    ui.horizontal_wrapped(|ui| {
-        ui.small("POWER");
-        icons::gauge(
-            ui,
-            node.energy as f32 / 64.0,
-            icons::GOLD,
-            &format!("{} / 64 energy", node.energy),
-        );
-        if node.energy == 0 {
-            ui.small("Connect a generator with power cable.");
-        }
-    });
 
     if let Some(recipe) = next {
         ui.add_space(4.0);
@@ -490,13 +500,18 @@ fn smelter_panel(
             egui::ProgressBar::new(progress)
                 .text(if active.is_some() {
                     format!(
-                        "{:.0}% · batch {}/{} ticks",
+                        "{:.0}% · {:.1} s left",
                         progress * 100.0,
-                        node.progress,
-                        recipe.ticks
+                        (recipe.ticks - node.progress.min(recipe.ticks)) as f32 * 0.25
+                            / (1 + node.upgrade) as f32
                     )
                 } else {
-                    format!("Ready · {} ticks · {} power", recipe.ticks, recipe.power)
+                    format!(
+                        "Ready · {:.1} s at {} · {} per batch",
+                        recipe.ticks as f32 * 0.25 / (1 + node.upgrade) as f32,
+                        power::fmt_power((recipe.power * (1 + node.upgrade)) as f64),
+                        power::fmt_joules((recipe.power * recipe.ticks) as f64)
+                    )
                 })
                 .fill(icons::TEAL),
         );
@@ -515,12 +530,22 @@ fn smelter_panel(
     if node.kind == Kind::Furnace {
         ui.add_space(6.0);
         ui.label(
+            RichText::new("FEED")
+                .size(11.0)
+                .color(crate::egui_ui::presentation::MUTED),
+        );
+        mode_picker(ui, pos, node, action);
+        ui.label(
             RichText::new("RECIPE")
                 .size(11.0)
                 .color(crate::egui_ui::presentation::MUTED),
         );
         ui.horizontal_wrapped(|ui| {
-            for id in 9..12 {
+            let ids: &[usize] = if node.mode == 1 { &[] } else { &[9, 10, 11] };
+            if node.mode == 1 {
+                ui.small("Ore mode picks copper, tin or iron ore automatically.");
+            }
+            for &id in ids {
                 let Some(recipe) = recipes::process(Kind::Furnace, id) else {
                     continue;
                 };
@@ -594,27 +619,693 @@ fn smelter_panel(
         {
             *action = UiAction::Factory(Action::Toggle(pos));
         }
-        if node.upgrade < 2 {
-            let cost: &[(usize, u32)] = if node.upgrade == 0 {
-                &[(14, 128), (16, 64)]
+        upgrade_button(ui, pos, node, inventory, action);
+    });
+}
+
+/// A bar with its reading written inside, so the number is visible without
+/// hovering.
+fn meter(ui: &mut egui::Ui, value: f32, color: Color32, caption: &str) {
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(340.0), 15.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, 0, Color32::from_rgb(17, 15, 20));
+    p.rect_filled(
+        Rect::from_min_size(r.min, vec2(r.width() * value.clamp(0.0, 1.0), r.height())),
+        0,
+        color.gamma_multiply(0.7),
+    );
+    p.rect_stroke(r, 0, Stroke::new(1.0, icons::TEAL.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+    p.text(
+        r.left_center() + vec2(4.0, 0.0),
+        Align2::LEFT_CENTER,
+        caption,
+        FontId::monospace(10.0),
+        icons::PAPER,
+    );
+}
+
+/// Live electrical readings for any assembly on a cable network.
+fn power_section(ui: &mut egui::Ui, node: &Node, grid: Option<NetStats>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("POWER").size(11.0).color(icons::GOLD));
+        let flow = if node.flow > 0 {
+            format!("+{}", power::fmt_power(node.flow as f64))
+        } else if node.flow < 0 {
+            format!("−{}", power::fmt_power(-node.flow as f64))
+        } else {
+            "0 W".into()
+        };
+        ui.label(RichText::new(flow).monospace().color(icons::PAPER));
+        if node.kind.powered() {
+            ui.label(
+                RichText::new(format!(
+                    "buffer {} / {}",
+                    power::fmt_joules(node.energy as f64),
+                    power::fmt_joules(power::CONSUMER_BUFFER as f64)
+                ))
+                .small()
+                .color(MUTED),
+            );
+        }
+    });
+    match grid {
+        Some(g) => {
+            let balance = g.generation as i64 - g.load as i64;
+            ui.label(
+                RichText::new(format!(
+                    "Grid: {} generated · {} drawn · {} gen / {} machines / {} batteries",
+                    power::fmt_power(g.generation as f64),
+                    power::fmt_power(g.load as f64),
+                    g.generators,
+                    g.machines,
+                    g.batteries
+                ))
+                .small()
+                .color(if balance >= 0 { MUTED } else { icons::GOLD }),
+            );
+            if g.capacity > 0 {
+                meter(
+                    ui,
+                    g.stored as f32 / g.capacity as f32,
+                    icons::TEAL,
+                    &format!(
+                        "Stored {} / {}{}",
+                        power::fmt_energy(g.stored as f64),
+                        power::fmt_energy(g.capacity as f64),
+                        g.runtime_seconds()
+                            .map(|s| format!(" · {:.0} min at this deficit", s / 60.0))
+                            .unwrap_or_default()
+                    ),
+                );
+            }
+        }
+        None => {
+            ui.label(
+                RichText::new("Not on a power network. Touch a power cable to a face.")
+                    .small()
+                    .color(icons::GOLD),
+            );
+        }
+    }
+}
+
+fn upgrade_button(ui: &mut egui::Ui, pos: IVec3, node: &Node, inventory: &Expedition, action: &mut UiAction) {
+    if !node.kind.upgradable() || node.upgrade >= 2 {
+        return;
+    }
+    let cost = node.kind.upgrade_cost(node.upgrade);
+    let label = if node.kind == Kind::Battery {
+        format!("Cells → {}", power::battery_tier_name(node.upgrade + 1))
+    } else {
+        format!("Drive {} → {}", node.upgrade + 1, node.upgrade + 2)
+    };
+    if ui
+        .add_enabled(affordable(inventory, cost), egui::Button::new(label))
+        .on_hover_ui(|ui| {
+            ingredients(ui, cost, inventory);
+            if node.kind == Kind::Battery {
+                ui.small(format!(
+                    "{} at up to {}. Stored charge is kept.",
+                    power::fmt_energy(power::battery_capacity(node.upgrade + 1) as f64),
+                    power::fmt_power(power::battery_rate(node.upgrade + 1) as f64)
+                ));
             } else {
-                &[(15, 128), (16, 128), (17, 64)]
-            };
+                ui.small("Faster batches; the same energy per batch at a higher draw.");
+            }
+        })
+        .clicked()
+    {
+        *action = UiAction::Factory(Action::UpgradeMachine(pos));
+    }
+}
+
+fn mode_picker(ui: &mut egui::Ui, pos: IVec3, node: &Node, action: &mut UiAction) {
+    ui.horizontal_wrapped(|ui| {
+        for (i, label) in node.kind.modes().iter().enumerate() {
+            let short = label.split(':').next().unwrap_or(label);
             if ui
-                .add_enabled(
-                    affordable(inventory, cost),
-                    egui::Button::new(format!("Drive {} → {}", node.upgrade + 1, node.upgrade + 2)),
-                )
-                .on_hover_ui(|ui| {
-                    ingredients(ui, cost, inventory);
-                    ui.small("Faster batches at higher power demand.");
-                })
+                .selectable_label(node.mode == i as u32, short)
+                .on_hover_text(*label)
                 .clicked()
             {
-                *action = UiAction::Factory(Action::UpgradeMachine(pos));
+                *action = UiAction::Factory(Action::SetRecipe(pos, i as u32));
             }
         }
     });
+}
+
+fn battery_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    grid: Option<NetStats>,
+    inventory: &Expedition,
+    action: &mut UiAction,
+) {
+    ui.set_width(380.0);
+    ui.horizontal(|ui| {
+        icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Battery bank").size(19.0).color(icons::PAPER));
+            ui.label(
+                RichText::new(format!(
+                    "{} · {} · up to {}",
+                    power::battery_tier_name(node.upgrade),
+                    node.status,
+                    power::fmt_power(power::battery_rate(node.upgrade) as f64)
+                ))
+                .color(icons::TEAL),
+            );
+        });
+    });
+    let cap = power::battery_capacity(node.upgrade);
+    meter(
+        ui,
+        node.energy as f32 / cap as f32,
+        icons::TEAL,
+        &format!(
+            "{} / {}  ({:.0}%)",
+            power::fmt_energy(node.energy as f64),
+            power::fmt_energy(cap as f64),
+            node.energy as f32 * 100.0 / cap as f32
+        ),
+    );
+    power_section(ui, node, grid);
+    let max = power::battery_rate(node.upgrade);
+    let mut limit = if node.target == 0 { max } else { node.target };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("I/O LIMIT").size(11.0).color(MUTED));
+        if ui
+            .add(egui::Slider::new(&mut limit, 1..=max).suffix(" kW"))
+            .on_hover_text("Like a Thermal energy cell: cap how fast this bank charges and discharges")
+            .changed()
+        {
+            *action = UiAction::Factory(Action::SetTarget(pos, if limit >= max { 0 } else { limit }));
+        }
+    });
+    ui.add_space(4.0);
+    ui.label(RichText::new("BEHAVIOUR").size(11.0).color(MUTED));
+    mode_picker(ui, pos, node, action);
+    if let Some(text) = node.kind.modes().get(node.mode as usize) {
+        ui.small(*text);
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(if node.enabled { "Isolate" } else { "Connect" }).on_hover_text("An isolated bank neither charges nor discharges").clicked() {
+            *action = UiAction::Factory(Action::Toggle(pos));
+        }
+        upgrade_button(ui, pos, node, inventory, action);
+    });
+}
+
+fn generator_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    grid: Option<NetStats>,
+    inventory: &Expedition,
+    action: &mut UiAction,
+) {
+    ui.set_width(400.0);
+    ui.horizontal(|ui| {
+        icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+        ui.vertical(|ui| {
+            ui.label(RichText::new(node.kind.name()).size(19.0).color(icons::PAPER));
+            ui.label(RichText::new(node.status).color(if node.status == "Generating" {
+                icons::TEAL
+            } else {
+                icons::GOLD
+            }));
+        });
+    });
+    if node.kind == Kind::Generator {
+        mode_picker(ui, pos, node, action);
+    }
+    let pile = pile::is_pile(node);
+    let rate = if node.kind == Kind::Bioreactor { 32.0 } else if pile { pile::RATE as f64 } else { 16.0 };
+    ui.label(
+        RichText::new(format!("Rated output {}", power::fmt_power(rate)))
+            .small()
+            .color(MUTED),
+    );
+    if pile {
+        let heat = node.progress as f32 / pile::MAX_HEAT as f32;
+        meter(
+            ui,
+            heat,
+            if node.progress >= pile::WARN_HEAT { Color32::from_rgb(235, 80, 60) } else { icons::GOLD },
+            &format!("Core heat {} / {}", node.progress, pile::MAX_HEAT),
+        );
+        meter(
+            ui,
+            node.water as f32 / 8192.0,
+            icons::TEAL,
+            &format!("Coolant {:.0} / 16000 L", node.water as f32 * 1000.0 / 512.0),
+        );
+    }
+    meter(
+        ui,
+        node.burn as f32 / power::MAX_COMBUSTION_BURN.max(pile::CAPACITY) as f32,
+        Color32::from_rgb(230, 120, 50),
+        &format!(
+            "Burning {} · {:.0} s left",
+            power::fmt_joules(node.burn as f64),
+            node.burn as f64 / rate * power::TICK_SECONDS
+        ),
+    );
+    meter(
+        ui,
+        node.energy as f32 / power::GENERATOR_BUFFER as f32,
+        icons::GOLD,
+        &format!(
+            "Buffer {} / {}",
+            power::fmt_energy(node.energy as f64),
+            power::fmt_energy(power::GENERATOR_BUFFER as f64)
+        ),
+    );
+    power_section(ui, node, grid);
+    ui.add_space(4.0);
+    ui.label(RichText::new("FUEL").size(11.0).color(MUTED));
+    egui::Grid::new(("fuel", pos)).spacing([8.0, 2.0]).show(ui, |ui| {
+        let fuels: Vec<(usize, u32, u32)> = if node.kind == Kind::Bioreactor {
+            vec![(13, 32, 800)]
+        } else if pile {
+            vec![(pile::FUEL, pile::PORTION, pile::CAPACITY)]
+        } else {
+            power::COMBUSTION_FUELS.to_vec()
+        };
+        for (fuel, portion, units) in fuels {
+            let per_item = units as f64 * 64.0 / portion as f64;
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                icons::paint(ui.painter(), r, Icon::Resource(fuel));
+                ui.label(NAMES[fuel]);
+            });
+            ui.monospace(stack_text(node.input[fuel]));
+            ui.label(
+                RichText::new(format!(
+                    "{} / item · {:.0} s",
+                    power::fmt_joules(per_item),
+                    per_item / rate * power::TICK_SECONDS
+                ))
+                .small()
+                .color(MUTED),
+            );
+            ui.end_row();
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Load fuel").clicked() {
+            *action = UiAction::Factory(Action::Load(pos));
+        }
+        if ui.button("Unload").clicked() {
+            *action = UiAction::Factory(Action::Collect(pos));
+        }
+        if ui.button(if node.enabled { "Pause" } else { "Start" }).clicked() {
+            *action = UiAction::Factory(Action::Toggle(pos));
+        }
+        if node.kind.water_port() && node.water > 0 {
+            if ui.button(if node.draining { "Close drain" } else { "Drain coolant" }).clicked() {
+                *action = UiAction::Factory(Action::Drain(pos));
+            }
+        }
+    });
+    let _ = inventory;
+}
+
+/// Top-down plan of one course of a shell: `#` brick, `D` controller,
+/// `·` the course's interior when hollow is allowed.
+fn shell_plan(ui: &mut egui::Ui, kind: Kind) {
+    let (courses, controller_course) = if kind == Kind::BlastFurnace { (4, 1) } else { (3, 1) };
+    let brick = if kind == Kind::BlastFurnace { "blast brick" } else { "coke oven brick" };
+    ui.label(
+        RichText::new(format!(
+            "BUILD · 3 × {courses} × 3 of {brick}, {} total. The {} sits in the middle of one wall, course {} from the bottom; pipes attach to its outer face.",
+            multiblock::bricks_needed(kind),
+            if kind == Kind::BlastFurnace { "tuyere" } else { "door" },
+            controller_course + 1
+        ))
+        .small()
+        .color(MUTED),
+    );
+    ui.horizontal(|ui| {
+        for course in 0..courses {
+            let (r, _) = ui.allocate_exact_size(vec2(44.0, 50.0), Sense::hover());
+            let p = ui.painter();
+            for z in 0..3 {
+                for x in 0..3 {
+                    let cell = Rect::from_min_size(r.min + vec2(x as f32 * 13.0 + 2.0, z as f32 * 13.0 + 2.0), vec2(12.0, 12.0));
+                    let controller = course == controller_course && x == 1 && z == 2;
+                    p.rect_filled(
+                        cell,
+                        0,
+                        if controller {
+                            Color32::from_rgb(240, 150, 60)
+                        } else if kind == Kind::BlastFurnace {
+                            Color32::from_rgb(110, 92, 84)
+                        } else {
+                            Color32::from_rgb(140, 82, 56)
+                        },
+                    );
+                }
+            }
+            p.text(
+                r.center_bottom() - vec2(0.0, 2.0),
+                Align2::CENTER_BOTTOM,
+                format!("course {}", course + 1),
+                FontId::proportional(10.0),
+                icons::PAPER,
+            );
+        }
+    });
+}
+
+fn multiblock_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    inventory: &Expedition,
+    action: &mut UiAction,
+) {
+    ui.set_width(420.0);
+    let title = if node.kind == Kind::CokeOven { "Coke oven" } else { "Blast furnace" };
+    ui.horizontal(|ui| {
+        icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+        ui.vertical(|ui| {
+            ui.label(RichText::new(title).size(19.0).color(icons::PAPER));
+            let (found, needed) = node.structure;
+            ui.label(
+                RichText::new(if node.formed {
+                    format!("{} · shell formed", node.status)
+                } else {
+                    format!("Incomplete shell: {found} / {needed} bricks")
+                })
+                .color(if node.formed { icons::TEAL } else { icons::GOLD }),
+            );
+        });
+    });
+    let t = multiblock::temperature(node);
+    let target = multiblock::working_temperature(node.kind, node.mode);
+    let max = if node.kind == Kind::CokeOven { multiblock::COKE_OVEN_MAX_C } else { multiblock::BLAST_MAX_C };
+    meter(
+        ui,
+        t as f32 / max as f32,
+        if t >= target { Color32::from_rgb(240, 120, 50) } else { icons::GOLD },
+        &format!("Hearth {t} °C · needs {target} °C"),
+    );
+    if node.kind == Kind::BlastFurnace {
+        mode_picker(ui, pos, node, action);
+    }
+    if let Some(process) = recipes::process(node.kind, node.mode as usize) {
+        ui.horizontal_wrapped(|ui| {
+            for &(i, n) in process.inputs.iter().filter(|&&(_, n)| n > 0) {
+                icons::slot(ui, Icon::Resource(i), Some(n), false, NAMES[i]);
+            }
+            ui.label(RichText::new("→").size(22.0).color(icons::GOLD));
+            icons::slot(ui, Icon::Resource(process.output.0), Some(process.output.1), true, NAMES[process.output.0]);
+            if node.kind == Kind::CokeOven {
+                icons::slot(
+                    ui,
+                    Icon::Resource(crate::world::factory::CREOSOTE),
+                    Some(multiblock::CREOSOTE_PER_BATCH),
+                    false,
+                    "Creosote oil (by-product)",
+                );
+            }
+        });
+        let progress = node.progress as f32 / process.ticks as f32;
+        meter(
+            ui,
+            progress,
+            icons::TEAL,
+            &format!(
+                "{:.0}% · {:.1} s of {:.0} s",
+                progress * 100.0,
+                (process.ticks - node.progress.min(process.ticks)) as f32 * 0.25,
+                process.ticks as f32 * 0.25
+            ),
+        );
+    }
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(200.0);
+            ui.small("CHARGE");
+            let inputs: Vec<_> = (0..NAMES.len())
+                .filter(|&i| node.accepts(i) || node.input[i] > 0)
+                .map(|i| (i, node.input[i]))
+                .collect();
+            supply_grid(ui, "mb-in", &inputs);
+        });
+        ui.vertical(|ui| {
+            ui.small("PRODUCT");
+            let outputs: Vec<_> = (0..NAMES.len())
+                .filter(|&i| node.output[i] > 0)
+                .map(|i| (i, node.output[i]))
+                .collect();
+            supply_grid(ui, "mb-out", &outputs);
+        });
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Load").on_hover_text("Load matching supplies from your pack").clicked() {
+            *action = UiAction::Factory(Action::Load(pos));
+        }
+        if ui.button("Unload").clicked() {
+            *action = UiAction::Factory(Action::Collect(pos));
+        }
+        if ui.button(if node.enabled { "Bank the fire" } else { "Light" }).clicked() {
+            *action = UiAction::Factory(Action::Toggle(pos));
+        }
+    });
+    if !node.formed {
+        shell_plan(ui, node.kind);
+    }
+    let _ = inventory;
+}
+
+fn induction_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    grid: Option<NetStats>,
+    pool: Option<(u32, u32, u32)>,
+    action: &mut UiAction,
+) {
+    ui.set_width(400.0);
+    ui.horizontal(|ui| {
+        icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Induction matrix").size(19.0).color(icons::PAPER));
+            if node.formed {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {} cells · {} providers",
+                        node.status, node.structure.0, node.structure.1
+                    ))
+                    .color(icons::TEAL),
+                );
+            } else {
+                ui.label(
+                    RichText::new(format!(
+                        "Not formed: {}",
+                        induction::problem(node.structure.1)
+                    ))
+                    .color(icons::GOLD),
+                );
+            }
+        });
+    });
+    if let Some((stored, cap, rate)) = pool {
+        meter(
+            ui,
+            stored as f32 / cap.max(1) as f32,
+            icons::TEAL,
+            &format!(
+                "{} / {}  ({:.1}%)",
+                power::fmt_energy(stored as f64),
+                power::fmt_energy(cap as f64),
+                stored as f64 * 100.0 / cap.max(1) as f64
+            ),
+        );
+        ui.small(format!("Transfer limit {} across all ports (one provider = 256 kW).", power::fmt_power(rate as f64)));
+    }
+    power_section(ui, node, grid);
+    ui.label(RichText::new("PORT").size(11.0).color(MUTED));
+    mode_picker(ui, pos, node, action);
+    ui.small("Build a hollow box of induction casing, 3 to 9 metres a side, with ports in its walls. Fill the inside with cells (64 kWh each) and providers (256 kW each); empty space is allowed.");
+}
+
+fn transformer_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    grid: Option<NetStats>,
+    pool: Option<(u32, u32, u32)>,
+    inventory: &Expedition,
+    action: &mut UiAction,
+) {
+    ui.set_width(380.0);
+    ui.horizontal(|ui| {
+        icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Transformer").size(19.0).color(icons::PAPER));
+            ui.label(
+                RichText::new(format!(
+                    "{} · up to {}",
+                    node.status,
+                    power::fmt_power(power::transformer_rate(node.upgrade) as f64)
+                ))
+                .color(icons::TEAL),
+            );
+        });
+    });
+    if let Some((stored, cap, _)) = pool {
+        meter(ui, stored as f32 / cap.max(1) as f32, icons::GOLD, &format!("Buffer {}", power::fmt_joules(stored as f64)));
+    }
+    power_section(ui, node, grid);
+    ui.small("Touch it with cables of two different tiers (or two separate networks). It carries surplus from one to the deficit of the other, one tick behind.");
+    ui.horizontal(|ui| {
+        if ui.button(if node.enabled { "Open breaker" } else { "Close breaker" }).clicked() {
+            *action = UiAction::Factory(Action::Toggle(pos));
+        }
+        upgrade_button(ui, pos, node, inventory, action);
+    });
+}
+
+fn cable_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    grid: Option<NetStats>,
+    inventory: &Expedition,
+    action: &mut UiAction,
+) {
+    ui.set_width(380.0);
+    ui.label(RichText::new(power::cable_tier_name(node.upgrade)).size(19.0).color(icons::PAPER));
+    let cap = power::cable_capacity(node.upgrade);
+    let used = grid.map(|g| g.throughput).unwrap_or(0);
+    meter(
+        ui,
+        used as f32 / cap as f32,
+        if used >= cap { Color32::from_rgb(235, 80, 60) } else { icons::TEAL },
+        &format!("Carrying {} of {}", power::fmt_power(used as f64), power::fmt_power(cap as f64)),
+    );
+    if let Some(g) = grid {
+        ui.small(format!(
+            "{} generators · {} machines · {} storage ports on this line",
+            g.generators, g.machines, g.batteries
+        ));
+    }
+    if node.upgrade < 2 {
+        let cost = Kind::Cable.upgrade_cost(node.upgrade);
+        if ui
+            .add(egui::Button::new(format!("Upgrade line → {}", power::cable_tier_name(node.upgrade + 1))))
+            .on_hover_ui(|ui| {
+                ui.small("Per cable piece:");
+                ingredients(ui, cost, inventory);
+                ui.small(format!(
+                    "Every connected piece of this tier is upgraded while materials last. {} capacity. Different tiers no longer connect: bridge them with a transformer.",
+                    power::fmt_power(power::cable_capacity(node.upgrade + 1) as f64)
+                ));
+            })
+            .clicked()
+        {
+            *action = UiAction::Factory(Action::UpgradeMachine(pos));
+        }
+    }
+}
+
+fn assembler_panel(
+    ui: &mut egui::Ui,
+    pos: IVec3,
+    node: &Node,
+    grid: Option<NetStats>,
+    inventory: &Expedition,
+    action: &mut UiAction,
+) {
+    use crate::world::inventory::{Item, all_recipes};
+    ui.set_width(440.0);
+    let recipe = assembler::recipe(node);
+    ui.horizontal(|ui| {
+        icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Assembling machine").size(19.0).color(icons::PAPER));
+            ui.label(
+                RichText::new(format!(
+                    "{} · {}",
+                    node.status,
+                    recipe.map(|r| r.name).unwrap_or("no recipe")
+                ))
+                .color(icons::TEAL),
+            );
+        });
+    });
+    if let Some(r) = recipe {
+        ui.horizontal_wrapped(|ui| {
+            for &(item, n) in r.ingredients {
+                if let Item::Resource(i) = item {
+                    icons::slot(ui, Icon::Resource(i as usize), Some(node.input[i as usize]), false, &format!("{} · needs {n} per craft", NAMES[i as usize]));
+                }
+            }
+            ui.label(RichText::new("→").size(22.0).color(icons::GOLD));
+            match r.output.item {
+                Item::Resource(i) => {
+                    icons::slot(ui, Icon::Resource(i as usize), Some(node.output[i as usize]), true, NAMES[i as usize]);
+                }
+                Item::Block(b) => {
+                    if let Some(k) = Kind::from_block(b) {
+                        icons::slot(ui, Icon::Machine(k), Some(node.stock * 64), true, k.name());
+                    }
+                }
+                _ => {}
+            }
+        });
+        let progress = node.progress as f32 / assembler::CRAFT_TICKS as f32;
+        meter(
+            ui,
+            progress,
+            icons::TEAL,
+            &format!(
+                "{:.0}% · {:.2} s · {} / craft",
+                progress * 100.0,
+                assembler::CRAFT_TICKS.div_ceil(1 + node.upgrade) as f32 * 0.25,
+                power::fmt_joules((assembler::POWER * assembler::CRAFT_TICKS) as f64)
+            ),
+        );
+    }
+    power_section(ui, node, grid);
+    ui.label(RichText::new("RECIPE").size(11.0).color(MUTED));
+    let search_id = ui.id().with(("assembler_search", pos));
+    let mut query = ui.ctx().data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+    ui.add(egui::TextEdit::singleline(&mut query).hint_text("Filter recipes").desired_width(200.0));
+    let q = query.to_lowercase();
+    egui::ScrollArea::vertical().id_salt(("assembler_recipes", pos)).max_height(150.0).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for i in assembler::choices() {
+                let r = &all_recipes()[i];
+                if !q.is_empty() && !r.name.to_lowercase().contains(&q) {
+                    continue;
+                }
+                let on = node.target == i as u32 + 1;
+                if ui.selectable_label(on, r.name).clicked() {
+                    *action = UiAction::Factory(Action::SetTarget(pos, if on { 0 } else { i as u32 + 1 }));
+                }
+            }
+        });
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(search_id, query));
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Load").on_hover_text("Load ingredients from your pack").clicked() {
+            *action = UiAction::Factory(Action::Load(pos));
+        }
+        let collect = if node.stock > 0 { format!("Collect {} kits", node.stock) } else { "Unload".to_string() };
+        if ui.button(collect).clicked() {
+            *action = UiAction::Factory(Action::Collect(pos));
+        }
+        if ui.button(if node.enabled { "Pause" } else { "Start" }).clicked() {
+            *action = UiAction::Factory(Action::Toggle(pos));
+        }
+        upgrade_button(ui, pos, node, inventory, action);
+    });
+    ui.small("Pipe ingredients in; resource products leave through the pipes. Machine kits stay inside until collected.");
 }
 
 pub(super) fn draw(
@@ -638,6 +1329,46 @@ pub(super) fn draw(
             }
             if matches!(node.kind, Kind::Furnace | Kind::AlloyKiln) {
                 smelter_panel(ui, *pos, node, inventory, action);
+                power_section(ui, node, view.focused_grid);
+                return;
+            }
+            if node.kind == Kind::Battery {
+                battery_panel(ui, *pos, node, view.focused_grid, inventory, action);
+                return;
+            }
+            if node.kind == Kind::InductionPort {
+                induction_panel(ui, *pos, node, view.focused_grid, view.focused_pool, action);
+                return;
+            }
+            if node.kind == Kind::Transformer {
+                transformer_panel(ui, *pos, node, view.focused_grid, view.focused_pool, inventory, action);
+                return;
+            }
+            if node.kind == Kind::Cable {
+                cable_panel(ui, *pos, node, view.focused_grid, inventory, action);
+                return;
+            }
+            if node.kind == Kind::Assembler {
+                assembler_panel(ui, *pos, node, view.focused_grid, inventory, action);
+                return;
+            }
+            if node.kind.generator() {
+                generator_panel(ui, *pos, node, view.focused_grid, inventory, action);
+                return;
+            }
+            if matches!(node.kind, Kind::CokeOven | Kind::BlastFurnace) {
+                multiblock_panel(ui, *pos, node, inventory, action);
+                return;
+            }
+            if node.kind.structural() {
+                ui.horizontal(|ui| {
+                    icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(node.kind.name()).size(19.0).color(icons::PAPER));
+                        ui.label(RichText::new(if node.formed { "Part of a formed shell" } else { "Loose brick" }).color(if node.formed { icons::TEAL } else { icons::GOLD }));
+                        ui.small(detail(node.kind));
+                    });
+                });
                 return;
             }
             ui.horizontal(|ui| {
@@ -645,7 +1376,7 @@ pub(super) fn draw(
                 ui.vertical(|ui| {
                     ui.label(RichText::new(node.kind.name()).size(20.0).color(icons::PAPER));
                     ui.label(RichText::new(node.status).color(if node.status=="Processing"||node.status=="Generating" {icons::TEAL}else{icons::GOLD}));
-                    if node.kind.powered() {icons::gauge(ui,node.energy as f32/64.0,icons::GOLD,&format!("{} / 64 power",node.energy));}
+                    if node.kind.powered() {power_section(ui,node,view.focused_grid);}
                     if node.kind==Kind::Generator && node.mode==1 {
                         let heat=node.progress as f32/crate::world::factory::pile::MAX_HEAT as f32;
                         icons::gauge(ui,heat,if node.progress>=crate::world::factory::pile::WARN_HEAT {egui::Color32::from_rgb(235,80,60)} else {icons::GOLD},&format!("Core heat {} / {}",node.progress,crate::world::factory::pile::MAX_HEAT));
@@ -692,10 +1423,7 @@ pub(super) fn draw(
                     if node.kind.water_port() && node.water>0 {
                         if ui.button(if node.draining {"Close drain"}else{"Drain water"}).on_hover_text("Pauses the machine and releases stored water into free neighbouring cells. Clear the outlet before dismantling.").clicked(){*action=UiAction::Factory(Action::Drain(*pos));}
                     }
-                    if node.kind.powered() && node.upgrade<2 {
-                        let cost:&[(usize,u32)]=if node.upgrade==0 {&[(14,128),(16,64)]}else{&[(15,128),(16,128),(17,64)]};
-                        if ui.add_enabled(affordable(inventory,cost),egui::Button::new(format!("Drive {} → {}",node.upgrade+1,node.upgrade+2))).on_hover_ui(|ui|{ingredients(ui,cost,inventory);ui.small("Faster work, higher power demand.");}).clicked(){*action=UiAction::Factory(Action::UpgradeMachine(*pos));}
-                    }
+                    upgrade_button(ui,*pos,node,inventory,action);
                 });
             }
             if matches!(node.kind,Kind::Feeder|Kind::Storage) || (node.kind==Kind::Pipe && node.mode==1) {
@@ -870,6 +1598,8 @@ pub(super) fn draw(
         });
         ui.add_space(8.0);
     } else if tab == 1 {
+        super::wands::draw(ui, adventure, action);
+        ui.separator();
         super::relics::codex(ui, adventure);
         ui.label(RichText::new("Weapons").size(18.0).color(icons::GOLD));
         let mut owns_any = false;
@@ -911,7 +1641,7 @@ pub(super) fn draw(
                         );
                         ui.horizontal_wrapped(|ui| {
                             for (name, detail) in traits {
-                                ui.label(RichText::new(name).size(9.5).color(icons::TEAL))
+                                ui.label(RichText::new(name).size(11.0).color(icons::TEAL))
                                     .on_hover_text(detail);
                             }
                         });
@@ -947,7 +1677,6 @@ pub(super) fn draw(
             ui.weak("No sword owned. Craft a copper sword from the Crafting tab, or recover a warden's steel blade.");
         }
         ui.separator();
-        super::wands::draw(ui, adventure, action);
         if adventure.wand < 3 {
             let cost = crate::world::adventure::wand_recipe(adventure.wand);
             ingredients(ui, cost, inventory);
@@ -1046,7 +1775,7 @@ pub(super) fn draw(
             ("Mined and gathered", &[0, 1, 2, 3, 4, 5, 13][..]),
             (
                 "Refined and relics",
-                &[6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18][..],
+                &[6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21][..],
             ),
         ];
         let mut shown = 0;

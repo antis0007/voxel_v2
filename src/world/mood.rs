@@ -144,11 +144,6 @@ pub fn season_grade(day_index: u32, time_of_day: f32) -> SeasonGrade {
     }
 }
 
-pub fn season_name(day_index: u32, time_of_day: f32) -> &'static str {
-    let year = (day_index as f32 + time_of_day.rem_euclid(1.0)) / SEASON_DAYS;
-    ["Spring", "Summer", "Autumn", "Winter"][year.rem_euclid(4.0).floor() as usize % 4]
-}
-
 impl LightingState {
     /// Layer the season and any running sky event over the weather-driven base.
     pub fn with_mood(mut self, weather_seed: u32, day_index: u32, time_of_day: f32) -> Self {
@@ -299,8 +294,6 @@ mod tests {
         assert_eq!(compass_line(0.0, 40.0), "A star fell to the south.");
         assert_eq!(compass_line(-30.0, -30.0), "A star fell to the north-west.");
     }
-
-    use super::*;
 
     #[test]
     fn events_are_deterministic_and_fade_at_slot_edges() {

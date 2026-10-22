@@ -58,7 +58,7 @@ fn stat_row(ui: &mut egui::Ui, label: &str, value: String, value_color: Color32)
         rect.right_center(),
         Align2::RIGHT_CENTER,
         value,
-        FontId::monospace(11.5),
+        FontId::monospace(12.0),
         value_color,
     );
 }
@@ -227,16 +227,16 @@ pub(super) fn paint_cast_block_brackets(
         let min_idx = *block_slots.iter().min().unwrap_or(&0);
         let max_idx = *block_slots.iter().max().unwrap_or(&0);
         if let (Some(r_start), Some(r_end)) = (slot_rects.get(min_idx), slot_rects.get(max_idx)) {
-            let y = r_start.bottom() + 2.5;
+            let y = r_start.bottom().round() + 2.0;
             let x0 = r_start.left() + 3.0;
             let x1 = r_end.right() - 3.0;
-            let stroke = Stroke::new(1.5, style::AMBER);
+            let stroke = Stroke::new(1.0, style::AMBER);
             painter.line_segment([Pos2::new(x0, y - 3.0), Pos2::new(x0, y)], stroke);
             painter.line_segment([Pos2::new(x0, y), Pos2::new(x1, y)], stroke);
             painter.line_segment([Pos2::new(x1, y), Pos2::new(x1, y - 3.0)], stroke);
             for &idx in &block_slots {
                 if let Some(r) = slot_rects.get(idx) {
-                    painter.circle_filled(Pos2::new(r.center().x, y), 1.8, style::AMBER);
+                    painter.rect_filled(Rect::from_min_size(Pos2::new(r.center().x.floor(), y - 1.0), vec2(1.0, 2.0)), 0, style::AMBER);
                 }
             }
         }
@@ -252,7 +252,7 @@ pub(super) fn paint_cast_block_brackets(
                 let c0 = Pos2::new(r_carrier.center().x, y);
                 let c1 = Pos2::new(r_payload.center().x, y);
                 let tether_col = Color32::from_rgb(255, 168, 72);
-                let stroke = Stroke::new(1.4, tether_col);
+                let stroke = Stroke::new(1.0, tether_col);
                 painter.line_segment([Pos2::new(c0.x, y + 3.0), c0], stroke);
                 painter.line_segment([c0, c1], stroke);
                 painter.line_segment([c1, Pos2::new(c1.x, y + 3.0)], stroke);
@@ -433,7 +433,7 @@ pub(super) fn show_wand_hover_card(ui: &mut egui::Ui, view: &View) {
             slot.left_top() + vec2(2.0, 1.0),
             Align2::LEFT_TOP,
             format!("{}", idx + 1),
-            FontId::monospace(8.5),
+            FontId::proportional(10.0),
             if idx == view.loadout.cursor {
                 style::AMBER
             } else {
@@ -582,7 +582,7 @@ pub(super) fn show_spell_hover_card(ui: &mut egui::Ui, spell: u32, view: &View) 
         } else {
             "Locked · Claim a sanctum reliquary or upgrade the wand"
         },
-        FontId::proportional(10.5),
+        FontId::proportional(10.0),
         if available { style::JADE } else { style::AMBER },
         16.0,
     );
@@ -616,7 +616,7 @@ pub(super) fn draw_wand_deck_strip(
     // A single row. `horizontal_wrapped` grew the inventory and the workbench
     // whenever the pointer, a drag, or a longer cast line changed the width.
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+        ui.spacing_mut().item_spacing = vec2(super::grimoire::GAP, 0.0);
         for i in 0..cap {
             let spell = view.loadout.slot(i);
             let label = if spell != wands::EMPTY {
@@ -626,8 +626,7 @@ pub(super) fn draw_wand_deck_strip(
             };
             let (rect, response) = ui.allocate_exact_size(
                 {
-                    let dist = (i as i32 - *selected as i32).abs();
-                    let (px, _) = super::wand_xmb::slot_metrics(dist);
+                    let px = super::grimoire::SLOT * if compact { 1.0 } else { 2.0 };
                     vec2(px, px)
                 },
                 egui::Sense::click_and_drag(),
@@ -643,12 +642,15 @@ pub(super) fn draw_wand_deck_strip(
             }
             deck_drag_hint(ui, rect, drag_state.is_some(), is_hovered);
 
+            let rect = super::grimoire::react(&response, rect, i == *selected);
+
             let p = ui.painter();
             icons::frame(
                 p,
                 rect,
-                i == *selected || i == view.loadout.cursor || is_hovered,
+                i == *selected,
             );
+            if is_hovered || response.has_focus() { super::grimoire::focus(p, rect); }
             if spell != wands::EMPTY {
                 icons::paint(p, rect.shrink(4.0), Icon::Spell(spell));
                 if wands::is_modifier(spell) {
@@ -676,7 +678,7 @@ pub(super) fn draw_wand_deck_strip(
                 rect.left_top() + vec2(3.0, 2.0),
                 Align2::LEFT_TOP,
                 format!("{}", i + 1),
-                FontId::monospace(9.5),
+                FontId::proportional(10.0),
                 if i == view.loadout.cursor {
                     style::AMBER
                 } else {
@@ -765,7 +767,7 @@ fn show_empty_slot_card(ui: &mut egui::Ui) {
     clipped_line(
         ui,
         "Right-click a filled slot to clear it",
-        FontId::proportional(10.5),
+        FontId::proportional(10.0),
         style::MUTED,
         16.0,
     );
@@ -788,7 +790,7 @@ fn paint_spell_library(
         for (index, (title, spells, _)) in PALETTE_TABS.iter().enumerate() {
             let label = format!("{title} {}", spells.len());
             if ui
-                .selectable_label(*tab == index, RichText::new(label).size(10.5))
+                .selectable_label(*tab == index, RichText::new(label).size(11.0))
                 .clicked()
             {
                 *tab = index;
@@ -842,13 +844,13 @@ fn paint_spell_library(
                         found_count(&spells, &view.spell_log),
                         spells.len()
                     ))
-                        .font(FontId::monospace(9.5))
+                        .font(FontId::proportional(10.0))
                         .color(style::MUTED),
                 );
                 if modifier_stroke {
                     ui.label(
                         RichText::new("place before a spell")
-                            .font(FontId::monospace(9.5))
+                            .font(FontId::proportional(10.0))
                             .color(style::AMBER),
                     );
                 }
@@ -1094,7 +1096,7 @@ pub(super) fn draw_inline_wand_bar(
                 let lbl = ui.add(
                     egui::Label::new(
                         RichText::new(format!("{} (T{})", stats.name, view.wand))
-                            .font(FontId::monospace(11.5))
+                            .font(FontId::monospace(11.0))
                             .color(style::AMBER),
                     )
                     .sense(egui::Sense::hover()),
@@ -1189,7 +1191,8 @@ fn spell_library_grid(
                             )
                         });
                         let p = ui.painter();
-                        icons::frame(p, r, response.hovered());
+                        let r = super::grimoire::react(&response, r, false);
+                        icons::frame(p, r, false);
                         let icon = Rect::from_center_size(
                             egui::pos2(r.center().x, r.top() + 24.0),
                             vec2(34.0, 34.0),
@@ -1220,7 +1223,7 @@ fn spell_library_grid(
                             egui::pos2(r.center().x, r.bottom() - 3.0),
                             Align2::CENTER_BOTTOM,
                             short,
-                            FontId::proportional(9.0),
+                            FontId::proportional(10.0),
                             if available {
                                 style::PAPER
                             } else {
@@ -1230,14 +1233,7 @@ fn spell_library_grid(
                         if !available {
                             p.rect_filled(r, 0, Color32::from_rgba_unmultiplied(12, 10, 14, 155));
                         }
-                        if response.hovered() {
-                            p.rect_stroke(
-                                r,
-                                0,
-                                Stroke::new(1.0, style::AMBER),
-                                egui::epaint::StrokeKind::Inside,
-                            );
-                        }
+                        if response.hovered() || response.has_focus() { super::grimoire::focus(p, r); }
                         if response.drag_started() && available {
                             *drag_state = Some(WandDrag::PaletteSpell(spell));
                         }

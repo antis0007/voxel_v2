@@ -5,7 +5,10 @@ use super::{BlockId, expedition, factory};
 pub const HOTBAR_SLOTS: usize = 9;
 pub const PACK_SLOTS: usize = 27;
 pub const EQUIP_SLOTS: usize = 4;
-pub const CRAFT_SLOTS: usize = 4;
+/// The crafting grid is 3 × 3. Away from a workbench only the top-left 2 × 2
+/// (slots 0, 1, 3, 4) is usable, as in Minecraft's inventory.
+pub const CRAFT_SLOTS: usize = 9;
+pub const HAND_GRID: [usize; 4] = [0, 1, 3, 4];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -113,6 +116,7 @@ impl FoodKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Item {
     Block(BlockId),
+    PowerKit(factory::portable::PowerKit),
     Resource(u8),
     Food(FoodKind),
     Weapon(u8),
@@ -121,6 +125,13 @@ pub enum Item {
 }
 
 impl Item {
+    pub fn placeable_block(self) -> Option<BlockId> {
+        match self {
+            Self::Block(b) => Some(b),
+            Self::PowerKit(k) => Some(k.kind.block()),
+            _ => None,
+        }
+    }
     pub fn canonical_block(block: BlockId) -> Option<BlockId> {
         if block == BlockId::Air
             || block.is_liquid()
@@ -137,6 +148,7 @@ impl Item {
 
     pub fn max_stack(self) -> u32 {
         match self {
+            Self::PowerKit(_) => 1,
             Self::Weapon(_) | Self::Armor(_, _) | Self::Tool(_) => 1,
             Self::Food(_) => 16,
             Self::Block(block) => {
@@ -150,7 +162,11 @@ impl Item {
                 ) || (block.is_model()
                     && !matches!(
                         block,
-                        BlockId::ItemPipe | BlockId::PowerCable | BlockId::FluidPipe
+                        BlockId::ItemPipe
+                            | BlockId::PowerCable
+                            | BlockId::FluidPipe
+                            | BlockId::CokeOvenBrick
+                            | BlockId::BlastBrick
                     ))
                 {
                     16
@@ -164,6 +180,7 @@ impl Item {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::PowerKit(k) => k.kind.block().display_name(),
             Self::Block(block) => block.display_name(),
             Self::Resource(index) => expedition::NAMES
                 .get(index as usize)
@@ -196,6 +213,7 @@ impl Item {
 
     pub fn category(self) -> &'static str {
         match self {
+            Self::PowerKit(_) => "Packed power assembly",
             Self::Block(b) if b.is_torch() => "Lighting block",
             Self::Block(b) if factory::Kind::from_block(b).is_some() => "Machine assembly",
             Self::Block(BlockId::Workbench | BlockId::Smelter) => "Crafting station",
@@ -218,6 +236,7 @@ impl Item {
     // Concise stat line for tooltip (detailed mechanics documented in code comments).
     pub fn description(self) -> &'static str {
         match self {
+            Self::PowerKit(_) => "Charge and installed upgrades retained · Place to restore",
             Self::Block(b) if b.is_torch() => "Light 14 · Wall / Floor",
             Self::Block(BlockId::Workbench) => "[F] Engineering & Arcane station",
             Self::Block(BlockId::Smelter) => "[F] Smelts ore + 0.25 coal",
@@ -225,8 +244,11 @@ impl Item {
             Self::Block(_) => "Placeable block",
             Self::Resource(3) => "Fuel · Smelting & Power",
             Self::Resource(4) => "Luminescent · Bore fuel",
-            Self::Resource(5) => "Resonant crystal",
+            Self::Resource(5) => "Crystal · Circuits, essence & infused materials",
             Self::Resource(13) => "Biomass · Rations & Bioreactor",
+            Self::Resource(19) => "Coke · 800 kJ fuel & blast furnace reductant",
+            Self::Resource(20) => "Creosote · 300 kJ liquid fuel",
+            Self::Resource(21) => "Bio-ethanol · 600 kJ liquid fuel",
             Self::Resource(_) => "Crafting material",
             Self::Food(FoodKind::FungalRation) => "+38 Hunger · +8 HP",
             Self::Food(FoodKind::RoastedCap) => "+24 Hunger · +4 HP",
@@ -264,6 +286,7 @@ impl Item {
 
     pub fn encode_u32(self) -> (u32, u32) {
         match self {
+            Self::PowerKit(k) => k.encode(),
             Self::Block(b) => (1, b.as_u32()),
             Self::Resource(i) => (2, i as u32),
             Self::Food(f) => (3, f as u32),
@@ -275,6 +298,9 @@ impl Item {
 
     pub fn decode_u32(kind: u32, payload: u32) -> anyhow::Result<Self> {
         use anyhow::ensure;
+        if kind & 0xff == 7 {
+            return Ok(Self::PowerKit(factory::portable::PowerKit::decode(kind, payload)?));
+        }
         Ok(match kind {
             1 => {
                 let block = BlockId::from_u32(payload);
@@ -339,9 +365,6 @@ impl ItemStack {
         }
     }
 
-    pub fn max_stack(self) -> u32 {
-        self.item.max_stack()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -628,6 +651,132 @@ pub const HAND_RECIPES: &[CraftingRecipe] = &[
     },
 ];
 
+/// Grid recipes that only make sense once the factory has started: shell
+/// bricks for the multiblocks. Machine kits are generated from
+/// `factory::Kind::recipe` so the workbench buttons and the grid agree.
+const BENCH_RECIPES: &[CraftingRecipe] = &[
+    CraftingRecipe {
+        name: "Mulch leaves",
+        output: ItemStack {
+            item: Item::Resource(13),
+            count: 1,
+        },
+        ingredients: &[(Item::Block(BlockId::Leaves), 4)],
+        description: "Pack leaves into biomass.",
+    },
+    CraftingRecipe {
+        name: "Mulch pine needles",
+        output: ItemStack {
+            item: Item::Resource(13),
+            count: 1,
+        },
+        ingredients: &[(Item::Block(BlockId::PineLeaves), 4)],
+        description: "Pack pine needles into biomass.",
+    },
+    CraftingRecipe {
+        name: "Mulch planks",
+        output: ItemStack {
+            item: Item::Resource(13),
+            count: 1,
+        },
+        ingredients: &[(Item::Block(BlockId::Planks), 2)],
+        description: "Chip offcuts into biomass.",
+    },
+    CraftingRecipe {
+        name: "Coke oven bricks",
+        output: ItemStack {
+            item: Item::Block(BlockId::CokeOvenBrick),
+            count: 4,
+        },
+        ingredients: &[
+            (Item::Block(BlockId::Clay), 2),
+            (Item::Block(BlockId::Sand), 2),
+        ],
+        description: "Fired clay and sand. 26 bricks around a coke oven door form the oven.",
+    },
+    CraftingRecipe {
+        name: "Blast bricks",
+        output: ItemStack {
+            item: Item::Block(BlockId::BlastBrick),
+            count: 4,
+        },
+        ingredients: &[
+            (Item::Block(BlockId::StoneBricks), 2),
+            (Item::Block(BlockId::Clay), 1),
+            (Item::Resource(factory::COKE as u8), 1),
+        ],
+        description: "Coke-bonded refractory. 35 bricks around a tuyere form a blast furnace.",
+    },
+];
+
+impl CraftingRecipe {
+    /// Machine kits, multiblock bricks and anything with more than four
+    /// ingredient stacks need the 3 × 3 grid of a workbench.
+    pub fn needs_bench(&self) -> bool {
+        let machine = matches!(self.output.item, Item::Block(b) if factory::Kind::from_block(b).is_some());
+        let slots: u32 = self.ingredients.iter().map(|&(item, n)| n.div_ceil(item.max_stack())).sum();
+        machine || self.ingredients.len() > 4 || slots > 4
+    }
+}
+
+// Append after existing machine kits: assembler targets persist recipe indices.
+const CRYSTAL_TECH_RECIPES: &[CraftingRecipe] = &[
+    CraftingRecipe {
+        name: "Resonant crystal block",
+        output: ItemStack { item: Item::Block(BlockId::Crystal), count: 1 },
+        ingredients: &[(Item::Resource(5), 1)],
+        description: "Re-form mined crystal for building, mirage masonry or star glass. Mining returns the same crystal quantity.",
+    },
+    CraftingRecipe {
+        name: "Copper cladding",
+        output: ItemStack { item: Item::Block(BlockId::CopperBlock), count: 1 },
+        ingredients: &[(Item::Resource(6), 4)],
+        description: "Reflective copper building block for workshops and machine halls.",
+    },
+    CraftingRecipe {
+        name: "Resonant star glass",
+        output: ItemStack { item: Item::Block(BlockId::StarGlass), count: 4 },
+        ingredients: &[(Item::Resource(5), 2), (Item::Block(BlockId::Sand), 4), (Item::Resource(18), 1)],
+        description: "Essence-infused crystal glass. A later alternative to the basalt recipe, with a captive starfield and polished finish.",
+    },
+    CraftingRecipe {
+        name: "Mithril infusion",
+        output: ItemStack { item: Item::Block(BlockId::MithrilBlock), count: 1 },
+        ingredients: &[(Item::Resource(15), 2), (Item::Resource(5), 2), (Item::Resource(18), 1), (Item::Resource(17), 1)],
+        description: "Infuse steel with crystal, essence and an arcane core. Hard pale-blue building metal with a restrained travelling sheen.",
+    },
+];
+
+/// Every grid recipe; new additions follow machine kits to preserve saved targets.
+pub fn all_recipes() -> &'static [CraftingRecipe] {
+    static ALL: std::sync::LazyLock<Vec<CraftingRecipe>> = std::sync::LazyLock::new(|| {
+        let mut all: Vec<CraftingRecipe> = HAND_RECIPES.to_vec();
+        all.extend_from_slice(BENCH_RECIPES);
+        for kind in factory::Kind::ALL {
+            let cost = kind.recipe();
+            if kind.structural() || cost.iter().any(|&(_, n)| n % 64 != 0) {
+                continue;
+            }
+            let ingredients: Vec<(Item, u32)> = cost
+                .iter()
+                .map(|&(i, n)| (Item::Resource(i as u8), n / 64))
+                .collect();
+            all.push(CraftingRecipe {
+                name: kind.name(),
+                output: ItemStack {
+                    item: Item::Block(kind.block()),
+                    count: kind.yield_count(),
+                },
+                ingredients: Box::leak(ingredients.into_boxed_slice()),
+                description: "Machine assembly. Right-click to place on the metre grid.",
+            });
+        }
+        all.extend_from_slice(CRYSTAL_TECH_RECIPES);
+        all
+    });
+    &ALL
+}
+
 #[derive(Clone, Debug)]
 pub struct DroppedStack {
     pub pos: glam::Vec3,
@@ -865,10 +1014,6 @@ impl SurvivalInventory {
             }
         }
         total
-    }
-
-    pub fn used_pack_slots(&self) -> usize {
-        self.pack.iter().filter(|s| s.is_some()).count()
     }
 
     pub fn armor_reduction(&self) -> f32 {
@@ -1480,7 +1625,7 @@ impl SurvivalInventory {
                 Item::Armor(_, _) => 1,
                 Item::Food(_) => 2,
                 Item::Resource(_) => 3,
-                Item::Block(_) => 4,
+                Item::Block(_) | Item::PowerKit(_) => 4,
             };
             (order, (kind << 16) | (payload & 0xFFFF))
         };
@@ -1683,8 +1828,9 @@ impl SurvivalInventory {
         }
     }
 
-    /// Evaluates the 2×2 crafting grid and returns the matching recipe and how many batches the grid can produce.
-    pub fn matching_grid_recipe(&self) -> Option<(&'static CraftingRecipe, u32)> {
+    /// Evaluates the crafting grid and returns the matching recipe and how many
+    /// batches it can produce. Away from a workbench only hand recipes match.
+    pub fn matching_grid_recipe(&self, bench: bool) -> Option<(&'static CraftingRecipe, u32)> {
         let mut present: Vec<(Item, u32)> = Vec::new();
         for stack in self.craft_grid.iter().flatten() {
             if let Some(entry) = present.iter_mut().find(|(i, _)| *i == stack.item) {
@@ -1696,8 +1842,8 @@ impl SurvivalInventory {
         if present.is_empty() {
             return None;
         }
-        for recipe in HAND_RECIPES {
-            if recipe.ingredients.len() != present.len() {
+        for recipe in all_recipes() {
+            if recipe.ingredients.len() != present.len() || (!bench && recipe.needs_bench()) {
                 continue;
             }
             let mut batches = u32::MAX;
@@ -1723,8 +1869,8 @@ impl SurvivalInventory {
 
     /// Crafts 1 batch from `craft_grid` onto `self.cursor` (or into inventory if `shift_to_pack`).
     /// Never consumes ingredients unless the output is guaranteed to fit without loss.
-    pub fn craft_from_grid(&mut self, shift_to_pack: bool) -> Option<ItemStack> {
-        let (recipe, max_batches) = self.matching_grid_recipe()?;
+    pub fn craft_from_grid(&mut self, shift_to_pack: bool, bench: bool) -> Option<ItemStack> {
+        let (recipe, max_batches) = self.matching_grid_recipe(bench)?;
         let out = recipe.output;
         let max_stack = self.stack_limit(out.item);
 
@@ -1793,9 +1939,18 @@ impl SurvivalInventory {
         Some(produced)
     }
 
-    /// Stages 1 batch of `recipe` from the player's inventory into the 2×2 `craft_grid`.
+    /// Stages 1 batch of `recipe` from the player's inventory into the crafting
+    /// grid (the 2 × 2 corner away from a bench, all nine slots at one).
     /// Returns `true` if all ingredients were available and staged.
-    pub fn stage_recipe_into_grid(&mut self, recipe: &CraftingRecipe) -> bool {
+    pub fn stage_recipe_into_grid(&mut self, recipe: &CraftingRecipe, bench: bool) -> bool {
+        if recipe.needs_bench() && !bench {
+            return false;
+        }
+        let usable: &[usize] = if bench {
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8]
+        } else {
+            &HAND_GRID
+        };
         // First return any existing craft_grid items to pack/hotbar if they fit.
         for i in 0..CRAFT_SLOTS {
             if let Some(stack) = self.craft_grid[i] {
@@ -1826,27 +1981,39 @@ impl SurvivalInventory {
             return false;
         }
 
-        // Pull ingredients into craft_grid slots.
-        let mut slot_idx = 0usize;
+        // Pull ingredients into grid slots: one stack per slot, so a recipe
+        // reads like the Minecraft pattern it stands for.
+        let mut free = usable.iter().copied();
         for &(item, count) in recipe.ingredients {
             if !self.remove_item(item, count) {
                 return false;
             }
-            // If an ingredient is 4 planks or 4 stone, spread across the 2×2 grid nicely if single-ingredient 4-count.
-            if recipe.ingredients.len() == 1 && count == 4 && item.max_stack() >= 1 {
-                for s in 0..4 {
-                    self.craft_grid[s] = Some(ItemStack { item, count: 1 });
+            let spread = if recipe.ingredients.len() == 1 && count == 4 {
+                4
+            } else {
+                1
+            };
+            let per = count / spread;
+            for k in 0..spread {
+                let n = if k + 1 == spread { count - per * (spread - 1) } else { per };
+                match free.next() {
+                    Some(slot) => self.craft_grid[slot] = Some(ItemStack { item, count: n }),
+                    None => {
+                        // Out of slots: hand the rest back rather than lose it.
+                        let _ = self.try_insert_pack_first(ItemStack { item, count: n });
+                    }
                 }
-                slot_idx = 4;
-            } else if slot_idx < CRAFT_SLOTS {
-                self.craft_grid[slot_idx] = Some(ItemStack { item, count });
-                slot_idx += 1;
             }
         }
         true
     }
 
+    #[cfg(test)]
     pub fn encode(&self, bytes: &mut Vec<u8>) {
+        self.encode_versioned(bytes, crate::world::storage::SAVE_VERSION);
+    }
+    /// Before save version 20: a 2 × 2 grid and 19 resource remainders.
+    pub fn encode_versioned(&self, bytes: &mut Vec<u8>, version: u8) {
         let mut put = |n: u32| bytes.extend_from_slice(&n.to_le_bytes());
         let encode_slot = |slot: Option<ItemStack>, put: &mut dyn FnMut(u32)| {
             if let Some(stack) = slot {
@@ -1869,21 +2036,42 @@ impl SurvivalInventory {
         for slot in self.equipment {
             encode_slot(slot, &mut put);
         }
-        for slot in self.craft_grid {
-            encode_slot(slot, &mut put);
+        if version >= 20 {
+            for slot in self.craft_grid {
+                encode_slot(slot, &mut put);
+            }
+        } else {
+            for i in HAND_GRID {
+                encode_slot(self.craft_grid[i], &mut put);
+            }
         }
         encode_slot(self.cursor, &mut put);
-        for rem in self.resource_remainders {
+        let resources = if version >= 20 {
+            factory::RESOURCE_COUNT
+        } else {
+            factory::LEGACY_RESOURCE_COUNT
+        };
+        for &rem in &self.resource_remainders[..resources] {
             put(rem.min(63));
         }
     }
 
+    #[cfg(test)]
     pub fn decode(read: &mut impl FnMut() -> anyhow::Result<u32>) -> anyhow::Result<Self> {
         Self::decode_at_scale(read, 1.0)
     }
+    #[cfg(test)]
     pub fn decode_at_scale(
         read: &mut impl FnMut() -> anyhow::Result<u32>,
         voxel_m: f32,
+    ) -> anyhow::Result<Self> {
+        Self::decode_versioned(read, voxel_m, crate::world::storage::SAVE_VERSION)
+    }
+    /// Saves before version 20 hold a 2 × 2 grid and 19 resource remainders.
+    pub fn decode_versioned(
+        read: &mut impl FnMut() -> anyhow::Result<u32>,
+        voxel_m: f32,
+        version: u8,
     ) -> anyhow::Result<Self> {
         use anyhow::ensure;
         let mut inv = Self::empty();
@@ -1923,11 +2111,22 @@ impl SurvivalInventory {
             }
             inv.equipment[i] = decoded;
         }
-        for slot in &mut inv.craft_grid {
-            *slot = decode_slot(read)?;
+        if version >= 20 {
+            for slot in &mut inv.craft_grid {
+                *slot = decode_slot(read)?;
+            }
+        } else {
+            for i in HAND_GRID {
+                inv.craft_grid[i] = decode_slot(read)?;
+            }
         }
         inv.cursor = decode_slot(read)?;
-        for rem in &mut inv.resource_remainders {
+        let resources = if version >= 20 {
+            factory::RESOURCE_COUNT
+        } else {
+            factory::LEGACY_RESOURCE_COUNT
+        };
+        for rem in &mut inv.resource_remainders[..resources] {
             let v = read()?;
             ensure!(v < 64, "Invalid survival resource remainder");
             *rem = v;
@@ -2041,16 +2240,68 @@ mod tests {
     fn crafting_2x2_consumes_exact_ingredients_and_prevents_loss() {
         let mut inv = SurvivalInventory::empty();
         inv.craft_grid[0] = Some(ItemStack::new(Item::Block(BlockId::Log), 2));
-        let (recipe, batches) = inv.matching_grid_recipe().expect("Log should match planks");
+        let (recipe, batches) = inv.matching_grid_recipe(false).expect("Log should match planks");
         assert_eq!(recipe.output.item, Item::Block(BlockId::Planks));
         assert_eq!(batches, 2);
 
         let crafted = inv
-            .craft_from_grid(false)
+            .craft_from_grid(false, false)
             .expect("Should craft 1 batch to cursor");
         assert_eq!(crafted.count, 4);
         assert_eq!(inv.cursor.unwrap().count, 4);
         assert_eq!(inv.craft_grid[0].unwrap().count, 1);
+    }
+
+    #[test]
+    fn machine_kits_need_the_workbench_grid() {
+        let mut inv = SurvivalInventory::empty();
+        // Coal generator: 2 copper + 2 iron ingots.
+        inv.craft_grid[0] = Some(ItemStack::new(Item::Resource(6), 2));
+        inv.craft_grid[1] = Some(ItemStack::new(Item::Resource(8), 2));
+        assert!(inv.matching_grid_recipe(false).is_none());
+        let (recipe, _) = inv.matching_grid_recipe(true).expect("bench crafts the generator");
+        assert_eq!(recipe.output.item, Item::Block(BlockId::CoalGenerator));
+        assert!(recipe.needs_bench());
+    }
+
+    #[test]
+    fn staging_by_hand_stays_in_the_two_by_two_corner() {
+        let mut inv = SurvivalInventory::empty();
+        inv.pack[0] = Some(ItemStack::new(Item::Block(BlockId::Planks), 8));
+        let bench = all_recipes()
+            .iter()
+            .find(|r| r.output.item == Item::Block(BlockId::Workbench))
+            .unwrap();
+        assert!(inv.stage_recipe_into_grid(bench, false));
+        for (i, slot) in inv.craft_grid.iter().enumerate() {
+            assert_eq!(slot.is_some(), HAND_GRID.contains(&i), "slot {i}");
+        }
+    }
+
+    #[test]
+    fn version_19_grid_lands_in_the_hand_corner() {
+        let mut inv = SurvivalInventory::empty();
+        inv.craft_grid[4] = Some(ItemStack::new(Item::Block(BlockId::Log), 3));
+        let mut bytes = Vec::new();
+        inv.encode(&mut bytes);
+        // Rewrite as a version 19 save: four grid slots, 19 remainders.
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+        let slots_before_grid = (HOTBAR_SLOTS + PACK_SLOTS + EQUIP_SLOTS) * 3;
+        let mut legacy = words[..slots_before_grid].to_vec();
+        for i in HAND_GRID {
+            legacy.extend_from_slice(&words[slots_before_grid + i * 3..slots_before_grid + i * 3 + 3]);
+        }
+        let cursor = slots_before_grid + CRAFT_SLOTS * 3;
+        legacy.extend_from_slice(&words[cursor..cursor + 3]);
+        legacy.extend(std::iter::repeat_n(0, factory::LEGACY_RESOURCE_COUNT));
+        let mut it = legacy.into_iter();
+        let back = SurvivalInventory::decode_versioned(&mut || Ok(it.next().unwrap()), 1.0, 19)
+            .unwrap();
+        assert!(it.next().is_none());
+        assert_eq!(back.craft_grid[4].unwrap().count, 3);
     }
 
     #[test]

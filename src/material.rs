@@ -1356,6 +1356,85 @@ define_materials! {
         matter: MatterState::Solid, collision: CollisionKind::Passable, density: 3100.0,
         hardness: 0.2, friction: 0.5, restitution: 0.05, fluid: FluidTraits::NONE,
         selectable: true, hotbar: None, heightmap: false, lod_decor: false
+    },
+    // Factory assemblies added with save version 20. Appended so earlier ids
+    // keep their meaning.
+    BatteryBank {
+        display: "Battery bank", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.20, 0.30, 0.34]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    CokeOven {
+        display: "Coke oven door", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.42, 0.24, 0.16]), surface: SurfaceDetail::new(0.8, 0.1, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2200.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    BlastFurnace {
+        display: "Blast furnace tuyere", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.30, 0.26, 0.24]), surface: SurfaceDetail::new(0.8, 0.1, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    CokeOvenBrick {
+        display: "Coke oven brick", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.46, 0.27, 0.18]), surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2000.0,
+        hardness: 0.9, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    BlastBrick {
+        display: "Blast brick", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.36, 0.30, 0.27]), surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2300.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    InductionCasing {
+        display: "Induction casing", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.30, 0.33, 0.36]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    InductionPort {
+        display: "Induction port", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.22, 0.36, 0.44]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    InductionCell {
+        display: "Induction cell", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.20, 0.42, 0.52]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    InductionProvider {
+        display: "Induction provider", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.46, 0.38, 0.20]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    Transformer {
+        display: "Transformer", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.28, 0.30, 0.26]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+    },
+    Assembler {
+        display: "Assembling machine", render_kind: RenderKind::Opaque, occludes: false,
+        color: ColorModel::flat([0.42, 0.40, 0.30]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
+        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
+        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
+        selectable: false, hotbar: None, heightmap: true, lod_decor: false
     }
 }
 
@@ -1367,6 +1446,15 @@ static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
     slots.sort_by_key(|(order, _)| *order);
     slots.into_iter().map(|(_, id)| id).collect()
 });
+
+/// Renderer-only families; low six bits of SurfaceDetail::shader_key.
+/// These do not change BlockId or checkpoint identity.
+pub mod terrain_family {
+    pub const GRAVEL: u32 = 33;
+    pub const TUFT: u32 = 34;
+    pub const PEBBLE: u32 = 35;
+    pub const CAPPED_TURF: u32 = 36;
+}
 
 impl BlockId {
     /// Attachment origin in the owning voxel; model dimensions are in metres.
@@ -1407,6 +1495,17 @@ impl BlockId {
                 | Self::FluidPipe
                 | Self::WaterTank
                 | Self::OreWasher
+                | Self::BatteryBank
+                | Self::CokeOven
+                | Self::BlastFurnace
+                | Self::CokeOvenBrick
+                | Self::BlastBrick
+                | Self::InductionCasing
+                | Self::InductionPort
+                | Self::InductionCell
+                | Self::InductionProvider
+                | Self::Transformer
+                | Self::Assembler
         )
     }
     pub const COUNT: usize = MATERIAL_TABLE.len();
@@ -1443,7 +1542,8 @@ impl BlockId {
             Self::Steam => 44,
             Self::Grass => 1,
             Self::Dirt | Self::Mud | Self::Clay => 2,
-            Self::Stone | Self::Basalt | Self::Gravel => 3,
+            Self::Stone | Self::Basalt => 3,
+            Self::Gravel => terrain_family::GRAVEL,
             Self::Sand | Self::Sandstone => 4,
             Self::Log => 5,
             Self::Leaves | Self::Bush | Self::PineLeaves => 6,
@@ -1572,18 +1672,6 @@ pub fn hotbar_block(slot: usize) -> Option<BlockId> {
     hotbar_defaults().get(slot).copied()
 }
 
-pub fn cycle_hotbar_block(current: BlockId, dir: i32) -> BlockId {
-    let blocks = hotbar_defaults();
-    if blocks.is_empty() {
-        return current;
-    }
-    let current_index = blocks
-        .iter()
-        .position(|block| *block == current)
-        .unwrap_or(0);
-    let next = (current_index as i32 + dir).rem_euclid(blocks.len() as i32) as usize;
-    blocks[next]
-}
 
 #[cfg(test)]
 mod tests {

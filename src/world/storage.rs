@@ -11,10 +11,20 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV19";
+const MAGIC: &[u8; 8] = b"VXWSAV28";
 /// Current writer version. Companion bytes follow the adventure block from 18;
-/// the found-spell log (3 words) follows the companion from 19.
-pub(crate) const SAVE_VERSION: u8 = 19;
+/// the found-spell log (3 words) follows the companion from 19. Version 20
+/// widens the resource table to 22 and the machine table to 21 kinds, and
+/// the crafting grid to 3 × 3. Version 21 adds induction matrices,
+/// transformers and assemblers (27 kinds) and two words per assembly.
+/// Version 22 adds non-stackable power-kit item tags and permits matrix pools
+/// on induction cells. The slot and factory record lengths are unchanged.
+/// Version 23 adds finite Tollkeeper gate ownership and live/dormant encounter damage.
+/// Version 24 adds a bounded Meridian orbital alignment booking.
+/// Version 25 adds the ground receiver and finite cargo contract ledger.
+/// Version 26 adds habitat sources, residents, production and separate mana/XP ledgers.
+/// Version 28 adds radio equipment, finite knowledge and registered dish tracking.
+pub(crate) const SAVE_VERSION: u8 = 28;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -27,7 +37,7 @@ fn save_version(bytes: &[u8]) -> Result<u8> {
     } else {
         anyhow::bail!("Unsupported save format")
     };
-    ensure!((1..=19).contains(&version), "Unsupported save version");
+    ensure!((1..=SAVE_VERSION).contains(&version), "Unsupported save version");
     Ok(version)
 }
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -181,13 +191,25 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
 }
 fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     let mut bytes = Vec::new();
-    for amount in world.expedition.resources {
+    let resources = if save_version >= 20 {
+        super::factory::RESOURCE_COUNT
+    } else {
+        super::factory::LEGACY_RESOURCE_COUNT
+    };
+    for &amount in &world.expedition.resources[..resources] {
         push(&mut bytes, amount);
     }
     push(&mut bytes, world.expedition.tool_tier);
     push(&mut bytes, u32::from(world.expedition.workshop_found));
     push(&mut bytes, u32::from(world.expedition.lamp));
-    world.factory.encode(&mut bytes);
+    world.factory.encode_format(
+        &mut bytes,
+        match save_version {
+            21.. => 10,
+            20 => 9,
+            _ => 8,
+        },
+    );
     world.adventure.encode(&mut bytes);
     if save_version >= 18 {
         world.adventure.encode_companion(&mut bytes);
@@ -195,11 +217,14 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     if save_version >= 19 {
         world.adventure.encode_spell_log(&mut bytes);
     }
+    if save_version >= 23 { world.adventure.encode_boss_series(&mut bytes); }
     if save_version >= 17 {
         world.undercrown.encode(&mut bytes);
     }
     world.sandbox.encode(&mut bytes);
-    world.inventory.encode(&mut bytes);
+    if save_version >= 24 { world.orbital.encode(&mut bytes, save_version); }
+    if save_version >= 26 { world.habitats.encode_versioned(&mut bytes,save_version); }
+    world.inventory.encode_versioned(&mut bytes, save_version);
     push(&mut bytes, world.inventory.dropped.len() as u32);
     for drop in &world.inventory.dropped {
         for v in drop.pos.to_array() {
@@ -446,8 +471,10 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             );
         }
         if version_four {
-            let resources = if version_seven {
+            let resources = if version >= 20 {
                 super::factory::RESOURCE_COUNT
+            } else if version_seven {
+                super::factory::LEGACY_RESOURCE_COUNT
             } else if version_six {
                 14
             } else {
@@ -473,7 +500,11 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             world.factory = super::factory::Factory::decode(
                 &mut || input.u32(),
                 size,
-                if version_eight {
+                if version >= 21 {
+                    10
+                } else if version >= 20 {
+                    9
+                } else if version_eight {
                     8
                 } else if version_seven {
                     7
@@ -498,6 +529,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                 world.adventure.spell_log =
                     super::adventure::Adventure::decode_spell_log(&mut || input.u32())?;
             }
+            if version >= 23 { world.adventure.decode_boss_series(&mut || input.u32())?; }
         }
         if version >= 17 {
             world.undercrown = super::undercrown::State::decode(&mut || input.u32())?;
@@ -505,10 +537,18 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         if version_twelve {
             world.sandbox = crate::simulation::sandbox::Sandbox::decode(&mut || input.u32())?;
         }
+        if version >= 24 {
+            world.orbital = super::orbital::State::decode(&mut || input.u32(), version)?;
+        }
+        if version >= 26 {
+            world.habitats = super::habitats::State::decode(&mut || input.u32(), version)?;
+            world.adventure.restore_farm_mastery(world.habitats.mastered);
+        }
         if version_thirteen {
-            world.inventory = super::inventory::SurvivalInventory::decode_at_scale(
+            world.inventory = super::inventory::SurvivalInventory::decode_versioned(
                 &mut || input.u32(),
                 world.voxel_scale.meters(),
+                version,
             )?;
             if version >= 16 {
                 let count = input.u32()?;
@@ -643,6 +683,8 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         world.chunks.insert(
             coord,
             Arc::new(ChunkData {
+                modified_bounds: Some((IVec3::ZERO, IVec3::splat(CHUNK_SIZE))),
+                structural_bounds: Some((IVec3::ZERO, IVec3::splat(CHUNK_SIZE))),
                 blocks: blocks
                     .into_boxed_slice()
                     .try_into()
@@ -832,7 +874,7 @@ mod tests {
         v12_bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
         v12_bytes.extend_from_slice(region_name);
         v12_bytes.extend_from_slice(&0u32.to_le_bytes()); // 0 regions
-        for amount in v12_world.expedition.resources {
+        for &amount in &v12_world.expedition.resources[..crate::world::factory::LEGACY_RESOURCE_COUNT] {
             push(&mut v12_bytes, amount);
         }
         push(&mut v12_bytes, v12_world.expedition.tool_tier);
@@ -841,7 +883,7 @@ mod tests {
             u32::from(v12_world.expedition.workshop_found),
         );
         push(&mut v12_bytes, u32::from(v12_world.expedition.lamp));
-        v12_world.factory.encode(&mut v12_bytes);
+        v12_world.factory.encode_format(&mut v12_bytes, 8);
         v12_world.adventure.encode(&mut v12_bytes);
         v12_bytes.truncate(v12_bytes.len() - 24); // V12 adventure encoded without V15 wand loadout (6 u32s)
         v12_world.sandbox.encode(&mut v12_bytes);
@@ -925,12 +967,104 @@ mod tests {
     }
 
     #[test]
+    fn version_20_keeps_batteries_coke_and_a_v19_layout_still_decodes() {
+        use crate::world::factory::{self, Factory, Kind};
+        let dir = std::env::temp_dir().join(format!("voxel_v20_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Resources and the 3 x 3 grid through the real loader.
+        let mut world = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        world.adventure.begin_journey();
+        world.expedition.resources[factory::COKE] = 5 * 64;
+        world.reconcile_legacy_to_inventory();
+        world.inventory.craft_grid[8] = Some(ItemStack::new(Item::Block(BlockId::Clay), 2));
+        let current = synth_save(&world, SAVE_VERSION, &dir, "world_v20.dat");
+        let loaded = load_exact(&current, &dir).unwrap();
+        assert_eq!(loaded.world.inventory.count_item(Item::Resource(factory::COKE as u8)), 5);
+        assert_eq!(loaded.world.inventory.craft_grid[8].unwrap().count, 2);
+        let legacy = synth_save(&world, 19, &dir, "world_v19.dat");
+        assert!(load_exact(&legacy, &dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Machines through the factory codec, current and legacy formats.
+        let mut f = Factory::default();
+        let mut battery = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        let cell = glam::IVec3::new(4, 40, 4);
+        let node = factory::fixture_place(&mut battery, cell, Kind::Battery).unwrap();
+        node.energy = 9000;
+        node.mode = 3;
+        f.nodes.insert(cell, node.clone());
+        let mut bytes = Vec::new();
+        f.encode(&mut bytes);
+        let mut words = bytes.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap()));
+        let back = Factory::decode(&mut || Ok(words.next().unwrap()), 1, factory::FACTORY_FORMAT).unwrap();
+        let n = &back.nodes[&cell];
+        assert_eq!((n.kind, n.energy, n.mode), (Kind::Battery, 9000, 3));
+
+        let mut old = Factory::default();
+        let mut furnace = factory::fixture_place(&mut battery, cell + glam::IVec3::X, Kind::Furnace)
+            .unwrap()
+            .clone();
+        furnace.input[9] = 64;
+        old.nodes.insert(cell, furnace);
+        let mut bytes = Vec::new();
+        old.encode_format(&mut bytes, 8);
+        let mut words = bytes.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap()));
+        let back = Factory::decode(&mut || Ok(words.next().unwrap()), 1, 8).unwrap();
+        assert!(words.next().is_none());
+        assert_eq!(back.nodes[&cell].input[9], 64);
+    }
+
+    #[test]
     fn save_version_17_is_accepted_and_magic_agrees() {
         assert_eq!(save_version(b"VXWSAV17").unwrap(), 17);
         assert_eq!(save_version(b"VXWSAV18").unwrap(), 18);
         assert_eq!(save_version(b"VXWSAV19").unwrap(), 19);
-        assert!(save_version(b"VXWSAV20").is_err());
+        assert_eq!(save_version(b"VXWSAV20").unwrap(), 20);
+        assert_eq!(save_version(b"VXWSAV21").unwrap(), 21);
+        assert_eq!(save_version(b"VXWSAV22").unwrap(), 22);
+        assert_eq!(save_version(b"VXWSAV23").unwrap(), 23);
+        assert_eq!(save_version(b"VXWSAV24").unwrap(), 24);
+        assert!(save_version(b"VXWSAV28").is_err());
         let magic_version = ((MAGIC[6] - b'0') * 10 + (MAGIC[7] - b'0')) as u8;
         assert_eq!(magic_version, SAVE_VERSION);
+    }
+
+    #[test]
+    fn v22_keeps_portable_charge_drops_matrix_pool_and_partial_assembler() {
+        use super::super::factory::{self, Kind, portable::PowerKit};
+        let dir = std::env::temp_dir().join(format!("voxel_v22_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut w = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        w.regions = super::super::regions::RegionStream::open(dir.join("regions/test-world"), Default::default());
+        let item = Item::PowerKit(PowerKit { kind: Kind::Battery, energy: 54_321, upgrade: 2, mode: 1, limit: 23 });
+        w.inventory.pack[0] = Some(ItemStack::new(item, 1));
+        w.inventory.cursor = Some(ItemStack::new(item, 1));
+        w.inventory.dropped.push(super::super::inventory::DroppedStack { pos: Vec3::new(3.0, 40.0, 3.0), stack: ItemStack::new(item, 1) });
+        let p = glam::IVec3::new(4, 40, 4);
+        let a = factory::fixture_place(&mut w, p, Kind::Assembler).unwrap();
+        a.target = super::super::inventory::all_recipes().iter().position(|r|
+            r.output.item == Item::Block(Kind::Generator.block())).unwrap() as u32 + 1;
+        a.progress = 3; a.input[6] = 128; a.input[8] = 128; a.energy = 40;
+        let c = factory::fixture_place(&mut w, p + glam::IVec3::X, Kind::InductionCell).unwrap();
+        c.energy = 2 * factory::induction::CELL_CAPACITY;
+        let (view, _) = w.capture_edits().unwrap().unwrap().persist().unwrap();
+        let mut footer = session_footer(&w, SAVE_VERSION);
+        w.activity.snapshot().encode(&mut footer);
+        let bytes = manifest(session_header(&w, &Player::new(), &DayNightCycle::default()).unwrap(), &view, &footer, 1).unwrap();
+        let path = dir.join("current.vxw");
+        std::fs::write(&path, bytes).unwrap();
+        let loaded = load_exact(&path, &path).unwrap().world;
+        assert_eq!(loaded.inventory.pack[0], w.inventory.pack[0]);
+        assert_eq!(loaded.inventory.cursor, w.inventory.cursor);
+        assert_eq!(loaded.inventory.dropped[0].stack.item, item);
+        assert_eq!(loaded.factory.nodes[&p].progress, 3);
+        assert_eq!(loaded.factory.nodes[&(p + glam::IVec3::X)].energy, 2 * factory::induction::CELL_CAPACITY);
+        // A real v21-layout file still loads through the production decoder.
+        let legacy = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        let path = synth_save(&legacy, 21, &dir, "legacy21.vxw");
+        assert!(load_exact(&path, &dir).is_ok());
+        drop(loaded); drop(w); drop(view);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

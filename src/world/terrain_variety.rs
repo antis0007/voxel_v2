@@ -219,9 +219,16 @@ pub(super) fn strand(h: f32, shore: Shore, wx: f32, wz: f32, seed: u32, version:
             let fade = smoothstep(-4.2, -1.8, d)
                 * (1.0 - smoothstep(shore.limit + 0.6, shore.limit + 3.4, d));
             let cusp = (value_noise2(wx / 17.0, wz / 17.0, seed.wrapping_add(9533)) - 0.5) * 0.42;
-            let bar_phase =
-                (d + value_noise2(wx / 38.0, wz / 38.0, seed.wrapping_add(9537)) * 1.1) * 2.15;
-            let bars = bar_phase.sin() * 0.24 * (1.0 - smoothstep(-3.8, -0.2, d));
+            let bars = if version >= 24 {
+                // Bars run along the shore, not around it. Keyed to elevation alone,
+                // the sine drew a ring of stripes at constant height on every coast.
+                let along = value_noise2(wx / 9.0, wz / 9.0, seed.wrapping_add(9537)) - 0.5;
+                along * 0.48 * (1.0 - smoothstep(-3.8, -0.2, d))
+            } else {
+                let bar_phase =
+                    (d + value_noise2(wx / 38.0, wz / 38.0, seed.wrapping_add(9537)) * 1.1) * 2.15;
+                bar_phase.sin() * 0.24 * (1.0 - smoothstep(-3.8, -0.2, d))
+            };
             let platform = -0.10 * (1.0 - smoothstep(-0.7, 0.18, d));
             let lower_berm = (-((d - shore.limit * 0.42) / 0.72).powi(2)).exp() * 0.58;
             let swale = (-((d - shore.limit * 0.95) / 1.15).powi(2)).exp() * 0.62;

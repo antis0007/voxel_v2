@@ -180,12 +180,13 @@ pub(super) fn chunk_sort_key(center: IVec3, key: ChunkKey) -> (u8, i32, i32, i32
 pub(super) fn pending_priority(
     center: IVec3,
     key: ChunkKey,
+    urgent: bool,
 ) -> Reverse<(i32, i32, i32, i32, i32, i32, i32, u8)> {
     let dx = (key.coord.x - center.x).abs();
     let dy = (key.coord.y - center.y).abs();
     let dz = (key.coord.z - center.z).abs();
     Reverse((
-        chunk_radial_distance_sq(center, key.coord),
+        if urgent { i32::MIN.saturating_add(chunk_radial_distance_sq(center, key.coord)) } else { chunk_radial_distance_sq(center, key.coord) },
         dy,
         key.lod as i32,
         dx.max(dy).max(dz),
@@ -403,17 +404,31 @@ pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
     let mut out = Vec::new();
 
     let distance = render_distance_settings().view_distance_chunks;
+    // Membership is in chunk coordinates; scale does not change this map.
+    let coverage = cache.resident_coverage(Vec3::ZERO, distance, 1.0);
+    // Publish terrain columns as complete owners. Partial vertical children
+    // cannot overlap a complete horizon parent and rely on depth coincidence.
+    let mut complete = std::collections::HashMap::new();
+    for q in &cache.published_coords {
+        let ready = cache.gpu_meshes.contains_key(q);
+        complete.entry((q.x,q.z)).and_modify(|v| *v &= ready).or_insert(ready);
+    }
     for (&coord, mesh) in &cache.gpu_meshes {
-        // Retained meshes remain drawable while the desired set expands again.
-        if chunk_radial_distance_sq(cache.center_chunk, coord) > distance * distance {
-            continue;
-        }
+        if !cache.published_coords.contains(&coord) {continue;}
+        if complete.get(&(coord.x,coord.z)) != Some(&true) { continue; }
+        // Includes bounded out-of-window pins. Never draw a child whose parent
+        // is not suppressed by the exact same dense/sparse ownership map.
+        if !coverage.contains_column(coord.x,coord.z) { continue; }
         if mesh.index_count == 0 {
             continue;
         }
 
         let (center, radius) = chunk_bounds_sphere(coord);
-        let outside = planes
+        // Skip the far plane: residency already bounds horizontal reach, and the
+        // horizon suppresses every resident column. Far-culling a resident chunk
+        // (e.g. ground more than the cull depth below a high flying camera)
+        // leaves a sky-coloured hole that neither pass fills.
+        let outside = planes[..5]
             .iter()
             .any(|plane| plane.truncate().dot(center) + plane.w < -radius);
         if outside {
@@ -426,8 +441,12 @@ pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
         });
     }
 
-    // Opaque terrain benefits from early depth rejection and deterministic order.
-    out.sort_unstable_by_key(|key| chunk_sort_key(cache.center_chunk, *key));
+    // For a perspective camera clip W is forward depth. Submit nearer opaque
+    // chunks first, rather than LOD/radial order used by the work scheduler.
+    // Coordinate ties keep insertion/rehash order from changing overdraw.
+    let forward = Vec3::new(view_proj.x_axis.w, view_proj.y_axis.w, view_proj.z_axis.w);
+    out.sort_unstable_by(|a, b| forward.dot(a.coord.as_vec3()).total_cmp(&forward.dot(b.coord.as_vec3()))
+        .then_with(|| (a.coord.x, a.coord.y, a.coord.z).cmp(&(b.coord.x, b.coord.y, b.coord.z))));
     out
 }
 

@@ -2,7 +2,7 @@
 //! HWYLA/modded-style compact recipe & tooltip QOL, and separate creative block catalogue.
 use super::*;
 use crate::world::inventory::{
-    ArmorTier, CRAFT_SLOTS, CraftingRecipe, EQUIP_SLOTS, EquipSlot, HAND_RECIPES, HOTBAR_SLOTS,
+    ArmorTier, CRAFT_SLOTS, CraftingRecipe, EQUIP_SLOTS, EquipSlot, HAND_GRID, HOTBAR_SLOTS,
     Item, ItemStack, PACK_SLOTS, PointerRelease, SlotAddr, SurvivalInventory, pointer_release,
 };
 
@@ -66,7 +66,7 @@ fn creative_item_group(item: Item) -> &'static str {
         Item::Armor(_, _) => "Armour",
         Item::Tool(_) => "Tools",
         Item::Food(_) => "Food",
-        Item::Block(_) => "Blocks",
+        Item::Block(_) | Item::PowerKit(_) => "Blocks",
     }
 }
 
@@ -99,6 +99,7 @@ fn draw_creative_item_card(ui: &mut egui::Ui, size: [f32; 2], item: Item) -> egu
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(size[0], size[1]), egui::Sense::click());
     let p = ui.painter();
+    let rect = grimoire::react(&response, rect, false);
     icons::frame(p, rect, false);
     let icon = egui::Rect::from_center_size(
         egui::pos2(rect.center().x, rect.top() + rect.height() * 0.40),
@@ -116,7 +117,7 @@ fn draw_creative_item_card(ui: &mut egui::Ui, size: [f32; 2], item: Item) -> egu
         rect.left_top() + egui::vec2(4.0, 3.0),
         Align2::LEFT_TOP,
         creative_item_group(item),
-        egui::FontId::monospace(8.5),
+        egui::FontId::monospace(10.0),
         presentation::MUTED,
     );
     if response.hovered() {
@@ -132,6 +133,7 @@ fn draw_creative_item_card(ui: &mut egui::Ui, size: [f32; 2], item: Item) -> egu
 
 pub(super) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: Item) {
     match item {
+        Item::PowerKit(k) => draw_voxel_icon(painter, rect, k.kind.block()),
         Item::Block(block) => draw_voxel_icon(painter, rect, block),
         Item::Resource(i) => icons::paint(painter, rect, icons::Icon::Resource(i as usize)),
         Item::Food(f) => icons::paint(painter, rect, icons::Icon::Food(f as u8)),
@@ -140,11 +142,7 @@ pub(super) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: It
             icons::paint(painter, rect, icons::Icon::Armor(slot as u8, tier as u8))
         }
         Item::Tool(1 | 2) => icons::paint(painter, rect, icons::Icon::Bore),
-        Item::Tool(t) => icons::paint(
-            painter,
-            rect,
-            icons::Icon::Spell((t.saturating_sub(3)) as u32),
-        ),
+        Item::Tool(t) => icons::paint(painter, rect, icons::Icon::Wand(t)),
     }
 }
 
@@ -334,6 +332,10 @@ fn show_item_tooltip(resp: &egui::Response, stack: ItemStack, inv: &SurvivalInve
                 .color(presentation::MUTED),
         );
         let total = inv.count_item(stack.item);
+        if let Item::PowerKit(k) = stack.item {
+            ui.small(format!("Stored: {} · upgrade {}", crate::world::factory::power::fmt_energy(k.energy as f64), k.upgrade));
+            ui.small("One assembly per slot. Charge travels with this item.");
+        }
         if total > stack.count {
             ui.small(format!("Owned: {total}"));
         }
@@ -389,7 +391,11 @@ fn draw_survival_slot(
     }
 
     let painter = ui.painter();
-    icons::frame(painter, rect, selected || is_hovered);
+    let rect = grimoire::react(&response, rect, selected);
+    icons::frame(painter, rect, selected);
+    if is_hovered || response.has_focus() {
+        grimoire::focus(painter, rect);
+    }
 
     // Highlight matching item stacks when hovering a slot or holding a cursor item
     let match_item = inv.cursor.map(|c| c.item).or_else(|| {
@@ -418,10 +424,10 @@ fn draw_survival_slot(
     // Hotbar number badge
     if let SlotAddr::Hotbar(slot) = addr {
         painter.text(
-            rect.min + egui::vec2(3.0, 1.5),
+            rect.min + egui::vec2(2.0, 1.0),
             Align2::LEFT_TOP,
             hotbar_key_label(slot),
-            egui::FontId::monospace((slot_px * 0.26).clamp(9.0, 11.5)),
+            egui::FontId::proportional(10.0),
             if selected {
                 presentation::PAPER
             } else {
@@ -431,12 +437,12 @@ fn draw_survival_slot(
     }
 
     if let Some(stack) = stack {
-        let pad = (slot_px * 0.14).clamp(3.0, 6.0);
+        let pad = 2.0;
         draw_item_icon(painter, rect.shrink(pad), stack.item);
         if stack.count > 1 {
             let count_text = format!("{}", stack.count);
-            let font = egui::FontId::monospace((slot_px * 0.30).clamp(9.5, 12.0));
-            let pos = rect.right_bottom() - egui::vec2(2.5, 1.5);
+            let font = egui::FontId::proportional(10.0);
+            let pos = rect.right_bottom() - egui::vec2(2.0, 2.0);
             painter.text(
                 pos + egui::vec2(1.0, 1.0),
                 Align2::RIGHT_BOTTOM,
@@ -612,6 +618,44 @@ fn draw_survival_slot(
     response
 }
 
+fn section_label(text: &str) -> RichText {
+    RichText::new(text)
+        .size(11.0)
+        .color(presentation::MUTED)
+}
+
+fn query_matches(query: &str, title: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty() || title.to_lowercase().contains(&q)
+}
+
+/// One line of vitals under the character: label, value, colour.
+fn stats_strip(
+    ui: &mut egui::Ui,
+    view: &crate::world::adventure::View,
+    inv: &SurvivalInventory,
+    width: f32,
+) {
+    let def_pct = (inv.armor_reduction() * 100.0).round() as u32;
+    let stat = |ui: &mut egui::Ui, label: &str, value: String, colour: Color32| {
+        ui.label(RichText::new(label).size(11.0).color(presentation::MUTED));
+        ui.label(RichText::new(value).size(11.0).color(colour));
+    };
+    ui.horizontal(|ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing.x = 6.0;
+        stat(ui, "HP", format!("{:.0}", view.health), presentation::PAPER);
+        stat(ui, "Food", format!("{:.0}%", view.hunger), presentation::PAPER);
+        stat(
+            ui,
+            "Armour",
+            format!("{def_pct}%"),
+            if def_pct > 0 { presentation::JADE } else { presentation::MUTED },
+        );
+        stat(ui, "MP", format!("{:.0}", view.mana), presentation::MANA);
+    });
+}
+
 fn draw_recipe_tooltip(ui: &mut egui::Ui, recipe: &CraftingRecipe, inv: &SurvivalInventory) {
     ui.set_max_width(240.0);
     ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
@@ -670,17 +714,33 @@ fn draw_survival_pack_view(
     action: &mut UiAction,
     compact: bool,
     open_wand_tab: &mut bool,
+    bench: bool,
 ) {
-    let avail_w = ui.available_width();
-    let screen_h = ui.ctx().content_rect().height();
-    let spacing = if compact { 3.0 } else { 4.0 };
-    let max_slot_w = ((avail_w - spacing * 8.0 - 8.0) / 9.0).floor();
-    // 2 rows in compact top section + 3 pack rows + 1 hotbar row = 6 slot rows plus header/margins
-    let max_slot_h = ((screen_h - 126.0) / 6.4).floor().max(20.0);
-    let slot_px = max_slot_w
-        .min(max_slot_h)
-        .clamp(20.0, if compact { 30.0 } else { 40.0 });
+    let recipes = crate::world::inventory::all_recipes();
+    // Leaving the bench folds the 3 × 3 grid back to the 2 × 2 corner.
+    if !bench {
+        for i in 0..CRAFT_SLOTS {
+            if !HAND_GRID.contains(&i) && survival.craft_grid[i].is_some() {
+                let _ = survival.shift_click_slot(SlotAddr::CraftGrid(i));
+            }
+        }
+    }
+    let grid_slots: &[usize] = if bench {
+        &[0, 1, 2, 3, 4, 5, 6, 7, 8]
+    } else {
+        &HAND_GRID
+    };
+    let grid_cols = if bench { 3 } else { 2 };
+    // Slot sizes are in points, so the page scales as one unit with the UI.
+    // Pack, hotbar, armour and crafting all share one slot size.
+    let spacing = 3.0;
+    let slot_px = if compact { 22.0 } else { 24.0 };
     let grid_w = slot_px * 9.0 + spacing * 8.0;
+    let recipe_w = 228.0;
+    let list_h = (ui.ctx().content_rect().height() - 250.0).clamp(160.0, 300.0);
+    let ghost_missing = Color32::from_rgba_unmultiplied(225, 105, 91, 70);
+    let ghost_held = Color32::from_rgba_unmultiplied(241, 214, 138, 60);
+    let dim = Color32::from_rgba_unmultiplied(12, 10, 13, 150);
 
     let mut hovered_slot: Option<SlotAddr> = None;
     let drag_id = egui::Id::new("survival_drag_origin");
@@ -720,42 +780,29 @@ fn draw_survival_pack_view(
         ghost_recipe = None;
     }
 
-    ui.vertical_centered(|ui| {
-        ui.set_width(grid_w);
-        ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
+    // Short screens scroll instead of clipping the top tabs and the hotbar.
+    let scroll_h = (ui.ctx().content_rect().height() - 128.0).max(200.0);
+    egui::ScrollArea::vertical()
+        .id_salt("survival_page")
+        .max_height(scroll_h)
+        .auto_shrink([false, true])
+        .show(ui, |ui| ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
 
-        // Noita-style inline Wand Deck bar right at the top of the Survival Inventory
-        if equipment_view.wand > 0 {
-            super::wands::draw_inline_wand_bar(ui, equipment_view, action, open_wand_tab);
-        }
-
-        // Top section: Armor + Player preview + 2×2 Crafting Grid + Output + Quick Recipe Book
-        ui.horizontal_top(|ui| {
+        // Left column: the character, crafting, stats, backpack and hotbar.
+        // Every row snaps to the same 9-slot width.
+        ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
+            ui.set_width(grid_w);
 
-            // 4 Armor slots (2×2 when vertical height is tight, or 1×4 column)
-            if compact {
-                egui::Grid::new("equip_grid_compact")
-                    .spacing([spacing, spacing])
-                    .show(ui, |ui| {
-                        for i in 0..EQUIP_SLOTS {
-                            draw_survival_slot(
-                                ui,
-                                survival,
-                                SlotAddr::Equipment(i),
-                                slot_px,
-                                false,
-                                &mut hovered_slot,
-                                &mut drag_slot,
-                                &mut lmb_split_visited,
-                                &mut lmb_split_origin,
-                            );
-                            if i % 2 == 1 {
-                                ui.end_row();
-                            }
-                        }
-                    });
-            } else {
+            if equipment_view.wand > 0 {
+                super::wands::draw_inline_wand_bar(ui, equipment_view, action, open_wand_tab);
+            }
+
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
+
+                // Armour: one column, same slot size as the pack.
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
                     for i in 0..EQUIP_SLOTS {
@@ -763,7 +810,7 @@ fn draw_survival_pack_view(
                             ui,
                             survival,
                             SlotAddr::Equipment(i),
-                            slot_px * 0.86,
+                            slot_px,
                             false,
                             &mut hovered_slot,
                             &mut drag_slot,
@@ -772,430 +819,393 @@ fn draw_survival_pack_view(
                         );
                     }
                 });
-            }
 
-            // Player character preview
-            let char_h = if compact {
-                slot_px * 2.0 + spacing
-            } else {
-                slot_px * 0.86 * 4.0 + spacing * 3.0
-            };
-            let char_w = (char_h * 0.68).clamp(52.0, 96.0);
-            draw_player_preview(
-                ui,
-                egui::vec2(char_w, char_h),
-                survival,
-                equipment_view,
-            );
-
-            ui.add_space(spacing);
-
-            // 2×2 Hand-Crafting Grid + Output Slot
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Craft")
-                            .size(11.5)
-                            .color(presentation::MUTED),
-                    );
-                    if (survival.craft_grid.iter().any(|s| s.is_some()) || ghost_recipe.is_some())
-                        && ui
-                            .small_button("×")
-                            .on_hover_text("Return grid items to pack / clear ghost preview")
-                            .clicked()
-                    {
-                        ghost_recipe = None;
-                        for i in 0..CRAFT_SLOTS {
-                            let _ = survival.shift_click_slot(SlotAddr::CraftGrid(i));
-                        }
-                    }
-                });
-
-                let mut craft_rects = [egui::Rect::NOTHING; CRAFT_SLOTS];
-                ui.horizontal_top(|ui| {
-                    egui::Grid::new("hand_craft_2x2")
-                        .spacing([spacing, spacing])
-                        .show(ui, |ui| {
-                            for i in 0..CRAFT_SLOTS {
-                                let resp = draw_survival_slot(
-                                    ui,
-                                    survival,
-                                    SlotAddr::CraftGrid(i),
-                                    slot_px,
-                                    false,
-                                    &mut hovered_slot,
-                                    &mut drag_slot,
-                                    &mut lmb_split_visited,
-                                    &mut lmb_split_origin,
-                                );
-                                craft_rects[i] = resp.rect;
-                                if i % 2 == 1 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
-
-                    // JEI/EMI Ghost Recipe Overlay when an uncraftable recipe was clicked
-                    if let Some(rec) = ghost_recipe.and_then(|idx| HAND_RECIPES.get(idx)) {
-                        for (slot_i, &(req_item, req_count)) in
-                            rec.ingredients.iter().take(CRAFT_SLOTS).enumerate()
-                        {
-                            let r = craft_rects[slot_i];
-                            let have = survival.count_item(req_item);
-                            let missing = have < req_count;
-                            ui.painter().rect_filled(
-                                r.shrink(2.0),
-                                0,
-                                if missing {
-                                    Color32::from_rgba_unmultiplied(185, 42, 46, 95)
-                                } else {
-                                    Color32::from_rgba_unmultiplied(82, 168, 112, 65)
-                                },
-                            );
-                            draw_item_icon(ui.painter(), r.shrink(5.0), req_item);
-                            ui.painter().text(
-                                r.right_bottom() - egui::vec2(2.0, 1.5),
-                                Align2::RIGHT_BOTTOM,
-                                format!("{have}/{req_count}"),
-                                egui::FontId::monospace(9.0),
-                                if missing {
-                                    presentation::DANGER
-                                } else {
-                                    presentation::JADE
-                                },
-                            );
-                        }
-                    }
-
-                    // Arrow + Output Slot
-                    ui.vertical(|ui| {
-                        ui.add_space(slot_px * 0.55);
-                        ui.label(
-                            RichText::new("→")
-                                .size(16.0)
-                                .color(presentation::MUTED),
-                        );
-                    });
-
-                    let matched = survival.matching_grid_recipe();
-                    let out_px = (slot_px * 1.12).round();
-                    let (out_rect, out_resp) = ui.allocate_exact_size(
-                        egui::vec2(out_px, out_px),
-                        egui::Sense::click(),
-                    );
-                    ui.ctx().data_mut(|d| {
-                        d.insert_temp(egui::Id::new("surv_craft_output"), out_rect);
-                    });
-                    icons::frame(
-                        ui.painter(),
-                        out_rect,
-                        matched.is_some() || out_resp.hovered(),
-                    );
-                    if let Some((recipe, batches)) = matched {
-                        let preview = ItemStack {
-                            item: recipe.output.item,
-                            count: recipe.output.count,
-                        };
-                        draw_item_icon(ui.painter(), out_rect.shrink(5.0), preview.item);
-                        if preview.count > 1 {
-                            ui.painter().text(
-                                out_rect.right_bottom() - egui::vec2(3.0, 2.0),
-                                Align2::RIGHT_BOTTOM,
-                                format!("{}", preview.count),
-                                egui::FontId::monospace(11.5),
-                                presentation::PAPER,
-                            );
-                        }
-                        out_resp.clone().on_hover_ui(|ui| {
-                            draw_recipe_tooltip(ui, recipe, survival);
-                            ui.small(format!(
-                                "{batches} ready · Left-click takes one · Right-click takes one · Shift-click crafts the stack into the pack"
-                            ));
-                        });
-                        if out_resp.contains_pointer()
-                            && ui.ctx().input(|i| {
-                                i.pointer.button_pressed(egui::PointerButton::Primary)
-                                    || i.pointer.button_pressed(egui::PointerButton::Secondary)
-                            })
-                        {
-                            let bulk = ui.ctx().input(|i| {
-                                i.pointer.button_pressed(egui::PointerButton::Primary)
-                                    && (i.modifiers.shift
-                                        || i.modifiers.ctrl
-                                        || i.modifiers.command)
-                            });
-                            let _ = survival.craft_from_grid(bulk);
-                        }
-                    } else if let Some(rec) = ghost_recipe.and_then(|idx| HAND_RECIPES.get(idx)) {
-                        draw_item_icon(ui.painter(), out_rect.shrink(5.0), rec.output.item);
-                        ui.painter().rect_filled(
-                            out_rect.shrink(2.0),
-                            0,
-                            Color32::from_rgba_unmultiplied(185, 42, 46, 80),
-                        );
-                        out_resp.on_hover_ui(|ui| {
-                            draw_recipe_tooltip(ui, rec, survival);
-                            ui.small("Missing ingredients highlighted in red");
-                        });
-                    } else {
-                        out_resp.on_hover_text("2×2 Crafting Output · Click any recipe on the right to stage or preview");
-                    }
-                });
-            });
-
-            ui.add_space(spacing);
-
-            // Modded/JEI-style compact recipe grid: icons with craftable/missing border + ghost staging
-            let rem_w = ui.available_width().max(slot_px * 2.0);
-            let rec_px = (slot_px * 0.84).clamp(22.0, 30.0);
-            let rec_cols = ((rem_w + 3.0) / (rec_px + 3.0)).floor().max(2.0) as usize;
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Recipes")
-                            .size(11.5)
-                            .color(presentation::MUTED),
-                    );
-                    if ui
-                        .selectable_label(craftable_only, "Ready")
-                        .on_hover_text("Show only recipes you can craft from the pack")
-                        .clicked()
-                    {
-                        craftable_only = !craftable_only;
-                    }
-                });
-                ui.add(
-                    egui::TextEdit::singleline(&mut recipe_query)
-                        .hint_text("Search")
-                        .desired_width(rem_w.min(160.0)),
+                // The figure spans the armour column exactly.
+                let figure_h = slot_px * EQUIP_SLOTS as f32 + spacing * (EQUIP_SLOTS as f32 - 1.0);
+                draw_player_preview(
+                    ui,
+                    egui::vec2(figure_h * 0.6, figure_h),
+                    survival,
+                    equipment_view,
                 );
-                egui::ScrollArea::vertical()
-                    .id_salt("quick_recipes_scroll")
-                    .max_height(char_h - 16.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let query = recipe_query.to_lowercase();
-                        egui::Grid::new("quick_recipe_grid")
-                            .spacing([3.0, 3.0])
+
+                ui.add_space(4.0);
+
+                // Crafting: grid, arrow, output.
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
+                    ui.horizontal(|ui| {
+                        ui.label(section_label(if bench { "CRAFTING 3×3" } else { "CRAFTING 2×2" }))
+                            .on_hover_text("Machine kits and multiblock bricks need the 3 × 3 grid: press F at a workbench, then E.");
+                        if (survival.craft_grid.iter().any(|s| s.is_some()) || ghost_recipe.is_some())
+                            && ui
+                                .small_button("Clear")
+                                .on_hover_text("Return grid items to the pack and clear the recipe preview")
+                                .clicked()
+                        {
+                            ghost_recipe = None;
+                            for i in 0..CRAFT_SLOTS {
+                                let _ = survival.shift_click_slot(SlotAddr::CraftGrid(i));
+                            }
+                        }
+                    });
+
+                    let mut craft_rects = [egui::Rect::NOTHING; CRAFT_SLOTS];
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
+                        egui::Grid::new(("craft_grid", grid_cols))
+                            .spacing([spacing, spacing])
+                            .min_col_width(slot_px)
+                            .min_row_height(slot_px)
                             .show(ui, |ui| {
-                                let mut col_count = 0usize;
-                                for (idx, recipe) in HAND_RECIPES.iter().enumerate() {
-                                    if !query.is_empty()
-                                        && !recipe.name.to_lowercase().contains(&query)
-                                    {
-                                        continue;
-                                    }
-                                    let craftable = recipe
-                                        .ingredients
-                                        .iter()
-                                        .all(|&(it, n)| survival.count_item(it) >= n);
-                                    if craftable_only && !craftable {
-                                        continue;
-                                    }
-                                    let (r, resp) = ui.allocate_exact_size(
-                                        egui::vec2(rec_px, rec_px),
-                                        egui::Sense::click(),
+                                for (k, &i) in grid_slots.iter().enumerate() {
+                                    let resp = draw_survival_slot(
+                                        ui,
+                                        survival,
+                                        SlotAddr::CraftGrid(i),
+                                        slot_px,
+                                        false,
+                                        &mut hovered_slot,
+                                        &mut drag_slot,
+                                        &mut lmb_split_visited,
+                                        &mut lmb_split_origin,
                                     );
-                                    let p = ui.painter();
-                                    p.rect_filled(
-                                        r,
-                                        0,
-                                        if craftable {
-                                            Color32::from_rgb(44, 52, 42)
-                                        } else {
-                                            Color32::from_rgb(36, 30, 32)
-                                        },
-                                    );
-                                    p.rect_stroke(
-                                        r,
-                                        0,
-                                        egui::Stroke::new(
-                                            1.0,
-                                            if resp.hovered() || ghost_recipe == Some(idx) {
-                                                presentation::AMBER
-                                            } else if craftable {
-                                                presentation::JADE
-                                            } else {
-                                                Color32::from_rgb(76, 58, 56)
-                                            },
-                                        ),
-                                        egui::StrokeKind::Inside,
-                                    );
-                                    draw_item_icon(p, r.shrink(3.0), recipe.output.item);
-                                    if recipe.output.count > 1 {
-                                        p.text(
-                                            r.right_bottom() - egui::vec2(1.5, 1.0),
-                                            Align2::RIGHT_BOTTOM,
-                                            format!("{}", recipe.output.count),
-                                            egui::FontId::monospace(9.0),
-                                            if craftable {
-                                                presentation::PAPER
-                                            } else {
-                                                presentation::MUTED
-                                            },
-                                        );
-                                    }
-                                    resp.clone().on_hover_ui(|ui| {
-                                        draw_recipe_tooltip(ui, recipe, survival);
-                                        ui.small("Left-click fills the grid. Right-click crafts one onto the cursor. Shift-click crafts every batch into the pack.");
-                                    });
-                                    if resp.contains_pointer()
-                                        && ui.ctx().input(|i| {
-                                            i.pointer.button_pressed(egui::PointerButton::Primary)
-                                                || i.pointer
-                                                    .button_pressed(egui::PointerButton::Secondary)
-                                        })
-                                    {
-                                        if craftable {
-                                            ghost_recipe = None;
-                                            let bulk = ui.ctx().input(|i| {
-                                                i.pointer.button_pressed(egui::PointerButton::Primary)
-                                                    && (i.modifiers.shift
-                                                        || i.modifiers.ctrl
-                                                        || i.modifiers.command)
-                                            });
-                                            let single_now = ui.ctx().input(|i| {
-                                                i.pointer
-                                                    .button_pressed(egui::PointerButton::Secondary)
-                                            });
-                                            if survival.stage_recipe_into_grid(recipe) {
-                                                if bulk {
-                                                    let _ = survival.craft_from_grid(true);
-                                                } else if single_now {
-                                                    let _ = survival.craft_from_grid(false);
-                                                }
-                                            }
-                                        } else {
-                                            // Stage JEI-style ghost recipe overlay
-                                            for i in 0..CRAFT_SLOTS {
-                                                let _ = survival.shift_click_slot(SlotAddr::CraftGrid(i));
-                                            }
-                                            ghost_recipe = if ghost_recipe == Some(idx) {
-                                                None
-                                            } else {
-                                                Some(idx)
-                                            };
-                                        }
-                                    }
-                                    col_count += 1;
-                                    if col_count % rec_cols == 0 {
+                                    craft_rects[i] = resp.rect;
+                                    if k % grid_cols == grid_cols - 1 {
                                         ui.end_row();
                                     }
                                 }
                             });
-                        ui.add_space(6.0);
+
+                        // Ghost preview of a recipe the player clicked: what each
+                        // slot needs, green when held, red when missing.
+                        if let Some(rec) = ghost_recipe.and_then(|idx| recipes.get(idx)) {
+                            for (slot_i, &(req_item, req_count)) in
+                                rec.ingredients.iter().take(grid_slots.len()).enumerate()
+                            {
+                                let r = craft_rects[grid_slots[slot_i]];
+                                let have = survival.count_item(req_item);
+                                let missing = have < req_count;
+                                ui.painter().rect_filled(
+                                    r.shrink(2.0),
+                                    0,
+                                    if missing { ghost_missing } else { ghost_held },
+                                );
+                                draw_item_icon(ui.painter(), r.shrink(5.0), req_item);
+                                ui.painter().text(
+                                    r.right_bottom() - egui::vec2(2.0, 1.5),
+                                    Align2::RIGHT_BOTTOM,
+                                    format!("{have}/{req_count}"),
+                                    egui::FontId::monospace(10.0),
+                                    if missing { presentation::DANGER } else { presentation::PAPER },
+                                );
+                            }
+                        }
+
+                        ui.add_space(2.0);
                         ui.label(
-                            RichText::new("Workbench  ·  F")
-                                .size(11.0)
+                            RichText::new("→")
+                                .size(18.0)
                                 .color(presentation::MUTED),
                         );
-                        let names = crate::world::expedition::NAMES;
-                        for (tier, title) in [
-                            (0u32, "Lumen Twig"),
-                            (1, "Quarry Conduit"),
-                            (2, "Sanctum Sovereign"),
-                        ] {
-                            if !query.is_empty() && !title.to_lowercase().contains(&query) {
-                                continue;
+
+                        let matched = survival.matching_grid_recipe(bench);
+                        let out_px = slot_px + 4.0;
+                        let (out_rect, out_resp) = ui.allocate_exact_size(
+                            egui::vec2(out_px, out_px),
+                            egui::Sense::click(),
+                        );
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(egui::Id::new("surv_craft_output"), out_rect);
+                        });
+                        icons::frame(ui.painter(), out_rect, matched.is_some() || out_resp.hovered());
+                        if let Some((recipe, batches)) = matched {
+                            draw_item_icon(ui.painter(), out_rect.shrink(4.0), recipe.output.item);
+                            if recipe.output.count > 1 {
+                                ui.painter().text(
+                                    out_rect.right_bottom() - egui::vec2(3.0, 2.0),
+                                    Align2::RIGHT_BOTTOM,
+                                    format!("{}", recipe.output.count),
+                                    egui::FontId::monospace(11.0),
+                                    presentation::PAPER,
+                                );
                             }
-                            let cost = crate::world::adventure::wand_recipe(tier);
-                            let line = cost
-                                .iter()
-                                .map(|(id, amount)| {
-                                    format!("{} ×{}", names[*id], amount / 64)
+                            out_resp.clone().on_hover_ui(|ui| {
+                                draw_recipe_tooltip(ui, recipe, survival);
+                                ui.small(format!(
+                                    "{batches} ready · Click takes one · Right-click takes one · Shift-click crafts the stack into the pack"
+                                ));
+                            });
+                            if out_resp.contains_pointer()
+                                && ui.ctx().input(|i| {
+                                    i.pointer.button_pressed(egui::PointerButton::Primary)
+                                        || i.pointer.button_pressed(egui::PointerButton::Secondary)
                                 })
-                                .collect::<Vec<_>>()
-                                .join("  ");
-                            ui.small(format!("{title}  {line}"))
-                                .on_hover_text("Found on the crystal altar of the matching Holy Mountain landing, or assembled with F at a workbench. Not a 2×2 recipe.");
+                            {
+                                let bulk = ui.ctx().input(|i| {
+                                    i.pointer.button_pressed(egui::PointerButton::Primary)
+                                        && (i.modifiers.shift
+                                            || i.modifiers.ctrl
+                                            || i.modifiers.command)
+                                });
+                                let _ = survival.craft_from_grid(bulk, bench);
+                            }
+                        } else if let Some(rec) = ghost_recipe.and_then(|idx| recipes.get(idx)) {
+                            draw_item_icon(ui.painter(), out_rect.shrink(4.0), rec.output.item);
+                            ui.painter().rect_filled(out_rect.shrink(2.0), 0, ghost_missing);
+                            out_resp.on_hover_ui(|ui| {
+                                draw_recipe_tooltip(ui, rec, survival);
+                                ui.small("Missing ingredients are marked red");
+                            });
+                        } else {
+                            out_resp.on_hover_text(if bench {
+                                "3×3 workbench output · pick a recipe to stage it"
+                            } else {
+                                "2×2 hand output · machines need a workbench (F, then E)"
+                            });
                         }
                     });
+                });
             });
-        });
 
-        // Inventory Profiles Next QOL strip: Pack label + Sort + Quick-Stack
-        ui.horizontal(|ui| {
-            ui.set_width(grid_w);
-            ui.label(
-                RichText::new("Backpack")
-                    .size(11.0)
-                    .color(presentation::MUTED),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button("Stack ▾")
-                    .on_hover_text("Merge matching backpack items into hotbar stacks")
-                    .clicked()
-                {
-                    survival.quick_stack_to_hotbar();
-                }
-                if ui
-                    .small_button("Sort [R]")
-                    .on_hover_text("Compact partial stacks and sort backpack by category [R]")
-                    .clicked()
-                    || ui.ctx().input(|i| i.key_pressed(egui::Key::R))
-                {
-                    survival.sort_pack();
-                }
-            });
-        });
+            stats_strip(ui, equipment_view, survival, grid_w);
+            ui.add_space(2.0);
 
-        // 27-Slot Main Pack (3 rows × 9 columns)
-        egui::Grid::new("survival_pack_27")
-            .spacing([spacing, spacing])
-            .show(ui, |ui| {
-                for idx in 0..PACK_SLOTS {
-                    draw_survival_slot(
-                        ui,
-                        survival,
-                        SlotAddr::Pack(idx),
-                        slot_px,
-                        false,
-                        &mut hovered_slot,
-                        &mut drag_slot,
-                        &mut lmb_split_visited,
-                        &mut lmb_split_origin,
-                    );
-                    if (idx + 1) % 9 == 0 {
-                        ui.end_row();
+            // Backpack: one header line, then 3 × 9 and the hotbar.
+            ui.horizontal(|ui| {
+                ui.set_width(grid_w);
+                ui.label(section_label("BACKPACK"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("Stack")
+                        .on_hover_text("Merge matching backpack items into hotbar stacks")
+                        .clicked()
+                    {
+                        survival.quick_stack_to_hotbar();
                     }
-                }
+                    if ui
+                        .small_button("Sort [R]")
+                        .on_hover_text("Compact partial stacks and sort backpack by category [R]")
+                        .clicked()
+                        || (ui.ctx().input(|i| i.key_pressed(egui::Key::R))
+                            && ui
+                                .ctx()
+                                .data_mut(|d| d.get_temp::<Option<Item>>(egui::Id::new("surv_hovered_item")))
+                                .flatten()
+                                .is_none())
+                    {
+                        survival.sort_pack();
+                    }
+                });
             });
 
-        ui.add_space(if compact { 3.0 } else { 6.0 });
-
-        // 9-Slot Survival Hotbar
-        egui::Grid::new("survival_hotbar_9")
-            .spacing([spacing, spacing])
-            .show(ui, |ui| {
-                for slot in 0..HOTBAR_SLOTS {
-                    let selected = slot == creative.selected_slot;
-                    let resp = draw_survival_slot(
-                        ui,
-                        survival,
-                        SlotAddr::Hotbar(slot),
-                        slot_px,
-                        selected,
-                        &mut hovered_slot,
-                        &mut drag_slot,
-                        &mut lmb_split_visited,
-                        &mut lmb_split_origin,
-                    );
-                    if resp.double_clicked() {
-                        if let Some(ItemStack {
-                            item: Item::Food(_),
-                            ..
-                        }) = survival.hotbar[slot]
-                        {
-                            creative.select_slot(slot);
-                            *action = UiAction::Factory(crate::world::factory::Action::EatRation);
+            egui::Grid::new("survival_pack_27")
+                .spacing([spacing, spacing])
+                .min_col_width(slot_px)
+                .min_row_height(slot_px)
+                .show(ui, |ui| {
+                    for idx in 0..PACK_SLOTS {
+                        draw_survival_slot(
+                            ui,
+                            survival,
+                            SlotAddr::Pack(idx),
+                            slot_px,
+                            false,
+                            &mut hovered_slot,
+                            &mut drag_slot,
+                            &mut lmb_split_visited,
+                            &mut lmb_split_origin,
+                        );
+                        if (idx + 1) % 9 == 0 {
+                            ui.end_row();
                         }
                     }
+                });
+
+            ui.add_space(4.0);
+
+            egui::Grid::new("survival_hotbar_9")
+                .spacing([spacing, spacing])
+                .min_col_width(slot_px)
+                .min_row_height(slot_px)
+                .show(ui, |ui| {
+                    for slot in 0..HOTBAR_SLOTS {
+                        let selected = slot == creative.selected_slot;
+                        let resp = draw_survival_slot(
+                            ui,
+                            survival,
+                            SlotAddr::Hotbar(slot),
+                            slot_px,
+                            selected,
+                            &mut hovered_slot,
+                            &mut drag_slot,
+                            &mut lmb_split_visited,
+                            &mut lmb_split_origin,
+                        );
+                        if resp.double_clicked() {
+                            if let Some(ItemStack {
+                                item: Item::Food(_),
+                                ..
+                            }) = survival.hotbar[slot]
+                            {
+                                creative.select_slot(slot);
+                                *action = UiAction::Factory(crate::world::factory::Action::EatRation);
+                            }
+                        }
+                    }
+                    ui.end_row();
+                });
+        });
+
+        // Right column: recipe browser. Same height as the left column.
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
+            ui.set_width(recipe_w);
+            ui.set_max_width(recipe_w);
+            ui.horizontal(|ui| {
+                ui.label(section_label("RECIPES"));
+                if ui
+                    .selectable_label(craftable_only, "Ready")
+                    .on_hover_text("Show only recipes you can craft from the pack")
+                    .clicked()
+                {
+                    craftable_only = !craftable_only;
                 }
-                ui.end_row();
             });
-    });
+            ui.add(
+                egui::TextEdit::singleline(&mut recipe_query)
+                    .hint_text("Search recipes")
+                    .desired_width(recipe_w),
+            );
+            egui::ScrollArea::vertical()
+                .id_salt("quick_recipes_scroll")
+                .max_height(list_h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let query = recipe_query.to_lowercase();
+                    let cols = ((recipe_w + spacing) / (slot_px + spacing)).floor().max(2.0) as usize;
+                    egui::Grid::new("quick_recipe_grid")
+                        .spacing([spacing, spacing])
+                        .min_col_width(slot_px)
+                        .min_row_height(slot_px)
+                        .show(ui, |ui| {
+                            let mut col_count = 0usize;
+                            for (idx, recipe) in recipes.iter().enumerate() {
+                                if !query.is_empty() && !recipe.name.to_lowercase().contains(&query) {
+                                    continue;
+                                }
+                                let reachable = bench || !recipe.needs_bench();
+                                let craftable = reachable
+                                    && recipe
+                                        .ingredients
+                                        .iter()
+                                        .all(|&(it, n)| survival.count_item(it) >= n);
+                                if craftable_only && !craftable {
+                                    continue;
+                                }
+                                let (r, resp) = ui.allocate_exact_size(
+                                    egui::vec2(slot_px, slot_px),
+                                    egui::Sense::click(),
+                                );
+                                let selected = resp.hovered() || ghost_recipe == Some(idx);
+                                let r = grimoire::react(&resp, r, selected);
+                                icons::frame(ui.painter(), r, selected);
+                                draw_item_icon(ui.painter(), r.shrink(4.0), recipe.output.item);
+                                if !craftable {
+                                    // Unavailable recipes are dimmed, not hidden.
+                                    ui.painter().rect_filled(r.shrink(2.0), 0, dim);
+                                } else {
+                                    ui.painter().circle_filled(
+                                        r.right_top() + egui::vec2(-4.0, 4.0),
+                                        2.5,
+                                        grimoire::GOLD_LIGHT,
+                                    );
+                                }
+                                if recipe.output.count > 1 {
+                                    ui.painter().text(
+                                        r.right_bottom() - egui::vec2(2.0, 1.0),
+                                        Align2::RIGHT_BOTTOM,
+                                        format!("{}", recipe.output.count),
+                                        egui::FontId::monospace(10.0),
+                                        if craftable { presentation::PAPER } else { presentation::MUTED },
+                                    );
+                                }
+                                resp.clone().on_hover_ui(|ui| {
+                                    draw_recipe_tooltip(ui, recipe, survival);
+                                    if recipe.needs_bench() && !bench {
+                                        ui.small(RichText::new("Needs the 3×3 grid at a workbench (F, then E).").color(presentation::AMBER));
+                                    }
+                                    ui.small("Click fills the grid · Right-click crafts one · Shift-click crafts every batch");
+                                });
+                                if resp.contains_pointer()
+                                    && ui.ctx().input(|i| {
+                                        i.pointer.button_pressed(egui::PointerButton::Primary)
+                                            || i.pointer.button_pressed(egui::PointerButton::Secondary)
+                                    })
+                                {
+                                    if craftable {
+                                        ghost_recipe = None;
+                                        let bulk = ui.ctx().input(|i| {
+                                            i.pointer.button_pressed(egui::PointerButton::Primary)
+                                                && (i.modifiers.shift
+                                                    || i.modifiers.ctrl
+                                                    || i.modifiers.command)
+                                        });
+                                        let single_now = ui.ctx().input(|i| {
+                                            i.pointer.button_pressed(egui::PointerButton::Secondary)
+                                        });
+                                        if survival.stage_recipe_into_grid(recipe, bench) {
+                                            if bulk {
+                                                let _ = survival.craft_from_grid(true, bench);
+                                            } else if single_now {
+                                                let _ = survival.craft_from_grid(false, bench);
+                                            }
+                                        }
+                                    } else {
+                                        // Show what the recipe needs in the grid.
+                                        for i in 0..CRAFT_SLOTS {
+                                            let _ = survival.shift_click_slot(SlotAddr::CraftGrid(i));
+                                        }
+                                        ghost_recipe = if ghost_recipe == Some(idx) {
+                                            None
+                                        } else {
+                                            Some(idx)
+                                        };
+                                    }
+                                }
+                                col_count += 1;
+                                if col_count % cols == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+            ui.add_space(2.0);
+            ui.label(section_label("WORKBENCH · F"));
+            let names = crate::world::expedition::NAMES;
+            for (tier, title) in [
+                (0u32, "Lumen Twig"),
+                (1, "Quarry Conduit"),
+                (2, "Sanctum Sovereign"),
+            ] {
+                if !query_matches(&recipe_query, title) {
+                    continue;
+                }
+                let cost = crate::world::adventure::wand_recipe(tier);
+                let line = cost
+                    .iter()
+                    .map(|(id, amount)| format!("{} ×{}", names[*id], amount / 64))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ui.label(
+                    RichText::new(format!("{title}: {line}"))
+                        .size(11.0)
+                        .color(presentation::MUTED),
+                )
+                .on_hover_text("Found on the crystal altar of the matching Holy Mountain landing, or assembled with F at a workbench.");
+            }
+        });
+    }));
 
     // Save currently hovered item for cross-slot matching highlights on the next frame
     let hovered_item = hovered_slot.and_then(|addr| survival.slot(addr).map(|s| s.item));
@@ -1219,6 +1229,14 @@ fn draw_survival_pack_view(
         for (idx, key) in keys.into_iter().enumerate() {
             if ui.ctx().input(|i| i.key_pressed(key)) {
                 survival.swap_slot_with_hotbar(addr, idx);
+            }
+        }
+        if let Some(stack) = survival.slot(addr) {
+            let (r, u) = ui
+                .ctx()
+                .input(|i| (i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::U)));
+            if r || u {
+                super::recipe_book::request(ui.ctx(), stack.item, u);
             }
         }
         if ui.ctx().input(|i| i.key_pressed(egui::Key::Q)) && survival.cursor.is_none() {
@@ -1285,6 +1303,7 @@ fn draw_survival_pack_view(
     // Sync selected hotbar block/weapon when player clicks or rearranges hotbar
     if let Some(stack) = survival.hotbar[creative.selected_slot] {
         match stack.item {
+            Item::PowerKit(k) => player.selected_block = k.kind.block(),
             Item::Block(b) => player.selected_block = b,
             Item::Weapon(tier) => {
                 if equipment_view.weapon != tier as u32 {
@@ -1349,11 +1368,15 @@ pub(super) fn draw(
     expedition: Option<&crate::world::expedition::Expedition>,
     machines: &crate::world::factory::View,
     equipment: &crate::world::adventure::View,
+    orbital: &crate::world::orbital::View,
     action: &mut UiAction,
 ) {
     *hovered = None;
     let page_id = egui::Id::new("inventory_page");
     let mut page = ctx.data_mut(|d| d.get_temp::<u32>(page_id).unwrap_or(2));
+    if super::recipe_book::take_request(ctx) {
+        page = 6;
+    }
     let category_id = egui::Id::new("inventory_category");
     let mut group = ctx.data_mut(|d| {
         d.get_temp::<String>(category_id)
@@ -1366,18 +1389,36 @@ pub(super) fn draw(
     let sort_name_id = egui::Id::new("creative_sort_name");
     let mut sort_by_name = ctx.data_mut(|d| d.get_temp::<bool>(sort_name_id).unwrap_or(true));
     let screen = ctx.content_rect();
-    let compact = screen.height() < 560.0 || screen.width() < 680.0;
+    let compact = screen.height() < 400.0 || screen.width() < 680.0;
 
-    let window_response = egui::Window::new("Inventory")
+    let window = egui::Window::new("Inventory")
+        .frame(egui::Frame::new().fill(grimoire::LEATHER)
+            .stroke(egui::Stroke::new(1.0, grimoire::GOLD_DARK))
+            .inner_margin(egui::Margin::symmetric(14, 10)))
         .title_bar(false)
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .default_width((screen.width() - 32.0).clamp(240.0, 620.0))
+        .default_width(if page == 2 {
+            // Pack width + gap + recipe column + window margins.
+            let slot = if compact { 22.0 } else { 24.0 };
+            (slot * 9.0 + 24.0 + 12.0 + 228.0 + 28.0_f32).min(screen.width() - 20.0)
+        } else {
+            (screen.width() - 60.0).clamp(240.0, 520.0)
+        })
         .min_width(220.0)
         .max_width((screen.width() - 20.0).max(220.0))
-        .max_height((screen.height() - 16.0).max(200.0))
+        .max_height((screen.height() - 16.0).max(200.0));
+    let window_response = window
         .show(ctx, |ui| {
+            if page == 2 {
+                // The survival page has a fixed width: pack and recipe columns.
+                // Without it the tab strip claims the whole screen.
+                let slot = if compact { 22.0 } else { 24.0 };
+                let inv_w = slot * 9.0 + 24.0 + 12.0 + 228.0;
+                ui.set_width(inv_w);
+                ui.set_max_width(inv_w);
+            }
             if compact {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
                 ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
@@ -1398,8 +1439,11 @@ pub(super) fn draw(
             ui.horizontal_wrapped(|ui| {
                 for (id, label) in [
                     (2, "Inventory"),
+                    (6, "Recipes"),
+                    (7, "Production"),
+                    (8, "Orbital"),
                     (0, "Workbench"),
-                    (1, "Relics"),
+                    (1, "Wands / Relics"),
                     (3, "Machines"),
                     (5, "Forge"),
                     (4, "Creative"),
@@ -1454,9 +1498,29 @@ pub(super) fn draw(
                     action,
                     compact,
                     &mut open_wand_tab,
+                    machines.bench,
                 );
                 if open_wand_tab {
-                    page = 0;
+                    page = 1;
+                }
+                return;
+            }
+
+            if page == 8 {
+                super::orbital::draw(ui, orbital, action);
+                return;
+            }
+
+            // Page 7: Factorio-style production statistics.
+            if page == 7 {
+                super::production::draw(ui, machines, action);
+                return;
+            }
+
+            // Page 6: JEI-style recipe browser and crafting-tree planner.
+            if page == 6 {
+                if super::recipe_book::draw(ui, survival, machines.bench) {
+                    page = 2;
                 }
                 return;
             }
@@ -1468,7 +1532,7 @@ pub(super) fn draw(
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new("CATALOGUE")
-                            .size(10.5)
+                            .size(11.0)
                             .color(presentation::AMBER),
                     );
                     for (mode, label, hint) in [
@@ -1487,7 +1551,7 @@ pub(super) fn draw(
                     }
                     if catalogue_mode == 1 {
                         ui.separator();
-                        ui.label(RichText::new("Give").size(10.0).color(presentation::MUTED));
+                        ui.label(RichText::new("Give").size(11.0).color(presentation::MUTED));
                         for amount in [1u32, 8, 64] {
                             if ui
                                 .selectable_label(give_count == amount, format!("×{amount}"))
@@ -1498,7 +1562,7 @@ pub(super) fn draw(
                         }
                         ui.label(
                             RichText::new("Shift-click gives a full stack")
-                                .size(9.5)
+                                .size(11.0)
                                 .color(presentation::MUTED),
                         );
                     }
@@ -1581,7 +1645,7 @@ pub(super) fn draw(
                 .max_height(
                     (screen.height()
                         - (ui.cursor().top() - ui.min_rect().top())
-                        - if compact { 96.0 } else { 140.0 })
+                        - if page == 4 { 64.0 } else { 48.0 })
                     .clamp(48.0, 380.0),
                 )
                 .auto_shrink([false, false])
@@ -1624,6 +1688,9 @@ pub(super) fn draw(
                 });
             }
         });
+    if let Some(inner) = &window_response {
+        grimoire::binding(&ctx.layer_painter(inner.response.layer_id), inner.response.rect, true);
+    }
     ctx.data_mut(|d| {
         if let Some(inner) = &window_response {
             d.insert_temp(egui::Id::new("inventory_window_rect"), inner.response.rect);

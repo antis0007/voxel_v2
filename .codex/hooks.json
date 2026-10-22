@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rtk hook codex"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:\\AI\\voxel-code-review\\venv\\Scripts\\python.exe\" \"C:\\dev\\voxel_v2_backup\\tools\\code_advisor.py\" hook",
+            "timeout": 10,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:\\AI\\voxel-code-review\\venv\\Scripts\\python.exe\" \"C:\\dev\\voxel_v2_backup\\tools\\code_advisor.py\" hook",
+            "timeout": 65,
+            "async": true,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -95,7 +95,7 @@ impl ChunkCache {
 
     pub(super) fn trim_lod_budget(&mut self) {
         self.lod_meshes
-            .trim_to(self.mesh_limit().saturating_sub(self.gpu_bytes));
+            .trim_to(self.mesh_limit().saturating_sub(self.gpu_bytes).saturating_sub(self.pending_gpu.bytes()));
     }
 
     // Total ordering prevents equal-distance chunks from evicting each other.
@@ -124,7 +124,9 @@ impl ChunkCache {
         let mut victims: Vec<_> = self
             .cpu_chunks
             .iter()
-            .filter(|(_, source)| Arc::strong_count(source) == 1)
+            .filter(|(q, source)| Arc::strong_count(source) == 1
+                && !self.horizon_pin_coords.contains(*q)
+                && !self.published_coords.contains(*q))
             .map(|(&coord, _)| (self.residency_rank(coord), coord))
             .collect();
         victims.sort_unstable_by(|a, b| b.0.cmp(&a.0));
@@ -139,6 +141,9 @@ impl ChunkCache {
 
     pub(super) fn admit_source(&mut self, coord: IVec3, data: GeneratedChunk) -> bool {
         let bytes = data.allocation_bytes();
+        // This cache is a current meshing source, not a published GPU snapshot.
+        // A rejected regenerated source must not leave an older cache entry
+        // which enqueue_missing could stamp with the current revision.
         self.cpu_chunks.remove(&coord);
         if self.cpu_bytes().saturating_add(bytes) > self.source_limit() {
             // Evict a batch to a low-water mark: sorting once avoids repeatedly
@@ -155,26 +160,59 @@ impl ChunkCache {
         true
     }
 
+    pub(super) fn reserve_pending_gpu(&mut self,key:ChunkKey,bytes:usize) -> Option<super::PendingGpuLease> {
+        if self.pending_gpu.contains(&key.coord) {return None;}
+        if !self.admit_mesh(key,bytes) {return None;}
+        let reservation=self.pending_gpu.reserve(key.coord,bytes);
+        if reservation.is_none(){self.budget_deferred.insert(key,bytes);}
+        reservation
+    }
+    /// Reservation already includes this destination; do not charge it twice.
+    pub(super) fn pending_publication_fits(&self,key:ChunkKey,bytes:usize) -> bool {
+        let all=self.gpu_bytes.saturating_add(self.lod_meshes.bytes()).saturating_add(self.pending_gpu.bytes());
+        let own_growth=bytes.saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0,|m|m.bytes));
+        let post=self.gpu_bytes.saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0,|m|m.bytes))
+            .saturating_add(bytes).saturating_add(self.pending_gpu.projected_growth(self).saturating_sub(own_growth));
+        all<=self.residency_limits.1 && post<=self.mesh_limit() && self.quality_mesh_fits(key,bytes,true)
+            && self.supplemental_gpu_bytes().saturating_add(self.pending_gpu.supplemental_bytes(self))<=super::edit_proxies::BYTE_LIMIT
+    }
+
     pub(super) fn admit_mesh(&mut self, key: ChunkKey, bytes: usize) -> bool {
+        if !self.quality_mesh_fits(key,bytes,false) {
+            self.budget_deferred.insert(key,bytes);return false;
+        }
         let replaced = self.gpu_meshes.get(&key.coord).map_or(0, |mesh| mesh.bytes);
+        let pending=self.pending_gpu.bytes();
+        let pending_growth=self.pending_gpu.projected_growth(self);
+        if self.horizon_pin_coords.contains(&key.coord) || self.edit_proxies.contains(&key.coord) {
+            let pinned=self.supplemental_gpu_bytes();
+            if pinned.saturating_add(self.pending_gpu.supplemental_bytes(self)).saturating_add(bytes)>super::edit_proxies::BYTE_LIMIT {
+                self.budget_deferred.insert(key,bytes); return false;
+            }
+        }
         let limit = self.mesh_limit();
         // Never remove the displayed mesh before upload succeeds. Reject before
         // evicting anything if even the replacement overlap cannot fit.
-        if bytes.saturating_add(replaced) > self.residency_limits.1 {
+        if bytes.saturating_add(replaced).saturating_add(pending) > self.residency_limits.1 {
             self.budget_deferred.insert(key, bytes);
             return false;
         }
         let needed = self
             .gpu_bytes
             .saturating_sub(replaced)
-            .saturating_add(bytes);
+            .saturating_add(bytes).saturating_add(pending_growth);
         if needed > limit {
             let rank = self.residency_rank(key.coord);
             let mut victims: Vec<_> = self
                 .gpu_meshes
                 .iter()
                 .filter(|(coord, mesh)| {
-                    **coord != key.coord && mesh.bytes > 0 && self.residency_rank(**coord) > rank
+                    **coord != key.coord && mesh.bytes > 0
+                        && !self.horizon_pin_coords.contains(*coord)
+                        && !self.published_coords.contains(*coord)
+                        && !self.edit_proxies.contains(*coord)
+                        && !self.pending_gpu.contains(coord)
+                        && self.residency_rank(**coord) > rank
                 })
                 .map(|(&coord, mesh)| (self.residency_rank(coord), coord, mesh.bytes))
                 .collect();
@@ -188,7 +226,7 @@ impl ChunkCache {
                 if self
                     .gpu_bytes
                     .saturating_sub(replaced)
-                    .saturating_add(bytes)
+                    .saturating_add(bytes).saturating_add(pending_growth)
                     <= limit
                 {
                     break;
@@ -203,13 +241,13 @@ impl ChunkCache {
                 );
                 self.gpu_bytes -= size;
                 self.gpu_evictions += 1;
-                self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+                self.mark_mesh_set_changed();
             }
         }
         // Keep the previous mesh through failed/retried GPU uploads.
         self.lod_meshes
-            .trim_to(limit.saturating_sub(self.gpu_bytes).saturating_sub(bytes));
-        if self.gpu_bytes.saturating_add(bytes) > self.residency_limits.1 {
+            .trim_to(limit.saturating_sub(self.gpu_bytes).saturating_sub(pending).saturating_sub(bytes));
+        if self.gpu_bytes.saturating_add(self.lod_meshes.bytes()).saturating_add(pending).saturating_add(bytes) > self.residency_limits.1 {
             self.budget_deferred.insert(key, bytes);
             return false;
         }
@@ -225,11 +263,15 @@ impl ChunkCache {
         }
         self.residency_limits = limits;
         self.trim_lod_budget();
-        if self.gpu_bytes > self.mesh_limit() {
-            let mut victims: Vec<_> = self.gpu_meshes.keys().copied().collect();
+        if self.gpu_bytes.saturating_add(self.pending_gpu.bytes()) > self.mesh_limit() {
+            // Requested membership may grow while the old column is still
+            // published. Resource pressure must not silently unpublish it.
+            let mut victims: Vec<_> = self.gpu_meshes.keys()
+                .filter(|q| !self.horizon_pin_coords.contains(*q) && !self.published_coords.contains(*q) && !self.edit_proxies.contains(*q) && !self.pending_gpu.contains(q))
+                .copied().collect();
             victims.sort_unstable_by_key(|coord| std::cmp::Reverse(self.residency_rank(*coord)));
             for coord in victims {
-                if self.gpu_bytes <= self.mesh_limit() {
+                if self.gpu_bytes.saturating_add(self.pending_gpu.bytes()) <= self.mesh_limit() {
                     break;
                 }
                 let mesh = self.gpu_meshes.remove(&coord).unwrap();
@@ -242,7 +284,7 @@ impl ChunkCache {
                     mesh.bytes,
                 );
                 self.gpu_evictions += 1;
-                self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
+                self.mark_mesh_set_changed();
             }
         }
         if self.cpu_bytes() > self.source_limit() {
@@ -252,11 +294,11 @@ impl ChunkCache {
 
     pub(super) fn budget_allows_request(&self, key: ChunkKey) -> bool {
         self.budget_deferred.get(&key).is_none_or(|bytes| {
-            self.gpu_bytes.saturating_add(*bytes) <= self.residency_limits.1
+            self.gpu_bytes.saturating_add(self.lod_meshes.bytes()).saturating_add(self.pending_gpu.bytes()).saturating_add(*bytes) <= self.residency_limits.1
                 && self
                     .gpu_bytes
                     .saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0, |mesh| mesh.bytes))
-                    .saturating_add(*bytes)
+                    .saturating_add(*bytes).saturating_add(self.pending_gpu.projected_growth(self))
                     <= self.mesh_limit()
         })
     }

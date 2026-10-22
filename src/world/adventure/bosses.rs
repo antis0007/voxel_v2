@@ -2,6 +2,7 @@
 use super::*;
 pub(super) fn kind(site: u32) -> u32 {
     match site {
+        10 => tollkeeper::KIND,
         3 => 6,
         5 => 7,
         8 => 8,
@@ -10,6 +11,8 @@ pub(super) fn kind(site: u32) -> u32 {
 }
 pub fn name(kind: u32) -> &'static str {
     match kind {
+        matron::KIND => "The Orchard Matron",
+        tollkeeper::KIND => "The Last Tollkeeper",
         6 => "The Cinder Castellan",
         7 => "The Unwritten Keeper",
         _ => "The Prism Hart",
@@ -17,6 +20,7 @@ pub fn name(kind: u32) -> &'static str {
 }
 pub(super) fn health(kind: u32) -> f32 {
     match kind {
+        tollkeeper::KIND => 240.0,
         6 => 360.0,
         7 => 280.0,
         _ => 320.0,
@@ -40,21 +44,28 @@ fn cue(kind: u32, release: bool) -> Cue {
     }
 }
 pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
+    if e.kind==matron::KIND {return matron::model(e,m,time);}
+    if e.kind == tollkeeper::KIND {
+        return tollkeeper::model(e, m, time);
+    }
+    if e.kind == 8 {
+        return hart::model(e, m, time);
+    }
     let c = if e.flash > 0.0 {
         [1.0, 0.96, 0.83]
     } else {
         color(e.kind)
     };
-    let enraged = e.health < health(e.kind) * 0.5;
+    let enraged = e.health < e.max_health() * 0.5;
     let mark = m.mark();
     let wind = if e.tell > 0.0 {
-        (1.0 - e.tell / if enraged { 0.8 } else { 1.1 }).clamp(0.0, 1.0)
+        (1.0 - e.tell / e.encounter.windup.max(0.1)).clamp(0.0, 1.0)
     } else {
         0.0
     };
     let wind = wind * wind * (3.0 - 2.0 * wind);
     let recovery = if e.tell <= 0.0 {
-        ((e.cooldown - if enraged { 1.3 } else { 2.1 } + 0.38) / 0.38).clamp(0.0, 1.0)
+        (e.recovery / 0.24).clamp(0.0, 1.0)
     } else {
         0.0
     };
@@ -138,44 +149,6 @@ pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
             );
         }
         m.orb(p + Vec3::Y * 2.1, 0.20, c, 1.8);
-    } else {
-        m.cuboid(
-            p + Vec3::Y * 1.1,
-            Vec3::new(0.75, 0.6, 0.85),
-            Quat::IDENTITY,
-            [0.15, 0.32, 0.39],
-            0.2,
-        );
-        for x in [-0.3, 0.3] {
-            for z in [-0.3, 0.3] {
-                m.beam(
-                    p + Vec3::new(x, 0.1, z + stride * (x * z).signum() * 0.12),
-                    p + Vec3::new(x, 0.95, z),
-                    0.09,
-                    [0.22, 0.46, 0.55],
-                    0.0,
-                );
-            }
-        }
-        let antler_mark = m.mark();
-        m.orb(p + Vec3::new(0.0, 1.75, -0.28), 0.25, c, 1.1);
-        for x in [-1.0, 1.0] {
-            let base = p + Vec3::new(x * 0.15, 1.9, -0.25);
-            let top = p + Vec3::new(x * 0.5, 2.5, -0.12);
-            m.beam(base, top, 0.055, c, 1.0);
-            m.beam(
-                top - Vec3::Y * 0.18,
-                top + Vec3::new(x * 0.22, -0.05, 0.0),
-                0.035,
-                c,
-                1.0,
-            );
-        }
-        m.rotate_since(
-            antler_mark,
-            p + Vec3::new(0.0, 1.55, -0.28),
-            Quat::from_rotation_x(wind * 0.65 - recovery * 0.4),
-        );
     }
     m.orb(
         p + Vec3::new(0.0, 1.5, -0.38),
@@ -187,22 +160,42 @@ pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
 }
 pub(super) fn tick(
     e: &mut Enemy,
-    world: &World,
+    world: &mut World,
     feet: Vec3,
     eye: Vec3,
     dt: f32,
     shots: &mut Vec<Projectile>,
     hazards: &mut Vec<tactics::Hazard>,
     sounds: &mut Vec<Sound>,
-) {
-    let enraged = e.health < health(e.kind) * 0.5;
+    dirty: &mut Vec<IVec3>,
+    navigation_budget: &mut usize,
+    ward_visible: bool,
+) -> (f32, Vec3) {
+    if e.kind==matron::KIND {return matron::tick(e,world,feet,eye,dt,shots,sounds,navigation_budget);}
+    if e.kind == tollkeeper::KIND {
+        return tollkeeper::tick(e, world, feet, eye, dt, sounds, dirty);
+    }
+    if e.kind == 8 {
+        return hart::tick(e, world, feet, eye, dt, shots, hazards, sounds, dirty);
+    }
+    let enraged = e.health < e.max_health() * 0.5;
     let d = eye - e.center();
     if (feet - e.home).length() > 48.0 {
         e.pos = e.home;
-        e.health = health(e.kind);
+        e.health = e.max_health();
         e.tell = 0.0;
         e.cooldown = 2.0;
-        return;
+        e.encounter.stationary = 0.0;
+        e.encounter.last_pattern = u32::MAX;
+        e.encounter.boss_phase = 0;
+        e.encounter.exposed = 0.0;
+        return (0.0, Vec3::ZERO);
+    }
+    if enraged && e.encounter.boss_phase == 0 && e.tell <= 0.0 && e.visible {
+        e.encounter.boss_phase = 1;
+        e.cooldown = e.cooldown.max(1.2);
+        e.encounter.exposed = 0.9;
+        sound(sounds, cue(e.kind, false), Some(e.center()), 1.0);
     }
     // Commit the facing with the attack target, leaving a readable dodge window.
     if e.tell <= 0.0 {
@@ -215,80 +208,29 @@ pub(super) fn tick(
     else if e.tell > 0.0 {
         e.tell -= dt;
         if e.tell <= 0.0 {
-            let area = e.attacks % 2 == 0;
-            if area {
-                let count = if enraged { 5 } else { 3 };
-                for i in 0..count {
-                    if hazards.len() >= 16 {
-                        break;
-                    }
-                    let offset = if e.kind == 6 {
-                        (e.aim - e.pos).normalize_or_zero() * ((i as f32 - 1.0) * 2.2)
-                    } else {
-                        let a = i as f32 * std::f32::consts::TAU / count as f32;
-                        Vec3::new(a.cos(), 0.0, a.sin()) * 2.5
-                    };
-                    hazards.push(tactics::Hazard {
-                        pos: e.aim + offset,
-                        radius: if e.kind == 6 { 1.8 } else { 1.5 },
-                        delay: 0.55 + i as f32 * 0.16,
-                        life: 0.22,
-                        pulse: 0.0,
-                        damage: if enraged { 24.0 } else { 18.0 },
-                        spores: false,
-                    });
-                }
-            } else {
-                let count = if e.kind == 7 {
-                    if enraged { 16 } else { 10 }
-                } else if enraged {
-                    9
-                } else {
-                    5
-                };
-                for i in 0..count {
-                    if shots.len() >= 96 {
-                        break;
-                    }
-                    let direction = if e.kind == 7 {
-                        let a = i as f32 * std::f32::consts::TAU / count as f32
-                            + e.attacks as f32 * 0.4;
-                        Vec3::new(a.cos(), 0.0, a.sin())
-                    } else {
-                        Quat::from_rotation_y((i as f32 - (count - 1) as f32 * 0.5) * 0.16)
-                            * (e.aim - e.center()).normalize_or_zero()
-                    };
-                    shots.push(Projectile {
-                        pos: e.center(),
-                        velocity: direction * if enraged { 12.0 } else { 9.0 },
-                        hostile: true,
-                        payload: None,
-                        payload_mods: Default::default(),
-                        spell: 0,
-                        life: 4.0,
-                        mods: Default::default(),
-                        bore_budget: 0,
-                        trail_timer: 0.0,
-                        splashed: false,
-                        follow: None,
-                    });
-                }
-            }
+            boss_patterns::release(e, world, shots, hazards);
             sound(sounds, cue(e.kind, true), Some(e.center()), 0.85);
-            e.cooldown = if enraged { 1.3 } else { 2.1 };
         }
     } else if e.visible && e.cooldown <= 0.0 {
         e.attacks = e.attacks.wrapping_add(1);
-        e.attack = if e.attacks % 2 == 0 { 2 } else { 0 };
-        e.aim = if e.attack == 2 { feet } else { eye };
+        boss_patterns::plan(e, feet, eye, ward_visible);
         e.tell = if enraged { 0.8 } else { 1.1 };
+        e.encounter.windup = e.tell;
         sound(sounds, cue(e.kind, false), Some(e.center()), 0.8);
     } else if e.visible && d.length() > 7.0 {
-        let movement = (d * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero() * dt * 1.2;
+        let direction =
+            e.navigation
+                .heading(world, e.pos, feet, e.kind, dt, e.slot, navigation_budget);
+        let movement = direction * dt * 1.2;
         let q = e.pos + movement;
         if free(world, q, e.kind) && factory::solid_point(world, q - Vec3::Y * 0.6) {
             e.phase += movement.length();
             e.pos = q;
+        } else if e.velocity.y.abs() < 0.01
+            && !free(world, q, e.kind)
+            && free(world, q + Vec3::Y * 1.05, e.kind)
+        {
+            e.velocity.y = 5.7;
         }
     }
     // Ground following is swept just like ordinary guardians.
@@ -304,4 +246,5 @@ pub(super) fn tick(
             break;
         }
     }
+    (0.0, Vec3::ZERO)
 }

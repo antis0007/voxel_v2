@@ -19,7 +19,6 @@ pub(crate) use crate::shader_sources::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use crate::world::{CloudControls, LightingState};

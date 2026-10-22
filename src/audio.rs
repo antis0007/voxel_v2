@@ -92,20 +92,31 @@ pub(super) struct Play {
 /// sparks stay tight so rapid fire does not smear into a wash.
 pub(super) fn reverb_send(cue: Cue) -> f32 {
     match cue {
-        Cue::Burst | Cue::Rift | Cue::Echo | Cue::Shatter | Cue::Splash => 0.52,
+        Cue::Rift | Cue::Echo | Cue::Shatter => 0.32,
+        Cue::Burst | Cue::Splash => 0.22,
         Cue::Bloom
         | Cue::ForgeSlam
         | Cue::ForgeWindup
         | Cue::ArchiveRelease
         | Cue::PrismRelease
-        | Cue::CinderStrike => 0.38,
-        Cue::Spark | Cue::Frost | Cue::Swing => 0.14,
+        | Cue::CinderStrike => 0.22,
+        Cue::Spark | Cue::Frost | Cue::Swing | Cue::Ward => 0.08,
         _ => 0.24,
     }
 }
 
-fn rapid_repeat(last_ms: u64, now_ms: u64) -> bool {
-    last_ms != u64::MAX && now_ms.saturating_sub(last_ms) < 24
+/// Spell casts get slightly different space by material; repeatable bolts stay
+/// dry enough to remain clear when fired in quick succession.
+fn rapid_window_ms(cue: Cue) -> u64 {
+    match cue {
+        Cue::Spark | Cue::Frost | Cue::Ward | Cue::Swing => 70,
+        Cue::Burst | Cue::Bloom | Cue::Splash => 110,
+        _ => 55,
+    }
+}
+
+fn rapid_repeat(last_ms: u64, now_ms: u64, window_ms: u64) -> bool {
+    last_ms != u64::MAX && now_ms.saturating_sub(last_ms) < window_ms
 }
 pub struct Audio {
     tx: mpsc::SyncSender<Play>,
@@ -117,6 +128,7 @@ pub struct Audio {
     /// Last trigger time per cue. Rapid identical cues receive a ducked gain
     /// instead of stacking at full amplitude and turning into a harsh buzz.
     last_cue_ms: [u64; Cue::COUNT],
+    spell_last_ms: [u64; 3],
 }
 impl Audio {
     pub fn new() -> Self {
@@ -148,10 +160,19 @@ impl Audio {
             serial: 0,
             started: Instant::now(),
             last_cue_ms: [u64::MAX; Cue::COUNT],
+            spell_last_ms: [u64::MAX; 3],
         }
     }
     pub fn set_active(&self, active: bool) {
         self.active.store(active, Ordering::Relaxed);
+    }
+    fn spell_family(cue: Cue) -> Option<usize> {
+        match cue {
+            Cue::Spark | Cue::Frost | Cue::Ward => Some(0),
+            Cue::Burst | Cue::CinderStrike => Some(1),
+            Cue::Bloom | Cue::Splash => Some(2),
+            _ => None,
+        }
     }
     pub fn play(&mut self, event: Event, eye: Vec3, forward: Vec3) {
         if !self.active.load(Ordering::Relaxed) {
@@ -178,10 +199,18 @@ impl Audio {
         let cue_index = event.cue as usize;
         let now = self.started.elapsed().as_millis() as u64;
         let last = self.last_cue_ms[cue_index];
-        let rapid = rapid_repeat(last, now);
+        let rapid = rapid_repeat(last, now, rapid_window_ms(event.cue));
         self.last_cue_ms[cue_index] = now;
-        let duck = if rapid { 0.48 } else { 1.0 };
-        let gain = gain * event.gain.clamp(0.0, 1.0) * duck;
+        let family_rapid = Self::spell_family(event.cue).is_some_and(|family| {
+            let last = self.spell_last_ms[family];
+            let rapid = rapid_repeat(last, now, 52);
+            self.spell_last_ms[family] = now;
+            rapid
+        });
+        let duck = if rapid || family_rapid { 0.36 } else { 1.0 };
+        // Keep spells clear under rapid fire while letting isolated impacts
+        // retain enough body to read as meaningful feedback.
+        let gain = gain * event.gain.clamp(0.0, 1.0) * duck * 0.62;
         let _ = self.tx.try_send(Play {
             cue: event.cue,
             left: gain * ((1.0 - pan) * 0.5).sqrt(),
@@ -217,8 +246,16 @@ mod tests {
 
     #[test]
     fn the_first_trigger_is_not_treated_as_a_rapid_repeat() {
-        assert!(!rapid_repeat(u64::MAX, 0));
-        assert!(rapid_repeat(100, 110));
-        assert!(!rapid_repeat(100, 124));
+        assert!(!rapid_repeat(u64::MAX, 0, 24));
+        assert!(rapid_repeat(100, 110, 24));
+        assert!(!rapid_repeat(100, 124, 24));
+    }
+
+    #[test]
+    fn common_spell_families_share_repeat_ducking() {
+        assert_eq!(Audio::spell_family(Cue::Spark), Audio::spell_family(Cue::Frost));
+        assert_eq!(Audio::spell_family(Cue::Burst), Audio::spell_family(Cue::CinderStrike));
+        assert_eq!(Audio::spell_family(Cue::Bloom), Audio::spell_family(Cue::Splash));
+        assert_ne!(Audio::spell_family(Cue::Spark), Audio::spell_family(Cue::Burst));
     }
 }

@@ -181,7 +181,7 @@ mod tests {
             .collect::<Vec<_>>()
             .into_iter();
         let mut read = || words.next().ok_or_else(|| anyhow::anyhow!("short"));
-        let back = Factory::decode(&mut read, 1, 8).expect("pile must decode");
+        let back = Factory::decode(&mut read, 1, super::super::FACTORY_FORMAT).expect("pile must decode");
         let m = &back.nodes[&glam::IVec3::new(4, 8, 12)];
         assert_eq!(
             (m.mode, m.progress, m.burn, m.energy, m.water),

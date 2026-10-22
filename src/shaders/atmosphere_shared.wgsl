@@ -200,7 +200,10 @@ fn sky_chroma(color: vec3<f32>, amount: f32) -> vec3<f32> {
 // saturated at the horizon, most chromatic a little above it, and deeper
 // toward an ozone-shifted zenith. Sunset is a solar aureole plus a pink
 // antisolar belt, with the zenith left blue.
-fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
+// `haze` weights the fog-colour seam and its luminance floor. The sky dome
+// passes 1.0. Aerial-perspective in-scatter passes how opaque its path is, so a
+// nearby surface (in-scatter ~ 0) is not lifted toward the horizon fog colour.
+fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>, haze: f32) -> vec3<f32> {
     let sun = normalize(light.sun_dir_intensity.xyz);
     let twilight = photographic_twilight(sun.y);
     let day = smoothstep(0.04, 0.30, sun.y);
@@ -262,9 +265,13 @@ fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
     let grade_amount = day * 0.50 + twilight * 0.74 + night * 0.58;
     var result = mix(physical, radiance_chroma(grade) * luminance, grade_amount);
     // The last degree of sky is the fog colour, so terrain haze and the dome meet.
-    let fog = max(light.fog_color_density.rgb, vec3<f32>(0.02));
-    let seam = exp(-abs(elev) * 18.0);
-    result = mix(result, radiance_chroma(fog) * max(luminance, sky_luma(fog) * 0.20), seam * 0.55);
+    // Near surfaces pass haze ~ 0 and the mix weight is zero: skip the fog
+    // colour fetch and mix entirely. Exact up to the 1e-4 threshold.
+    let seam = exp(-abs(elev) * 18.0) * haze;
+    if seam > 1e-4 {
+        let fog = max(light.fog_color_density.rgb, vec3<f32>(0.02));
+        result = mix(result, radiance_chroma(fog) * max(luminance, sky_luma(fog) * 0.20 * haze), seam * 0.55);
+    }
     return max(result, vec3<f32>(0.0));
 }
 
@@ -345,7 +352,8 @@ fn aerial_perspective(
     }
 
     let physical = sample_atmosphere_aerial_perspective(view_dir, dist, cam.world_params.w * 0.82);
-    return vec4<f32>(photographic_sky_radiance(physical.rgb, view_dir), physical.a);
+    let path_opacity = smoothstep(0.0, 0.05, 1.0 - physical.a);
+    return vec4<f32>(photographic_sky_radiance(physical.rgb, view_dir, path_opacity), physical.a);
 }
 
 // Runtime sky-view mode. Sky-view and multiscatter now come from explicit
@@ -392,7 +400,7 @@ fn runtime_sky_view_atmosphere_color(
         * daylight
         * (0.28 + 0.72 * (1.0 - up));
 
-    return photographic_sky_radiance(max(sky, vec3<f32>(0.0)), dir);
+    return photographic_sky_radiance(max(sky, vec3<f32>(0.0)), dir, 1.0);
 }
 // ============================================================
 // atmosphere_color(dir) — full sky radiance for view direction `dir`.

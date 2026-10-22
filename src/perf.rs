@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+pub mod route;
+
 use crate::render::{
     ChunkStreamerStats, RenderDistanceSettings, RenderFrameStats, WeatherUploadStats,
 };
@@ -10,6 +12,11 @@ pub struct CpuFrameStats {
     pub gameplay_ms: f32,
     pub snapshot_ms: f32,
     pub streaming_ms: f32,
+    /// Nested Playing resident chunk upload wall time, included in streaming_ms.
+    /// Zero outside that path; distinct from the renderer's stream_upload_ms.
+    pub resident_upload_wall_ms: f32,
+    /// Coverage construction, horizon validation, build dispatch and upload.
+    pub horizon_ms: f32,
     pub culling_ms: f32,
     pub torch_ms: f32,
     pub weather_ms: f32,
@@ -46,6 +53,8 @@ pub struct PerfSnapshot {
     pub fps_avg: f32,
     pub fps_1p_low: f32,
     pub frame_ms_avg: f32,
+    pub frame_ms_p50: f32,
+    pub frame_ms_p95: f32,
     pub frame_ms_p99: f32,
     pub frame_ms_max: f32,
     pub cpu_avg: CpuFrameStats,
@@ -72,6 +81,8 @@ impl Default for PerfSnapshot {
             fps_avg: 0.0,
             fps_1p_low: 0.0,
             frame_ms_avg: 0.0,
+            frame_ms_p50: 0.0,
+            frame_ms_p95: 0.0,
             frame_ms_p99: 0.0,
             frame_ms_max: 0.0,
             cpu_avg: CpuFrameStats::default(),
@@ -155,6 +166,7 @@ pub fn snapshot_from_samples(
     sorted_ms.sort_by(|a, b| a.total_cmp(b));
     let p99_index = (((sample_count - 1) as f32) * 0.99).round() as usize;
     let frame_ms_p99 = sorted_ms[p99_index.min(sorted_ms.len() - 1)];
+    let percentile = |p: f32| sorted_ms[(((sample_count - 1) as f32 * p).round() as usize).min(sample_count - 1)];
     let fps_avg = if frame_ms_avg > 0.0 {
         1000.0 / frame_ms_avg
     } else {
@@ -175,6 +187,8 @@ pub fn snapshot_from_samples(
         fps_avg,
         fps_1p_low,
         frame_ms_avg,
+        frame_ms_p50: percentile(0.50),
+        frame_ms_p95: percentile(0.95),
         frame_ms_p99,
         frame_ms_max,
         cpu_avg: average_cpu(samples),
@@ -196,6 +210,8 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
             acc.gameplay_ms += sample.cpu.gameplay_ms;
             acc.snapshot_ms += sample.cpu.snapshot_ms;
             acc.streaming_ms += sample.cpu.streaming_ms;
+            acc.resident_upload_wall_ms += sample.cpu.resident_upload_wall_ms;
+            acc.horizon_ms += sample.cpu.horizon_ms;
             acc.culling_ms += sample.cpu.culling_ms;
             acc.torch_ms += sample.cpu.torch_ms;
             acc.weather_ms += sample.cpu.weather_ms;
@@ -210,6 +226,8 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
         gameplay_ms: sum.gameplay_ms / denom,
         snapshot_ms: sum.snapshot_ms / denom,
         streaming_ms: sum.streaming_ms / denom,
+        resident_upload_wall_ms: sum.resident_upload_wall_ms / denom,
+        horizon_ms: sum.horizon_ms / denom,
         culling_ms: sum.culling_ms / denom,
         torch_ms: sum.torch_ms / denom,
         weather_ms: sum.weather_ms / denom,
@@ -221,6 +239,8 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
 
 fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
     let denom = samples.len().max(1) as f32;
+    let first_frame = samples.iter().map(|s| s.render.frame_id).filter(|id| *id != 0).min().unwrap_or(0);
+    let last_frame = samples.iter().map(|s| s.render.frame_id).max().unwrap_or(0);
     let sum = samples
         .iter()
         .fold(RenderFrameStats::default(), |mut acc, sample| {
@@ -242,16 +262,20 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
             acc.outline_vertices += sample.render.outline_vertices;
             acc.invert_outline_vertices += sample.render.invert_outline_vertices;
             acc.ui_vertices += sample.render.ui_vertices;
-            acc.gpu_pass_total_ms += sample.render.gpu_pass_total_ms;
-            acc.gpu_shadow_ms += sample.render.gpu_shadow_ms;
-            acc.gpu_terrain_ms += sample.render.gpu_terrain_ms;
-            acc.gpu_indirect_ms += sample.render.gpu_indirect_ms;
-            acc.gpu_cloud_raymarch_ms += sample.render.gpu_cloud_raymarch_ms;
-            acc.gpu_cloud_temporal_ms += sample.render.gpu_cloud_temporal_ms;
-            acc.gpu_sky_ms += sample.render.gpu_sky_ms;
-            acc.gpu_cloud_composite_ms += sample.render.gpu_cloud_composite_ms;
-            acc.gpu_outline_ms += sample.render.gpu_outline_ms;
-            acc.gpu_ui_ms += sample.render.gpu_ui_ms;
+            if sample.render.gpu_sample_count != 0
+                && (first_frame..=last_frame).contains(&sample.render.gpu_sample_frame_id) {
+                acc.gpu_sample_count += sample.render.gpu_sample_count;
+                acc.gpu_pass_total_ms += sample.render.gpu_pass_total_ms;
+                acc.gpu_shadow_ms += sample.render.gpu_shadow_ms;
+                acc.gpu_terrain_ms += sample.render.gpu_terrain_ms;
+                acc.gpu_indirect_ms += sample.render.gpu_indirect_ms;
+                acc.gpu_cloud_raymarch_ms += sample.render.gpu_cloud_raymarch_ms;
+                acc.gpu_cloud_temporal_ms += sample.render.gpu_cloud_temporal_ms;
+                acc.gpu_sky_ms += sample.render.gpu_sky_ms;
+                acc.gpu_cloud_composite_ms += sample.render.gpu_cloud_composite_ms;
+                acc.gpu_outline_ms += sample.render.gpu_outline_ms;
+                acc.gpu_ui_ms += sample.render.gpu_ui_ms;
+            }
             acc.gpu_timestamps_supported |= sample.render.gpu_timestamps_supported;
             acc.cloud_history_invalidations += sample.render.cloud_history_invalidations;
             acc.cloud_history_camera_invalidations +=
@@ -265,7 +289,13 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
             acc
         });
 
+    let gpu_denom = sum.gpu_sample_count.max(1) as f32;
     RenderFrameStats {
+        frame_id: 0,
+        config_id: 0,
+        gpu_sample_count: sum.gpu_sample_count,
+        gpu_sample_frame_id: 0,
+        gpu_sample_config_id: 0,
         surface_acquire_ms: sum.surface_acquire_ms / denom,
         stream_upload_ms: sum.stream_upload_ms / denom,
         shadow_encode_ms: sum.shadow_encode_ms / denom,
@@ -284,16 +314,16 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
         outline_vertices: (sum.outline_vertices as f32 / denom).round() as usize,
         invert_outline_vertices: (sum.invert_outline_vertices as f32 / denom).round() as usize,
         ui_vertices: (sum.ui_vertices as f32 / denom).round() as usize,
-        gpu_pass_total_ms: sum.gpu_pass_total_ms / denom,
-        gpu_shadow_ms: sum.gpu_shadow_ms / denom,
-        gpu_terrain_ms: sum.gpu_terrain_ms / denom,
-        gpu_indirect_ms: sum.gpu_indirect_ms / denom,
-        gpu_cloud_raymarch_ms: sum.gpu_cloud_raymarch_ms / denom,
-        gpu_cloud_temporal_ms: sum.gpu_cloud_temporal_ms / denom,
-        gpu_sky_ms: sum.gpu_sky_ms / denom,
-        gpu_cloud_composite_ms: sum.gpu_cloud_composite_ms / denom,
-        gpu_outline_ms: sum.gpu_outline_ms / denom,
-        gpu_ui_ms: sum.gpu_ui_ms / denom,
+        gpu_pass_total_ms: sum.gpu_pass_total_ms / gpu_denom,
+        gpu_shadow_ms: sum.gpu_shadow_ms / gpu_denom,
+        gpu_terrain_ms: sum.gpu_terrain_ms / gpu_denom,
+        gpu_indirect_ms: sum.gpu_indirect_ms / gpu_denom,
+        gpu_cloud_raymarch_ms: sum.gpu_cloud_raymarch_ms / gpu_denom,
+        gpu_cloud_temporal_ms: sum.gpu_cloud_temporal_ms / gpu_denom,
+        gpu_sky_ms: sum.gpu_sky_ms / gpu_denom,
+        gpu_cloud_composite_ms: sum.gpu_cloud_composite_ms / gpu_denom,
+        gpu_outline_ms: sum.gpu_outline_ms / gpu_denom,
+        gpu_ui_ms: sum.gpu_ui_ms / gpu_denom,
         gpu_timestamps_supported: sum.gpu_timestamps_supported,
         cloud_history_invalidations: (sum.cloud_history_invalidations as f32 / denom).round()
             as usize,

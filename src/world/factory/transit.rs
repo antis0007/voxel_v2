@@ -30,6 +30,7 @@ impl Packet {
     }
 
     /// Seconds until delivery at the current speed.
+    #[cfg(test)]
     pub fn eta(&self) -> f32 {
         ((self.path.len().saturating_sub(1)) as f32 - self.progress).max(0.0) / SPEED
     }
@@ -51,7 +52,7 @@ impl Packet {
 /// Shortest pipe route from machine `from` to machine `to` inside `network`.
 /// `via` pins the first pipe cell (extractors pull through their own cell).
 /// Returns `[from, pipe.., to]`, or `None` when the machines are not joined.
-pub fn find_path(
+pub(super) fn find_path(
     network: &Network,
     from: IVec3,
     to: IVec3,
@@ -401,7 +402,7 @@ mod tests {
             .collect::<Vec<_>>()
             .into_iter();
         let mut read = || words.next().ok_or_else(|| anyhow::anyhow!("short"));
-        let back = Factory::decode(&mut read, 1, 8).expect("decodes");
+        let back = Factory::decode(&mut read, 1, super::super::FACTORY_FORMAT).expect("decodes");
         assert_eq!(back.nodes[&IVec3::new(4, 0, 0)].input[6], 64);
         assert_eq!(back.nodes[&IVec3::ZERO].output[6], 0);
     }

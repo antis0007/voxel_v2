@@ -29,7 +29,13 @@ impl SolidPlan {
         let mut opaque = vec![0u64; 3 * P * P];
         let mut renderable = vec![0u64; 3 * P * P];
         let mut water = vec![0u64; 3 * P * P];
-        let partial_water = !chunk.water_levels.is_empty();
+        // Submerged volume churn must not switch the whole chunk's water
+        // tessellation. Only a rendered free fractional surface needs this path.
+        let partial_water = chunk.water_levels.iter().any(|(&p, &level)| {
+            level < 8
+                && chunk.get_world(p) == BlockId::Water
+                && chunk.get_world(p + IVec3::Y) != BlockId::Water
+        });
         let mut torches = 0;
         let mut water_faces = 0;
         for y in 0..P {
@@ -79,6 +85,7 @@ impl SolidPlan {
             partial_water,
         };
         let mut masks = vec![None; (N + 1) * N * N];
+        let mut lighting = vec![None; (N + 1) * N * N];
         for axis in 0..3 {
             let ua = (axis + 1) % 3;
             let va = (axis + 2) % 3;
@@ -87,6 +94,7 @@ impl SolidPlan {
                     return None;
                 }
                 masks.fill(None);
+                lighting.fill(None);
                 let mut planes = 0u64;
                 for v in 0..N {
                     for u in 0..N {
@@ -123,7 +131,22 @@ impl SolidPlan {
                             let plane = depth + usize::from(positive);
                             planes |= 1 << plane;
                             let world_p = chunk.chunk * CHUNK_SIZE + IVec3::from_array(p);
-                            let water_bucket = if b == BlockId::Water && axis == 1 && positive {
+                            // A water top may merge into a 2x2 quad only when all eight
+                            // neighbours at this row are water: every corner is then free
+                            // to move with the waves. Cells at a bank, wall or step stay
+                            // 1x1 so their pinned corners never sit on a merged edge.
+                            let water_interior = b == BlockId::Water
+                                && axis == 1
+                                && positive
+                                && (-1..=1).all(|dz| {
+                                    (-1..=1).all(|dx| {
+                                        chunk.get_world(world_p + IVec3::new(dx, 0, dz))
+                                            == BlockId::Water
+                                    })
+                                });
+                            let water_bucket = if b == BlockId::Water && axis == 1 && positive && !water_interior {
+                                0
+                            } else if b == BlockId::Water && axis == 1 && positive {
                                 let mut cells = 0u8;
                                 let mut sample_p = world_p;
                                 while cells < 6
@@ -141,12 +164,39 @@ impl SolidPlan {
                             } else {
                                 0
                             };
-                            masks[plane * N * N + v * N + u] =
-                                Some(FaceMaterial::from_block_with_water_bucket(
+                            let mut material = FaceMaterial::from_block_with_water_bucket(
                                     b,
                                     world_p,
                                     water_bucket,
-                                ));
+                                );
+                            // Immediate air above the authoritative support is the
+                            // surface rule. Glass, foliage and liquids occupy it;
+                            // a roof separated by air does not cap it. The existing
+                            // one-cell halo and dirty-neighbor radius cover this read.
+                            material.capped_turf = matches!(b, BlockId::Grass | BlockId::SnowGrass)
+                                && chunk.get_world(world_p + IVec3::Y) != BlockId::Air;
+                            masks[plane * N * N + v * N + u] = Some(material);
+                            // A material match alone cannot justify a greedy merge:
+                            // stretching corner AO/skylight over a whole patch makes
+                            // metre-wide light wedges and seams beside small faces.
+                            let ao = super::face_corner_ao(
+                                chunk, axis, positive, plane as i32, u as i32, v as i32, 1, 1,
+                            );
+                            if ao.iter().all(|&value| value == 1.0) {
+                                let normal = glam::Vec3::from_array(super::face_normal_from_axis(axis, positive));
+                                let mut samples = [0u32; 4];
+                                for (i, (du, dv)) in [(0, 0), (1, 0), (1, 1), (0, 1)].into_iter().enumerate() {
+                                    let mut corner = p;
+                                    corner[axis] = plane as i32;
+                                    corner[ua] += du;
+                                    corner[va] += dv;
+                                    let position = (chunk.chunk * CHUNK_SIZE + IVec3::from_array(corner)).as_vec3();
+                                    samples[i] = chunk.sky_visibility(position, normal).to_bits();
+                                }
+                                if samples.iter().all(|&value| value == samples[0]) {
+                                    lighting[plane * N * N + v * N + u] = Some(samples[0]);
+                                }
+                            }
                         }
                     }
                 }
@@ -154,6 +204,7 @@ impl SolidPlan {
                     let plane = planes.trailing_zeros() as usize;
                     planes &= planes - 1;
                     let mask = &mut masks[plane * N * N..(plane + 1) * N * N];
+                    let light = &lighting[plane * N * N..(plane + 1) * N * N];
                     let mut i = 0;
                     while i < N * N {
                         let Some(material) = mask[i] else {
@@ -176,6 +227,7 @@ impl SolidPlan {
                             && w < max_water_span
                             && (!is_water_top || (u + w) % 2 == 1)
                             && mask[i + w] == Some(material)
+                            && light[i].is_some() && light[i + w] == light[i]
                         {
                             w += 1;
                         }
@@ -185,7 +237,8 @@ impl SolidPlan {
                             && (!is_water_top || (v + h) % 2 == 1)
                         {
                             for x in 0..w {
-                                if mask[(v + h) * N + u + x] != Some(material) {
+                                if mask[(v + h) * N + u + x] != Some(material)
+                                    || light[i].is_none() || light[(v + h) * N + u + x] != light[i] {
                                     break 'grow;
                                 }
                             }

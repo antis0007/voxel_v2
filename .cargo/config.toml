@@ -1,0 +1,4 @@
+# This repo builds into its own ./target. A global ~/.cargo/config.toml points
+# every cargo project on this machine at Pyrenet's shared cache; this overrides it.
+[build]
+target-dir = "target"

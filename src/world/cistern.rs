@@ -11,6 +11,7 @@ pub fn tunnel_width() -> f32 {
     0.70
 }
 
+#[cfg(test)]
 pub fn plate_accepts(weight: u8) -> bool {
     weight >= 2
 }
@@ -58,6 +59,7 @@ pub fn sample(cfg: &WorldSampleConfig, metres: Vec3) -> Option<B> {
     None
 }
 
+#[cfg(test)]
 pub fn garden_spore_local() -> Vec3 {
     Vec3::new(240.0, 0.1, 48.0)
 }

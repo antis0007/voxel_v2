@@ -3,7 +3,7 @@ use super::{CHUNK_SIZE, ChunkData, chunk_coord_from_world_block};
 use anyhow::{Result, ensure};
 use glam::IVec3;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     sync::Arc,
 };
 

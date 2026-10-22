@@ -12,14 +12,15 @@ use std::{
 };
 const CAPACITY: usize = 64;
 const BACKLOG: usize = 32768;
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct Interest {
     center: (i32, i32),
     radius: i32,
+    supplemental: HashSet<(i32, i32)>,
 }
 impl Interest {
-    fn contains(self, c: (i32, i32)) -> bool {
-        c.0.abs_diff(self.center.0).max(c.1.abs_diff(self.center.1)) <= self.radius as u32
+    fn contains(&self, c: (i32, i32)) -> bool {
+        self.supplemental.contains(&c) || c.0.abs_diff(self.center.0).max(c.1.abs_diff(self.center.1)) <= self.radius as u32
     }
 }
 struct Job {
@@ -60,6 +61,7 @@ impl ColumnPlans {
             interest: Arc::new(Mutex::new(Interest {
                 center: (0, 0),
                 radius: 0,
+                supplemental: HashSet::new(),
             })),
             tx: None,
             rx,
@@ -67,6 +69,7 @@ impl ColumnPlans {
         }
     }
     pub fn clear(&mut self) {
+        self.interest.lock().unwrap_or_else(|e| e.into_inner()).supplemental.clear();
         self.epoch.fetch_add(1, Ordering::Relaxed);
         self.ranges.clear();
         self.pending.clear();
@@ -75,15 +78,25 @@ impl ColumnPlans {
         self.ready.clear();
     }
     pub fn set_interest(&mut self, center: (i32, i32), radius: i32) {
+        let mut current = self.interest.lock().unwrap_or_else(|e| e.into_inner());
+        if current.center == center && current.radius == radius.max(0) { return; }
         let next = Interest {
             center,
             radius: radius.max(0),
+            supplemental: current.supplemental.clone(),
         };
-        let mut current = self.interest.lock().unwrap_or_else(|e| e.into_inner());
         if *current == next {
             return;
         }
-        *current = next;
+        *current = next.clone();
+        drop(current);
+        self.retain(|&c, _| next.contains(c));
+    }
+    pub fn set_supplemental_interest(&mut self, supplemental: HashSet<(i32, i32)>) {
+        let mut current = self.interest.lock().unwrap_or_else(|e| e.into_inner());
+        if current.supplemental == supplemental { return; }
+        current.supplemental = supplemental;
+        let next = current.clone();
         drop(current);
         self.retain(|&c, _| next.contains(c));
     }
@@ -103,8 +116,8 @@ impl ColumnPlans {
             match self.rx.try_recv() {
                 Ok(done) if done.epoch == self.epoch.load(Ordering::Relaxed) => {
                     self.pending.remove(&done.c);
-                    let interest = *self.interest.lock().unwrap_or_else(|e| e.into_inner());
-                    if !interest.contains(done.c) {
+                    let relevant = self.interest.lock().unwrap_or_else(|e| e.into_inner()).contains(done.c);
+                    if !relevant {
                         continue;
                     }
                     if let Some(range) = done.range {

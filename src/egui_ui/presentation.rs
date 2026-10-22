@@ -1,14 +1,14 @@
 //! Shared game styling and control reference, separate from renderer diagnostics.
 use egui::{Color32, RichText};
 
-pub(super) const INK: Color32 = Color32::from_rgb(29, 25, 29);
-pub(super) const PAPER: Color32 = Color32::from_rgb(244, 230, 202);
+pub(super) const INK: Color32 = super::grimoire::RECESS;
+pub(super) const PAPER: Color32 = Color32::from_rgb(0xe6, 0xd8, 0xb8);
 pub(super) const MUTED: Color32 = Color32::from_rgb(173, 157, 139);
-pub(super) const EDGE: Color32 = Color32::from_rgb(103, 86, 75);
+pub(super) const EDGE: Color32 = super::grimoire::SILVER_DARK;
 pub(super) const JADE: Color32 = Color32::from_rgb(211, 183, 125);
-pub(super) const AMBER: Color32 = Color32::from_rgb(218, 172, 105);
+pub(super) const AMBER: Color32 = super::grimoire::GOLD;
 pub(super) const DANGER: Color32 = Color32::from_rgb(225, 105, 91);
-pub(super) const MANA: Color32 = Color32::from_rgb(116, 174, 207);
+pub(super) const MANA: Color32 = Color32::from_rgb(0x70, 0xc9, 0xcf);
 
 pub(super) fn keycap(ui: &mut egui::Ui, key: &str) {
     egui::Frame::new()
@@ -22,10 +22,15 @@ pub(super) fn keycap(ui: &mut egui::Ui, key: &str) {
 }
 
 pub(super) fn apply_theme(ctx: &egui::Context) {
+    ctx.tessellation_options_mut(|o| {
+        o.feathering = false;
+        o.round_text_to_pixels = true;
+        o.round_line_segments_to_pixels = true;
+        o.round_rects_to_pixels = true;
+    });
     // Tiny5 for interface text, PixelCode for figures and keys. Both are embedded
-    // so a build does not depend on the launch directory. egui 0.33 filters the
-    // font atlas linearly; begin_frame snaps scale to a whole pixel so glyphs
-    // still land on the grid.
+    // so a build does not depend on the launch directory. end_frame sets the
+    // font atlas to nearest sampling; begin_frame resolves integer scaling.
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "tiny5".into(),
@@ -54,6 +59,8 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     // so the first native theme event cannot replace their readable text style.
     ctx.set_theme(egui::ThemePreference::Dark);
     let mut style = (*ctx.style()).clone();
+    // State changes are crisp; slot movement uses the explicit integer-pixel recoil.
+    style.animation_time = 0.0;
     style.visuals = egui::Visuals::dark();
     style.visuals.window_fill = INK;
     style.visuals.panel_fill = INK;
@@ -80,15 +87,20 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(6.0, 6.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.interact_size.y = 30.0;
-    // Tiny5 is drawn on a 10px grid. PixelCode stays on the monospace family
-    // for counts and keycaps, at its own 12px grid.
+    // Solid scrollbars and a bordered tooltip/popup frame, as in Minecraft's
+    // GUI, so lists read as lists and hover text reads as a box.
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
+    style.visuals.window_stroke = egui::Stroke::new(2.0, EDGE);
+    // Tiny5 is drawn on a 10px grid; body text sits at 13 so it stays legible
+    // at the default UI scale. PixelCode stays on the monospace family for
+    // counts and keycaps, at its own 12px grid.
     style
         .text_styles
         .insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
     for (kind, size) in [
-        (egui::TextStyle::Body, 10.0),
-        (egui::TextStyle::Button, 10.0),
-        (egui::TextStyle::Small, 10.0),
+        (egui::TextStyle::Body, 13.0),
+        (egui::TextStyle::Button, 13.0),
+        (egui::TextStyle::Small, 11.5),
     ] {
         style
             .text_styles

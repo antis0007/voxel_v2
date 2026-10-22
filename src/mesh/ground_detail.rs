@@ -21,6 +21,29 @@ fn hash(p: IVec3) -> u32 {
     h = h.wrapping_mul(0x7feb352d);
     h ^ (h >> 15)
 }
+/// Texture kind of a grass tuft (vertex colour, foliage lighting) and of a loose
+/// stone. Must match the kind 34 / 35 branches in `world_shader.wgsl`.
+const TUFT_KIND: f32 = crate::material::terrain_family::TUFT as f32;
+const STONE_KIND: f32 = crate::material::terrain_family::PEBBLE as f32;
+/// Blades per tuft and the per-item mesh reservation they need.
+const BLADES: u32 = 6;
+/// Smooth 0..1 field over blocks (bilinear hashes on a `PATCH_BLOCKS` lattice)
+/// that gathers tufts into loose patches with open gaps between them. Pure
+/// function of world column, so chunk reloads and remeshes keep placement.
+const PATCH_METRES: f32 = 5.0;
+fn patch_field(x: i32, z: i32) -> f32 {
+    patch_field_metres(x as f32, z as f32)
+}
+fn patch_field_metres(x: f32, z: f32) -> f32 {
+    let (px, pz) = (x / PATCH_METRES, z / PATCH_METRES);
+    let (gx, gz) = (px.floor() as i32, pz.floor() as i32);
+    let (fx, fz) = (px - px.floor(), pz - pz.floor());
+    let v = |i: i32, k: i32| (hash(IVec3::new(gx + i, 7919, gz + k)) & 65535) as f32 / 65535.0;
+    let (sx, sz) = (fx * fx * (3.0 - 2.0 * fx), fz * fz * (3.0 - 2.0 * fz));
+    let a = v(0, 0) + (v(1, 0) - v(0, 0)) * sx;
+    let b = v(0, 1) + (v(1, 1) - v(0, 1)) * sx;
+    a + (b - a) * sz
+}
 impl DetailPlan {
     pub fn new(chunk: &GeneratedChunk, cancel: &AtomicBool) -> Option<Self> {
         let mut items = Vec::new();
@@ -54,6 +77,11 @@ impl DetailPlan {
                     // of dark stones. Keep the physical density scale invariant.
                     let density = if b == B::Sand {
                         threshold / 4
+                    } else if grass {
+                        // Loose patches: sparse in the gaps, about twice the
+                        // old density at a patch heart. Mean stays near 1x.
+                        let patch = patch_field_metres(p.x as f32 * scale, p.z as f32 * scale);
+                        (threshold as f32 * (0.15 + 2.2 * patch * patch)) as u32
                     } else {
                         threshold
                     };
@@ -76,12 +104,11 @@ impl DetailPlan {
                         let shade = 0.82 + ((h >> 8) & 255) as f32 / 255.0 * 0.24;
                         color = [0.29 * shade, 0.27 * shade, 0.22 * shade];
                     } else if grass {
-                        let dry = ((h >> 8) & 255) as f32 / 255.0;
-                        color = [
-                            color[0] * (0.78 + dry * 0.18),
-                            color[1] * (0.76 + dry * 0.08),
-                            color[2] * 0.80,
-                        ];
+                        // Root colour: the shader's matted-turf green, so the
+                        // tuft base sits in the ground texture. Tips lighten
+                        // in `append`; a few tufts go dry at the tips.
+                        let v = ((h >> 8) & 255) as f32 / 255.0;
+                        color = [0.105 + v * 0.02, 0.190 + v * 0.03, 0.060];
                     } else {
                         color = [color[0] * 0.96, color[1] * 0.97, color[2] * 0.98];
                     }
@@ -103,10 +130,10 @@ impl DetailPlan {
         self.items.is_empty()
     }
     pub fn vertices(&self) -> usize {
-        self.items.len() * 20
+        self.items.len() * (BLADES as usize * 4).max(20)
     }
     pub fn indices(&self) -> usize {
-        self.items.len() * 60
+        self.items.len() * (BLADES as usize * 12).max(60)
     }
     pub fn append(&self, chunk: &GeneratedChunk, mesh: &mut ChunkMesh, lod: u8) {
         if lod > 1 {
@@ -116,28 +143,36 @@ impl DetailPlan {
         for d in &self.items {
             let size = (0.065 + (d.hash & 255) as f32 / 255.0 * 0.10) / scale;
             if d.grass {
-                for blade in 0..5 {
+                let dry_tuft = (d.hash >> 20) % 5 == 0;
+                for blade in 0..BLADES {
                     let a = blade as f32 * 2.39996 + (d.hash % 100) as f32 * 0.0628;
                     let lateral = Vec3::new(a.cos(), 0.0, a.sin());
                     let variation = ((d.hash.rotate_left(blade * 5) >> 24) & 255) as f32 / 255.0;
-                    let height = size * (1.0 + variation * 1.4);
-                    let lean = lateral * size * (0.25 + variation * 0.55);
-                    let p = d.p + lateral * size * 0.18;
+                    let height = size * (1.1 + variation * 1.5);
+                    let lean = lateral * size * (0.20 + variation * 0.45);
+                    // Blades fan out from one root clump; base 2-4 cm wide.
+                    let p = d.p + lateral * size * 0.22;
+                    let across = Vec3::new(-a.sin(), 0.0, a.cos());
+                    let half = size * (0.20 + variation * 0.08);
                     let points = [
-                        p - lateral * size * 0.16,
-                        p + lateral * size * 0.16,
-                        p + lean + Vec3::Y * height + lateral * size * 0.035,
-                        p + lean + Vec3::Y * height - lateral * size * 0.035,
+                        p - across * half,
+                        p + across * half,
+                        p + lean + Vec3::Y * height + across * half * 0.18,
+                        p + lean + Vec3::Y * height - across * half * 0.18,
                     ];
-                    let normal = Vec3::new(-a.sin(), 0.4, a.cos()).normalize();
+                    let normal = (lateral * 0.35 + Vec3::Y).normalize();
+                    let tip = if dry_tuft && variation > 0.45 {
+                        [d.color[0] * 3.1, d.color[1] * 1.75, d.color[2] * 1.4]
+                    } else {
+                        [d.color[0] * 1.45, d.color[1] * 1.55, d.color[2] * 1.3]
+                    };
                     let base = mesh.vertices.len() as u32;
                     for (i, p) in points.into_iter().enumerate() {
-                        let shade = if i < 2 { 0.72 } else { 1.12 };
                         mesh.vertices.push(Vertex3 {
                             pos: p.to_array(),
-                            color: d.color.map(|v| v * shade),
+                            color: if i < 2 { d.color } else { tip },
                             normal: normal.to_array(),
-                            surface: [0.95, 0.0, 0.0, 0.0],
+                            surface: [0.95, if i < 2 { 0.0 } else { height * scale }, TUFT_KIND, 0.0],
                             ao_strength: 0.85,
                         });
                     }
@@ -181,7 +216,7 @@ impl DetailPlan {
                             pos: p.to_array(),
                             color: d.color,
                             normal: normal.to_array(),
-                            surface: [0.93, 0.03, 0.0, 0.0],
+                            surface: [0.93, 0.03, STONE_KIND, 0.0],
                             ao_strength: 0.9,
                         });
                     }
@@ -190,7 +225,7 @@ impl DetailPlan {
                     pos: (d.p + Vec3::Y * size * height).to_array(),
                     color: d.color,
                     normal: Vec3::Y.to_array(),
-                    surface: [0.93, 0.03, 0.0, 0.0],
+                    surface: [0.93, 0.03, STONE_KIND, 0.0],
                     ao_strength: 0.9,
                 });
                 for i in 0..5 {
@@ -207,6 +242,27 @@ impl DetailPlan {
                         base + i + 5,
                     ]);
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::patch_field;
+
+    #[test]
+    fn tuft_patch_field_is_bounded_and_continuous_across_chunk_and_sign_boundaries() {
+        for x in -70..70 {
+            for z in [-33, -32, -1, 0, 31, 32] {
+                let v = patch_field(x, z);
+                assert!((0.0..=1.0).contains(&v), "patch {v} at {x},{z}");
+                // Neighbouring columns differ by at most one lattice step's
+                // worth of smoothstep slope, so placement never jumps at a
+                // chunk edge or across zero.
+                let dx = (patch_field(x + 1, z) - v).abs();
+                assert!(dx <= 0.31, "jump {dx} at {x},{z}");
+                assert_eq!(v, patch_field(x, z));
             }
         }
     }

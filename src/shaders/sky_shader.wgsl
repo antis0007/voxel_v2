@@ -91,7 +91,10 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
     let grid = uv * 820.0;  // slightly higher density than before
     let cell  = floor(grid);
     let local = fract(grid) - vec2<f32>(0.5);
-    let seed  = hash12(cell);
+    // Integer hash: the sin hash forms lines at these cell magnitudes, and the
+    // 0.4% presence threshold turns those lines into visible star grids.
+    let icell = vec2<i32>(cell);
+    let seed  = hash_cell1(icell, 101);
 
     // Only a small fraction of cells contain a star.
     let present = smoothstep(0.9960, 1.0, seed);
@@ -100,10 +103,7 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
     }
 
     // Sub-cell jitter so stars don't sit on a grid.
-    let jitter = vec2<f32>(
-        hash12(cell + vec2<f32>(13.1,  7.2)),
-        hash12(cell + vec2<f32>( 3.7, 19.4)),
-    ) - vec2<f32>(0.5);
+    let jitter = hash_cell2(icell, 211) - vec2<f32>(0.5);
 
     let d = length(local - jitter * 0.58);
 
@@ -116,7 +116,7 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
     let shape = select(0.0, 1.0, select(texel, cross, seed > 0.9985));
 
     // Colour temperature: mix cool blue-white (O/B type) with warm yellow-white (K/G).
-    let hue  = hash12(cell + vec2<f32>(23.7, -11.2));
+    let hue  = hash_cell1(icell, 307);
     let star_color = mix(
         vec3<f32>(0.60, 0.68, 1.00),   // hot blue-white
         vec3<f32>(1.00, 0.92, 0.78),   // warm yellow-white
@@ -124,7 +124,7 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
     );
 
     // Twinkling: slow atmospheric shimmer.
-    let twinkle_phase = hash12(cell + vec2<f32>(31.4, 5.9)) * 6.28318;
+    let twinkle_phase = hash_cell1(icell, 401) * 6.28318;
     // Stepped twinkle: three brightness frames instead of a smooth shimmer.
     let twinkle = 0.84 + 0.16 * floor(0.5 + 0.5 * sin(light.weather_globals[0].x * 0.7 + twinkle_phase) * 2.0) / 2.0;
 

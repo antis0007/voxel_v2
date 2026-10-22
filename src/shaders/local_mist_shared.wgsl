@@ -14,7 +14,7 @@ struct CascadeData {
 };
 
 struct ShadowUniform {
-    cascades: array<CascadeData, 4>,
+    cascades: array<CascadeData, 5>,
     cascade_count: u32,
     blend_width: f32,
     world_scale: f32,

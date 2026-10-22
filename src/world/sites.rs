@@ -3,6 +3,7 @@
 use super::{BlockId as B, WorldSampleConfig, WorldType, hash2, sample_column, value_noise2};
 use glam::{IVec3, Vec3};
 use std::cell::RefCell;
+use crate::fast_hash::FastMap;
 use std::collections::HashMap;
 
 fn region_span(cfg: &WorldSampleConfig) -> f32 {
@@ -23,8 +24,8 @@ struct Site {
     starter: bool,
 }
 thread_local! {
-    static SITES: RefCell<(Option<WorldSampleConfig>, HashMap<(i32,i32),Option<Site>>)> = RefCell::new((None,HashMap::new()));
-    static GALLERIES: RefCell<(Option<WorldSampleConfig>, HashMap<(i32,i32),Option<f32>>)> = RefCell::new((None,HashMap::new()));
+    static SITES: RefCell<(Option<WorldSampleConfig>, FastMap<(i32,i32),Option<Site>>)> = RefCell::new((None,FastMap::default()));
+    static GALLERIES: RefCell<(Option<WorldSampleConfig>, FastMap<(i32,i32),Option<f32>>)> = RefCell::new((None,FastMap::default()));
 }
 
 fn chamber_rarity(version: u32) -> f32 {
@@ -51,7 +52,7 @@ fn gallery_floor(cfg: &WorldSampleConfig, p: IVec3, m: Vec3) -> Option<f32> {
     if let Some(cached) = GALLERIES.with(|c| {
         let mut c = c.borrow_mut();
         if c.0 != Some(*cfg) {
-            *c = (Some(*cfg), HashMap::new());
+            *c = (Some(*cfg), FastMap::default());
         }
         c.1.get(&key).copied()
     }) {
@@ -102,7 +103,7 @@ fn site(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Site> {
     let cached = SITES.with(|s| {
         let mut c = s.borrow_mut();
         if c.0 != Some(*cfg) {
-            *c = (Some(*cfg), HashMap::new());
+            *c = (Some(*cfg), FastMap::default());
         }
         c.1.get(&(rx, rz)).copied()
     });
@@ -201,7 +202,7 @@ struct Homestead {
 type HomeSlot = Option<std::rc::Rc<Homestead>>;
 
 thread_local! {
-    static HOMES: RefCell<(Option<WorldSampleConfig>, HashMap<(i32, i32), HomeSlot>)> = RefCell::new((None, HashMap::new()));
+    static HOMES: RefCell<(Option<WorldSampleConfig>, FastMap<(i32, i32), HomeSlot>)> = RefCell::new((None, FastMap::default()));
     static HOME_LAST: RefCell<Option<(WorldSampleConfig, (i32, i32), HomeSlot)>> = const { RefCell::new(None) };
 }
 
@@ -272,7 +273,7 @@ fn homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
     let found = HOMES.with(|h| {
         let mut h = h.borrow_mut();
         if h.0 != Some(*cfg) {
-            *h = (Some(*cfg), HashMap::new());
+            *h = (Some(*cfg), FastMap::default());
         }
         h.1.get(&(ix, iz)).cloned()
     });
@@ -524,6 +525,9 @@ fn ruin_descent(s: Site, cfg: &WorldSampleConfig, q: Vec3) -> Option<B> {
 fn sample_site(s: Site, cfg: &WorldSampleConfig, p: Vec3, terrain_top: f32) -> Option<B> {
     let q = local(s, p);
     let v = cfg.voxel_meters();
+    if s.kind == 1 && cfg.generator_version >= 26 {
+        return super::toll_crossing::block(q,v);
+    }
     if let Some(b) = ruin_descent(s, cfg, q) {
         return Some(b);
     }
@@ -863,7 +867,7 @@ pub(super) fn fungus(
     None
 }
 
-/// Holy-mountain mouth 18 m east of spawn, then four stacked landings & vaulted sanctums.
+// Holy-mountain mouth 18 m east of spawn, then four stacked landings & vaulted sanctums.
 thread_local! {
     static SHAFT_GROUND: std::cell::Cell<Option<(WorldSampleConfig, f32)>> = const { std::cell::Cell::new(None) };
 }
@@ -1062,6 +1066,9 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
         return None;
     }
     let m = (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
+    if let Some(block) = super::habitats::region::sample(cfg, m) {
+        return Some(block);
+    }
     let terrain_top = (height + 1) as f32 * cfg.voxel_meters();
     if let Some(carved) = noita_descent(cfg, m) {
         return Some(carved);
@@ -1340,6 +1347,11 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
         11.0
     };
     let roof = roof_base - ellipse * 5.0 + (dx * 0.21).sin();
+    if variant == 2 && cfg.generator_version >= super::prism_sanctum::FIRST_VERSION {
+        if let Some(block) = super::prism_sanctum::block(Vec3::new(dx, dy, dz), cfg.voxel_meters()) {
+            return Some(block);
+        }
+    }
     // The broken road is an optional construction puzzle, with a walkable floor detour.
     // Version-gated so existing worlds retain their terrain and discoveries.
     if cfg.generator_version >= 12
@@ -1541,6 +1553,7 @@ pub fn location(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
     } else if q.x.abs() < 18.0 && q.z.abs() < 16.0 {
         Some(match s.kind {
             0 => "Ruined artificer workshop",
+            1 if cfg.generator_version >= 26 => "The ruined toll crossing",
             1 => "Overgrown watchtower",
             2 => "Sunken waterworks",
             3 => "Abandoned foundry",
@@ -1585,7 +1598,7 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
                     };
                     out.push((IVec3::new(x, z, 0), point, lead));
                 }
-                if !s.starter && cfg.generator_version >= 16 {
+                if !s.starter && cfg.generator_version >= 16 && !(s.kind==1 && cfg.generator_version>=26) {
                     for layer in 1..=3 {
                         let point =
                             Vec3::new(s.x + 3.0, s.ground - layer as f32 * 22.0 + 1.2, s.z - 6.0);
@@ -1692,7 +1705,7 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
 /// Reward identity follows the actual generated structure, not the enemy mix.
 pub fn reward_kind(cfg: &WorldSampleConfig, id: IVec3) -> u32 {
     if id.z == 0 {
-        site(cfg, id.x, id.y).map_or(0, |s| s.kind)
+        site(cfg, id.x, id.y).map_or(0, |s| if s.kind==1 && cfg.generator_version>=26 {10} else {s.kind})
     } else if id.z == 2 || id.z == 3 {
         // Treasure caches use the inscriptions that are not boss gates.
         const KINDS: [u32; 7] = [0, 1, 2, 4, 6, 7, 9];

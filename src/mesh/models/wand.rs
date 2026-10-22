@@ -110,8 +110,11 @@ fn voxel_gem(m: &mut Model, rot: Quat, centre: Vec3, radius: f32, colour: [f32; 
     let n = (radius * stretch / WAND_PIXEL).ceil() as i32;
     let light = Vec3::new(-0.45, 0.70, 0.55).normalize();
     let half = (light + Vec3::Y).normalize();
-    let deep = scaled(colour, 0.12);
-    let lit = mix(colour, [1.0, 1.0, 1.0], 0.5);
+    // Dark, desaturated body so the lit facets have contrast; the spell colour
+    // lives in the rim and the diffuse top, not in a flat fill.
+    let deep = scaled(mix(colour, [0.10, 0.09, 0.13], 0.6), 0.30);
+    let lit = mix(colour, [1.0, 1.0, 1.0], 0.2);
+    let rim_colour = mix(colour, [1.0, 1.0, 1.0], 0.5);
     for x in -n..=n {
         for y in -n..=n {
             for z in -n..=n {
@@ -129,9 +132,11 @@ fn voxel_gem(m: &mut Model, rot: Quat, centre: Vec3, radius: f32, colour: [f32; 
                     normal
                 };
                 let diffuse = normal.dot(light).max(0.0);
-                let spec = normal.dot(half).max(0.0).powf(18.0);
+                let spec = normal.dot(half).max(0.0).powf(40.0);
+                // Fresnel-style rim: surfaces turning away from the lens catch the colour.
+                let rim = (1.0 - normal.z.abs()).powf(3.0);
                 let shade = mix(deep, lit, diffuse);
-                let col = mix(shade, [1.0, 1.0, 1.0], spec * 0.6);
+                let col = mix(mix(shade, rim_colour, rim * 0.55), [1.0, 1.0, 1.0], spec * 0.85);
                 // glow must stay 0: any glow > 0 makes `Model::triangle` pick the
                 // emissive particle kind 40, which ignores this per-cube shading.
                 m.cuboid(
@@ -638,7 +643,7 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
     // fades through `life()`, so nothing pops when it respawns.
     let vital = 0.4 + 0.6 * v.mana.clamp(0.0, 1.0).sqrt();
     let hot = mix(glow, [1.0, 1.0, 1.0], 0.62);
-    let deep = scaled(mix(glow, [0.55, 0.25, 1.0], 0.35), 0.75);
+    let deep = scaled(glow, 0.75);
     let tau = std::f32::consts::TAU;
 
     // Runes circling the head. The last spell cast changes how many there are.
@@ -936,6 +941,17 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
             0.2 + 2.2 * lit,
             0.92,
         );
+    }
+    // Kind 55 has fixed matte roughness/reflectance in the shader, leaving
+    // surface.x/y/w available for its enchantment's sRGB colour. Carry the
+    // selected spell separately from the authored shaft/grip base colour and
+    // cosmetic glow override. Only this wand's solid pieces receive metadata.
+    for vertex in &mut m.vertices[rig_mark..] {
+        if vertex.surface[2] == 55.0 {
+            vertex.surface[0] = v.spell[0].clamp(0.0, 1.0);
+            vertex.surface[1] = v.spell[1].clamp(0.0, 1.0);
+            vertex.surface[3] = v.spell[2].clamp(0.0, 1.0);
+        }
     }
     m.set_surface_kind(41.0);
 }

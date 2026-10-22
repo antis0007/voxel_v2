@@ -1,0 +1,54 @@
+// Frozen actual 6CAB production helpers, renamed only to coexist with candidate.
+fn terrain_axis_facet_specular_loop_reference(macro_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>,
+    roughness: f32, f0: vec3<f32>) -> vec3<f32> {
+    if !all(abs(macro_n) < vec3<f32>(1e10)) || macro_n.y < 0.0 || dot(macro_n, macro_n) < 1e-12 {
+        return terrain_specular(vec3<f32>(0.0, 1.0, 0.0), v, l, roughness, f0);
+    }
+    let m = terrain_safe_unit3(macro_n, vec3<f32>(0.0, 1.0, 0.0));
+    let faces = array<vec3<f32>, 3>(
+        vec3<f32>(select(-1.0, 1.0, m.x >= 0.0), 0.0, 0.0),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(0.0, 0.0, select(-1.0, 1.0, m.z >= 0.0)));
+    let areas = abs(m);
+    var response = vec3<f32>(0.0);
+    var projected_area = 0.0;
+    for (var i = 0u; i < 3u; i += 1u) {
+        let weight = areas[i] * max(dot(faces[i], v), 0.0);
+        if weight > 0.0 {
+            projected_area += weight;
+            if dot(faces[i], l) > 0.0 {
+                // Existing helper includes N.L. No second incident cosine.
+                response += weight * terrain_specular(faces[i], v, l, roughness, f0);
+            }
+        }
+    }
+    if projected_area <= 1e-12 { return vec3<f32>(0.0); }
+    return response / projected_area;
+}
+
+fn terrain_axis_facet_diffuse_loop_reference(macro_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>,
+    roughness: f32, oren_weight: f32) -> f32 {
+    if !all(abs(macro_n) < vec3<f32>(1e10)) || macro_n.y < 0.0 || dot(macro_n, macro_n) < 1e-12 {
+        return terrain_diffuse_lobe(vec3<f32>(0.0, 1.0, 0.0), v, l, roughness, oren_weight);
+    }
+    let m = terrain_safe_unit3(macro_n, vec3<f32>(0.0, 1.0, 0.0));
+    let faces = array<vec3<f32>, 3>(
+        vec3<f32>(select(-1.0, 1.0, m.x >= 0.0), 0.0, 0.0),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(0.0, 0.0, select(-1.0, 1.0, m.z >= 0.0)));
+    let areas = abs(m);
+    var response = 0.0;
+    var projected_area = 0.0;
+    for (var i = 0u; i < 3u; i += 1u) {
+        let weight = areas[i] * max(dot(faces[i], v), 0.0);
+        if weight > 0.0 {
+            projected_area += weight;
+            if dot(faces[i], l) > 0.0 {
+                // Both Lambert and Oren already include N.L; no second cosine.
+                response += weight * terrain_diffuse_lobe(faces[i], v, l, roughness, oren_weight);
+            }
+        }
+    }
+    if projected_area <= 1e-12 { return 0.0; }
+    return response / projected_area;
+}

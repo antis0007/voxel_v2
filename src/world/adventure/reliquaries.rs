@@ -29,6 +29,7 @@ pub type RelicFocus = crate::world::interaction::Prompt;
 #[derive(Clone)]
 pub struct BossView {
     pub name: &'static str,
+    pub action: Option<&'static str>,
     pub health: f32,
     pub maximum: f32,
 }
@@ -233,6 +234,9 @@ impl Adventure {
             let Some(forward) = direction else {
                 continue;
             };
+            // A disguise must not announce its species and health across the room.
+            // Its physical seam/glint and player attacks remain valid counterplay.
+            if enemy.encounter.concealed { continue; }
             if !(distance_squared > 0.1 * 0.1
                 && distance_squared <= ENEMY_FOCUS_RANGE * ENEMY_FOCUS_RANGE)
             {
@@ -250,13 +254,21 @@ impl Adventure {
             }
         }
         self.boss_view = closest_boss.map(|enemy| BossView {
-            name: bosses::name(enemy.kind),
+            action: if matches!(enemy.kind,6|7) {
+                if enemy.tell > 0.0 { boss_patterns::PATTERNS.iter().find(|p|p.id == enemy.attack).map(|p|p.name) }
+                else if enemy.encounter.exposed > 0.0 { Some("Exposed — strike now") } else { None }
+            } else if enemy.kind==matron::KIND {matron::action_name(enemy)} else {None},
+            name: if enemy.kind == 8 {
+                hart::name(enemy)
+            } else {
+                bosses::name(enemy.kind)
+            },
             health: enemy.health,
-            maximum: bosses::health(enemy.kind),
+            maximum: enemy.max_health(),
         });
         self.enemy_focus = focused_enemy.map(|enemy| super::EnemyFocus {
             kind: enemy.kind,
-            name: super::enemy_name(enemy.kind),
+            name: super::encounters::name(enemy),
             health: enemy.health,
             maximum: enemy.max_health(),
             frozen: enemy.slow > 0.0,
@@ -361,6 +373,7 @@ impl Adventure {
                 3 => "Cinderbrand recovered",
                 5 => "Rift well recovered",
                 8 => "Winterglass and Echo step recovered",
+                10 => "Keeper's passage recovered",
                 _ => "Inscription recovered",
             },
             items: Vec::new(),
@@ -393,8 +406,17 @@ impl Adventure {
             // Leave its removal and defeat bookkeeping to the existing owner.
             return enemy.kind == kind && enemy.health > 0.0;
         }
-        if self.enemies.len() >= MAX_ENEMIES {
+        if self.enemies.iter().filter(|e|e.habitat.is_none()).count() >= MAX_ENEMIES {
             return false;
+        }
+        if kind == tollkeeper::KIND {
+            if let Some(saved) = self.tollkeepers.get(&relic.site) {
+                let mut enemy=Enemy::new(relic.site,3,kind,relic.pos,0);
+                tollkeeper::restore(&mut enemy,saved);
+                if !free(world,enemy.pos,kind) { return false; }
+                self.enemies.push(enemy);
+                return true;
+            }
         }
         for i in 0..24 {
             let a = i as f32 * 2.4;
@@ -405,7 +427,18 @@ impl Adventure {
                     && factory::solid_point(world, q - Vec3::Y * 0.2)
                     && free(world, q, kind)
                 {
-                    self.enemies.push(Enemy::new(relic.site, 3, kind, q, 3));
+                    let menace = if kind == tollkeeper::KIND { 0 } else if kind == 8 {
+                        (relic
+                            .site
+                            .x
+                            .unsigned_abs()
+                            .wrapping_add(relic.site.y.unsigned_abs())
+                            % 3) as u8
+                    } else {
+                        3
+                    };
+                    self.enemies
+                        .push(Enemy::new(relic.site, 3, kind, q, menace));
                     return true;
                 }
             }

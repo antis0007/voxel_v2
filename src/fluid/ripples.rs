@@ -558,7 +558,6 @@ mod world_contract {
 
 #[cfg(test)]
 mod world_bench {
-    use super::*;
     use crate::fluid::VoxelScalePreset;
     use crate::world::{BlockId as B, World, WorldType};
     use glam::{IVec3, Vec3};

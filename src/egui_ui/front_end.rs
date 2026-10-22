@@ -72,6 +72,7 @@ pub(super) fn home(
                                 );
                                 ui.checkbox(&mut owner.invert_mouse, "Invert vertical look");
                                 ui.checkbox(&mut owner.show_hud, "Show the in-game HUD");
+                                super::magic_fx::motion_setting(ui);
                                 ui.horizontal(|ui| {
                                     ui.add(
                                         egui::Slider::new(
@@ -82,11 +83,16 @@ pub(super) fn home(
                                         .text("UI scale"),
                                     );
                                     if ui.small_button("Reset").clicked() {
-                                        owner.ui_scale = 1.0;
+                                        owner.ui_scale = crate::preferences::UI_SCALE_DEFAULT;
                                     }
                                 });
                                 ui.small(
                                     "Scales menus, HUD text and the inventory without changing the world.",
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut owner.hotbar_scale, 0.7..=1.6)
+                                        .step_by(0.05)
+                                        .text("Hotbar size"),
                                 );
                                 settings::saving_settings(ui);
                                 settings::audio_settings(ui);
@@ -633,22 +639,32 @@ pub(super) fn pause(
                                 "View distance, lighting and frame rate.",
                             );
                             settings::graphics_settings(ui, render, physics.voxel_scale.meters());
+                            super::magic_fx::motion_setting(ui);
                             ui.add(
                                 egui::Slider::new(&mut owner.fov_degrees, 50.0..=110.0)
                                     .text("Field of view"),
                             );
                             ui.horizontal(|ui| {
                                 ui.add(
-                                    egui::Slider::new(&mut owner.ui_scale, 0.75..=1.75)
+                                    egui::Slider::new(
+                                        &mut owner.ui_scale,
+                                        crate::preferences::UI_SCALE_MIN
+                                            ..=crate::preferences::UI_SCALE_MAX,
+                                    )
                                         .step_by(0.05)
                                         .text("UI scale"),
                                 );
                                 if ui.small_button("Reset").clicked() {
-                                    owner.ui_scale = 1.0;
+                                    owner.ui_scale = crate::preferences::UI_SCALE_DEFAULT;
                                 }
                             });
                             ui.small(
                                 "Scales menus, HUD text and the inventory without changing the world.",
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut owner.hotbar_scale, 0.7..=1.6)
+                                    .step_by(0.05)
+                                    .text("Hotbar size"),
                             );
                             if let Some(status) = &owner.region_status {
                                 ui.collapsing("Storage diagnostics", |ui| {

@@ -24,6 +24,9 @@ pub const NAMES: [&str; super::factory::RESOURCE_COUNT] = [
     "Induction coils",
     "Arcane cores",
     "Wild essence",
+    "Coal coke",
+    "Creosote oil",
+    "Bio-ethanol",
 ];
 const UNIT: u32 = 64;
 
@@ -449,7 +452,12 @@ pub fn harvest(
             world.expedition.add(i, amount * units);
         }
         world.reconcile_legacy_to_inventory();
-        world.expedition.say(label);
+        let m = p.as_vec3() * world.voxel_scale.meters();
+        let place = super::sites::location(&world.sample_config(), m);
+        match super::lore::record(world.seed, p, place, m.y) {
+            Some(record) => world.expedition.say(format!("{label} {record}")),
+            None => world.expedition.say(label),
+        }
     } else if let Some(drop_block) = super::inventory::Item::canonical_block(block) {
         let item = super::inventory::Item::Block(drop_block);
         let (ins, _) = world

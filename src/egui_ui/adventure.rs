@@ -33,14 +33,13 @@ fn draw_hearts(
     align_left: bool,
 ) {
     let count = (maximum / 10.0).ceil() as usize;
-    let icon_step = (width / 10.0).floor().clamp(11.0, 17.0);
+    let icon_step = (width / 10.0).floor().clamp(8.0, 10.0);
     let columns = (width / icon_step).floor().clamp(5.0, 10.0) as usize;
     let rows = count.div_ceil(columns);
-    let row_h = (icon_step + 1.0).max(13.0);
+    let row_h = (icon_step + 1.0).max(9.0);
     let (rect, resp) =
         ui.allocate_exact_size(vec2(width, rows as f32 * row_h), egui::Sense::hover());
-    let dpi = ui.ctx().pixels_per_point();
-    let unit = ((icon_step / 8.5) * dpi).floor().max(1.0) / dpi;
+    let unit = (icon_step / 8.5).floor().max(1.0);
     let shape = [
         " ## ## ", "#######", "#######", " ##### ", "  ###  ", "   #   ",
     ];
@@ -52,12 +51,12 @@ fn draw_hearts(
         rect.center().x - group_width * 0.5
     };
     let origin = egui::pos2(
-        (start_x * dpi).round() / dpi,
-        ((rect.top() + 2.0) * dpi).round() / dpi,
+        start_x.round(),
+        (rect.top() + 2.0).round(),
     );
     let low_hp = value <= 25.0;
     let preview_top = (value + preview_heal).min(maximum);
-    let pulse = ((time * 5.5).sin() * 0.5 + 0.5).clamp(0.25, 0.95);
+    let pulse = ((time * 3.8).sin() * 0.5 + 0.5).clamp(0.20, 0.78);
     for heart in 0..count {
         let bounce = if low_hp {
             ((time * 11.0 + heart as f32 * 1.3).sin() * 1.2).round()
@@ -141,11 +140,10 @@ fn draw_hunger(
         "  ####  ", " ###### ", "####### ", " ###### ", "  ####  ", "   ###  ", "    ### ",
         "     ## ",
     ];
-    let icon_step = (width / 10.0).floor().clamp(11.0, 17.0);
-    let row_h = (icon_step + 1.0).max(13.0);
+    let icon_step = (width / 10.0).floor().clamp(8.0, 10.0);
+    let row_h = (icon_step + 1.0).max(9.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, row_h), egui::Sense::hover());
-    let dpi = ui.ctx().pixels_per_point();
-    let unit = ((icon_step / 8.8) * dpi).floor().max(1.0) / dpi;
+    let unit = (icon_step / 8.8).floor().max(1.0);
     let group_width = 10.0 * icon_step;
     let start_x = if align_right {
         rect.right() - group_width
@@ -153,8 +151,8 @@ fn draw_hunger(
         rect.center().x - group_width * 0.5
     };
     let origin = egui::pos2(
-        (start_x * dpi).round() / dpi,
-        ((rect.top() + 1.5) * dpi).round() / dpi,
+        start_x.round(),
+        (rect.top() + 2.0).round(),
     );
     let starving = value <= 0.05;
     let low_hunger = value <= 25.0;
@@ -170,13 +168,13 @@ fn draw_hunger(
         let old = ((trail - threshold) / 10.0).clamp(0.0, 1.0);
         let prev_fill = ((preview_top - threshold) / 10.0).clamp(0.0, 1.0);
 
+        // Keep the HUD calm at normal hunger; starvation/eating use a tiny,
+        // staggered lift instead of the old full-row shake.
         let bounce = if starving {
-            ((time * 13.0 + idx as f32 * 1.7).sin() * 1.4).round()
-        } else if low_hunger {
-            ((time * 8.5 + idx as f32 * 1.4).sin() * 1.0).round()
+            ((time * 8.0 + idx as f32 * 1.1).sin() * 0.7).round()
         } else if eating {
-            let wave = ((time * 14.0 - slot_index_from_right as f32 * 0.6).sin()).max(0.0);
-            -(wave * 1.5).round()
+            let wave = ((time * 10.0 - slot_index_from_right as f32 * 0.65).sin()).max(0.0);
+            -(wave * 1.0).round()
         } else {
             0.0
         };
@@ -235,23 +233,6 @@ fn draw_hunger(
     }
     ui.painter().add(egui::Shape::mesh(mesh));
 
-    // Subtle 75% well-fed regen threshold tick mark (2.5 haunches from left of the right-aligned group)
-    let tick_x = origin.x + 2.5 * icon_step - 1.0;
-    ui.painter().line_segment(
-        [
-            egui::pos2(tick_x, rect.top() + 1.0),
-            egui::pos2(tick_x, rect.bottom() - 2.0),
-        ],
-        Stroke::new(
-            1.0,
-            if value >= 75.0 {
-                style::JADE
-            } else {
-                Color32::from_rgba_unmultiplied(173, 157, 139, 95)
-            },
-        ),
-    );
-
     let state_label = if starving {
         "STARVING (-HP)"
     } else if low_hunger {
@@ -277,13 +258,12 @@ fn draw_armor_row(ui: &mut egui::Ui, width: f32, armor_points: u32) {
         return;
     }
     const SHIELD: [&str; 6] = ["######", "######", "######", " #### ", "  ##  ", "  ##  "];
-    let icon_step = (width / 10.0).floor().clamp(11.0, 17.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 13.0), egui::Sense::hover());
-    let dpi = ui.ctx().pixels_per_point();
-    let unit = ((icon_step / 8.8) * dpi).floor().max(1.0) / dpi;
+    let icon_step = (width / 10.0).floor().clamp(8.0, 10.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 9.0), egui::Sense::hover());
+    let unit = 1.0;
     let origin = egui::pos2(
-        (rect.left() * dpi).round() / dpi,
-        ((rect.top() + 1.0) * dpi).round() / dpi,
+        rect.left().round(),
+        (rect.top() + 1.0).round(),
     );
     let mut mesh = egui::Mesh::default();
     let icons = (armor_points.div_ceil(2) as usize).min(10);
@@ -316,8 +296,8 @@ fn draw_armor_row(ui: &mut egui::Ui, width: f32, armor_points: u32) {
     resp.on_hover_text(format!("Armor protection: {} / 20", armor_points));
 }
 
-/// Noita-style Mana + Cast Delay / Recharge dual gauge bar with low-mana flash warning.
-fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, time: f32) {
+/// One instrument: a fixed mana field, cast-cost marker and recharge rail.
+fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, _time: f32) {
     let eval = wands::evaluate_cast_block(
         view.wand,
         view.rare_spells,
@@ -328,116 +308,174 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, tim
     );
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 18.0), egui::Sense::hover());
     let p = ui.painter();
-
-    let bar_w = (width - 88.0).max(90.0);
-    let mana_bar = Rect::from_min_size(rect.min + vec2(0.0, 2.0), vec2(bar_w, 7.0));
-    let timer_bar = Rect::from_min_size(rect.min + vec2(0.0, 11.0), vec2(bar_w, 4.0));
-
-    let flashing = view.mana_flash > 0.0 && ((time * 2.4).sin() > 0.35);
+    let rect = super::grimoire::snap(rect);
+    icons::frame(p, rect, false);
+    let gauge = rect.shrink(2.0);
+    let mana_bar = Rect::from_min_size(gauge.min, vec2(gauge.width(), 12.0));
+    let low = view.mana < eval.mana_cost || view.mana_flash > 0.0;
+    let color = if low { style::DANGER } else { style::MANA };
+    let fill = (mana_bar.width() * (view.mana / maximum).clamp(0.0, 1.0)).floor();
     p.rect_filled(
-        mana_bar.expand(1.5),
+        Rect::from_min_size(mana_bar.min, vec2(fill, 12.0)),
         0,
-        if flashing { style::DANGER } else { style::INK },
+        color.gamma_multiply(0.7),
     );
-    p.rect_filled(mana_bar, 0, Color32::from_rgb(38, 35, 62));
-
-    let fill_frac = (view.mana / maximum).clamp(0.0, 1.0);
-    let filled = Rect::from_min_size(
-        mana_bar.min,
-        vec2(fill_frac * mana_bar.width(), mana_bar.height()),
-    );
-    p.rect_filled(
-        filled,
-        0,
-        if flashing {
-            style::DANGER
-        } else {
-            Color32::from_rgb(91, 128, 218)
-        },
-    );
-    p.rect_filled(
-        Rect::from_min_size(filled.min, vec2(filled.width(), 2.0)),
-        0,
-        Color32::from_rgb(164, 198, 248),
-    );
-
-    // Preview next cast mana cost tick on the mana bar
+    p.rect_filled(Rect::from_min_size(mana_bar.min, vec2(fill, 1.0)), 0, color);
     if eval.mana_cost > 0.0 {
-        let cost_frac = (eval.mana_cost / maximum).clamp(0.0, 1.0);
-        let cost_x = mana_bar.left() + cost_frac * mana_bar.width();
-        p.line_segment(
-            [
-                egui::pos2(cost_x, mana_bar.top()),
-                egui::pos2(cost_x, mana_bar.bottom()),
-            ],
-            Stroke::new(
-                1.2,
-                if view.mana < eval.mana_cost {
-                    style::DANGER
-                } else {
-                    style::AMBER
-                },
-            ),
+        let x = mana_bar.left()
+            + (mana_bar.width() * (eval.mana_cost / maximum).clamp(0.0, 1.0)).floor();
+        p.rect_filled(
+            Rect::from_min_size(egui::pos2(x, mana_bar.top()), vec2(1.0, 3.0)),
+            0,
+            if low {
+                style::DANGER
+            } else {
+                super::grimoire::GOLD_LIGHT
+            },
         );
     }
-
-    // Cast Delay (Cyan) & Recharge Time (Amber) sub-bar
-    p.rect_filled(timer_bar.expand(1.0), 0, style::INK);
-    p.rect_filled(timer_bar, 0, Color32::from_rgb(28, 26, 34));
+    let text = format!("MP {:.0}/{maximum:.0}", view.mana.max(0.0));
+    p.text(
+        mana_bar.left_top() + vec2(3.0, 1.0),
+        Align2::LEFT_TOP,
+        text,
+        FontId::proportional(10.0),
+        if low { style::DANGER } else { style::PAPER },
+    );
+    let recharging = view.recharge_total > 0.01 && view.cooldown <= view.recharge_total + 0.01;
+    let state = if view.cooldown <= 0.0 {
+        String::new()
+    } else {
+        format!("{}{:.1}s", if recharging { "R" } else { "" }, view.cooldown)
+    };
+    p.text(
+        mana_bar.right_top() - vec2(3.0, -1.0),
+        Align2::RIGHT_TOP,
+        state,
+        FontId::proportional(10.0),
+        if low { style::DANGER } else { style::PAPER },
+    );
+    let rail = Rect::from_min_size(gauge.min + vec2(0.0, 14.0), vec2(gauge.width(), 1.0));
+    p.rect_filled(rail, 0, super::grimoire::SILVER_DARK);
     if view.cooldown > 0.0 {
-        let total = view.cast_total.max(0.06);
-        let frac = (view.cooldown / total).clamp(0.0, 1.0);
-        let recharging = view.recharge_total > 0.01 && view.cooldown <= view.recharge_total + 0.01;
-        let timer_col = if recharging {
-            style::AMBER
+        let total = if recharging {
+            view.recharge_total
         } else {
-            Color32::from_rgb(112, 224, 246)
-        };
+            view.cast_total
+        }
+        .max(0.06);
         p.rect_filled(
             Rect::from_min_size(
-                timer_bar.min,
-                vec2(frac * timer_bar.width(), timer_bar.height()),
+                rail.min,
+                vec2(
+                    (rail.width() * (view.cooldown / total).clamp(0.0, 1.0)).floor(),
+                    1.0,
+                ),
             ),
             0,
-            timer_col,
+            if recharging {
+                style::AMBER
+            } else {
+                style::MANA
+            },
         );
     }
-
-    let text = if view.mana_flash > 0.0 {
-        "LOW MP!".to_string()
-    } else if view.cooldown > 0.0
-        && view.recharge_total > 0.01
-        && view.cooldown <= view.recharge_total + 0.01
-    {
-        format!("RCH {:.2}s", view.cooldown)
-    } else {
-        format!("{:.0} MP", view.mana.max(0.0).floor())
-    };
-    let text_col = if view.mana_flash > 0.0 {
-        style::DANGER
-    } else if view.cooldown > 0.0 && view.recharge_total > 0.01 {
-        style::AMBER
-    } else {
-        style::PAPER
-    };
-    p.text(
-        rect.right_top() + vec2(1.0, 1.0),
-        Align2::RIGHT_TOP,
-        &text,
-        FontId::monospace(13.0),
-        style::INK,
-    );
-    p.text(
-        rect.right_top(),
-        Align2::RIGHT_TOP,
-        text,
-        FontId::monospace(13.0),
-        text_col,
-    );
-
     resp.on_hover_ui(|ui| {
         super::wands::show_wand_hover_card(ui, view);
     });
+}
+
+fn spell_deck(ui: &mut egui::Ui, view: &View, width: f32, maximum: f32, time: f32) {
+    let cap = wands::capacity(view.wand);
+    let eval = wands::evaluate_cast_block(
+        view.wand,
+        view.rare_spells,
+        view.discoveries,
+        view.rank,
+        &view.loadout,
+        view.loadout.cursor,
+    );
+    let mut slots = Vec::with_capacity(cap);
+    let mana_width = width - (cap as f32 * 20.0 - 2.0) - 4.0;
+    let inline_mana = mana_width >= 78.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = vec2(super::grimoire::GAP, 2.0);
+        for index in 0..cap {
+            let spell = view.loadout.slot(index);
+            let (r, response) = ui.allocate_exact_size(
+                vec2(super::grimoire::SLOT, super::grimoire::SLOT),
+                egui::Sense::hover(),
+            );
+            slots.push(r);
+            let r = super::grimoire::react(&response, r, index == view.loadout.cursor);
+            icons::frame(ui.painter(), r, index == view.loadout.cursor);
+            if spell != wands::EMPTY {
+                icons::paint(ui.painter(), r.shrink(2.0), Icon::Spell(spell));
+                if wands::is_modifier(spell) {
+                    ui.painter().rect_filled(
+                        Rect::from_min_size(r.left_top() + vec2(2.0, 2.0), vec2(2.0, 2.0)),
+                        0,
+                        style::MANA,
+                    );
+                }
+                if index == view.loadout.cursor && view.cooldown > 0.0 {
+                    let content = r.shrink(2.0);
+                    let h = (content.height()
+                        * (view.cooldown / view.cast_total.max(0.12)).clamp(0.0, 1.0))
+                    .floor();
+                    ui.painter().rect_filled(
+                        Rect::from_min_size(content.min, vec2(content.width(), h)),
+                        0,
+                        Color32::from_black_alpha(155),
+                    );
+                }
+                if response.hovered() {
+                    super::grimoire::focus(ui.painter(), r);
+                }
+                response.on_hover_ui(|ui| super::wands::show_spell_hover_card(ui, spell, view));
+            }
+        }
+        if inline_mana {
+            ui.add_space(2.0);
+            mana_and_timers(ui, mana_width, view, maximum, time);
+        }
+    });
+    super::wands::paint_cast_block_brackets(ui.painter(), &slots, &eval);
+    if !inline_mana {
+        mana_and_timers(ui, width, view, maximum, time);
+    }
+    let (r, _) = ui.allocate_exact_size(vec2(width, 10.0), egui::Sense::hover());
+    // Dark backing so the name and binding hint stay legible over grass and trees.
+    ui.painter()
+        .rect_filled(r.expand2(vec2(3.0, 1.0)), 0, Color32::from_black_alpha(120));
+    ui.painter().text(
+        r.left_top() + vec2(1.0, 1.0),
+        Align2::LEFT_TOP,
+        spell_name(view.spell),
+        FontId::proportional(10.0),
+        style::INK,
+    );
+    ui.painter().text(
+        r.left_top(),
+        Align2::LEFT_TOP,
+        spell_name(view.spell),
+        FontId::proportional(10.0),
+        style::PAPER,
+    );
+    ui.painter().text(
+        r.right_top() + vec2(1.0, 1.0),
+        Align2::RIGHT_TOP,
+        crate::player::spell_binding_hint(),
+        FontId::proportional(10.0),
+        style::INK,
+    );
+    ui.painter().text(
+        r.right_top(),
+        Align2::RIGHT_TOP,
+        crate::player::spell_binding_hint(),
+        FontId::proportional(10.0),
+        super::grimoire::SILVER,
+    );
 }
 
 /// Positions health on the left and hunger on the right above the centered hotbar (Minecraft-style),
@@ -508,8 +546,7 @@ pub(super) fn hud(
     let screen = ctx.content_rect();
     let available = (screen.width() - 24.0).max(160.0);
     // Match the hotbar width when it fits, or clamp to available screen width.
-    let bar_width = hotbar_rect.width().max(260.0).min(available).min(380.0);
-    let compact = screen.height() < 480.0 || bar_width < 240.0;
+    let bar_width = hotbar_rect.width().min(available).floor();
     let bottom = hotbar_rect.top() - 4.0;
     let regen_active = view.hunger >= 75.0 && view.health < maximum && view.hurt <= 0.0;
 
@@ -518,90 +555,9 @@ pub(super) fn hud(
         .interactable(cursor_free)
         .show(ctx, |ui| {
             ui.set_width(bar_width);
-            ui.spacing_mut().item_spacing = vec2(4.0, 2.5);
+            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            ui.spacing_mut().interact_size.y = 9.0;
 
-            if view.wand > 0 {
-                mana_and_timers(ui, bar_width, view, max_mana, time);
-                if !compact {
-                    let cap = wands::capacity(view.wand);
-                    let eval = wands::evaluate_cast_block(
-                        view.wand,
-                        view.rare_spells,
-                        view.discoveries,
-                        view.rank,
-                        &view.loadout,
-                        view.loadout.cursor,
-                    );
-                    let mut slot_rects = Vec::with_capacity(cap);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(3.0, 2.0);
-                        ui.set_max_width(bar_width);
-                        for slot in 0..cap {
-                            let spell = view.loadout.slot(slot);
-                            let (r, slot_resp) =
-                                ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
-                            slot_rects.push(r);
-                            if spell == wands::EMPTY {
-                                ui.painter().rect_filled(
-                                    r.shrink(2.0),
-                                    0,
-                                    Color32::from_black_alpha(120),
-                                );
-                                ui.painter().rect_stroke(
-                                    r.shrink(1.0),
-                                    0,
-                                    Stroke::new(1.0, Color32::from_rgb(62, 52, 48)),
-                                    egui::epaint::StrokeKind::Inside,
-                                );
-                                continue;
-                            }
-                            icons::frame(ui.painter(), r, slot == view.loadout.cursor);
-                            icons::paint(ui.painter(), r.shrink(2.0), Icon::Spell(spell));
-                            if wands::is_modifier(spell) {
-                                ui.painter().rect_stroke(
-                                    r.shrink(1.0),
-                                    0,
-                                    Stroke::new(1.0, style::AMBER),
-                                    egui::epaint::StrokeKind::Inside,
-                                );
-                            }
-                            if slot == view.loadout.cursor && view.cooldown > 0.0 {
-                                let progress =
-                                    (view.cooldown / view.cast_total.max(0.12)).clamp(0.0, 1.0);
-                                ui.painter().rect_filled(
-                                    Rect::from_min_size(
-                                        r.left_bottom() - vec2(0.0, 2.0),
-                                        vec2(r.width() * progress, 2.0),
-                                    ),
-                                    0,
-                                    style::MANA,
-                                );
-                            }
-                            slot_resp.on_hover_ui(|ui| {
-                                super::wands::show_spell_hover_card(ui, spell, view);
-                            });
-                        }
-                        ui.add_space(2.0);
-                        style::keycap(ui, "R");
-                        let name_w = (bar_width - cap as f32 * 25.0 - 56.0).clamp(72.0, 140.0);
-                        let (name_rect, wand_lbl) =
-                            ui.allocate_exact_size(vec2(name_w, 16.0), egui::Sense::hover());
-                        ui.painter().with_clip_rect(name_rect).text(
-                            name_rect.left_center(),
-                            Align2::LEFT_CENTER,
-                            spell_name(view.spell),
-                            FontId::proportional(11.5),
-                            style::PAPER,
-                        );
-                        style::keycap(ui, "T");
-                        wand_lbl.on_hover_ui(|ui| {
-                            super::wands::show_wand_hover_card(ui, view);
-                        });
-                    });
-                    super::wands::paint_cast_block_brackets(ui.painter(), &slot_rects, &eval);
-                    ui.add_space(2.0);
-                }
-            }
             if view.ward > 0.0 && view.ward_hits > 0 {
                 ui.label(
                     egui::RichText::new(format!(
@@ -617,13 +573,13 @@ pub(super) fn hud(
             if armor_points > 0 || view.respawn_point.is_some() {
                 ui.horizontal(|ui| {
                     if armor_points > 0 {
-                        draw_armor_row(ui, (bar_width * 0.46).max(110.0), armor_points);
+                        draw_armor_row(ui, (bar_width * 0.46).floor(), armor_points);
                     }
                     if let Some(sp) = view.respawn_point {
                         let lbl = ui.add(
                             egui::Label::new(
                                 egui::RichText::new("✦ Sanctum Bound")
-                                    .size(10.5)
+                                    .size(11.0)
                                     .color(style::JADE),
                             )
                             .sense(egui::Sense::hover()),
@@ -637,8 +593,8 @@ pub(super) fn hud(
             }
 
             // Minecraft-style split row: Health on the left, Hunger on the right above the hotbar.
-            let half_w = ((bar_width - 10.0) * 0.5).max(110.0);
-            if bar_width >= 230.0 {
+            let half_w = ((bar_width - 8.0) * 0.5).floor();
+            if bar_width >= 160.0 {
                 ui.horizontal(|ui| {
                     ui.set_width(bar_width);
                     draw_hearts(
@@ -688,11 +644,29 @@ pub(super) fn hud(
                 );
             }
         });
+    let mut bounds = result.response.rect;
+    if view.wand > 0 {
+        let slots_width = wands::capacity(view.wand) as f32 * 20.0 - 2.0;
+        let width = bar_width.max(slots_width + 84.0).min(available).floor();
+        let wand = egui::Area::new("wand_instrument".into())
+            .anchor(
+                Align2::CENTER_BOTTOM,
+                [0.0, bounds.top() - 6.0 - screen.bottom()],
+            )
+            .interactable(cursor_free)
+            .show(ctx, |ui| {
+                ui.set_width(width);
+                ui.spacing_mut().interact_size.y = 9.0;
+                ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                spell_deck(ui, view, width, max_mana, time);
+            });
+        bounds = bounds.union(wand.response.rect);
+    }
     super::relics::reward(ctx, view);
     super::relics::encounter(ctx, view);
     draw_compass(ctx, yaw, view.quest.as_ref());
     combat_feedback(ctx, view, yaw);
-    result.response.rect
+    bounds
 }
 
 /// Pixel-art heading strip. The target marker is derived from the same
@@ -700,22 +674,19 @@ pub(super) fn hud(
 /// when it is outside the visible arc.
 fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
     let content = ctx.content_rect();
-    let width = (content.width() - 96.0).clamp(250.0, 540.0);
+    let width = (content.width() - 96.0).clamp(200.0, 300.0).floor();
+    // 34 px tall so the labels (at +15) clear the bottom frame line; the top edge
+    // stays where it was at 28 px.
     let bar = Rect::from_center_size(
-        egui::pos2(content.center().x, content.top() + 30.0),
-        vec2(width, 36.0),
+        egui::pos2(content.center().x.floor(), content.top() + 25.0),
+        vec2(width, 34.0),
     );
     let p = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         "compass_strip".into(),
     ));
-    p.rect_filled(bar, 0, Color32::from_rgba_unmultiplied(12, 16, 22, 168));
-    p.rect_stroke(
-        bar,
-        0,
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(210, 202, 172, 120)),
-        egui::StrokeKind::Inside,
-    );
+    p.rect_filled(bar, 0, Color32::from_rgba_unmultiplied(18, 21, 25, 180));
+    super::grimoire::binding(&p, bar, false);
 
     let heading = yaw.to_degrees().rem_euclid(360.0);
     let span = 104.0;
@@ -772,7 +743,7 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
         egui::pos2(bar.right() + 6.0, bar.center().y),
         Align2::LEFT_CENTER,
         format!("{:03}°", heading.round() as i32 % 360),
-        FontId::monospace(9.5),
+        FontId::monospace(10.0),
         style::MUTED,
     );
 
@@ -837,7 +808,7 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
             egui::pos2(x, bar.bottom() + 3.0),
             Align2::CENTER_TOP,
             format!("{}  {:.0} m{}", target.label, target.distance_m, height),
-            FontId::monospace(9.5),
+            FontId::monospace(10.0),
             color,
         );
     }

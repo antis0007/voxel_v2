@@ -170,27 +170,42 @@ pub(crate) fn tectonic_zoom(generator_version: u32) -> f32 {
     if generator_version >= 15 { 2.4 } else { 1.0 }
 }
 
+type TectonicKey = (u32, u32, u32, u32);
+
 thread_local! {
     // Tectonics depend only on XZ. Cave-column generation used to recompute the
     // full plate solve for every solid voxel; this keeps it to once per column
     // per worker while preserving exact results.
-    static TECTONIC_CACHE: std::cell::RefCell<HashMap<(u32, u32, u32, u32), TectonicSample>>
-        = std::cell::RefCell::new(HashMap::new());
+    static TECTONIC_CACHE: std::cell::RefCell<crate::fast_hash::FastMap<TectonicKey, TectonicSample>>
+        = std::cell::RefCell::new(crate::fast_hash::FastMap::default());
+    // Voxel loops walk y fastest, so the next query is nearly always the same
+    // column. One remembered entry answers it without hashing at all.
+    static TECTONIC_LAST: std::cell::Cell<Option<(TectonicKey, TectonicSample)>>
+        = const { std::cell::Cell::new(None) };
 }
 
 pub fn sample_tectonics_zoomed(wx: f32, wz: f32, seed: u32, zoom: f32) -> TectonicSample {
     let key = (wx.to_bits(), wz.to_bits(), seed, zoom.to_bits());
-    if let Some(hit) = TECTONIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
-        return hit;
-    }
-    let value = sample_tectonics_uncached(wx, wz, seed, zoom);
-    TECTONIC_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache.len() >= 32_768 {
-            cache.clear();
+    if let Some((last, value)) = TECTONIC_LAST.get() {
+        if last == key {
+            return value;
         }
-        cache.insert(key, value);
-    });
+    }
+    let value = match TECTONIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        Some(hit) => hit,
+        None => {
+            let value = sample_tectonics_uncached(wx, wz, seed, zoom);
+            TECTONIC_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if cache.len() >= 32_768 {
+                    cache.clear();
+                }
+                cache.insert(key, value);
+            });
+            value
+        }
+    };
+    TECTONIC_LAST.set(Some((key, value)));
     value
 }
 
@@ -564,6 +579,17 @@ pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, 
     preview_surface_lod(cfg, x, z, 8.0)
 }
 
+/// Unquantized far-field surface height in metres (top of the surface voxel),
+/// from the same filtered evaluator as `preview_surface_lod`. The whole-voxel
+/// column height steps by one voxel, which turns gentle slopes into bands when
+/// a normal is taken over a few tens of metres; this keeps the slope continuous.
+pub(crate) fn preview_height_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> f32 {
+    if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
+        return super::distant_surface(cfg, x, z).0 * cfg.voxel_meters();
+    }
+    preview_landscape_lod(cfg, x, z, footprint).height + cfg.voxel_meters()
+}
+
 /// Visual far-field sample. `footprint` is the horizon ring spacing in metres: terrain
 /// detail finer than that is faded out instead of aliasing into spikes.
 pub(crate) fn preview_surface_lod(
@@ -575,6 +601,18 @@ pub(crate) fn preview_surface_lod(
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
         return super::distant_surface(cfg, x, z);
     }
+    let column = preview_column_lod(cfg, x, z, footprint);
+    (column.height as f32 + 1.0, column.surface)
+}
+
+pub(super) fn preview_column_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> ColumnSample {
+    if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
+        return super::sample_column(cfg, x, z);
+    }
+    column_from_landscape(cfg, x, z, preview_landscape_lod(cfg, x, z, footprint))
+}
+
+pub(super) fn preview_landscape_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> Landscape {
     let wx = cfg.world_x(x);
     let wz = cfg.world_z(z);
     let probe = footprint.clamp(8.0, 96.0);
@@ -593,78 +631,7 @@ pub(crate) fn preview_surface_lod(
     let hz = height_at(wx, wz + probe);
     let slope0 = (((hx - h0) / probe).powi(2) + ((hz - h0) / probe).powi(2)).sqrt();
     let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25);
-    let tect = if cfg.generator_version >= 9 {
-        Some(sample_tectonics_zoomed(
-            wx,
-            wz,
-            cfg.seed,
-            tectonic_zoom(cfg.generator_version),
-        ))
-    } else {
-        None
-    };
-    let patch = value_noise2(wx / 19.0, wz / 19.0, cfg.seed.wrapping_add(9341));
-    let snow_score = (1.0 - smoothstep(0.08, 0.48, temperature)) * 0.22
-        + smoothstep(104.0, 158.0, h) * 0.62
-        + patch * 0.28
-        - slope * 0.22;
-    // Before generator 23 the shore surfaces switched on at a hard 110 m ring
-    // around the origin, which showed as concentric colour bands. From 23 they
-    // follow the shore field alone, so the ring is gone.
-    let far_gate = cfg.generator_version >= 23 || wx.hypot(wz) > 110.0;
-    let far_override = if cfg.generator_version >= 15 && far_gate {
-        use super::terrain_variety as tv;
-        let shore = tv::shore(wx, wz, cfg.seed, temperature, moisture);
-        tv::shore_surface(wx, wz, cfg.seed, h, slope, shore, cfg.generator_version)
-            .or_else(|| {
-                tv::anomaly(wx, wz, cfg.seed)
-                    .filter(|_| h > 20.0)
-                    .and_then(|a| tv::anomaly_surface(&a, wx, wz, cfg.seed, h, slope))
-            })
-            .map(|(top, _)| top)
-    } else {
-        None
-    };
-    let block = if let Some(top) = far_override.filter(|_| h >= 1.5) {
-        top
-    } else if h < 1.5 {
-        BlockId::Basalt
-    } else if cfg.generator_version < 15 && h < 14.8 && slope < 0.42 {
-        BlockId::Sand
-    } else if tect.is_some_and(|t| t.volcanism > 0.54 && (h > 38.0 || slope > 0.38))
-        && snow_score <= 0.68
-    {
-        BlockId::Basalt
-    } else if snow_score > 0.64 && slope < 0.74 && h > 88.0 {
-        if h > 134.0 && slope < 0.34 && temperature < 0.22 && patch > 0.60 {
-            BlockId::Ice
-        } else {
-            BlockId::SnowGrass
-        }
-    } else if h > 112.0 || slope > 0.68 {
-        if let Some(t) = tect {
-            sample_stratigraphic_bed(wx, h, wz, cfg.seed, &t, cfg.generator_version)
-        } else {
-            BlockId::Stone
-        }
-    } else if temperature > 0.63 && moisture < 0.38 {
-        if cfg.generator_version >= 15 {
-            super::terrain_variety::desert_surface(wx, wz, cfg.seed, slope).0
-        } else {
-            BlockId::Sand
-        }
-    } else {
-        BlockId::Grass
-    };
-    let block = if cfg.generator_version >= 14 && super::valley::in_channel(cfg, wx, wz) {
-        BlockId::Sand
-    } else {
-        block
-    };
-    (
-        cfg.clamp_height(cfg.blocks_for_height(h)) as f32 + 1.0,
-        block,
-    )
+    classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, 0.25)
 }
 
 fn build_tile(key: TileKey) -> Tile {
@@ -855,6 +822,13 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
         }
     }
     let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h, slope, sediment);
+    classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, sediment)
+}
+
+fn classify_landscape(
+    cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32, slope: f32,
+    temperature: f32, moisture: f32, sediment: f32,
+) -> Landscape {
     let alpine = if cfg.generator_version >= 9 {
         h > 124.0 || (h > 98.0 && temperature < 0.24) || (h > 84.0 && slope > 0.78)
     } else if cfg.generator_version >= 7 {
@@ -1025,11 +999,21 @@ fn apply_macro_shaping(
         // The central clearing is dry, gently graded and joins 320 m of dry land.
         let distance = wx.hypot(wz);
         let v7 = cfg.generator_version >= 7;
+        // Generator 30 stretches or squeezes the falloff beyond the 110 m core by
+        // a slow noise field, so the home landmass gets bays and headlands instead
+        // of a circular rim of sand. Inside 110 m nothing changes.
+        let falloff_distance = if cfg.generator_version >= 30 && distance > 110.0 {
+            let lobe = fbm2(wx / 190.0, wz / 190.0, cfg.seed.wrapping_add(9061));
+            let reach = (1.0 + (lobe - 0.5) * 2.0 * 1.1).clamp(0.45, 2.0);
+            110.0 + (distance - 110.0) / reach
+        } else {
+            distance
+        };
         let inland = 1.0
             - smoothstep(
                 if v7 { 110.0 } else { 160.0 },
                 if v7 { 380.0 } else { 520.0 },
-                distance,
+                falloff_distance,
             );
         let floor =
             27.0 + (value_noise2(wx / 90.0, wz / 90.0, cfg.seed.wrapping_add(9011)) - 0.5) * 5.0;
@@ -1166,6 +1150,17 @@ fn apply_macro_shaping(
     (h, slope, temperature, moisture)
 }
 
+/// Generator 30: how far the true seabed lies above (+) or below (-) the
+/// whole-voxel column height, in voxels. Water depth adds it back so a gentle
+/// shelf grades smoothly instead of stepping one colour ring per voxel.
+pub(super) fn bed_fraction(cfg: &WorldSampleConfig, x: i32, z: i32) -> f32 {
+    if cfg.world_type == WorldType::Superflat || cfg.generator_version < 30 {
+        return 0.0;
+    }
+    let voxels = sample(cfg, x, z).height * cfg.inv_voxel_meters();
+    (voxels - voxels.round()).clamp(-0.5, 0.5)
+}
+
 pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
     if cfg.world_type == WorldType::Superflat {
         return ColumnSample {
@@ -1176,7 +1171,12 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
             cave: super::CaveColumn::default(),
         };
     }
-    let s = sample(cfg, x, z);
+    column_from_landscape(cfg, x, z, sample(cfg, x, z))
+}
+
+/// One material/ecology policy for resident columns and filtered horizon samples.
+/// The evaluator may filter relief, but never invent a second biome palette.
+fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) -> ColumnSample {
     let (mut surface, mut filler, mut vegetation) = match s.biome {
         Biome::Ocean | Biome::Coast => (BlockId::Sand, BlockId::Sandstone, 0.0),
         Biome::Marsh => (BlockId::Mud, BlockId::Clay, 0.25),
@@ -1514,19 +1514,31 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
 /// Generator 15 bedrock. A mountain is mostly one rock; thick, wavy beds of a
 /// second rock show only now and then, and basalt appears only in volcanic
 /// provinces. The old 9.5-11 m cycle made every cliff a stack of zebra stripes.
-fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> BlockId {
-    let dip_coord = wx * tect.boundary_normal[0] + wz * tect.boundary_normal[1];
-    let tilt = (dip_coord * 0.012).sin() * (6.0 + tect.boundary_proximity * 10.0);
-    let fold = tect.fold_wave * (4.0 + tect.orogeny * 12.0);
-    // Low-frequency warp bends beds into long gentle waves instead of flat stripes.
-    let warp = (value_noise2(wx / 170.0, wz / 170.0, seed.wrapping_add(9947)) - 0.5) * 16.0;
-    let strat_y = wy + tilt + fold + warp + tect.fault_throw;
-    if tect.volcanism > 0.46 || tect.rift_graben > 0.5 {
-        let dike = (dip_coord * 0.07 + wy * 0.03 + warp * 0.1).sin().abs();
-        if dike < 0.07 + tect.volcanism * 0.10 {
-            return BlockId::Basalt;
+/// The parts of `bedrock_v15` that depend on the column only. Voxel loops walk
+/// y fastest, so one remembered column serves nearly every query and saves
+/// about ten noise evaluations per solid voxel.
+#[derive(Clone, Copy)]
+struct BedrockColumn {
+    warp: f32,
+    heat: f32,
+    region: f32,
+    period: f32,
+}
+
+thread_local! {
+    static BEDROCK_LAST: std::cell::Cell<Option<((u32, u32, u32), BedrockColumn)>>
+        = const { std::cell::Cell::new(None) };
+}
+
+fn bedrock_column(wx: f32, wz: f32, seed: u32) -> BedrockColumn {
+    let key = (wx.to_bits(), wz.to_bits(), seed);
+    if let Some((last, column)) = BEDROCK_LAST.get() {
+        if last == key {
+            return column;
         }
     }
+    // Low-frequency warp bends beds into long gentle waves instead of flat stripes.
+    let warp = (value_noise2(wx / 170.0, wz / 170.0, seed.wrapping_add(9947)) - 0.5) * 16.0;
     let region = value_noise2(wx / 1100.0, wz / 1100.0, seed.wrapping_add(9951));
     // Warm lowland-climate regions are sedimentary sandstone country; elsewhere a
     // mountain is grey stone. The far-terrain shader tints rock by the same heat
@@ -1539,6 +1551,34 @@ fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> B
         ((base_heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0),
         0.5,
     );
+    let period = 34.0 + 22.0 * value_noise2(wx / 1600.0, wz / 1600.0, seed.wrapping_add(9955));
+    let column = BedrockColumn {
+        warp,
+        heat,
+        region,
+        period,
+    };
+    BEDROCK_LAST.set(Some((key, column)));
+    column
+}
+
+fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> BlockId {
+    let dip_coord = wx * tect.boundary_normal[0] + wz * tect.boundary_normal[1];
+    let tilt = (dip_coord * 0.012).sin() * (6.0 + tect.boundary_proximity * 10.0);
+    let fold = tect.fold_wave * (4.0 + tect.orogeny * 12.0);
+    let BedrockColumn {
+        warp,
+        heat,
+        region,
+        period,
+    } = bedrock_column(wx, wz, seed);
+    let strat_y = wy + tilt + fold + warp + tect.fault_throw;
+    if tect.volcanism > 0.46 || tect.rift_graben > 0.5 {
+        let dike = (dip_coord * 0.07 + wy * 0.03 + warp * 0.1).sin().abs();
+        if dike < 0.07 + tect.volcanism * 0.10 {
+            return BlockId::Basalt;
+        }
+    }
     let dominant = if tect.volcanism > 0.40 {
         BlockId::Basalt
     } else if heat > 0.60 && region < 0.72 {
@@ -1548,7 +1588,6 @@ fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> B
     } else {
         BlockId::Stone
     };
-    let period = 34.0 + 22.0 * value_noise2(wx / 1600.0, wz / 1600.0, seed.wrapping_add(9955));
     let bed = (strat_y / period).floor();
     let sheet = value_noise2(
         bed * 3.17 + 0.5,
@@ -1619,10 +1658,8 @@ fn stratum_v15(
     tect: &TectonicSample,
     meters: glam::Vec3,
     below: f32,
-    vein: f32,
     fleck: f32,
 ) -> BlockId {
-    let _ = vein;
     let seed = cfg.seed;
     // Flat coal and ironstone lenses, rare enough that a cliff shows a few, not a barcode.
     let lens = super::value_noise3(
@@ -1671,12 +1708,19 @@ pub(super) fn geological_stratum(
 ) -> BlockId {
     let meters = p.as_vec3() * cfg.voxel_meters();
     let below = depth as f32 * cfg.voxel_meters();
-    let vein = super::value_noise3(
-        meters.x * 0.24,
-        meters.y * 0.24,
-        meters.z * 0.24,
-        cfg.seed.wrapping_add(883),
-    );
+    // Generator 15+ rarely reads `vein` (only in volcanic pipes and fault
+    // planes), so it is evaluated on demand instead of for every solid voxel.
+    let vein_cache = std::cell::OnceCell::new();
+    let vein = || {
+        *vein_cache.get_or_init(|| {
+            super::value_noise3(
+                meters.x * 0.24,
+                meters.y * 0.24,
+                meters.z * 0.24,
+                cfg.seed.wrapping_add(883),
+            )
+        })
+    };
     let fleck = super::hash3(p.x, p.y, p.z, cfg.seed.wrapping_add(887));
 
     if cfg.generator_version >= 9 {
@@ -1723,7 +1767,7 @@ pub(super) fn geological_stratum(
                 return BlockId::Basalt;
             }
             if pipe_strength > 0.34 {
-                if fleck > 0.58 && vein > 0.56 {
+                if fleck > 0.58 && vein() > 0.56 {
                     return if meters.y > 0.0 {
                         BlockId::CopperOre
                     } else {
@@ -1736,7 +1780,7 @@ pub(super) fn geological_stratum(
 
         // 3. Fault-plane breccia & hydrothermal mineralization along tectonic sutures:
         if tect.fault_plane > 0.68 {
-            if vein > 0.60 && fleck > 0.35 {
+            if vein() > 0.60 && fleck > 0.35 {
                 return if meters.y > -4.0 {
                     BlockId::CopperOre
                 } else {
@@ -1749,17 +1793,17 @@ pub(super) fn geological_stratum(
         }
 
         if cfg.generator_version >= 15 {
-            return stratum_v15(cfg, &tect, meters, below, vein, fleck);
+            return stratum_v15(cfg, &tect, meters, below, fleck);
         }
         // 4. 3D Tilted, Folded, and Fault-Offset Sedimentary & Metamorphic Stratigraphy:
         let dip_tilt = (dip_coord * 0.045).sin() * (4.0 + tect.boundary_proximity * 6.5);
         let fold_disp = tect.fold_wave * (5.0 + tect.orogeny * 13.5);
         let strat_y =
-            meters.y + dip_tilt + fold_disp + tect.fault_throw * 1.15 + (vein - 0.5) * 2.2;
+            meters.y + dip_tilt + fold_disp + tect.fault_throw * 1.15 + (vein() - 0.5) * 2.2;
         let bed_phase = (strat_y / 9.5).rem_euclid(1.0);
 
         // Bedded Carboniferous coal seams & ancient cratonic banded ironstone formations:
-        if (0.47..0.54).contains(&bed_phase) && vein > 0.62 && fleck > 0.34 {
+        if (0.47..0.54).contains(&bed_phase) && vein() > 0.62 && fleck > 0.34 {
             return if tect.crust_age > 0.54 || strat_y < 6.0 {
                 BlockId::IronOre
             } else {
@@ -1790,11 +1834,11 @@ pub(super) fn geological_stratum(
         if (0.20..0.33).contains(&bed_phase)
             && strat_y > -6.0
             && tect.crust_age > 0.38
-            && vein < 0.52
+            && vein() < 0.52
         {
             return BlockId::Sandstone;
         }
-        if (0.72..0.79).contains(&bed_phase) && below < 22.0 && vein < 0.42 {
+        if (0.72..0.79).contains(&bed_phase) && below < 22.0 && vein() < 0.42 {
             return BlockId::Clay;
         }
     }
@@ -1813,11 +1857,11 @@ pub(super) fn geological_stratum(
                 BlockId::TinOre
             };
         }
-        if meters.y > -12.0 && meters.y < 6.0 && vein < 0.36 {
+        if meters.y > -12.0 && meters.y < 6.0 && vein() < 0.36 {
             return BlockId::Limestone;
         }
     }
-    if vein > 0.72 && fleck > 0.38 {
+    if vein() > 0.72 && fleck > 0.38 {
         return if meters.y < 8.0 {
             BlockId::IronOre
         } else {

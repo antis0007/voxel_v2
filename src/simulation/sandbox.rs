@@ -2,7 +2,7 @@
 use crate::world::BlockId;
 use anyhow::{Result, ensure};
 use glam::{IVec3, Quat, Vec3};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 pub const MAX_CELLS: usize = 32768;
 pub const MAX_BODIES: usize = 64;
 pub const MAX_BODY_VOXELS: usize = 128;

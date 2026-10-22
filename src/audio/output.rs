@@ -74,8 +74,7 @@ struct Voice {
     cursor: f32,
 }
 
-/// Equal-cue voices share one bus so rapid fire cannot phase-stack into a
-/// clipped buzz. Distinct cues keep their own full-level bus.
+/// Repeated voices share a gently normalized bus.
 fn equal_cue_gain(count: u32) -> f32 {
     1.0 / count.max(1) as f32
 }
@@ -147,7 +146,7 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
         }
         STATUS.store(1, Ordering::Relaxed);
         let mut buffers: Vec<_> = (0..3).map(|_| Buffer::new()).collect();
-        let mut voices: Vec<Voice> = Vec::with_capacity(24);
+        let mut voices: Vec<Voice> = Vec::with_capacity(16);
         let mut reverb = Reverb::new(synth::RATE);
         let mut failed = false;
         while running.load(Ordering::Relaxed) && !failed {
@@ -156,10 +155,9 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                 voices.clear();
             }
             while let Ok(play) = rx.try_recv() {
-                if enabled && voices.len() < 24 {
-                    // Rapid-fire casts used to stack up to 24 copies of the same
-                    // transient at full gain. Keep a small polyphony per cue;
-                    // distinct cues are unaffected.
+                if enabled {
+                    // Bound both same-cue repeats and total voices so dense
+                    // combat cannot turn into a crunchy wall of sound.
                     let cue = play.cue as usize;
                     let same = voices.iter().filter(|v| v.play.cue as usize == cue).count();
                     if same >= 4 {
@@ -176,7 +174,19 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                             voices.remove(index);
                         }
                     }
-                    voices.push(Voice { play, cursor: 0.0 });
+                    if voices.len() < 16 {
+                        voices.push(Voice { play, cursor: 0.0 });
+                    } else if let Some(index) = voices
+                        .iter()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| a.cursor.total_cmp(&b.cursor))
+                        .map(|(index, _)| index)
+                    {
+                        // Under cross-cue overload, retire the most finished
+                        // tail before admitting a new high-priority onset.
+                        voices.remove(index);
+                        voices.push(Voice { play, cursor: 0.0 });
+                    }
                 }
             }
             for buffer in &mut buffers {
@@ -198,27 +208,27 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                     buffer.prepared = false;
                 }
                 let target = if enabled { volume() } else { 0.0 };
-                let mut cue_counts = [0u32; Cue::COUNT];
-                for voice in &voices {
-                    cue_counts[voice.play.cue as usize] += 1;
-                }
                 let send = voices
                     .iter()
                     .map(|voice| voice.play.reverb)
-                    .fold(0.0f32, f32::max);
+                    .sum::<f32>()
+                    .min(0.42);
                 for frame in buffer.data.chunks_exact_mut(2) {
                     let mut stereo = [0.0f32; 2];
+                    let mut cue_counts = [0u32; Cue::COUNT];
+                    let mut active_count = 0u32;
                     gain += (target - gain) * 0.002;
                     for voice in &mut voices {
                         let cue = voice.play.cue as usize;
                         let sample = &bank[cue][voice.play.variant];
                         let i = voice.cursor as usize;
                         if i + 1 < sample.len() {
+                            active_count += 1;
+                            cue_counts[cue] += 1;
                             let value =
                                 sample[i] + (sample[i + 1] - sample[i]) * voice.cursor.fract();
-                            // Equal-cue voices share one bus. This keeps a burst
-                            // of 16 Sparks as loud as one Spark instead of
-                            // phase-stacking into a clipped buzz.
+                            // Equal-cue voices share one bus so repeated
+                            // Sparks do not grow linearly in loudness.
                             let norm = equal_cue_gain(cue_counts[cue]);
                             stereo[0] += value * voice.play.left * norm;
                             stereo[1] += value * voice.play.right * norm;
@@ -230,8 +240,20 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                     let (wet_l, wet_r) = reverb.process((stereo[0] + stereo[1]) * 0.5, send);
                     stereo[0] += wet_l;
                     stereo[1] += wet_r;
+                    // Recompute from voices that are actually sounding this
+                    // frame so quiet tails don't suppress a new cast.
+                    let bus_gain = (1.0 / (active_count.max(1) as f32).sqrt()).max(0.42);
                     for ch in 0..2 {
-                        frame[ch] = (stereo[ch].tanh() * gain * 28000.0) as i16;
+                        let limited = stereo[ch] * bus_gain;
+                        // Cubic soft knee is nearly linear at ordinary levels
+                        // and rolls off peaks without the saturated tanh buzz.
+                        let abs = limited.abs();
+                        let shaped = if abs <= 0.55 {
+                            limited
+                        } else {
+                            limited.signum() * (0.55 + 0.40 * (1.0 - (-((abs - 0.55) / 0.40)).exp()))
+                        };
+                        frame[ch] = (shaped * gain * 24000.0) as i16;
                     }
                 }
                 voices.retain(|v| {
@@ -294,7 +316,7 @@ mod tests {
     fn equal_cue_voices_share_one_normalized_bus() {
         assert_eq!(equal_cue_gain(0), 1.0);
         assert_eq!(equal_cue_gain(1), 1.0);
-        assert_eq!(equal_cue_gain(4), 0.25);
+        assert_eq!(equal_cue_gain(4), 0.5);
         assert!(equal_cue_gain(16) < equal_cue_gain(2));
     }
 

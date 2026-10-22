@@ -158,6 +158,12 @@ pub fn species(kind: u32) -> Option<&'static Species> {
         windup: 0.85,
         cooldown: 3.0,
     };
+    const MATRON: Species = Species {
+        name: "Orchard Matron", role: Role::Rooted, health: 240.0,
+        body_height: 2.5, body_width: 1.8, center_height: 1.25,
+        tall: true, flying: false, brawler: false, speed: 0.7,
+        attack_range: 14.0, windup: 1.1, cooldown: 3.0,
+    };
     match kind {
         0 => Some(&SKITTERER),
         1 => Some(&SENTINEL),
@@ -167,6 +173,7 @@ pub fn species(kind: u32) -> Option<&'static Species> {
         11 => Some(&LAMPREY),
         12 => Some(&KILN),
         13 => Some(&PORTER),
+        15 => Some(&MATRON),
         _ => None,
     }
 }
@@ -184,10 +191,26 @@ pub fn draw_body(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) 
         4 => moth(e, m, time, wind, hit),
         5 => warden(e, m, time, wind, hit),
         10 => mimic(e, m, time, wind, hit),
-        11 => lamprey(e, m, time, wind, hit),
+        11 => lamprey(e, m, time, wind),
         12 => kiln(e, m, time, wind, hit),
         13 => porter(e, m, time, wind, hit),
+        15 => matron(e, m, wind, hit),
         _ => {}
+    }
+}
+
+fn matron(e: &Enemy, m: &mut Model, wind: f32, hit: [f32;3]) {
+    let sway = (e.phase * 2.0).sin() * 0.04 * e.gait;
+    m.cuboid(local(e,0.0,0.8,0.0),Vec3::new(1.5,1.4,1.3),Quat::from_rotation_z(sway),[0.3,0.4,0.2],0.0);
+    m.cuboid(local(e,0.0,1.65-wind*0.2,0.0),Vec3::new(1.1,0.7,0.9),Quat::IDENTITY,hit,0.0);
+    for side in [-1.0,1.0] {
+        for i in 0..3 {
+            let z = i as f32*0.45-0.45;
+            limb(m,local(e,side*0.5,0.9,z),local(e,side*0.95,0.5,z+wind*0.3),local(e,side*1.1,0.1,z),0.1,[0.42,0.58,0.32]);
+            // Large visible brood sacs contract with the committed cast.
+            m.cuboid(local(e,side*0.63,1.25,z),Vec3::new(0.45,0.6-wind*0.15,0.35),Quat::IDENTITY,[0.52,0.36,0.52],0.0);
+        }
+        m.cuboid(local(e,side*0.25,1.8,-0.48),Vec3::splat(0.1),Quat::IDENTITY,[0.9,0.72,0.42],0.2);
     }
 }
 
@@ -210,7 +233,7 @@ fn limb(m: &mut Model, hip: Vec3, knee: Vec3, foot: Vec3, thickness: f32, color:
 }
 
 fn skitterer(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
-    let bob = (e.phase * 7.0).sin().abs() * 0.035;
+    let bob = (e.phase * 7.0).sin().abs() * 0.035 * e.gait;
     let crouch = wind * 0.10;
     let shell = [0.30, 0.34, 0.22];
     let belly = [0.15, 0.19, 0.13];
@@ -252,8 +275,8 @@ fn skitterer(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
     for side in [-1.0_f32, 1.0] {
         for i in 0..4 {
             let ph = e.phase * 8.0 + i as f32 * 1.55 + side * 0.7;
-            let stride = ph.sin() * (0.055 + wind * 0.05);
-            let lift = ph.cos().max(0.0) * 0.055;
+            let stride = ph.sin() * 0.055 * e.gait + wind * 0.025;
+            let lift = ph.cos().max(0.0) * 0.055 * e.gait;
             let z = 0.26 - i as f32 * 0.17;
             let hip = local(e, side * 0.27, 0.32 + bob - crouch, z);
             let knee = local(e, side * 0.50, 0.30 + lift + bob - crouch, z + stride);
@@ -456,154 +479,7 @@ fn moth(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
 }
 
 fn warden(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
-    let stride = (e.phase * 5.0).sin() * 0.16;
-    let armor = [0.31, 0.39, 0.43];
-    let armor_dark = [0.17, 0.24, 0.28];
-    let cloth = [0.13, 0.22, 0.25];
-    let gold = [0.60, 0.47, 0.19];
-    let plume = (time * 1.3 + e.slot as f32).sin() * 0.025;
-    for (x, phase) in [(-0.20, 0.0), (0.20, 1.55)] {
-        let swing = stride * (e.phase * 5.0 + phase).sin();
-        let hip = local(e, x, 0.62, 0.0);
-        let knee = local(e, x * 1.2, 0.33, swing * 0.7);
-        let foot = local(e, x * 1.25, 0.04, swing);
-        limb(m, hip, knee, foot, 0.075, armor_dark);
-        m.cuboid(
-            local(e, x, 0.64, 0.0),
-            Vec3::new(0.24, 0.15, 0.22),
-            Quat::IDENTITY,
-            cloth,
-            0.0,
-        );
-    }
-    m.cuboid(
-        local(e, 0.0, 1.06 - wind * 0.04, 0.0),
-        Vec3::new(0.54, 0.68, 0.34),
-        Quat::from_rotation_x(wind * 0.10),
-        armor,
-        0.0,
-    );
-    m.cuboid(
-        local(e, 0.0, 0.76, 0.0),
-        Vec3::new(0.58, 0.10, 0.38),
-        Quat::IDENTITY,
-        gold,
-        0.0,
-    );
-    m.cuboid(
-        local(e, 0.0, 1.04, -0.20),
-        Vec3::new(0.30, 0.42, 0.10),
-        Quat::IDENTITY,
-        cloth,
-        0.0,
-    );
-    for x in [-0.31, 0.31] {
-        m.cuboid(
-            local(e, x, 1.32, 0.0),
-            Vec3::new(0.22, 0.20, 0.32),
-            Quat::from_rotation_z(x.signum() * 0.16),
-            armor_dark,
-            0.0,
-        );
-    }
-    m.cuboid(
-        local(e, 0.0, 1.52, -0.01),
-        Vec3::new(0.34, 0.30, 0.32),
-        Quat::IDENTITY,
-        armor,
-        0.0,
-    );
-    m.cuboid(
-        local(e, 0.0, 1.50, -0.19),
-        Vec3::new(0.28, 0.08, 0.08),
-        Quat::IDENTITY,
-        [0.06, 0.09, 0.11],
-        0.0,
-    );
-    m.orb(local(e, 0.0, 1.54, -0.24), 0.045, hit, 2.6);
-    m.cuboid(
-        local(e, plume, 1.70, 0.04),
-        Vec3::new(0.12, 0.16, 0.34),
-        Quat::from_rotation_x(-0.24),
-        gold,
-        0.18,
-    );
-    // Weapon arm raises and thrusts with the tell.
-    let weapon_hand = local(e, 0.44, 1.10 + wind * 0.22, -0.18 - wind * 0.20);
-    m.beam(
-        local(e, 0.32, 1.26, 0.0),
-        weapon_hand,
-        0.075,
-        armor_dark,
-        0.0,
-    );
-    m.cuboid(
-        weapon_hand,
-        Vec3::new(0.12, 0.12, 0.14),
-        Quat::IDENTITY,
-        [0.50, 0.39, 0.20],
-        0.0,
-    );
-    m.beam(
-        weapon_hand + Vec3::new(0.0, -0.02, -0.04),
-        weapon_hand + Vec3::new(0.0, 0.02, -0.78),
-        0.035,
-        [0.72, 0.77, 0.78],
-        0.32,
-    );
-    // Shield arm. `guard` is gameplay state: a broken shield leaves an empty
-    // arm, and the warden can no longer block from the front.
-    let shield_hand = local(e, -0.46, 1.06, -0.16);
-    m.beam(
-        local(e, -0.32, 1.24, 0.0),
-        shield_hand,
-        0.075,
-        armor_dark,
-        0.0,
-    );
-    if e.guard {
-        let brace = wind * 0.22;
-        let shield_center = local(e, -0.56 - brace * 0.20, 1.08, -0.30);
-        m.cuboid(
-            shield_center,
-            Vec3::new(0.16, 0.78, 0.62),
-            Quat::from_rotation_x(-0.10 * wind),
-            [0.24, 0.38, 0.46],
-            0.04,
-        );
-        m.cuboid(
-            shield_center + Vec3::new(-0.02, 0.0, -0.06),
-            Vec3::new(0.08, 0.52, 0.38),
-            Quat::IDENTITY,
-            [0.34, 0.49, 0.56],
-            0.08,
-        );
-        m.orb(shield_center + Vec3::new(-0.06, 0.0, 0.0), 0.10, gold, 0.8);
-    } else {
-        // A short broken strap remains where the shield was.
-        m.cuboid(
-            shield_hand + Vec3::new(-0.02, -0.10, 0.0),
-            Vec3::new(0.10, 0.16, 0.10),
-            Quat::IDENTITY,
-            [0.30, 0.20, 0.12],
-            0.0,
-        );
-    }
-    // Two ground pixels on a heavy step make contact readable without a
-    // screen-space dust system.
-    let step = (e.phase * 5.0).sin().abs();
-    if step > 0.75 {
-        for x in [-0.26, 0.26] {
-            m.glow_voxel(
-                local(e, x, 0.03, 0.06),
-                Vec3::splat(0.025),
-                Quat::IDENTITY,
-                [0.42, 0.36, 0.28],
-                0.2,
-                0.5,
-            );
-        }
-    }
+    super::enemy_presentation::warden(e, m, time, wind, hit);
 }
 
 #[cfg(test)]
@@ -730,7 +606,7 @@ fn mimic(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
     }
 }
 
-fn lamprey(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
+fn lamprey(e: &Enemy, m: &mut Model, time: f32, wind: f32) {
     let body = [0.20, 0.32, 0.34];
     let dark = [0.10, 0.17, 0.20];
     let coil = wind * 0.22;
@@ -857,7 +733,7 @@ fn kiln(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
     for side in [-1.0_f32, 1.0] {
         for i in 0..3 {
             let z = -0.22 + i as f32 * 0.22;
-            let swing = (e.phase * 6.0 + i as f32 * 1.8 + side).sin() * 0.04;
+            let swing = (e.phase * 6.0 + i as f32 * 1.8 + side).sin() * 0.04 * e.gait;
             limb(
                 m,
                 local(e, side * 0.30, 0.34, z),
@@ -885,18 +761,18 @@ fn kiln(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
 }
 
 fn porter(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
-    let stride = (e.phase * 4.2).sin() * 0.15;
+    let stride = 0.15 * e.gait;
     let frame = [0.34, 0.29, 0.23];
     let brass = [0.56, 0.43, 0.20];
     let cloth = [0.16, 0.24, 0.24];
     let cargo = [0.34, 0.24, 0.14];
-    for (x, phase) in [(-0.25, 0.0), (0.25, 1.6)] {
+    for (x, phase) in [(-0.25, 0.0), (0.25, std::f32::consts::PI)] {
         let swing = stride * (e.phase * 4.2 + phase).sin();
         limb(
             m,
             local(e, x, 0.62, 0.0),
             local(e, x * 1.2, 0.32, swing * 0.6),
-            local(e, x * 1.25, 0.04, swing),
+            local(e, x * 1.25, 0.04 + (e.phase * 4.2 + phase).cos().max(0.0) * 0.07 * e.gait, swing),
             0.085,
             [0.20, 0.17, 0.14],
         );

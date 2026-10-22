@@ -20,6 +20,20 @@ pub enum RenderDebugView {
     CloudTemporalWeight,
     ShadowCascadeIndex,
     ShadowTexelDensity,
+    Albedo,
+    MaterialId,
+    GeometricNormal,
+    ShadingNormal,
+    Roughness,
+    DirectLight,
+    AmbientDiffuse,
+    LocalLight,
+    Unfogged,
+    Projection,
+    AmbientOcclusion,
+    SkyAccess,
+    MeshKind,
+    WaterDepth,
 }
 
 impl RenderDebugView {
@@ -43,6 +57,20 @@ impl RenderDebugView {
             Self::CloudTemporalWeight => 15,
             Self::ShadowCascadeIndex => 16,
             Self::ShadowTexelDensity => 17,
+            Self::Albedo => 18,
+            Self::MaterialId => 19,
+            Self::GeometricNormal => 20,
+            Self::ShadingNormal => 21,
+            Self::Roughness => 22,
+            Self::DirectLight => 23,
+            Self::AmbientDiffuse => 24,
+            Self::LocalLight => 25,
+            Self::Unfogged => 26,
+            Self::Projection => 27,
+            Self::AmbientOcclusion => 28,
+            Self::SkyAccess => 29,
+            Self::MeshKind => 30,
+            Self::WaterDepth => 31,
         }
     }
 
@@ -66,10 +94,24 @@ impl RenderDebugView {
             Self::CloudTemporalWeight => "Cloud Temporal Weight",
             Self::ShadowCascadeIndex => "Shadow Cascade Index",
             Self::ShadowTexelDensity => "Shadow Texel Density",
+            Self::Albedo => "Unlit Material Albedo",
+            Self::MaterialId => "Render Family ID (unknown: magenta)",
+            Self::GeometricNormal => "Triangle Normal (world XYZ -> RGB)",
+            Self::ShadingNormal => "Shading Normal (world XYZ -> RGB)",
+            Self::Roughness => "Actual BRDF Roughness",
+            Self::DirectLight => "Directional Light (linear HDR)",
+            Self::AmbientDiffuse => "Ambient/Bounce Diffuse (linear HDR)",
+            Self::LocalLight => "Local Lights (linear HDR)",
+            Self::Unfogged => "Surface Lighting (no atmospheric obscuration)",
+            Self::Projection => "Material Projection (5 cm texels)",
+            Self::AmbientOcclusion => "Vertex Ambient Occlusion",
+            Self::SkyAccess => "Cached Sky Access",
+            Self::MeshKind => "Mesh: resident green / backdrop blue / edited orange",
+            Self::WaterDepth => "Water Optical Depth (white: 32 metres)",
         }
     }
 
-    pub fn all() -> [Self; 18] {
+    pub fn all() -> [Self; 32] {
         [
             Self::None,
             Self::WeatherClipmapNear,
@@ -89,6 +131,20 @@ impl RenderDebugView {
             Self::CloudTemporalWeight,
             Self::ShadowCascadeIndex,
             Self::ShadowTexelDensity,
+            Self::Albedo,
+            Self::MaterialId,
+            Self::GeometricNormal,
+            Self::ShadingNormal,
+            Self::Roughness,
+            Self::DirectLight,
+            Self::AmbientDiffuse,
+            Self::LocalLight,
+            Self::Unfogged,
+            Self::Projection,
+            Self::AmbientOcclusion,
+            Self::SkyAccess,
+            Self::MeshKind,
+            Self::WaterDepth,
         ]
     }
 }

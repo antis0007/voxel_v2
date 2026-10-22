@@ -2,8 +2,13 @@
 //! Chunk residency and terrain work are owned by render/streaming.rs.
 
 mod capture;
+pub mod coverage;
+pub(crate) fn flush_review_captures() {
+    if !capture::flush(std::time::Duration::from_secs(2)) {
+        eprintln!("[capture] end-of-review flush timed out");
+    }
+}
 mod horizon;
-pub use horizon::FAR_PLANE as HORIZON_FAR_PLANE;
 mod streaming;
 pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, build_draw_list};
 pub use streaming::{
@@ -15,8 +20,15 @@ pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
 mod atmosphere;
 pub mod atmosphere_params;
 pub mod cloud_governor;
-pub mod clouds;
 mod debug;
+#[cfg(test)]
+mod material_finish_contract;
+#[cfg(test)]
+mod directional_facet_contract;
+#[cfg(test)]
+mod directional_facet_diffuse_contract;
+#[cfg(test)]
+mod axis_unroll_contract;
 mod indirect;
 mod postprocess;
 pub use indirect::{
@@ -26,6 +38,7 @@ pub mod shadow;
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3, Vec4};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -138,6 +151,13 @@ pub struct WeatherUploadStats {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderFrameStats {
+    pub frame_id: u64,
+    pub config_id: u64,
+    /// Completed GPU samples, consumed once. Zero means the numeric timing is
+    /// retained for the live display only and must not enter an average.
+    pub gpu_sample_count: usize,
+    pub gpu_sample_frame_id: u64,
+    pub gpu_sample_config_id: u64,
     pub surface_acquire_ms: f32,
     pub stream_upload_ms: f32,
     pub shadow_encode_ms: f32,
@@ -206,21 +226,21 @@ enum CloudHistoryInvalidationReason {
 }
 
 const GPU_TIMESTAMP_BUFFERED_FRAMES: usize = 8;
-const GPU_TIMESTAMP_PASS_COUNT: u32 = 12;
+const GPU_TIMESTAMP_PASS_COUNT: u32 = GPU_TIMESTAMP_SHADOW_PASS_COUNT + 8;
 const GPU_TIMESTAMP_QUERY_COUNT: u32 = GPU_TIMESTAMP_PASS_COUNT * 2;
 const GPU_TIMESTAMP_RESULT_BYTES: u64 = GPU_TIMESTAMP_QUERY_COUNT as u64 * wgpu::QUERY_SIZE as u64;
 const GPU_TIMESTAMP_RESOLVE_BYTES: u64 = GPU_TIMESTAMP_RESULT_BYTES
     .div_ceil(wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT)
     * wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
 const GPU_TIMESTAMP_SHADOW_PASS_COUNT: u32 = shadow::CASCADE_COUNT as u32;
-const GPU_TIMESTAMP_PASS_TERRAIN: u32 = 4;
-const GPU_TIMESTAMP_PASS_CLOUD_RAYMARCH: u32 = 5;
-const GPU_TIMESTAMP_PASS_CLOUD_TEMPORAL: u32 = 6;
-const GPU_TIMESTAMP_PASS_SKY: u32 = 7;
-const GPU_TIMESTAMP_PASS_CLOUD_COMPOSITE: u32 = 8;
-const GPU_TIMESTAMP_PASS_OUTLINE: u32 = 9;
-const GPU_TIMESTAMP_PASS_UI: u32 = 10;
-const GPU_TIMESTAMP_PASS_INDIRECT: u32 = 11;
+const GPU_TIMESTAMP_PASS_TERRAIN: u32 = GPU_TIMESTAMP_SHADOW_PASS_COUNT;
+const GPU_TIMESTAMP_PASS_CLOUD_RAYMARCH: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 1;
+const GPU_TIMESTAMP_PASS_CLOUD_TEMPORAL: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 2;
+const GPU_TIMESTAMP_PASS_SKY: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 3;
+const GPU_TIMESTAMP_PASS_CLOUD_COMPOSITE: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 4;
+const GPU_TIMESTAMP_PASS_OUTLINE: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 5;
+const GPU_TIMESTAMP_PASS_UI: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 6;
+const GPU_TIMESTAMP_PASS_INDIRECT: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 7;
 
 fn allocate_pass_timestamp_writes<'a>(
     query_set: Option<&'a wgpu::QuerySet>,
@@ -253,8 +273,34 @@ struct GpuProfilerSlot {
     readback_buffer: wgpu::Buffer,
     pending: bool,
     submission_id: u64,
+    frame_id: u64,
+    config_id: u64,
     query_count: u32,
     pass_queries: [Option<(u32, u32)>; GPU_TIMESTAMP_PASS_COUNT as usize],
+}
+
+// One callback per device, installed before any optional profiler resources.
+// A false flag means no loss has been reported, not a GPU-completion fence.
+fn acquire_surface_frame(surface:&wgpu::Surface<'_>,lost:&AtomicBool)->Result<wgpu::SurfaceTexture,wgpu::SurfaceError> {
+    if lost.load(Ordering::Acquire) {return Err(wgpu::SurfaceError::Lost);}
+    let result=surface.get_current_texture();
+    if let Err(error)=&result {
+        static FAILURES:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+        let count=FAILURES.fetch_add(1,Ordering::Relaxed)+1;
+        if count.is_power_of_two() {eprintln!("[surface-acquire] failure={count} error={error:?}");}
+    }
+    result
+}
+
+fn install_device_loss_signal(device: &wgpu::Device) -> Arc<AtomicBool> {
+    let lost = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&lost);
+    device.set_device_lost_callback(move |reason, message| {
+        if !signal.swap(true, Ordering::AcqRel) {
+            eprintln!("[device-lost] reason={reason:?} message={message}");
+        }
+    });
+    lost
 }
 
 struct GpuProfiler {
@@ -265,21 +311,24 @@ struct GpuProfiler {
     done_tx: mpsc::Sender<GpuTimestampReadback>,
     done_rx: mpsc::Receiver<GpuTimestampReadback>,
     last_timings: GpuPassTimings,
+    completed: VecDeque<GpuTimingSample>,
     device_lost: Arc<AtomicBool>,
     failed: bool,
 }
 
+#[derive(Clone, Copy)]
+struct GpuTimingSample {
+    timings: GpuPassTimings,
+    frame_id: u64,
+    config_id: u64,
+}
+
 impl GpuProfiler {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, device_lost: Arc<AtomicBool>) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
 
-        let device_lost = Arc::new(AtomicBool::new(false));
-        let lost_signal = device_lost.clone();
-        device.set_device_lost_callback(move |_, _| {
-            lost_signal.store(true, Ordering::Release);
-        });
         // Optional diagnostic allocations must not become invalid resources
         // silently published into the next render encoder.
         device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -312,6 +361,8 @@ impl GpuProfiler {
                     readback_buffer,
                     pending: false,
                     submission_id: 0,
+                    frame_id: 0,
+                    config_id: 0,
                     query_count: 0,
                     pass_queries: [None; GPU_TIMESTAMP_PASS_COUNT as usize],
                 }
@@ -336,6 +387,7 @@ impl GpuProfiler {
             done_tx,
             done_rx,
             last_timings: GpuPassTimings::default(),
+            completed: VecDeque::with_capacity(GPU_TIMESTAMP_BUFFERED_FRAMES * 2),
             device_lost,
             failed: false,
         })
@@ -351,10 +403,11 @@ impl GpuProfiler {
         }
         self.failed = true;
         self.last_timings = GpuPassTimings::default();
+        self.completed.clear();
     }
 
     fn acquire_slot(&mut self) -> Option<usize> {
-        if !self.healthy() {
+        if !self.healthy() || self.completed.len() >= GPU_TIMESTAMP_BUFFERED_FRAMES {
             return None;
         }
         for _ in 0..self.slots.len() {
@@ -398,6 +451,8 @@ impl GpuProfiler {
         slot_index: usize,
         query_count: u32,
         pass_queries: [Option<(u32, u32)>; GPU_TIMESTAMP_PASS_COUNT as usize],
+        frame_id: u64,
+        config_id: u64,
     ) {
         if query_count == 0 || !self.healthy() {
             return;
@@ -409,6 +464,8 @@ impl GpuProfiler {
         let slot = &mut self.slots[slot_index];
         slot.pending = true;
         slot.submission_id = submission_id;
+        slot.frame_id = frame_id;
+        slot.config_id = config_id;
         slot.query_count = query_count;
         slot.pass_queries = pass_queries;
         let requested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -449,6 +506,8 @@ impl GpuProfiler {
                 return false;
             }
             let period = self.timestamp_period_ns;
+            let frame_id = slot.frame_id;
+            let config_id = slot.config_id;
             // wgpu 27's getter is infallible at the API boundary: the backend
             // panics if loss destroys a buffer AFTER a successful map callback.
             // Contain that race here and retire the entire optional profiler.
@@ -470,7 +529,12 @@ impl GpuProfiler {
                 Some(Self::decode_timings(&raw, &slot.pass_queries, period))
             }));
             match result {
-                Ok(Some(timings)) if self.healthy() => self.last_timings = timings,
+                Ok(Some(timings)) if self.healthy() => {
+                    // At most eight pending readbacks can join eight queued
+                    // samples. Stop requesting timestamps under backpressure;
+                    // gameplay never waits for the optional profiler.
+                    self.completed.push_back(GpuTimingSample { timings, frame_id, config_id });
+                }
                 _ => {
                     self.disable("timing readback invalidated; timing resources retired");
                     return false;
@@ -479,8 +543,10 @@ impl GpuProfiler {
         }
         true
     }
-    fn last_timings(&self) -> GpuPassTimings {
-        self.last_timings
+    fn take_sample(&mut self) -> Option<GpuTimingSample> {
+        let sample = self.completed.pop_front()?;
+        self.last_timings = sample.timings;
+        Some(sample)
     }
 
     fn decode_timings(
@@ -590,6 +656,13 @@ static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(3);
 /// Requested divisor: 2 = Ultra, 3 = High, 4 = Balanced.
 /// Extra divisor added by the adaptive cloud governor (0 = none).
 static CLOUD_AUTO_BUMP: AtomicU32 = AtomicU32::new(0);
+static CLOUD_ADAPTIVE_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Controlled reviews must compare the same quality even when their GPU cost differs.
+pub fn set_cloud_adaptive_enabled(enabled: bool) {
+    CLOUD_ADAPTIVE_ENABLED.store(enabled, Ordering::Relaxed);
+    if !enabled { CLOUD_AUTO_BUMP.store(0, Ordering::Relaxed); }
+}
 
 pub fn cloud_render_scale() -> u32 {
     CLOUD_RENDER_SCALE.load(Ordering::Relaxed)
@@ -601,15 +674,28 @@ pub fn set_cloud_render_scale(scale: u32) {
 /// 180-line cloud image. Keep at least 360 rows so small windows do not turn
 /// every cumulus into a soft blob after the cubic reconstruction.
 pub fn effective_cloud_render_scale(width: u32, height: u32) -> u32 {
-    let by_height = (height / 360).max(1);
-    let base = cloud_render_scale().min(by_height).clamp(2, 4);
-    (base + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)).min(4)
+    let maximum = (height / 360).min(width / 640).clamp(1, 4);
+    (cloud_render_scale() + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)).min(maximum)
 }
 /// Divisor request including the governor's bump, used to notice changes.
 fn cloud_scale_request() -> u32 {
     cloud_render_scale() * 8 + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)
 }
 const CLOUD_TEMPORAL_ENABLED: bool = false;
+
+#[derive(Clone, Copy, Default)]
+struct RenderIsolation {
+    skip_clouds: bool,
+    skip_horizon: bool,
+}
+
+fn render_isolation() -> RenderIsolation {
+    static OPTIONS: std::sync::OnceLock<RenderIsolation> = std::sync::OnceLock::new();
+    *OPTIONS.get_or_init(|| RenderIsolation {
+        skip_clouds: std::env::var("VOXEL_REVIEW_SKIP_CLOUDS").as_deref() == Ok("1"),
+        skip_horizon: std::env::var("VOXEL_REVIEW_SKIP_HORIZON").as_deref() == Ok("1"),
+    })
+}
 
 use crate::shader_sources::{LINE_SHADER, SHADOW_SHADER, UI_SHADER};
 
@@ -629,6 +715,7 @@ struct CameraUniform {
     /// x: conservative published resident coverage in metres. A negative
     /// value means "no override"; zero means no resident mesh is published.
     coverage: [f32; 4],
+    resident_coverage: coverage::ResidentCoverage,
 }
 
 #[repr(C)]
@@ -659,6 +746,8 @@ struct LightingUniform {
     mood: [f32; 4],
     /// fireflies, pollen, diamond dust, embers.
     ambience: [f32; 4],
+    /// Three linear palette colours, flow controls, then detail controls.
+    magic: [[f32; 4]; 5],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -726,7 +815,14 @@ fn lighting_uniform_from_state(
     let mut torch_positions = [[0.0; 4]; MAX_TORCH_LIGHTS];
     let mut torch_colors = [[0.0; 4]; MAX_TORCH_LIGHTS];
 
-    for (index, torch) in torch_lights.iter().take(MAX_TORCH_LIGHTS).enumerate() {
+    // Moving lights go first so the shader can time-seed exactly that prefix
+    // (torch_meta.z). Light sums are order-independent, so no light changes.
+    let moving_count = torch_lights.iter().filter(|torch| torch.moving).count().min(MAX_TORCH_LIGHTS);
+    let ordered = torch_lights
+        .iter()
+        .filter(|torch| torch.moving)
+        .chain(torch_lights.iter().filter(|torch| !torch.moving));
+    for (index, torch) in ordered.take(MAX_TORCH_LIGHTS).enumerate() {
         torch_positions[index] = [
             torch.position.x,
             torch.position.y,
@@ -866,7 +962,7 @@ fn lighting_uniform_from_state(
         torch_meta: [
             torch_lights.len().min(MAX_TORCH_LIGHTS) as f32,
             sky_time,
-            weather_state.summaries[0][3],
+            moving_count as f32,
             debug_view.as_u32() as f32,
         ],
         torch_positions,
@@ -876,6 +972,7 @@ fn lighting_uniform_from_state(
         surface_weather: crate::material_studio::weather_surface(cloud_controls.cumulonimbus),
         mood: state.mood,
         ambience: state.ambience,
+        magic: crate::egui_ui::magic_style::world_uniform(),
     }
 }
 
@@ -885,6 +982,9 @@ pub struct TorchLight {
     pub radius: f32,
     pub color: [f32; 3],
     pub strength: f32,
+    /// Follows the player or a spell. Its flicker is seeded from time alone so
+    /// walking does not re-roll it; static lights seed from their position.
+    pub moving: bool,
 }
 
 /// Maps conventional clip depth (0 near .. 1 far) to reverse-Z (1 near .. 0 far):
@@ -971,6 +1071,7 @@ pub struct Gpu {
     surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    device_lost: Arc<AtomicBool>,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     adapter_summary: String,
@@ -980,6 +1081,7 @@ pub struct Gpu {
     lighting_bind_group: wgpu::BindGroup,
     atmosphere: AtmosphereRuntime,
     shadow_renderer: shadow::ShadowRenderer,
+    horizon_detail: horizon::detail::Gpu,
     world_surface_bind_group: wgpu::BindGroup,
     cloud_texture_layout: wgpu::BindGroupLayout,
     cloud_render_layout: wgpu::BindGroupLayout,
@@ -1039,6 +1141,7 @@ pub struct Gpu {
     cloud_governor: cloud_governor::CloudGovernor,
     last_frame_instant: Instant,
     frame_index: u32,
+    render_frame_id: u64,
     // Monotonic sky time, used by the spell grade so its cadence is independent
     // of frame rate. frame_index is retained for temporal jitter only.
     effect_time: f32,
@@ -1346,6 +1449,7 @@ pub struct GpuBootstrap {
     surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    device_lost: Arc<AtomicBool>,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     adapter_summary: String,
@@ -1385,6 +1489,7 @@ pub struct GpuPendingInit {
     cloud_temporal_layout: Option<wgpu::BindGroupLayout>,
 
     world_surface_bind_group: Option<wgpu::BindGroup>,
+    horizon_detail: Option<horizon::detail::Gpu>,
 
     cloud_sampler: Option<wgpu::Sampler>,
     cloud_field_sampler: Option<wgpu::Sampler>,
@@ -1481,6 +1586,7 @@ impl GpuBootstrap {
             })
             .await?;
 
+        let device_lost = install_device_loss_signal(&device);
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats
@@ -1517,6 +1623,7 @@ impl GpuBootstrap {
             surface,
             device,
             queue,
+            device_lost,
             config,
             size,
             adapter_summary,
@@ -1570,7 +1677,7 @@ impl GpuBootstrap {
             u32,
         ),
     {
-        let frame = self.surface.get_current_texture()?;
+        let frame = acquire_surface_frame(&self.surface,&self.device_lost)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1645,6 +1752,7 @@ impl GpuBootstrap {
             cloud_temporal_layout: None,
 
             world_surface_bind_group: None,
+            horizon_detail: None,
 
             cloud_sampler: None,
             cloud_field_sampler: None,
@@ -1774,10 +1882,15 @@ impl GpuPendingInit {
             .device
             .clone();
         device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let started = std::time::Instant::now();
         let result = self.step_inner();
         if let Some(error) = pollster::block_on(device.pop_error_scope()) {
             anyhow::bail!("Renderer initialization failed at {stage:?}: {error}");
         }
+        println!(
+            "[startup-timing] renderer stage={stage:?} ms={:.1}",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         result
     }
 
@@ -1802,6 +1915,7 @@ impl GpuPendingInit {
                         previous_camera_pos: [0.0; 4],
                         scene_seed: [0; 4],
                         coverage: [-1.0, 0.0, 0.0, 0.0],
+                        resident_coverage: coverage::ResidentCoverage::default(),
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
@@ -1926,6 +2040,31 @@ impl GpuPendingInit {
                                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                                count: None,
+                            },
+                            // Distant-terrain detail map (render/horizon_detail.rs).
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 5,
+                                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT
+                                    | wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Texture {
+                                    sample_type: wgpu::TextureSampleType::Float {
+                                        filterable: true,
+                                    },
+                                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                                    multisampled: false,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 6,
+                                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT
+                                    | wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
                                 count: None,
                             },
                         ],
@@ -2345,10 +2484,16 @@ impl GpuPendingInit {
                     label: Some("sky shader"),
                     source: wgpu::ShaderSource::Wgsl(sky_shader_source().into()),
                 }));
+                let world_source=world_shader_source();
+                let world_fingerprint=format!("{:016x}",crate::shader_sources::source_fingerprint(&world_source));
+                let validated=env!("VOXEL_VALIDATED_WORLD_FNV");
+                anyhow::ensure!(world_fingerprint==validated,
+                    "Build/runtime WGSL source mismatch: built validator={validated}, runtime={world_fingerprint}");
+                println!("[shader-validation] world_fnv1a64={world_fingerprint} build_match=true");
                 self.world_shader =
                     Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("world shader"),
-                        source: wgpu::ShaderSource::Wgsl(world_shader_source().into()),
+                        source: wgpu::ShaderSource::Wgsl(world_source.into()),
                     }));
                 self.line_shader =
                     Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2447,141 +2592,47 @@ impl GpuPendingInit {
                         push_constant_ranges: &[],
                     });
 
-                self.cloud_pipeline = Some(device.create_render_pipeline(
-                    &wgpu::RenderPipelineDescriptor {
-                        label: Some("cloud pipeline"),
-                        layout: Some(&cloud_layout),
+                // A pass with no vertex buffers that draws one full-screen triangle.
+                let fullscreen = |label: &str,
+                                  layout: &wgpu::PipelineLayout,
+                                  module: &wgpu::ShaderModule,
+                                  format: wgpu::TextureFormat,
+                                  blend: Option<wgpu::BlendState>,
+                                  depth_stencil: Option<wgpu::DepthStencilState>| {
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some(label),
+                        layout: Some(layout),
                         vertex: wgpu::VertexState {
-                            module: self.cloud_shader.as_ref().unwrap(),
+                            module,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             buffers: &[],
                         },
                         fragment: Some(wgpu::FragmentState {
-                            module: self.cloud_shader.as_ref().unwrap(),
+                            module,
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
-                                format: wgpu::TextureFormat::Rgba16Float,
-                                blend: None,
+                                format,
+                                blend,
                                 write_mask: wgpu::ColorWrites::ALL,
                             })],
                         }),
                         primitive: wgpu::PrimitiveState::default(),
-                        depth_stencil: None,
+                        depth_stencil,
                         multisample: Default::default(),
                         multiview: None,
                         cache: None,
-                    },
-                ));
+                    })
+                };
 
-                self.sky_pipeline = Some(device.create_render_pipeline(
-                    &wgpu::RenderPipelineDescriptor {
-                        label: Some("sky pipeline"),
-                        layout: Some(&sky_layout),
-                        vertex: wgpu::VertexState {
-                            module: self.sky_shader.as_ref().unwrap(),
-                            entry_point: Some("vs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[],
-                        },
-                        fragment: Some(wgpu::FragmentState {
-                            module: self.sky_shader.as_ref().unwrap(),
-                            entry_point: Some("fs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            targets: &[Some(wgpu::ColorTargetState {
-                                format: postprocess::SCENE_FORMAT,
-                                blend: Some(wgpu::BlendState::REPLACE),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            })],
-                        }),
-                        primitive: wgpu::PrimitiveState::default(),
-                        depth_stencil: Some(wgpu::DepthStencilState {
-                            format: wgpu::TextureFormat::Depth32Float,
-                            depth_write_enabled: false,
-                            depth_compare: wgpu::CompareFunction::Equal,
-                            stencil: Default::default(),
-                            bias: Default::default(),
-                        }),
-                        multisample: Default::default(),
-                        multiview: None,
-                        cache: None,
-                    },
-                ));
-
-                self.cloud_composite_pipeline = Some(device.create_render_pipeline(
-                    &wgpu::RenderPipelineDescriptor {
-                        label: Some("cloud composite pipeline"),
-                        layout: Some(&cloud_composite_layout),
-                        vertex: wgpu::VertexState {
-                            module: self.cloud_composite_shader.as_ref().unwrap(),
-                            entry_point: Some("vs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[],
-                        },
-                        fragment: Some(wgpu::FragmentState {
-                            module: self.cloud_composite_shader.as_ref().unwrap(),
-                            entry_point: Some("fs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            targets: &[Some(wgpu::ColorTargetState {
-                                format: postprocess::SCENE_FORMAT,
-                                blend: Some(wgpu::BlendState {
-                                    color: wgpu::BlendComponent {
-                                        src_factor: wgpu::BlendFactor::One,
-                                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                        operation: wgpu::BlendOperation::Add,
-                                    },
-                                    alpha: wgpu::BlendComponent {
-                                        src_factor: wgpu::BlendFactor::One,
-                                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                        operation: wgpu::BlendOperation::Add,
-                                    },
-                                }),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            })],
-                        }),
-                        primitive: wgpu::PrimitiveState::default(),
-                        depth_stencil: None,
-                        multisample: Default::default(),
-                        multiview: None,
-                        cache: None,
-                    },
-                ));
-
-                self.cloud_temporal_pipeline = Some(device.create_render_pipeline(
-                    &wgpu::RenderPipelineDescriptor {
-                        label: Some("cloud temporal pipeline"),
-                        layout: Some(&cloud_temporal_pipeline_layout),
-                        vertex: wgpu::VertexState {
-                            module: self.cloud_temporal_shader.as_ref().unwrap(),
-                            entry_point: Some("vs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[],
-                        },
-                        fragment: Some(wgpu::FragmentState {
-                            module: self.cloud_temporal_shader.as_ref().unwrap(),
-                            entry_point: Some("fs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            targets: &[Some(wgpu::ColorTargetState {
-                                format: wgpu::TextureFormat::Rgba16Float,
-                                blend: Some(wgpu::BlendState::REPLACE),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            })],
-                        }),
-                        primitive: wgpu::PrimitiveState::default(),
-                        depth_stencil: None,
-                        multisample: Default::default(),
-                        multiview: None,
-                        cache: None,
-                    },
-                ));
-
-                self.world_pipeline = Some(device.create_render_pipeline(
-                    &wgpu::RenderPipelineDescriptor {
+                let world_shader = self.world_shader.as_ref().unwrap();
+                let world_pipeline = || {
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: Some("world pipeline"),
                         layout: Some(&world_layout),
                         vertex: wgpu::VertexState {
-                            module: self.world_shader.as_ref().unwrap(),
+                            module: world_shader,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             buffers: &[wgpu::VertexBufferLayout {
@@ -2597,7 +2648,7 @@ impl GpuPendingInit {
                             }],
                         },
                         fragment: Some(wgpu::FragmentState {
-                            module: self.world_shader.as_ref().unwrap(),
+                            module: world_shader,
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[
@@ -2627,15 +2678,16 @@ impl GpuPendingInit {
                         multisample: Default::default(),
                         multiview: None,
                         cache: None,
-                    },
-                ));
+                    })
+                };
 
-                let create_line_pipeline = |label: &str, blend: wgpu::BlendState| {
+                let line_shader = self.line_shader.as_ref().unwrap();
+                let line_pipeline = |label: &str, blend: wgpu::BlendState| {
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: Some(label),
                         layout: Some(&line_layout),
                         vertex: wgpu::VertexState {
-                            module: self.line_shader.as_ref().unwrap(),
+                            module: line_shader,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             buffers: &[wgpu::VertexBufferLayout {
@@ -2645,7 +2697,7 @@ impl GpuPendingInit {
                             }],
                         },
                         fragment: Some(wgpu::FragmentState {
-                            module: self.line_shader.as_ref().unwrap(),
+                            module: line_shader,
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             targets: &[Some(wgpu::ColorTargetState {
@@ -2671,11 +2723,44 @@ impl GpuPendingInit {
                     })
                 };
 
-                self.line_pipeline = Some(create_line_pipeline(
-                    "line pipeline",
-                    wgpu::BlendState::ALPHA_BLENDING,
-                ));
+                let ui_shader = self.ui_shader.as_ref().unwrap();
+                let ui_pipeline = || {
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("ui pipeline"),
+                        layout: Some(&ui_layout),
+                        vertex: wgpu::VertexState {
+                            module: ui_shader,
+                            entry_point: Some("vs_main"),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            buffers: &[wgpu::VertexBufferLayout {
+                                array_stride: std::mem::size_of::<UiVertex>() as u64,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
+                            }],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: ui_shader,
+                            entry_point: Some("fs_main"),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: config.format,
+                                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                        }),
+                        primitive: wgpu::PrimitiveState::default(),
+                        depth_stencil: None,
+                        multisample: Default::default(),
+                        multiview: None,
+                        cache: None,
+                    })
+                };
 
+                let premultiplied_over = wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                };
                 let invert_blend = wgpu::BlendState {
                     color: wgpu::BlendComponent {
                         src_factor: wgpu::BlendFactor::OneMinusDst,
@@ -2684,45 +2769,72 @@ impl GpuPendingInit {
                     },
                     alpha: wgpu::BlendComponent::OVER,
                 };
-                self.line_invert_pipeline =
-                    Some(create_line_pipeline("line invert pipeline", invert_blend));
+                let sky_depth = wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Equal,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                };
+                let cloud_shader = self.cloud_shader.as_ref().unwrap();
+                let sky_shader = self.sky_shader.as_ref().unwrap();
+                let composite_shader = self.cloud_composite_shader.as_ref().unwrap();
+                let temporal_shader = self.cloud_temporal_shader.as_ref().unwrap();
+                let shadow_shader = self.shadow_shader.as_ref().unwrap();
 
-                self.ui_pipeline = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("ui pipeline"),
-                    layout: Some(&ui_layout),
-                    vertex: wgpu::VertexState {
-                        module: self.ui_shader.as_ref().unwrap(),
-                        entry_point: Some("vs_main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<UiVertex>() as u64,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
-                        }],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: self.ui_shader.as_ref().unwrap(),
-                        entry_point: Some("fs_main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: config.format,
-                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    multiview: None,
-                    cache: None,
-                },
-            ));
-
-                self.shadow_renderer = Some(shadow::ShadowRenderer::new(
-                    device,
-                    self.shadow_shader.as_ref().unwrap(),
-                ));
+                // The driver compiles each shader when its pipeline is created.
+                // After a shader edit that took about 4.4 s in series, so the
+                // pipelines are built on parallel threads.
+                let (cloud, sky, composite, temporal, world, (line, line_invert), ui, shadow) =
+                    std::thread::scope(|scope| {
+                        let cloud = scope.spawn(|| {
+                            fullscreen("cloud pipeline", &cloud_layout, cloud_shader,
+                                wgpu::TextureFormat::Rgba16Float, None, None)
+                        });
+                        let sky = scope.spawn(|| {
+                            fullscreen("sky pipeline", &sky_layout, sky_shader, postprocess::SCENE_FORMAT,
+                                Some(wgpu::BlendState::REPLACE), Some(sky_depth))
+                        });
+                        let composite = scope.spawn(|| {
+                            let blend = wgpu::BlendState { color: premultiplied_over, alpha: premultiplied_over };
+                            fullscreen("cloud composite pipeline", &cloud_composite_layout, composite_shader,
+                                postprocess::SCENE_FORMAT, Some(blend), None)
+                        });
+                        let temporal = scope.spawn(|| {
+                            fullscreen("cloud temporal pipeline", &cloud_temporal_pipeline_layout,
+                                temporal_shader, wgpu::TextureFormat::Rgba16Float,
+                                Some(wgpu::BlendState::REPLACE), None)
+                        });
+                        let world = scope.spawn(world_pipeline);
+                        let lines = scope.spawn(|| {
+                            (
+                                line_pipeline("line pipeline", wgpu::BlendState::ALPHA_BLENDING),
+                                line_pipeline("line invert pipeline", invert_blend),
+                            )
+                        });
+                        let ui = scope.spawn(ui_pipeline);
+                        let shadow = scope.spawn(|| shadow::ShadowRenderer::new(device, shadow_shader));
+                        let failed = "pipeline creation thread panicked";
+                        (
+                            cloud.join().expect(failed),
+                            sky.join().expect(failed),
+                            composite.join().expect(failed),
+                            temporal.join().expect(failed),
+                            world.join().expect(failed),
+                            lines.join().expect(failed),
+                            ui.join().expect(failed),
+                            shadow.join().expect(failed),
+                        )
+                    });
+                self.cloud_pipeline = Some(cloud);
+                self.sky_pipeline = Some(sky);
+                self.cloud_composite_pipeline = Some(composite);
+                self.cloud_temporal_pipeline = Some(temporal);
+                self.world_pipeline = Some(world);
+                self.line_pipeline = Some(line);
+                self.line_invert_pipeline = Some(line_invert);
+                self.ui_pipeline = Some(ui);
+                self.shadow_renderer = Some(shadow);
 
                 self.stage = GpuInitStage::Finalize;
                 Ok(None)
@@ -2748,6 +2860,7 @@ impl GpuPendingInit {
                     1024,
                 ));
 
+                let horizon_detail = horizon::detail::Gpu::new(device);
                 let world_surface_bind_group = Gpu::create_world_surface_bind_group(
                     device,
                     self.world_surface_layout.as_ref().unwrap(),
@@ -2756,8 +2869,10 @@ impl GpuPendingInit {
                     &self.shadow_renderer.as_ref().unwrap().depth_sampler,
                     self.cloud_shadow_view.as_ref().unwrap(),
                     self.cloud_field_sampler.as_ref().unwrap(),
+                    &horizon_detail,
                 );
                 self.world_surface_bind_group = Some(world_surface_bind_group);
+                self.horizon_detail = Some(horizon_detail);
 
                 // Do not recurse into self.step() here. Keep the staged init explicit and
                 // let the outer bootstrap loop call step() again on the next tick.
@@ -2767,7 +2882,8 @@ impl GpuPendingInit {
 
             GpuInitStage::Complete => {
                 let bootstrap = self.bootstrap.take().expect("bootstrap missing");
-                let gpu_profiler = GpuProfiler::new(&bootstrap.device, &bootstrap.queue);
+                let gpu_profiler = GpuProfiler::new(&bootstrap.device, &bootstrap.queue,
+                    Arc::clone(&bootstrap.device_lost));
                 let postprocess = postprocess::PostProcess::new(
                     &bootstrap.device,
                     &bootstrap.config,
@@ -2793,6 +2909,7 @@ impl GpuPendingInit {
                     surface: bootstrap.surface,
                     device: bootstrap.device,
                     queue: bootstrap.queue,
+                    device_lost: bootstrap.device_lost,
                     config: bootstrap.config,
                     size: bootstrap.size,
                     adapter_summary: bootstrap.adapter_summary,
@@ -2805,6 +2922,7 @@ impl GpuPendingInit {
                     atmosphere: self.atmosphere_runtime.take().unwrap(),
 
                     shadow_renderer: self.shadow_renderer.take().unwrap(),
+                    horizon_detail: self.horizon_detail.take().unwrap(),
                     world_surface_bind_group: self.world_surface_bind_group.take().unwrap(),
 
                     cloud_texture_layout: self.cloud_texture_layout.take().unwrap(),
@@ -2867,6 +2985,7 @@ impl GpuPendingInit {
                     cloud_governor: cloud_governor::CloudGovernor::default(),
                     last_frame_instant: Instant::now(),
                     frame_index: 0,
+                    render_frame_id: 0,
                     effect_time: 0.0,
                     cloud_history_frame_stats: CloudHistoryFrameStats::default(),
                     last_weather_upload_stats: WeatherUploadStats::default(),
@@ -2894,6 +3013,10 @@ impl GpuPendingInit {
     }
 }
 impl Gpu {
+    pub fn device_usable(&self) -> bool {
+        !self.device_lost.load(Ordering::Acquire)
+    }
+
     pub fn upload_scene(&mut self, vertices: &[Vertex3]) {
         self.scene_vertices = vertices.len();
         if vertices.is_empty() {
@@ -2980,6 +3103,7 @@ impl Gpu {
         shadow_sampler: &wgpu::Sampler,
         cloud_shadow: &wgpu::TextureView,
         cloud_field_sampler: &wgpu::Sampler,
+        horizon_detail: &horizon::detail::Gpu,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("world surface bind group"),
@@ -3004,6 +3128,14 @@ impl Gpu {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(cloud_field_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&horizon_detail.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: horizon_detail.params.as_entire_binding(),
                 },
             ],
         })
@@ -3047,9 +3179,9 @@ impl Gpu {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: (config.width / effective_cloud_render_scale(config.width, config.height))
+                width: config.width.div_ceil(effective_cloud_render_scale(config.width, config.height))
                     .max(1),
-                height: (config.height / effective_cloud_render_scale(config.width, config.height))
+                height: config.height.div_ceil(effective_cloud_render_scale(config.width, config.height))
                     .max(1),
                 depth_or_array_layers: 1,
             },
@@ -3515,7 +3647,22 @@ impl Gpu {
         world: &mut crate::world::World,
         eye: Vec3,
         coverage_radius: f32,
+        resident: coverage::ResidentCoverage,
+        desired_resident: coverage::ResidentCoverage,
+        cache:&streaming::ChunkCache,
+        fov_degrees:f32,
     ) {
+        self.horizon.set_device_loss_signal(&self.device_lost);
+        if !self.device_usable() { return; }
+        self.horizon.set_refinement_projection(self.config.height as f32/(2.0*(fov_degrees.to_radians()*0.5).tan()));
+        let cfg=world.sample_config();
+        let root=&world.regions.view.root;
+        if !self.horizon.collar_observation_current(cache.gpu_mesh_revision,cfg,root,&resident,cache.quality_column_iter()) {
+            let preferred=cache.quality_columns();
+            let input=cache.collar_input(self.horizon.current_collar(),&resident,&preferred);
+            self.horizon.set_collar_observation(input,cache.gpu_mesh_revision,cfg,Arc::clone(root),resident,preferred);
+        }
+        self.horizon.set_resident_coverage(resident, desired_resident);
         let scale = world.voxel_scale.meters();
         let revision = world.revision();
         let visible_world =
@@ -3536,7 +3683,23 @@ impl Gpu {
             eye,
             hidden_radius,
         );
+        if let Some(update) = self.horizon.take_detail_update() {
+            self.horizon_detail.apply(&self.queue, update.as_deref());
+        }
     }
+    pub fn horizon_quality_columns(&mut self,cfg:crate::world::WorldSampleConfig,eye:Vec3,forward:Vec3,fov_degrees:f32)->Vec<(i32,i32)> {
+        let focal=self.config.height as f32/(2.0*(fov_degrees.to_radians()*0.5).tan());
+        let ordinary_lod0_m=render_distance_settings().lod_start_chunks as f32*32.0*cfg.voxel_meters();
+        self.horizon.quality_columns(cfg,eye,forward,focal,[self.config.width,self.config.height],ordinary_lod0_m)
+    }
+    pub fn horizon_quality_parent_valid(&self,snapshot:&crate::world::WorldSnapshot,eye:Vec3,columns:&[(i32,i32)])->bool {
+        self.horizon.quality_parent_valid(snapshot,eye,columns)
+    }
+    pub fn horizon_retention_columns(&self) -> Vec<(i32,i32)> { self.horizon.retention_columns() }
+    pub fn horizon_work_stage(&self) -> &'static str { self.horizon.work_stage() }
+    pub fn horizon_published_source(&self) -> Option<crate::world::WorldSampleConfig> { self.horizon.published_source() }
+    pub fn horizon_published_revision(&self) -> Option<u64> { self.horizon.published_revision() }
+    pub fn horizon_baked_columns(&self, columns:&[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> { self.horizon.baked_columns(columns) }
 
     pub fn horizon_ready(&self) -> bool {
         self.horizon.mesh.is_some()
@@ -3552,6 +3715,7 @@ impl Gpu {
         generator_version: u32,
         coverage_radius: f32,
     ) {
+        self.horizon.set_refinement_projection(self.config.height as f32 * projection.y_axis.y.abs() * 0.5);
         // Invert only the rotation/projection. Inverting the translated f32 matrix
         // makes rays and motion estimates increasingly unstable away from the origin.
         // Capture-time A/B uses the same executable and shader pipeline.
@@ -3626,9 +3790,20 @@ impl Gpu {
                     u32::from(mist_disabled),
                     u32::from(!shadow::enabled()),
                 ],
-                // x: resident coverage radius; y: sea level in metres. The
-                // caustic spill reads this without adding another uniform slot.
-                coverage: [coverage_radius, self.water_level_m, 0.0, 0.0],
+                // x: resident coverage radius; y: sea level in metres; z: radius of
+                // the full-detail (LOD 0) ring in metres. The caustic spill and
+                // the water waves read these without another uniform slot.
+                coverage: [
+                    coverage_radius,
+                    self.water_level_m,
+                    if render_settings.lod_levels > 1 {
+                        render_settings.lod_start_chunks as f32 * CHUNK_SIZE as f32 * world_scale
+                    } else {
+                        visible_world
+                    },
+                    self.horizon.exclusion_radius(),
+                ],
+                resident_coverage: *self.horizon.resident_coverage(),
                 // Previous projection has no translation; temporal uses camera deltas.
                 prev_view_proj: self.last_rotation_view_proj.to_cols_array_2d(),
                 camera_forward: [
@@ -3663,16 +3838,10 @@ impl Gpu {
         self.last_camera_forward = cur_forward;
         self.last_world_scale = world_scale;
 
-        let render_settings = render_distance_settings();
-        let far_plane_voxels =
-            (render_settings.view_distance_chunks as f32 * CHUNK_SIZE as f32 * 1.20).max(640.0);
-        let far_plane_world = far_plane_voxels * world_scale;
-
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
             standard_inv_view_proj,
             0.05 * world_scale,
-            far_plane_world,
             world_scale,
         );
         self.atmosphere
@@ -3700,6 +3869,37 @@ impl Gpu {
         atmosphere_mode: AtmosphereMode,
     ) {
         self.effect_time = sky_time;
+        let mut review_lighting = *lighting;
+        if let Some(exposure) = crate::terrain_review::fixed_exposure() {
+            review_lighting.exposure = exposure;
+        }
+        let lighting = &review_lighting;
+        let mut review_clouds = *cloud_controls;
+        if let Some(wind) = crate::terrain_review::wind_override() { review_clouds.wind_speed = wind; }
+        let cloud_controls = &review_clouds;
+        let mode = crate::terrain_review::light_mode();
+        let mut held_torch = if mode == "off" { None } else { held_torch };
+        let torch_lights = if mode == "off" || mode == "sweep" { &[][..] } else { torch_lights };
+        if mode == "sweep" {
+            static REVIEW_CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let angle = REVIEW_CLOCK.get_or_init(std::time::Instant::now).elapsed().as_secs_f32() * 0.25;
+            held_torch = Some(TorchLight {
+                position: self.last_camera_pos + Vec3::new(angle.cos() * 6.0, 1.5, -10.0 + angle.sin() * 6.0),
+                radius: 18.0, color: [1.0; 3], strength: 4.4, moving: true,
+            });
+        }
+        if mode == "on" {
+            held_torch = Some(TorchLight {
+                position: self.last_camera_pos + self.last_camera_forward * 0.42
+                    + self.last_camera_forward.cross(Vec3::Y) * 0.18 - Vec3::Y * 0.28,
+                radius: 18.0, color: [1.0, 0.56, 0.22], strength: 4.4, moving: true,
+            });
+        }
+        let detail_wind_angle = cloud_controls.wind_dir_angle.to_radians();
+        self.shadow_renderer.set_detail_wind(sky_time, [
+            detail_wind_angle.cos() * cloud_controls.wind_speed,
+            detail_wind_angle.sin() * cloud_controls.wind_speed,
+        ]);
         let uniform = lighting_uniform_from_state(
             lighting,
             cloud_controls,
@@ -3722,16 +3922,10 @@ impl Gpu {
         self.current_lighting = *lighting;
         self.current_debug_view = debug_view;
 
-        let render_settings = render_distance_settings();
-        let far_plane_voxels =
-            (render_settings.view_distance_chunks as f32 * CHUNK_SIZE as f32 * 1.20).max(640.0);
-        let far_plane_world = far_plane_voxels * self.last_world_scale;
-
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
             self.last_inv_view_proj,
             0.05 * self.last_world_scale,
-            far_plane_world,
             self.last_world_scale,
         );
         self.clear_color = [
@@ -3867,7 +4061,13 @@ impl Gpu {
             u32,
         ),
     {
-        let frame = self.surface.get_current_texture()?;
+        // Loading must not repeat the last world's GPU sample or draw counts.
+        self.render_frame_id = self.render_frame_id.wrapping_add(1);
+        self.last_render_stats = RenderFrameStats {
+            frame_id: self.render_frame_id,
+            ..Default::default()
+        };
+        let frame = acquire_surface_frame(&self.surface,&self.device_lost)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -3915,7 +4115,19 @@ impl Gpu {
             self.config.height,
         );
 
+        if !self.pending_captures.is_empty() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            self.pending_captures.retain(|capture| !capture.finish_if_ready());
+        }
+        let capture=self.capture_path.take().and_then(|path| {
+            if self.pending_captures.len() >= capture::MAX_PENDING_READBACKS {
+                eprintln!("[capture] dropped {}: readback queue full (capacity={})", path.display(), capture::MAX_PENDING_READBACKS);
+                return None;
+            }
+            capture::PendingCapture::encode(&self.device, &mut encoder, &frame.texture, &self.config, path)
+        });
         self.queue.submit(Some(encoder.finish()));
+        if let Some(mut capture)=capture { capture.map(); self.pending_captures.push(capture); }
         frame.present();
         Ok(())
     }
@@ -3940,7 +4152,10 @@ impl Gpu {
             u32,
         ),
     {
-        if self.cloud_governor.update(
+        if CLOUD_ADAPTIVE_ENABLED.load(Ordering::Relaxed)
+            && self.last_render_stats.gpu_sample_count != 0
+            && self.last_render_stats.gpu_sample_config_id == self.last_render_stats.config_id
+            && self.cloud_governor.update(
             self.last_render_stats.gpu_pass_total_ms,
             self.last_frame_instant.elapsed().as_secs_f32(),
         ) {
@@ -3968,10 +4183,18 @@ impl Gpu {
         }
 
         let acquire_start = Instant::now();
-        let frame = self.surface.get_current_texture()?;
+        let frame = acquire_surface_frame(&self.surface,&self.device_lost)?;
         let mut frame_stats = RenderFrameStats::default();
-        if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let gpu_timings = profiler.last_timings();
+        self.render_frame_id = self.render_frame_id.wrapping_add(1);
+        frame_stats.frame_id = self.render_frame_id;
+        if let Some(profiler) = self.gpu_profiler.as_mut() {
+            let completed = profiler.take_sample();
+            let gpu_timings = profiler.last_timings;
+            if let Some(sample) = completed {
+                frame_stats.gpu_sample_count = 1;
+                frame_stats.gpu_sample_frame_id = sample.frame_id;
+                frame_stats.gpu_sample_config_id = sample.config_id;
+            }
             frame_stats.gpu_pass_total_ms = gpu_timings.total_ms;
             frame_stats.gpu_shadow_ms = gpu_timings.shadow_ms;
             frame_stats.gpu_terrain_ms = gpu_timings.terrain_ms;
@@ -3993,12 +4216,29 @@ impl Gpu {
             drop(frame);
             self.resize(PhysicalSize::new(surface_size.width, surface_size.height));
             let reacquire_start = Instant::now();
-            let reacquired = self.surface.get_current_texture()?;
+            let reacquired = acquire_surface_frame(&self.surface,&self.device_lost)?;
             frame_stats.surface_acquire_ms += reacquire_start.elapsed().as_secs_f32() * 1000.0;
             reacquired
         } else {
             frame
         };
+
+        // Fingerprint the effective pass configuration, not requested quality.
+        // It travels with the readback so a resize/debug/pause change cannot
+        // silently relabel an older GPU measurement as the current frame.
+        let distance = render_distance_settings();
+        frame_stats.config_id = [
+            self.config.width, self.config.height,
+            effective_cloud_render_scale(self.config.width, self.config.height),
+            self.current_debug_view.as_u32(), u32::from(paused),
+            u32::from(shadow::enabled()), u32::from(indirect_lighting_enabled()),
+            distance.view_distance_chunks as u32, distance.lod_start_chunks as u32,
+            distance.lod_levels as u32, self.config.present_mode as u32,
+            u32::from(self.fxaa_enabled), u32::from(render_isolation().skip_clouds),
+            u32::from(render_isolation().skip_horizon),
+        ].into_iter().fold(0xcbf29ce484222325u64, |hash, value| {
+            (hash ^ value as u64).wrapping_mul(0x100000001b3)
+        });
 
         let view = frame
             .texture
@@ -4038,14 +4278,18 @@ impl Gpu {
         // Static terrain does not need a full shadow redraw every frame. Re-render
         // only when the snapped light camera or the uploaded mesh set changes.
         let shadow_start = Instant::now();
+        self.shadow_renderer.set_horizon_source(
+            self.horizon.shadow_generation(),
+            self.horizon.resident_coverage(),
+        );
         let redraw_shadow_map = !paused
             && shadow::enabled()
             && self
                 .shadow_renderer
-                .apply_update_if_needed(&self.queue, chunk_cache.gpu_mesh_revision);
+                .apply_update_if_needed(&self.queue, chunk_cache.shadow_caster_revision);
 
         if redraw_shadow_map {
-            self.shadow_renderer.build_cascade_draw_lists(chunk_cache);
+            self.shadow_renderer.build_cascade_draw_lists(chunk_cache, self.horizon.mesh.as_ref());
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {
@@ -4062,6 +4306,7 @@ impl Gpu {
             self.shadow_renderer.render(
                 &mut encoder,
                 chunk_cache,
+                self.horizon.mesh.as_ref(),
                 gpu_query_set.as_ref(),
                 &shadow_timestamp_queries,
             );
@@ -4145,15 +4390,15 @@ impl Gpu {
                         terrain_indices += mesh.index_count as usize;
                     }
                 }
-                if let Some(mesh) = &self.horizon.mesh {
+                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon) {
                     let planes =
                         streaming::extract_planes(REVERSE_Z * self.last_rotation_view_proj);
                     for page in &mesh.pages {
                         pass.set_vertex_buffer(0, page.vertices.slice(..));
                         pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        if mesh.cull {
+                        if mesh.cull || page.batches.iter().any(|b|b.conditional()) {
                             for batch in &page.batches {
-                                if !batch.visible(self.last_camera_pos, &planes) {
+                                if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) {
                                     continue;
                                 }
                                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
@@ -4203,11 +4448,11 @@ impl Gpu {
         let cloud_start = Instant::now();
         if !paused {
             let cloud_extent = wgpu::Extent3d {
-                width: (self.config.width
-                    / effective_cloud_render_scale(self.config.width, self.config.height))
+                width: self.config.width
+                    .div_ceil(effective_cloud_render_scale(self.config.width, self.config.height))
                 .max(1),
-                height: (self.config.height
-                    / effective_cloud_render_scale(self.config.width, self.config.height))
+                height: self.config.height
+                    .div_ceil(effective_cloud_render_scale(self.config.width, self.config.height))
                 .max(1),
                 depth_or_array_layers: 1,
             };
@@ -4238,9 +4483,11 @@ impl Gpu {
                 cloud_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 cloud_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 cloud_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                cloud_pass.draw(0..3, 0..1);
+                if !render_isolation().skip_clouds {
+                    cloud_pass.draw(0..3, 0..1);
+                }
             }
-            frame_stats.cloud_raymarch_passes = 1;
+            frame_stats.cloud_raymarch_passes = usize::from(!render_isolation().skip_clouds);
 
             if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid {
                 let mut temporal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -4445,7 +4692,7 @@ impl Gpu {
                 self.current_lighting.exposure.max(0.01),
                 self.current_lighting.saturation,
                 if self.fxaa_enabled { 1.0 } else { 0.0 },
-                if self.current_debug_view == RenderDebugView::None {
+                if matches!(self.current_debug_view, RenderDebugView::None | RenderDebugView::Unfogged) {
                     0.0
                 } else {
                     1.0
@@ -4454,7 +4701,7 @@ impl Gpu {
                 0.85, // native 8x8 ordered dither, one 8-bit code at most
                 0.0,  // no palette quantization: preserve the authored ramps
                 0.0,  // no block contour: lighting owns the silhouettes
-                0.30, // stacked tight + wide Noita-style glow
+                if crate::terrain_review::fixed_exposure().is_some() { 0.0 } else { 0.30 },
                 0.72, // glow threshold: emissives, not ordinary daylight
                 self.effect_time,
                 0.06, // restrained vignette
@@ -4531,6 +4778,10 @@ impl Gpu {
                 .retain(|capture| !capture.finish_if_ready());
         }
         let capture = self.capture_path.take().and_then(|path| {
+            if self.pending_captures.len() >= capture::MAX_PENDING_READBACKS {
+                eprintln!("[capture] dropped {}: readback queue full (capacity={})", path.display(), capture::MAX_PENDING_READBACKS);
+                return None;
+            }
             capture::PendingCapture::encode(
                 &self.device,
                 &mut encoder,
@@ -4553,7 +4804,8 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         if let Some(slot_index) = gpu_timestamp_slot {
             if let Some(profiler) = self.gpu_profiler.as_mut() {
-                profiler.mark_submitted(slot_index, gpu_query_count, gpu_pass_queries);
+                profiler.mark_submitted(slot_index, gpu_query_count, gpu_pass_queries,
+                    frame_stats.frame_id, frame_stats.config_id);
             }
         }
         frame_stats.submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;

@@ -245,6 +245,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let cloud = reconstruct_cloud(surface_uv);
     let alpha = clamp(cloud.a, 0.0, 0.998);
     let debug_mode = render_debug_view();
+    // Surface-lighting diagnostic: keep cloud shadows in the lighting field,
+    // but remove foreground cloud obscuration alongside world fog.
+    if debug_mode == 26u { return vec4<f32>(0.0); }
 
     if debug_mode == DEBUG_VIEW_ATMOSPHERE_TRANSMITTANCE {
         return vec4<f32>(atmosphere_debug_transmittance_color(surface_uv), 1.0);

@@ -1,7 +1,7 @@
 mod boundary;
 mod memory;
 pub mod models;
-pub use memory::{MeshPlan, PLANNING_BYTES};
+pub use memory::{MeshPlan, PLANNING_BYTES, encode_water};
 mod ground_detail;
 mod solid;
 use glam::{IVec3, Vec3};
@@ -39,9 +39,15 @@ pub struct ChunkMesh {
 
 pub const CHUNK_PAD: i32 = 1;
 pub const PADDED_CHUNK_SIZE: i32 = CHUNK_SIZE + 2; // 34
+#[cfg(test)]
+mod terrain_contract;
 /// Vertical inset (in voxel units) keeping free water surfaces recessed below
 /// the top edge of surrounding bank and shoreline blocks.
 pub const WATER_SURFACE_INSET: f32 = 0.135;
+/// `ao_strength` marking a water wall vertex that sits on the free surface. The
+/// shader rides such vertices on the same waves as the top face. Water lighting
+/// clamps ao to [0, 1], so the value is invisible to shading.
+pub const WATER_SURFACE_RIM_AO: f32 = 1.5;
 
 impl ChunkMesh {
     pub fn empty() -> Self {
@@ -62,6 +68,16 @@ pub struct GeneratedChunk {
     /// Highest opaque cell per padded column; generated terrain supplies roofs
     /// above this chunk too. Lighting metadata, never collision geometry.
     pub sky_ceiling: Vec<i32>,
+    /// Terrain surface height per padded column from the generator, kept even
+    /// when it lies below this chunk. Water that runs off the bottom of the
+    /// chunk uses it to finish its depth, so neighbouring chunks of one ocean
+    /// agree with each other and with the horizon mesh. Empty when unknown.
+    pub bed_height: Vec<i32>,
+    /// Generator 30+: the true seabed height above or below `bed_height`, in
+    /// voxels (-0.5..=0.5), for padded columns that hold water. Whole-voxel beds
+    /// make a gentle shelf step in one colour ring per voxel; adding this keeps
+    /// the water depth continuous. Empty for older generators and dry chunks.
+    pub bed_frac: Vec<f32>,
 }
 
 impl GeneratedChunk {
@@ -69,6 +85,8 @@ impl GeneratedChunk {
     pub fn allocation_bytes(&self) -> usize {
         self.blocks.capacity() * std::mem::size_of::<BlockId>()
             + self.sky_ceiling.capacity() * std::mem::size_of::<i32>()
+            + self.bed_height.capacity() * std::mem::size_of::<i32>()
+            + self.bed_frac.capacity() * std::mem::size_of::<f32>()
             + self.water_levels.capacity() * (std::mem::size_of::<(IVec3, u8)>() + 1) * 2
     }
 
@@ -78,6 +96,8 @@ impl GeneratedChunk {
             chunk,
             blocks,
             sky_ceiling: Vec::new(),
+            bed_height: Vec::new(),
+            bed_frac: Vec::new(),
             water_levels: Default::default(),
         }
     }
@@ -129,12 +149,61 @@ impl GeneratedChunk {
             return 1.0;
         }
         let air = pos + normal * 0.55;
-        let p = (air.floor().as_ivec3() - self.origin())
-            .clamp(IVec3::ZERO, IVec3::splat(PADDED_CHUNK_SIZE - 1));
-        let roof = self.sky_ceiling[(p.z * PADDED_CHUNK_SIZE + p.x) as usize] as f32;
-        let cover_m = ((roof + 0.5 - air.y) * self.voxel_meters).max(0.0);
-        // Approximate diffuse light penetration, independent of voxel scale.
-        (-(cover_m * 0.48)).exp().max(0.006)
+        // Columns describe cell centres. Reconstruct visibility at the shared
+        // vertex, rather than selecting one side of a roof edge with floor().
+        // Average transmitted light, not roof heights (which invents a roof).
+        let local = air - self.origin().as_vec3() - Vec3::new(0.5, 0.0, 0.5);
+        let cell = local.floor().as_ivec3();
+        let fraction = local - local.floor();
+        let sample = |dx: i32, dz: i32| {
+            let x = (cell.x + dx).clamp(0, PADDED_CHUNK_SIZE - 1);
+            let z = (cell.z + dz).clamp(0, PADDED_CHUNK_SIZE - 1);
+            let roof = self.sky_ceiling[(z * PADDED_CHUNK_SIZE + x) as usize] as f32;
+            let cover_m = ((roof + 0.5 - air.y) * self.voxel_meters).max(0.0);
+            (-(cover_m * 0.48)).exp().max(0.006)
+        };
+        let low = sample(0, 0) * (1.0 - fraction.x) + sample(1, 0) * fraction.x;
+        let high = sample(0, 1) * (1.0 - fraction.x) + sample(1, 1) * fraction.x;
+        low * (1.0 - fraction.z) + high * fraction.z
+    }
+
+    /// Depth in metres of a water column that is still wet at the chunk's bottom
+    /// row, `cells` voxels deep so far, finished down to the generated seabed.
+    /// `None` when the bed is unknown or inside this chunk (a cave or lake that
+    /// continues below), where the caller keeps its conservative floor.
+    fn depth_below_chunk(&self, p: IVec3, cells: f32) -> Option<f32> {
+        let local = p - self.origin();
+        let in_column = (0..PADDED_CHUNK_SIZE).contains(&local.x)
+            && (0..PADDED_CHUNK_SIZE).contains(&local.z);
+        let bed = *self
+            .bed_height
+            .get((local.z * PADDED_CHUNK_SIZE + local.x) as usize)
+            .filter(|_| in_column)?;
+        // `p.y` is the first row below the chunk; the bed block is at `bed`.
+        (bed < p.y).then(|| {
+            ((cells + (p.y - bed) as f32) * self.voxel_meters - self.bed_correction(p, None))
+                .max(0.02 * self.voxel_meters)
+        })
+    }
+
+    /// Metres to take off a depth that ends on the generated bed, so the bed sits
+    /// at its true fractional height. Zero when the column was edited (the bed row
+    /// no longer matches the generated one) or carries no fraction.
+    fn bed_correction(&self, p: IVec3, bed_row: Option<i32>) -> f32 {
+        let local = p - self.origin();
+        if self.bed_frac.is_empty()
+            || !(0..PADDED_CHUNK_SIZE).contains(&local.x)
+            || !(0..PADDED_CHUNK_SIZE).contains(&local.z)
+        {
+            return 0.0;
+        }
+        let i = (local.z * PADDED_CHUNK_SIZE + local.x) as usize;
+        match (self.bed_height.get(i), self.bed_frac.get(i)) {
+            (Some(&bed), Some(&frac)) if bed_row.is_none_or(|row| row == bed) => {
+                frac * self.voxel_meters
+            }
+            _ => 0.0,
+        }
     }
 
     pub fn water_optics(&self, pos: Vec3, normal: Vec3) -> (f32, [f32; 3]) {
@@ -157,7 +226,13 @@ impl GeneratedChunk {
                     }
                     continue;
                 }
-                let mut cells = self.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0;
+                // Match the rendered body: water with water above fills this
+                // cell even when simulation retains a fractional volume.
+                let mut cells = if self.get_world(p + IVec3::Y) == BlockId::Water {
+                    1.0
+                } else {
+                    self.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0
+                };
                 p.y -= 1;
                 while p.y >= self.origin().y && self.get_world(p) == BlockId::Water {
                     cells += 1.0;
@@ -170,9 +245,9 @@ impl GeneratedChunk {
                 let bed = if bed.is_opaque() { bed } else { BlockId::Sand };
                 bed_color += Vec3::from_array(bed.color(p));
                 depth += if p.y < self.origin().y {
-                    meters.max(10.0)
+                    self.depth_below_chunk(p, cells).unwrap_or_else(|| meters.max(10.0))
                 } else {
-                    meters
+                    (meters - self.bed_correction(p, Some(p.y))).max(0.02 * self.voxel_meters)
                 };
                 water_samples += 1;
             }
@@ -186,9 +261,10 @@ impl GeneratedChunk {
             if solid_shore_samples > 0 {
                 let shore_cap = (0.12 + 0.11 * water_samples as f32) * self.voxel_meters;
                 avg_depth = avg_depth.min(shore_cap);
-            } else if water_samples < 4 {
-                avg_depth = avg_depth.min(0.18 * self.voxel_meters);
             }
+            // Air beside an exposed water wall is not a shallow bed. Clamping
+            // incomplete corners to 18 cm erased the real column depth even
+            // on two-metre flow steps, tinting their whole side like the bed.
             (avg_depth, (bed_color / total).to_array())
         }
     }
@@ -198,6 +274,7 @@ struct FaceMaterial {
     block: BlockId,
     color_bits: [u32; 3],
     water_depth_bucket: u8,
+    capped_turf: bool,
 }
 
 impl FaceMaterial {
@@ -241,7 +318,16 @@ impl FaceMaterial {
             block,
             color_bits: [color[0].to_bits(), color[1].to_bits(), color[2].to_bits()],
             water_depth_bucket,
+            capped_turf: false,
         }
+    }
+
+    fn surface(self) -> crate::material::SurfaceDetail {
+        let mut surface = self.block.surface();
+        if self.capped_turf {
+            surface.texture_kind = crate::material::terrain_family::CAPPED_TURF;
+        }
+        surface
     }
 
     fn color(self) -> [f32; 3] {
@@ -399,7 +485,7 @@ fn emit_greedy_face(
         quad,
         material.color(),
         face_normal_from_axis(axis, positive),
-        material.block.surface(),
+        material.surface(),
         corner_ao,
     );
 }
@@ -507,7 +593,13 @@ fn push_face(
             ao_strength: ao,
         });
     }
-    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    // Choose the AO diagonal instead of exposing a fixed triangular crease at
+    // corners where two occluders meet.
+    if corner_ao[0] + corner_ao[2] > corner_ao[1] + corner_ao[3] {
+        indices.extend_from_slice(&[base, base + 1, base + 3, base + 1, base + 2, base + 3]);
+    } else {
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
 }
 
 /// Leaves and wood are thin, porous volumes. Max-filtering them like terrain
@@ -702,6 +794,13 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                     continue;
                 }
                 let material = block[id];
+                // Coarse-cell tops round a free water level up by as much as
+                // one cell and invent boundary walls. Keep water on the shared
+                // fine source surface; the coarse occupancy still occludes
+                // solid faces exactly as before.
+                if material == BlockId::Water {
+                    continue;
+                }
                 let x = cx * step;
                 let y = cy * step;
                 let z = cz * step;
@@ -941,6 +1040,9 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                 }
             }
         }
+    }
+    if chunk.blocks.contains(&BlockId::Water) {
+        append_water_mesh(&mut mesh, chunk);
     }
     mesh
 }
@@ -1387,6 +1489,47 @@ fn water_corner_height(chunk: &GeneratedChunk, x: i32, z: i32, row: i32) -> f32 
     }
 }
 
+/// Admission bound for exact water appended to a coarse solid mesh. A face
+/// emits four vertices and six indices. Three times output bytes also covers
+/// the old and new allocations overlapping during amortized Vec growth.
+pub fn exact_water_mesh_bytes_upper_bound(chunk: &GeneratedChunk) -> usize {
+    let mut faces = 0usize;
+    for y in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            for x in 0..CHUNK_SIZE {
+                let p = chunk.chunk * CHUNK_SIZE + IVec3::new(x, y, z);
+                if chunk.get_world(p) != BlockId::Water { continue; }
+                let submerged = chunk.get_world(p + IVec3::Y) == BlockId::Water;
+                let full_height = submerged
+                    || f32::from(chunk.water_levels.get(&p).copied().unwrap_or(8)) / 8.0
+                        * (1.0 - WATER_SURFACE_INSET) >= 1.0;
+                faces += usize::from(!full_height);
+                faces += usize::from(chunk.get_world(p - IVec3::Y).is_empty());
+                for delta in [IVec3::X, -IVec3::X, IVec3::Z, -IVec3::Z] {
+                    let neighbor = chunk.get_world(p + delta);
+                    if neighbor.is_opaque() { continue; }
+                    // Two free surfaces share the exact same smoothed corner;
+                    // a submerged neighbour reaches at least our top. Neither
+                    // case emits an internal wall. Count possible flow steps.
+                    if neighbor != BlockId::Water
+                        || (full_height && chunk.get_world(p + delta + IVec3::Y) != BlockId::Water)
+                    {
+                        faces += 1;
+                    }
+                }
+            }
+        }
+    }
+    faces.saturating_mul(4 * std::mem::size_of::<Vertex3>() + 6 * std::mem::size_of::<u32>())
+        .saturating_mul(3)
+}
+
+pub(crate) fn water_mesh(chunk: &GeneratedChunk) -> ChunkMesh {
+    let mut mesh=ChunkMesh::empty();
+    append_water_mesh(&mut mesh,chunk);
+    mesh
+}
+
 fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
     // Height above the voxel floor for a water voxel: 1.0 when water sits
     // above it, otherwise its own free level.
@@ -1490,6 +1633,7 @@ fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
                         } else {
                             [rel[3], rel[2], rel[1], rel[0]]
                         };
+                        let first = mesh.vertices.len();
                         push_face(
                             &mut mesh.vertices,
                             &mut mesh.indices,
@@ -1499,6 +1643,17 @@ fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
                             BlockId::Water.surface(),
                             [1.0; 4],
                         );
+                        if axis != 1 {
+                            // Only wall vertices above their voxel floor are on the
+                            // surface. A dry floor edge sits exactly at `base.y` and
+                            // must stay put, while a wall top or a neighbour's
+                            // water-level foot must follow the waves like the top.
+                            for v in &mut mesh.vertices[first..] {
+                                if v.pos[1] > base.y + 1e-4 {
+                                    v.ao_strength = WATER_SURFACE_RIM_AO;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1747,3 +1902,6 @@ mod terrace_metric {
         }
     }
 }
+
+#[cfg(test)]
+mod water_depth_probe;

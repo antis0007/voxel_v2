@@ -1,3 +1,10 @@
+struct ResidentCoverage {
+    header: vec4<i32>,
+    words: array<vec4<u32>, 131>,
+    sparse_header: vec4<i32>,
+    sparse_keys: array<vec4<i32>, 512>,
+};
+
 struct Camera {
     view_proj : mat4x4<f32>,
     camera_pos : vec4<f32>,
@@ -9,9 +16,11 @@ struct Camera {
     ray_up : vec4<f32>,
     previous_camera_pos : vec4<f32>,
     scene_seed : vec4<u32>,
-    // x: conservative published resident coverage in metres. Negative means
-    // no override; zero means no resident mesh is published.
+    // x: smoothed resident detail handoff radius in metres; negative means
+    // no override. y: sea level. z: full-detail (LOD 0) ring radius.
+    // w: strict GPU-published resident disc radius; zero means no complete disc.
     coverage : vec4<f32>,
+    resident_coverage: ResidentCoverage,
 };
 
 @group(0) @binding(0) var<uniform> cam : Camera;
@@ -47,6 +56,8 @@ struct Lighting {
     mood: vec4<f32>,
     // x: fireflies, y: pollen, z: diamond dust, w: embers.
     ambience: vec4<f32>,
+    // Palette A/B/C, strength/speed/width/chromatic, density/angle/sparkle.
+    magic: array<vec4<f32>,5>,
 };
 
 @group(1) @binding(0) var<uniform> light : Lighting;

@@ -7,8 +7,11 @@ use super::architecture::{Building, Door, Palette, Roof, Windows, Wing, WingSpec
 use super::{BlockId as B, WorldSampleConfig, WorldType, hash2, sample_column};
 use glam::Vec3;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fast_hash::FastMap;
 use std::rc::Rc;
+
+mod bearer_hall;
+mod layout;
 
 pub const CELL: f32 = 144.0;
 const SLOT: f32 = 28.0;
@@ -38,6 +41,8 @@ pub enum Kind {
     Labyrinth,
     /// Generator 21: a cross of real floor over pits. The rest is mirage.
     Pitfall,
+    /// Generator 28: a processional bridge over connected lower service works.
+    WeighingHall,
 }
 
 #[derive(Clone, Copy)]
@@ -141,10 +146,10 @@ impl Room {
     }
 
     fn pit_depth(&self) -> f32 {
-        if self.kind == Kind::Pitfall {
-            PIT_DEPTH
-        } else {
-            0.0
+        match self.kind {
+            Kind::Pitfall => PIT_DEPTH,
+            Kind::WeighingHall => bearer_hall::DEPTH,
+            _ => 0.0,
         }
     }
 
@@ -1015,9 +1020,18 @@ impl Dungeon {
             }
         }
         let mut degree = [0usize; 9];
+        if version >= layout::FIRST_VERSION {
+            layout::complete_loop(&edges, &tree, &mut extra);
+        }
         for &(a, b) in &tree {
             degree[a] += 1;
             degree[b] += 1;
+        }
+        if version >= layout::FIRST_VERSION {
+            for &(a, b) in &extra {
+                degree[a] += 1;
+                degree[b] += 1;
+            }
         }
         // Dead ends may sink a level when the corridor is long enough to ramp.
         for &(a, b) in &tree {
@@ -1043,6 +1057,9 @@ impl Dungeon {
                     best = (i, d);
                 }
             }
+        }
+        if version >= layout::FIRST_VERSION {
+            best = (layout::objective(&rooms, &tree, &extra, 4), 1.0);
         }
         if best.1 > 0.0 {
             rooms[best.0].kind = Kind::Treasure;
@@ -1091,6 +1108,7 @@ impl Dungeon {
         let mut ore = false;
         let mut cosmos = false;
         let mut cosmos_floor: Option<&Room> = None;
+        let mut bearer_shell = false;
         for r in &self.rooms {
             if m.x < r.x0 - wt || m.x >= r.x1 + wt || m.z < r.z0 - wt || m.z >= r.z1 + wt {
                 continue;
@@ -1100,6 +1118,13 @@ impl Dungeon {
                 continue;
             }
             let inside_xz = m.x >= r.x0 && m.x < r.x1 && m.z >= r.z0 && m.z < r.z1;
+            if r.kind == Kind::WeighingHall {
+                if inside_xz && fy >= -bearer_hall::DEPTH && fy < r.h {
+                    return Some(bearer_hall::block(m.x-r.x0, fy, m.z-r.z0,
+                        r.x1-r.x0, r.z1-r.z0, self.seed));
+                }
+                bearer_shell = true;
+            }
             if inside_xz && fy >= 0.0 && fy < r.height_at(m.x) {
                 return Some(
                     self.furnish(cfg, r, m.x - r.x0, m.z - r.z0, fy, v)
@@ -1154,6 +1179,9 @@ impl Dungeon {
         }
         if !shell {
             return None;
+        }
+        if bearer_shell {
+            return Some(B::Basalt);
         }
         if let Some(r) = cosmos_floor {
             return Some(self.cosmos_floor(r, m.x - r.x0, m.z - r.z0));
@@ -1421,7 +1449,7 @@ impl Dungeon {
                     return Some(B::Crystal);
                 }
             }
-            Kind::Pedestal | Kind::Atrium => {}
+            Kind::Pedestal | Kind::Atrium | Kind::WeighingHall => {}
             Kind::Labyrinth => return labyrinth(self.seed, r, rx, rz, fy, v),
             Kind::Pitfall => {
                 // A plinth and lamp at the crossing, and a torch on each aisle end so
@@ -1554,7 +1582,7 @@ fn gatehouse(seed: u32) -> Building {
 type CellKey = (u32, u32, u8, i32, i32);
 
 thread_local! {
-    static CELLS: RefCell<HashMap<CellKey, Option<Rc<Dungeon>>>> = RefCell::new(HashMap::new());
+    static CELLS: RefCell<FastMap<CellKey, Option<Rc<Dungeon>>>> = RefCell::new(FastMap::default());
     static LAST: RefCell<Option<(CellKey, Option<Rc<Dungeon>>)>> = const { RefCell::new(None) };
     static VAULTS: RefCell<Option<((u32, u32, u8, i32), Rc<[Dungeon; 3]>)>> = const { RefCell::new(None) };
 }
@@ -1778,7 +1806,7 @@ fn room(x0: f32, x1: f32, z0: f32, z1: f32, floor: f32, h: f32, kind: Kind, vaul
     }
 }
 
-fn vault_tier(band: usize, ground: f32, seed: u32) -> Dungeon {
+fn vault_tier(band: usize, ground: f32, seed: u32, version: u32) -> Dungeon {
     // Rooms sit under the shaft at (18, 0); each tier's ceiling is 24 m * band below the surface.
     let floor = ground - 24.0 * band as f32 - 7.0;
     let o = 18.0;
@@ -1833,7 +1861,10 @@ fn vault_tier(band: usize, ground: f32, seed: u32) -> Dungeon {
             },
             vec![
                 r(-7.0, 7.0, -7.0, 7.0, 7.0, Kind::Hub, true),
-                r(14.0, 44.0, -14.0, 14.0, 8.0, Kind::Hall, true),
+                r(14.0, 44.0, -14.0, 14.0,
+                    if version >= layout::FIRST_VERSION { bearer_hall::HEIGHT } else { 8.0 },
+                    if version >= layout::FIRST_VERSION { Kind::WeighingHall } else { Kind::Hall },
+                    version < layout::FIRST_VERSION),
                 r(-9.0, 9.0, -28.0, -15.0, 6.0, Kind::Forge, true),
                 r(-9.0, 9.0, 15.0, 28.0, 6.0, Kind::Barracks, false),
                 r(-26.0, -15.0, -7.0, 7.0, 6.0, Kind::Ore, false),
@@ -1876,9 +1907,9 @@ fn vaults(cfg: &WorldSampleConfig, ground: f32) -> Rc<[Dungeon; 3]> {
         return found;
     }
     let built = Rc::new([
-        vault_tier(1, ground, cfg.seed),
-        vault_tier(2, ground, cfg.seed),
-        vault_tier(3, ground, cfg.seed),
+        vault_tier(1, ground, cfg.seed, cfg.generator_version),
+        vault_tier(2, ground, cfg.seed, cfg.generator_version),
+        vault_tier(3, ground, cfg.seed, cfg.generator_version),
     ]);
     VAULTS.with(|v| *v.borrow_mut() = Some((key, built.clone())));
     built
@@ -2132,16 +2163,26 @@ mod tests {
             }
             (start.elapsed().as_secs_f64(), solid)
         };
-        // Each version is timed in its own block. Alternating versions made them
-        // evict each other from the shared landscape tile cache, which measured
-        // cache thrash instead of generator cost. Best of three per version
-        // keeps background load from favouring either side.
-        let best = |version| {
-            let _ = time(version);
-            (0..3).map(|_| time(version).0).fold(f64::MAX, f64::min)
-        };
-        let old = best(15);
-        let new = best(16);
+        // Wall-clock on a shared, hybrid-core machine is bimodal per process: the
+        // same binary measured v16 at 1.07x and 1.9x of v15 depending on which core
+        // the test thread landed on, steady within each process. Timing one version
+        // after the other therefore compared two different machines. Alternating
+        // short blocks and keeping each version's best gives both versions the same
+        // chance to hit the fast state. Each block warms its own thread-local and
+        // tile caches first (the discarded call), so a version switch costs neither.
+        let mut old = f64::MAX;
+        let mut new = f64::MAX;
+        for round in 0..4 {
+            for version in if round % 2 == 0 { [15, 16] } else { [16, 15] } {
+                let _ = time(version);
+                let t = time(version).0;
+                if version == 15 {
+                    old = old.min(t);
+                } else {
+                    new = new.min(t);
+                }
+            }
+        }
         println!(
             "terrain generation: v15 {old:.3}s, v16 {new:.3}s ({:.2}x)",
             new / old
@@ -2151,6 +2192,96 @@ mod tests {
             "v16 generation is {:.2}x slower than v15",
             new / old
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn profile_generation_stages() {
+        use glam::IVec3;
+        let version = std::env::var("PROFILE_VERSION")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(crate::world::CURRENT_GENERATOR_VERSION);
+        let c = WorldSampleConfig {
+            generator_version: version,
+            seed: 424242,
+            world_type: WorldType::Hills,
+            voxel_scale: VoxelScalePreset::OneMeter,
+        };
+        let size = crate::mesh::PADDED_CHUNK_SIZE;
+        let chunks: Vec<IVec3> = (6..10)
+            .flat_map(|cx| (-2..2).flat_map(move |cz| (-2..3).map(move |cy| IVec3::new(cx, cy, cz))))
+            .collect();
+        // One timer per whole sweep: per-call timers cost more than the calls.
+        let sweep = |name: &str, f: &dyn Fn(IVec3, i32, i32, crate::world::ColumnSample, i32) -> usize| {
+            let mut best = f64::MAX;
+            let mut sink = 0;
+            for _ in 0..3 {
+                let t = std::time::Instant::now();
+                for &ch in &chunks {
+                    let origin = ch * crate::world::CHUNK_SIZE - IVec3::ONE;
+                    for z in 0..size {
+                        for x in 0..size {
+                            let col = sample_column(&c, origin.x + x, origin.z + z);
+                            for y in 0..size {
+                                sink += f(origin, x, z, col, y);
+                            }
+                        }
+                    }
+                }
+                best = best.min(t.elapsed().as_secs_f64());
+            }
+            println!("v{version} {name:<18} {best:.3}s (sink {sink})");
+        };
+        sweep("columns+loop", &|_, _, _, _, _| 0);
+        sweep("undercrown", &|o, x, z, col, y| {
+            super::super::undercrown::block(&c, o + IVec3::new(x, y, z), col.height).is_some() as usize
+        });
+        sweep("sites::block", &|o, x, z, col, y| {
+            super::super::sites::block(&c, o + IVec3::new(x, y, z), col.height).is_some() as usize
+        });
+        sweep("sites::cavern", &|o, x, z, col, y| {
+            super::super::sites::cavern(&c, o + IVec3::new(x, y, z), col.height).is_some() as usize
+        });
+        sweep("cave_carves", &|o, x, z, col, y| {
+            super::super::cave_carves(&c, o + IVec3::new(x, y, z), &col) as usize
+        });
+        sweep("stratum", &|o, x, z, col, y| {
+            let p = o + IVec3::new(x, y, z);
+            let depth = col.height - p.y;
+            if depth > 6 {
+                super::super::landscape::geological_stratum(&c, p, col.height, depth) as usize
+            } else {
+                0
+            }
+        });
+        sweep("tectonics", &|o, x, z, _, y| {
+            if y > 0 {
+                return 0;
+            }
+            let m = (o + IVec3::new(x, y, z)).as_vec3();
+            super::super::landscape::sample_tectonics_zoomed(m.x, m.z, c.seed, 2.4).fold_wave as usize
+        });
+        let profiles_for = |o: IVec3| crate::world::RegionProfiles::new(&c, o.x, o.z, size);
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            for &ch in &chunks {
+                let origin = ch * crate::world::CHUNK_SIZE - IVec3::ONE;
+                let profiles = profiles_for(origin);
+                for z in 0..size {
+                    for x in 0..size {
+                        let col = sample_column(&c, origin.x + x, origin.z + z);
+                        for y in 0..size {
+                            let p = origin + IVec3::new(x, y, z);
+                            std::hint::black_box(super::super::sample_block_with(&c, p, col, &profiles));
+                        }
+                    }
+                }
+            }
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        println!("v{version} full sample_block   {best:.3}s");
     }
 
     #[test]

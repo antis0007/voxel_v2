@@ -6,7 +6,6 @@ use crate::world::{
 };
 use glam::IVec3;
 use std::{
-    collections::HashMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},

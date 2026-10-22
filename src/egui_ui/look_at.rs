@@ -1,18 +1,22 @@
 //! "Here's what you're looking at" panel (HWYLA / Jade style) for the block
-//! under the crosshair. It is non-interactive and sits at the top centre.
+//! under the crosshair. Non-interactive, compact, top centre.
 //!
 //! Layout, top to bottom:
-//! * icon tile, block name, and a temperature chip when the cell is hot;
-//! * the item category in the accent colour, where Minecraft shows the mod name;
-//! * chips: state of matter, hardness pips, passability, distance;
-//! * for a machine, its status with energy and water readings;
+//! * a small icon, the name, and a temperature chip when the cell is hot;
+//! * the category in the accent colour (where Minecraft shows the mod name),
+//!   with state, hardness pips and distance on the same line;
+//! * for an assembly, a status dot and only the readings that matter for its
+//!   kind: power in W, stored energy in Wh, batch progress with time left,
+//!   hearth temperature, multiblock shell, buffers and the grid balance;
 //! * controls as keycaps (`F  Inspect · E  Inventory`).
 //!
 //! All data is passed in; this module reads no world state.
-use super::presentation::{self, AMBER, DANGER, EDGE, JADE, MANA, MUTED, PAPER};
+use super::icons::{self, Icon};
+use super::presentation::{AMBER, DANGER, EDGE, JADE, MANA, MUTED, PAPER};
 use crate::material::{BlockId, CollisionKind, MatterState};
-use crate::world::factory::Node;
-use egui::{Align2, Color32, RichText, Sense, Stroke, vec2};
+use crate::world::expedition::NAMES;
+use crate::world::factory::{Kind, Probe, assembler, induction, multiblock, pile, power};
+use egui::{Align2, Color32, FontId, RichText, Sense, Stroke, vec2};
 
 pub struct LookAt<'a> {
     pub block: BlockId,
@@ -21,12 +25,14 @@ pub struct LookAt<'a> {
     pub distance_m: Option<f32>,
     /// Control hint from `expedition::hint`, e.g. `F  Inspect   ·   E  Inventory`.
     pub hint: &'a str,
-    /// The machine at the crosshair, when the block is one.
-    pub machine: Option<&'a Node>,
+    /// The assembly at the crosshair, when the block is one.
+    pub machine: Option<&'a Probe>,
 }
 
 /// Seconds the panel takes to settle when the target changes.
-const SETTLE: f64 = 0.14;
+const SETTLE: f64 = 0.12;
+const WIDTH: f32 = 236.0;
+const SMALL: f32 = 11.0;
 
 pub fn draw(ctx: &egui::Context, look: &LookAt) {
     // Restart the fade-in whenever the target block changes.
@@ -37,149 +43,464 @@ pub fn draw(ctx: &egui::Context, look: &LookAt) {
         .unwrap_or((u32::MAX, now));
     let since = if last == look.block.as_u32() { since } else { now };
     ctx.data_mut(|d| d.insert_temp(state_id, (look.block.as_u32(), since)));
-    let appear = (((now - since) / SETTLE) as f32).clamp(0.0, 1.0);
+    let appear = if super::magic_fx::reduced(ctx) { 1.0 } else {
+        ((((now - since) / SETTLE) as f32).clamp(0.0, 1.0) * 4.0).floor() / 4.0
+    };
 
     egui::Area::new("target_name".into())
-        .anchor(Align2::CENTER_TOP, [0.0, 74.0 - (1.0 - appear) * 6.0])
+        .anchor(Align2::CENTER_TOP, [0.0, 70.0 - (1.0 - appear) * 4.0])
         .interactable(false)
         .show(ctx, |ui| {
             ui.set_opacity(appear);
-            presentation::hud_frame().show(ui, |ui| {
-                ui.set_min_width(210.0);
-                ui.set_max_width(290.0);
-                // Rows are as tall as their text, not the default 18-point widget.
-                ui.spacing_mut().interact_size.y = 12.0;
-                ui.horizontal(|ui| {
-                    icon_tile(ui, look.block);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        title_row(ui, look);
-                        ui.label(
-                            RichText::new(crate::world::inventory::Item::Block(look.block).category())
-                                .size(10.0)
-                                .italics()
-                                .color(JADE),
-                        );
-                        chip_row(ui, look);
-                    });
+            egui::Frame::new()
+                .fill(Color32::from_rgba_unmultiplied(22, 19, 23, 228))
+                .stroke(Stroke::new(1.0, EDGE))
+                .inner_margin(egui::Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    ui.set_min_width(WIDTH);
+                    ui.set_max_width(WIDTH + 40.0);
+                    ui.spacing_mut().interact_size.y = 10.0;
+                    ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
+                    header(ui, look);
+                    if let Some(probe) = look.machine {
+                        ui.add_space(1.0);
+                        machine(ui, probe);
+                    }
+                    if !look.hint.is_empty() {
+                        keycap_row(ui, look.hint);
+                    }
                 });
-                if let Some(node) = look.machine {
-                    ui.add_space(3.0);
-                    machine_rows(ui, node);
-                }
-                if !look.hint.is_empty() {
-                    ui.add_space(3.0);
-                    ui.separator();
-                    keycap_row(ui, look.hint);
-                }
-            });
         });
 }
 
-fn icon_tile(ui: &mut egui::Ui, block: BlockId) {
-    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, Color32::from_rgb(20, 18, 21));
-    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, EDGE), egui::StrokeKind::Inside);
-    super::draw_voxel_icon(painter, rect.shrink(5.0), block);
-}
-
-fn title_row(ui: &mut egui::Ui, look: &LookAt) {
+fn header(ui: &mut egui::Ui, look: &LookAt) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(look.block.display_name())
-                .size(13.5)
-                .strong()
-                .color(PAPER),
-        );
-        if let Some(temp_c) = look.temperature_c {
-            // Scorching cells read red; merely warm ones amber.
-            let colour = if temp_c > 300.0 { DANGER } else { Color32::from_rgb(245, 134, 62) };
-            chip(ui, &format!("{temp_c:.0}°C"), colour);
+        let (rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(rect, 0.0, Color32::from_rgb(16, 14, 17));
+        let (sides, accent) = if look.temperature_c.is_some_and(|t| t > 300.0) {
+            (3, DANGER)
+        } else if look.machine.is_some() {
+            (5, AMBER)
+        } else {
+            (6, JADE)
+        };
+        super::sigils::draw(painter, rect.center(), 11.0, sides, accent);
+        super::draw_voxel_icon(painter, rect.shrink(3.0), look.block);
+        // One brief acquisition glint; a held target never keeps sparkling.
+        let now = ui.ctx().input(|i| i.time);
+        let since = ui.ctx().data(|d| d.get_temp::<(u32, f64)>(egui::Id::new("look_at_state")))
+            .map_or(now, |(_, since)| since);
+        let age = now - since;
+        if age > 0.04 && age < 0.28 && !super::magic_fx::reduced(ui.ctx()) {
+            let pixel = 1.0 / ui.ctx().pixels_per_point();
+            let c = rect.right_top() + vec2(-2.0, 2.0);
+            for offset in [vec2(0.0,0.0), vec2(pixel,0.0), vec2(-pixel,0.0), vec2(0.0,pixel), vec2(0.0,-pixel)] {
+                let q = c + offset;
+                let q = egui::pos2((q.x / pixel).round() * pixel, (q.y / pixel).round() * pixel);
+                painter.rect_filled(egui::Rect::from_min_size(q, vec2(pixel,pixel)), 0.0, PAPER);
+            }
         }
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.horizontal(|ui| {
+                let name = look
+                    .machine
+                    .and_then(|m| m.shell_of)
+                    .map(|_| look.block.display_name())
+                    .unwrap_or(look.block.display_name());
+                ui.label(RichText::new(name).size(12.0).strong().color(PAPER));
+                if let Some(temp_c) = look.temperature_c {
+                    let colour = if temp_c > 300.0 { DANGER } else { AMBER };
+                    ui.label(RichText::new(format!("{temp_c:.0}°C")).size(SMALL).color(colour));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(
+                    RichText::new(crate::world::inventory::Item::Block(look.block).category())
+                        .size(SMALL)
+                        .italics()
+                        .color(JADE),
+                );
+                facts(ui, look);
+            });
+        });
     });
 }
 
-fn chip_row(ui: &mut egui::Ui, look: &LookAt) {
+/// State, hardness and distance on the category line, only when they say
+/// something: machines skip matter state, air-like cells skip hardness.
+fn facts(ui: &mut egui::Ui, look: &LookAt) {
     let material = look.block.material();
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let (state, state_colour) = match material.physics.matter_state {
-            MatterState::Solid => ("Solid", PAPER),
-            MatterState::Powder => ("Powder", AMBER),
-            MatterState::Liquid => ("Liquid", MANA),
-            MatterState::Gas => ("Gas", MUTED),
-            MatterState::Plasma => ("Plasma", DANGER),
-            MatterState::Vacuum => ("Void", MUTED),
+    let solid = material.physics.matter_state == MatterState::Solid;
+    if look.machine.is_none() {
+        let state = match material.physics.matter_state {
+            MatterState::Solid => None,
+            MatterState::Powder => Some(("powder", AMBER)),
+            MatterState::Liquid => Some(("liquid", MANA)),
+            MatterState::Gas => Some(("gas", MUTED)),
+            MatterState::Plasma => Some(("plasma", DANGER)),
+            MatterState::Vacuum => Some(("void", MUTED)),
         };
-        chip(ui, state, state_colour);
-        if material.physics.collision == CollisionKind::Passable
-            && material.physics.matter_state == MatterState::Solid
-        {
-            chip(ui, "Passable", MUTED);
+        if let Some((text, colour)) = state {
+            ui.label(RichText::new(text).size(SMALL).color(colour));
         }
-        // Hardness pips only mean something for things you can break.
-        if material.physics.matter_state == MatterState::Solid && material.physics.hardness > 0.0 {
+        if material.physics.collision == CollisionKind::Passable && solid {
+            ui.label(RichText::new("passable").size(SMALL).color(MUTED));
+        }
+        if solid && material.physics.hardness > 0.0 {
             hardness_pips(ui, material.physics.hardness);
         }
-        if let Some(distance) = look.distance_m {
-            chip(ui, &format!("{distance:.1} m"), MUTED);
-        }
-    });
+    }
+    if let Some(distance) = look.distance_m {
+        ui.label(RichText::new(format!("{distance:.1} m")).size(SMALL).color(MUTED));
+    }
 }
 
-/// Five pips; hardness 0..1.1 maps onto them so soft dirt shows one and
-/// bedrock-grade material shows five.
+/// Five pips; hardness 0..1.1 maps onto them.
 fn hardness_pips(ui: &mut egui::Ui, hardness: f32) {
     let filled = ((hardness / 1.1) * 5.0).ceil().clamp(1.0, 5.0) as usize;
-    let (rect, _) = ui.allocate_exact_size(vec2(5.0 * 7.0 + 2.0, 14.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(5.0 * 4.0, 10.0), Sense::hover());
     let painter = ui.painter();
     for i in 0..5 {
-        let pip = egui::Rect::from_min_size(
-            rect.min + vec2(1.0 + i as f32 * 7.0, 4.0),
-            vec2(5.0, 7.0),
-        );
+        let pip = egui::Rect::from_min_size(rect.min + vec2(i as f32 * 4.0, 3.0), vec2(3.0, 5.0));
         painter.rect_filled(pip, 0.0, if i < filled { JADE } else { EDGE });
     }
 }
 
-fn chip(ui: &mut egui::Ui, text: &str, colour: Color32) {
-    egui::Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 10))
-        .stroke(Stroke::new(1.0, EDGE))
-        .inner_margin(egui::Margin::symmetric(4, 1))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(9.5).color(colour));
+/// `label ........ value` on one line.
+fn row(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(SMALL).color(MUTED));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new(value).size(SMALL).monospace().color(colour));
         });
+    });
 }
 
-fn machine_rows(ui: &mut egui::Ui, node: &Node) {
+/// A thin bar with its caption drawn inside.
+fn bar(ui: &mut egui::Ui, fraction: f32, colour: Color32, caption: &str) {
+    let width = ui.available_width().max(WIDTH);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 11.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 0.0, Color32::from_rgb(14, 12, 16));
+    let mut fill = rect;
+    fill.set_width(rect.width() * fraction.clamp(0.0, 1.0));
+    p.rect_filled(fill, 0.0, colour.gamma_multiply(0.75));
+    p.rect_stroke(rect, 0.0, Stroke::new(1.0, EDGE), egui::StrokeKind::Inside);
+    p.text(
+        rect.left_center() + vec2(3.0, 0.0),
+        Align2::LEFT_CENTER,
+        caption,
+        FontId::monospace(10.0),
+        PAPER,
+    );
+}
+
+/// A row of tiny item icons with counts, for buffers.
+fn stacks(ui: &mut egui::Ui, label: &str, items: &[(usize, u32)]) {
+    if items.is_empty() {
+        return;
+    }
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-        ui.label(RichText::new(node.status).size(10.5).strong().color(JADE));
-        if !node.enabled {
-            chip(ui, "Paused", AMBER);
-        }
-        chip(ui, &format!("E {}", node.energy), MANA);
-        if node.water > 0 {
-            chip(ui, &format!("H₂O {:.1} m³", node.water as f32 / 512.0), MANA);
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.label(RichText::new(label).size(SMALL).color(MUTED));
+        for &(i, n) in items.iter().take(5) {
+            let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            icons::paint(ui.painter(), r, Icon::Resource(i));
+            let count = if n % 64 == 0 {
+                format!("{}", n / 64)
+            } else {
+                format!("{:.2}", n as f32 / 64.0)
+            };
+            ui.label(RichText::new(count).size(11.0).monospace().color(PAPER))
+                .on_hover_text(NAMES[i]);
         }
     });
+}
+
+fn status_colour(status: &str, enabled: bool) -> Color32 {
+    if !enabled {
+        return MUTED;
+    }
+    match status {
+        "Processing" | "Generating" | "Coking" | "Smelting" | "Charging" | "Full" => {
+            Color32::from_rgb(120, 214, 150)
+        }
+        "Discharging" | "Holding" | "Heating" | "Balancing" => AMBER,
+        "Idle" | "Ready" => MUTED,
+        _ => DANGER,
+    }
+}
+
+fn machine(ui: &mut egui::Ui, probe: &Probe) {
+    let n = &probe.node;
+    // Status line: coloured dot, status, and the live power flow.
+    ui.horizontal(|ui| {
+        let colour = status_colour(n.status, n.enabled);
+        let (dot, _) = ui.allocate_exact_size(vec2(7.0, 10.0), Sense::hover());
+        ui.painter().circle_filled(dot.center(), 3.0, colour);
+        let status = if n.enabled { n.status } else { "Paused" };
+        ui.label(RichText::new(status).size(11.0).strong().color(colour));
+        if n.upgrade > 0 {
+            let tier = if n.kind == Kind::Battery {
+                power::battery_tier_name(n.upgrade).to_string()
+            } else {
+                format!("Drive ×{}", n.upgrade + 1)
+            };
+            ui.label(RichText::new(tier).size(SMALL).color(MANA));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if n.flow != 0 {
+                let (text, colour) = if n.flow > 0 {
+                    (format!("+{}", power::fmt_power(n.flow as f64)), Color32::from_rgb(120, 214, 150))
+                } else {
+                    (format!("−{}", power::fmt_power(-n.flow as f64)), AMBER)
+                };
+                ui.label(RichText::new(text).size(SMALL).monospace().color(colour));
+            }
+        });
+    });
+    if let Some(mode) = n.kind.modes().get(n.mode as usize) {
+        if n.kind != Kind::Furnace || n.mode == 1 {
+            let short = mode.split(':').next().unwrap_or(mode);
+            row(ui, "Mode", short, PAPER);
+        }
+    }
+    match n.kind {
+        Kind::Battery | Kind::InductionPort | Kind::Transformer => {
+            if let Some((stored, cap, rate)) = probe.pool {
+                bar(
+                    ui,
+                    stored as f32 / cap.max(1) as f32,
+                    MANA,
+                    &format!(
+                        "{} / {}  {:.0}%",
+                        power::fmt_energy(stored as f64),
+                        power::fmt_energy(cap as f64),
+                        stored as f64 * 100.0 / cap.max(1) as f64
+                    ),
+                );
+                row(ui, "Rate limit", &power::fmt_power(rate as f64), MUTED);
+            }
+            if n.kind == Kind::InductionPort {
+                if n.formed {
+                    row(
+                        ui,
+                        "Matrix",
+                        &format!("{} cells · {} providers", n.structure.0, n.structure.1),
+                        JADE,
+                    );
+                } else {
+                    row(ui, "Matrix", induction::problem(n.structure.1), DANGER);
+                }
+            }
+        }
+        Kind::InductionCasing | Kind::InductionCell | Kind::InductionProvider => {
+            if n.formed {
+                row(ui, "Part of", "formed induction matrix", JADE);
+            } else {
+                row(ui, "Matrix", induction::problem(n.structure.1), DANGER);
+            }
+            match n.kind {
+                Kind::InductionCell => row(ui, "Adds", "64 kWh", MUTED),
+                Kind::InductionProvider => row(ui, "Adds", "256 kW", MUTED),
+                _ => {}
+            }
+        }
+        Kind::Cable => {
+            let cap = power::cable_capacity(n.upgrade);
+            let used = probe.grid.map(|g| g.throughput).unwrap_or(0);
+            row(ui, "Tier", power::cable_tier_name(n.upgrade), PAPER);
+            bar(
+                ui,
+                used as f32 / cap as f32,
+                if used >= cap { DANGER } else { MANA },
+                &format!("{} / {}", power::fmt_power(used as f64), power::fmt_power(cap as f64)),
+            );
+        }
+        Kind::Assembler => {
+            match assembler::recipe(n) {
+                Some(r) => {
+                    row(ui, "Recipe", r.name, PAPER);
+                    bar(
+                        ui,
+                        n.progress as f32 / assembler::CRAFT_TICKS as f32,
+                        Color32::from_rgb(110, 190, 160),
+                        &format!("{:.0}%", n.progress as f32 * 100.0 / assembler::CRAFT_TICKS as f32),
+                    );
+                    if n.stock > 0 {
+                        row(ui, "Finished", &format!("{} kits", n.stock), JADE);
+                    }
+                }
+                None => row(ui, "Recipe", "none set", DANGER),
+            }
+        }
+        Kind::Generator | Kind::Bioreactor => {
+            if pile::is_pile(n) {
+                let colour = if n.progress >= pile::WARN_HEAT { DANGER } else { AMBER };
+                bar(
+                    ui,
+                    n.progress as f32 / pile::MAX_HEAT as f32,
+                    colour,
+                    &format!("Core heat {} / {}", n.progress, pile::MAX_HEAT),
+                );
+            }
+            if n.burn > 0 {
+                let rate = if n.kind == Kind::Bioreactor { 32.0 } else if pile::is_pile(n) { pile::RATE as f64 } else { 16.0 };
+                row(
+                    ui,
+                    "Burning",
+                    &format!(
+                        "{} · {:.0} s",
+                        power::fmt_joules(n.burn as f64),
+                        n.burn as f64 / rate * power::TICK_SECONDS
+                    ),
+                    PAPER,
+                );
+            }
+            bar(
+                ui,
+                n.energy as f32 / power::GENERATOR_BUFFER as f32,
+                AMBER,
+                &format!(
+                    "Buffer {} / {}",
+                    power::fmt_energy(n.energy as f64),
+                    power::fmt_energy(power::GENERATOR_BUFFER as f64)
+                ),
+            );
+        }
+        Kind::CokeOven | Kind::BlastFurnace => {
+            let (found, needed) = n.structure;
+            if n.formed {
+                row(ui, "Shell", &format!("formed · {needed} bricks"), JADE);
+            } else {
+                row(ui, "Shell", &format!("{found} / {needed} bricks"), DANGER);
+            }
+            let t = multiblock::temperature(n);
+            let target = multiblock::working_temperature(n.kind, n.mode);
+            let max = if n.kind == Kind::CokeOven {
+                multiblock::COKE_OVEN_MAX_C
+            } else {
+                multiblock::BLAST_MAX_C
+            };
+            bar(
+                ui,
+                t as f32 / max as f32,
+                if t >= target { Color32::from_rgb(240, 120, 50) } else { AMBER },
+                &format!("Hearth {t} °C · works at {target} °C"),
+            );
+        }
+        _ => {}
+    }
+    if let Some(process) = n.process() {
+        let progress = n.progress as f32 / process.ticks.max(1) as f32;
+        let speed = if n.kind.powered() { 1 + n.upgrade } else { 1 };
+        let left = (process.ticks - n.progress.min(process.ticks)) as f32 * 0.25 / speed as f32;
+        let input = process.inputs[0].0;
+        bar(
+            ui,
+            progress,
+            Color32::from_rgb(110, 190, 160),
+            &format!(
+                "{} → {}  {:.0}% · {:.1} s",
+                short(NAMES[input]),
+                short(NAMES[process.output.0]),
+                progress * 100.0,
+                left
+            ),
+        );
+    }
+    if n.kind.powered() {
+        row(
+            ui,
+            "Local buffer",
+            &format!(
+                "{} / {}",
+                power::fmt_joules(n.energy as f64),
+                power::fmt_joules(power::CONSUMER_BUFFER as f64)
+            ),
+            MUTED,
+        );
+    }
+    if n.water > 0 || (n.kind.water_port() && n.kind != Kind::Generator) {
+        bar(
+            ui,
+            n.water as f32 / 8192.0,
+            MANA,
+            &format!("Water {:.0} / 16000 L", n.water as f32 * 1000.0 / 512.0),
+        );
+    }
+    let mut inputs: Vec<(usize, u32)> = (0..NAMES.len()).filter(|&i| n.input[i] > 0).map(|i| (i, n.input[i])).collect();
+    inputs.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+    let mut outputs: Vec<(usize, u32)> = (0..NAMES.len()).filter(|&i| n.output[i] > 0).map(|i| (i, n.output[i])).collect();
+    outputs.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+    if n.kind == Kind::Storage || n.kind == Kind::Feeder {
+        inputs.extend(outputs.drain(..));
+        stacks(ui, "Holds", &inputs);
+    } else {
+        stacks(ui, "In", &inputs);
+        stacks(ui, "Out", &outputs);
+    }
+    if let Some(grid) = probe.grid {
+        let balance = grid.generation as i64 - grid.load as i64;
+        let mut text = format!(
+            "+{} / −{}",
+            power::fmt_power(grid.generation as f64),
+            power::fmt_power(grid.load as f64)
+        );
+        if grid.capacity > 0 {
+            text.push_str(&format!(" · {:.0}%", grid.stored as f64 * 100.0 / grid.capacity as f64));
+        }
+        row(
+            ui,
+            "Grid",
+            &text,
+            if balance >= 0 { MUTED } else if grid.stored > 0 { AMBER } else { DANGER },
+        );
+        if let Some(s) = grid.runtime_seconds() {
+            row(ui, "Reserve lasts", &duration(s), AMBER);
+        }
+    } else if n.kind.powered() || n.kind.generator() || n.kind.stores_power() {
+        row(ui, "Grid", "no power cable", DANGER);
+    }
+    if let Some(kind) = probe.shell_of {
+        let name = if kind == Kind::CokeOven { "Coke oven" } else { "Blast furnace" };
+        row(ui, "Part of", name, JADE);
+    }
+}
+
+fn short(name: &str) -> &str {
+    name.strip_suffix(" ingots")
+        .or_else(|| name.strip_suffix(" dust"))
+        .unwrap_or(name)
+}
+
+fn duration(seconds: f64) -> String {
+    if seconds >= 3600.0 {
+        format!("{:.1} h", seconds / 3600.0)
+    } else if seconds >= 60.0 {
+        format!("{:.0} min", seconds / 60.0)
+    } else {
+        format!("{seconds:.0} s")
+    }
 }
 
 /// `F  Inspect   ·   E  Inventory` becomes `[F] Inspect  [E] Inventory`. A
 /// segment without a double-space is plain explanatory text.
 fn keycap_row(ui: &mut egui::Ui, hint: &str) {
+    ui.add_space(1.0);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.spacing_mut().item_spacing.x = 3.0;
         for segment in hint.split('·').map(str::trim).filter(|s| !s.is_empty()) {
             match segment.split_once("  ") {
                 Some((key, action)) => {
                     keycap(ui, key.trim());
-                    ui.label(RichText::new(action.trim()).size(10.5).color(PAPER));
+                    ui.label(RichText::new(action.trim()).size(SMALL).color(PAPER));
                 }
                 None => {
-                    ui.label(RichText::new(segment).size(10.0).color(MUTED));
+                    ui.label(RichText::new(segment).size(SMALL).color(MUTED));
                 }
             }
         }
@@ -190,9 +511,8 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
     egui::Frame::new()
         .fill(Color32::from_rgb(52, 46, 50))
         .stroke(Stroke::new(1.0, EDGE))
-        .corner_radius(2)
-        .inner_margin(egui::Margin::symmetric(5, 1))
+        .inner_margin(egui::Margin::symmetric(3, 0))
         .show(ui, |ui| {
-            ui.label(RichText::new(key).size(10.0).strong().color(PAPER));
+            ui.label(RichText::new(key).size(SMALL).strong().color(PAPER));
         });
 }

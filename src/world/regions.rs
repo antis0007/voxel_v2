@@ -34,12 +34,23 @@ pub struct Record {
     pub resident_bytes: u32,
 }
 
+/// Controlled index metadata for source-lifecycle tests; no payload IO occurs.
+#[cfg(test)]
+pub(crate) fn controlled_source_record(generation:u64)->Record {
+    Record{pin:None,generation,offset:generation*64,len:4,checksum:generation*17,version:1,resident_bytes:4}
+}
+
 // Copy-on-write roots are partitioned: publishing one edited chunk must not
 // clone the complete region directory while render/simulation readers pin it.
 const INDEX_BUCKETS: usize = 128;
 type Group = Arc<HashMap<IVec3, Record>>;
 type Groups = Arc<HashMap<IVec3, Group>>;
 type Columns = Arc<HashMap<(i32, i32), Arc<HashSet<i32>>>>;
+/// Weak COW root identities permit cheap, ABA-safe freshness checks without
+/// retaining the complete persistent record directory.
+pub struct RegionStorageIdentity {
+    groups: [std::sync::Weak<HashMap<IVec3, Group>>; INDEX_BUCKETS],
+}
 #[derive(Clone)]
 pub struct RegionIndex {
     groups: [Groups; INDEX_BUCKETS],
@@ -56,6 +67,12 @@ impl Default for RegionIndex {
     }
 }
 impl RegionIndex {
+    pub fn storage_identity(&self) -> RegionStorageIdentity {
+        RegionStorageIdentity { groups: std::array::from_fn(|i|Arc::downgrade(&self.groups[i])) }
+    }
+    pub fn matches_storage_identity(&self, old:&RegionStorageIdentity) -> bool {
+        self.groups.iter().zip(&old.groups).all(|(a,b)|std::sync::Weak::ptr_eq(&Arc::downgrade(a),b))
+    }
     fn bucket(x: i32, y: i32, z: i32) -> usize {
         let h = (x as u32).wrapping_mul(0x8da6b343)
             ^ (y as u32).wrapping_mul(0xd8163841)
@@ -331,6 +348,8 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
     ensure!(input.is_empty(), "Unexpected region record data");
     Ok(DiskChunk {
         chunk: Arc::new(ChunkData {
+            modified_bounds: Some((IVec3::ZERO, IVec3::splat(CHUNK_SIZE))),
+            structural_bounds: Some((IVec3::ZERO, IVec3::splat(CHUNK_SIZE))),
             blocks: blocks
                 .into_boxed_slice()
                 .try_into()
@@ -448,6 +467,8 @@ pub struct RegionStream {
     write_queued: HashSet<IVec3>,
     pending: HashMap<IVec3, u64>,
     reading: HashSet<IVec3>,
+    // Source-only renderer interest. Loading these records never wakes physics.
+    visual_interest: HashSet<IVec3>,
     next_version: u64,
     tx: mpsc::SyncSender<Command>,
     rx: mpsc::Receiver<Completion>,
@@ -602,6 +623,7 @@ impl RegionStream {
             write_queued: HashSet::new(),
             pending: HashMap::new(),
             reading: HashSet::new(),
+            visual_interest: HashSet::new(),
             next_version,
             tx,
             rx,
@@ -627,6 +649,23 @@ impl RegionStream {
     }
 }
 impl World {
+    pub fn set_visual_region_interest(&mut self, sources: &[IVec3]) {
+        let mut wanted = HashSet::new();
+        for &q in sources {
+            for y in -1..=1 { for z in -1..=1 { for x in -1..=1 {
+                if let (Some(px),Some(py),Some(pz)) = (q.x.checked_add(x),q.y.checked_add(y),q.z.checked_add(z)) {
+                    wanted.insert(IVec3::new(px,py,pz));
+                }
+            }}}
+        }
+        if self.regions.visual_interest != wanted {
+            self.regions.visual_interest = wanted;
+            self.regions.last_plan = None;
+            self.regions.last_eviction = None;
+            self.snapshot_revision = u64::MAX;
+        }
+    }
+
     pub fn snapshot_near(&mut self, center: IVec3, radius: i32) -> super::WorldSnapshot {
         self.stream_regions(center, radius);
         if self.snapshot_revision == u64::MAX
@@ -638,6 +677,7 @@ impl World {
                 .iter()
                 .filter(|(c, _)| {
                     c.x.abs_diff(center.x).max(c.z.abs_diff(center.z)) <= (radius + 1) as u32
+                        || self.regions.visual_interest.contains(*c)
                 })
                 .map(|(&c, v)| (c, Arc::clone(v)))
                 .collect();
@@ -885,6 +925,7 @@ impl World {
             let mut bytes = self.edited_resident_bytes();
             let mut victims = HashSet::new();
             for c in clean {
+                if self.regions.visual_interest.contains(&c) { continue; }
                 let d = (c - center).abs();
                 if d.max_element() <= 2 {
                     continue;
@@ -921,9 +962,12 @@ impl World {
                 .view
                 .records
                 .nearby(center, radius + 1)
-                .filter(|c| !self.chunks.contains_key(c))
+                .chain(self.regions.visual_interest.iter())
+                .filter(|c| self.regions.view.records.contains_key(c) && !self.chunks.contains_key(c))
                 .copied()
                 .collect();
+            wanted.sort_unstable_by_key(|c| (c.x,c.y,c.z));
+            wanted.dedup();
             wanted.sort_unstable_by_key(|c| (*c - center).as_i64vec3().length_squared());
             self.regions.read_plan = wanted.into();
             self.regions.last_plan = Some(plan);
@@ -956,6 +1000,7 @@ impl World {
                     .keys()
                     .filter(|p| {
                         !self.regions.dirty.contains_key(p)
+                            && !self.regions.visual_interest.contains(*p)
                             && !self.regions.pending.contains_key(p)
                             && self.regions.view.records.contains_key(p)
                             && (**p - center).abs().max_element() > 2
@@ -1005,6 +1050,36 @@ mod encoding {
     use super::*;
     use crate::fluid::VoxelScalePreset;
     use crate::world::{World, WorldType};
+
+    #[test]
+    fn visual_source_interest_loads_cold_edits_without_waking_physics() {
+        let root=std::env::temp_dir().join(format!("voxel-visual-regions-{}-{}",std::process::id(),checkpoint_id()));
+        let mut writer=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);
+        writer.regions=RegionStream::open(root.clone(),HashMap::new());
+        let p=IVec3::new(3205,70,-3195);let q=crate::world::chunk_coord_from_world_block(p);
+        writer.set_water_volume(p,3);writer.request_simulation_writeback();
+        let deadline=Instant::now()+Duration::from_secs(5);
+        while !writer.regions.view.records.contains_key(&q) {
+            assert!(Instant::now()<deadline,"region write timeout");
+            writer.stream_regions(q,1);std::thread::sleep(Duration::from_millis(2));
+        }
+        let records=HashMap::from([(q,writer.regions.view.records.get(&q).unwrap().clone())]);
+        let mut reader=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);
+        reader.regions=RegionStream::open(root,records);
+        let activity=(reader.activity.chunks(),reader.activity.pending());
+        reader.set_visual_region_interest(&[q]);
+        let deadline=Instant::now()+Duration::from_secs(5);
+        while !reader.chunks.contains_key(&q) {
+            assert!(Instant::now()<deadline,"visual source read timeout");
+            reader.stream_regions(IVec3::ZERO,1);std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(reader.water_volume(p),3);
+        let snapshot=reader.snapshot_near(IVec3::ZERO,1);
+        assert!(snapshot.chunks.contains_key(&q),"near snapshots must include the explicitly requested source halo");
+        assert_eq!((reader.activity.chunks(),reader.activity.pending()),activity,"read-only renderer source loading must not seed simulation");
+        reader.set_visual_region_interest(&[]);reader.stream_regions(IVec3::ZERO,1);
+        assert!(!reader.chunks.contains_key(&q),"releasing source interest must allow ordinary budget eviction");
+    }
 
     fn record(bytes: &[u8], version: u64) -> Record {
         Record {

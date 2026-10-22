@@ -140,6 +140,7 @@ pub fn motion_camera(player: &mut Player, scale: f32, elapsed: f32) {
 
 pub fn camera(player: &mut Player, scale: f32) {
     let z_dist = match mode() {
+        "minerals" => 10.5,
         "survival" => 2.2,
         "factory" => 7.5,
         _ => 4.5,
@@ -156,6 +157,22 @@ pub fn camera(player: &mut Player, scale: f32) {
     player.fly_mode = FlyMode::Noclip;
     player.crouch_t = 0.0;
     player.selected_block = BlockId::Stone;
+    if mode() == "factory" {
+        if let Some(offset) = factory_review_focus() {
+            player.pos = (Vec3::new(offset.x as f32 + 0.5, 101.5 + offset.y as f32, offset.z as f32 + 3.5)) / scale;
+        }
+    }
+}
+
+fn factory_review_focus() -> Option<IVec3> {
+    Some(match std::env::var("VOXEL_REVIEW_FOCUS").ok()?.as_str() {
+        "battery" => IVec3::new(-2, 0, 3),
+        "matrix" => IVec3::new(4, 1, -2),
+        "transformer" => IVec3::new(5, 0, 2),
+        "assembler" => IVec3::new(-5, 0, -1),
+        "cable" => IVec3::new(5, 0, 1),
+        _ => return None,
+    })
 }
 
 /// Magical-tech fixture: an extractor line, a lift that climbs a level, and a
@@ -166,7 +183,7 @@ fn install_factory(world: &mut World) {
     let n = (1.0 / scale) as i32;
     let mut edits = Vec::new();
     for y in 99 * n..106 * n {
-        for z in -4 * n..4 * n {
+        for z in -8 * n..4 * n {
             for x in -6 * n..6 * n {
                 edits.push((
                     IVec3::new(x, y, z),
@@ -213,9 +230,91 @@ fn install_factory(world: &mut World) {
     factory::fixture_place(world, at(3, 0, 2), Kind::Tank);
     factory::fixture_place(world, at(3, 0, 0), Kind::Pump);
     factory::fixture_place(world, at(3, 0, 1), Kind::FluidPipe);
+    // Line D: a battery bank on the generator's cable, in Mana font mode.
+    if let Some(b) = factory::fixture_place(world, at(-2, 0, 3), Kind::Battery) {
+        b.energy = factory::power::battery_capacity(0) * 3 / 5;
+        b.mode = 3;
+    }
+    // Brick multiblocks behind the lines: a coke oven and a blast furnace,
+    // their controllers facing the camera.
+    use crate::world::factory::multiblock;
+    for (kind, x, fuel) in [(Kind::CokeOven, -3, 3usize), (Kind::BlastFurnace, 1, factory::COKE)] {
+        let p = at(x, 1, -5);
+        for c in multiblock::shell(kind, p, IVec3::NEG_Z, n) {
+            factory::fixture_place(world, c, multiblock::brick_kind(kind).unwrap());
+        }
+        if let Some(c) = factory::fixture_place(world, p, kind) {
+            c.input[fuel] = 8 * 64;
+            if kind == Kind::BlastFurnace {
+                c.input[2] = 8 * 64;
+            }
+        }
+    }
+    // Line E: a 4 x 4 x 4 induction matrix with cells and a provider,
+    // a transformer onto an HV line, and an assembler building generators.
+    for y in 0..4 {
+        for z in -5..=-2 {
+            for x in 3..=6 {
+                let wall = y == 0 || y == 3 || z == -5 || z == -2 || x == 3 || x == 6;
+                let kind = if (x, y, z) == (4, 1, -2) {
+                    Kind::InductionPort
+                } else if wall {
+                    Kind::InductionCasing
+                } else if (x, y, z) == (4, 1, -4) {
+                    Kind::InductionProvider
+                } else {
+                    Kind::InductionCell
+                };
+                factory::fixture_place(world, at(x, y, z), kind);
+            }
+        }
+    }
+    factory::fixture_place(world, at(5, 0, 2), Kind::Transformer);
+    for z in [0, 1] {
+        if let Some(c) = factory::fixture_place(world, at(5, 0, z), Kind::Cable) {
+            c.upgrade = 1;
+        }
+    }
+    if let Some(a) = factory::fixture_place(world, at(-5, 0, -1), Kind::Assembler) {
+        let generator = crate::world::inventory::all_recipes()
+            .iter()
+            .position(|r| r.output.item == crate::world::inventory::Item::Block(Kind::Generator.block()))
+            .unwrap();
+        a.target = generator as u32 + 1;
+        a.input[6] = 8 * 128;
+        a.input[8] = 8 * 128;
+        a.energy = 40;
+    }
+    world.factory.focus = factory_review_focus().map(|p| at(p.x, p.y, p.z));
 }
 
 pub fn install(world: &mut World) {
+    if mode() == "minerals" {
+        // Unsaved material comparison, left to right. Uses the normal terrain
+        // mesher, skylight metadata and torch BRDF, not synthetic UI swatches.
+        let materials = [BlockId::CoalOre, BlockId::IronOre, BlockId::CopperOre,
+            BlockId::TinOre, BlockId::Crystal, BlockId::CopperBlock,
+            BlockId::MithrilBlock, BlockId::StarGlass];
+        let n = (1.0 / world.voxel_scale.meters()) as i32;
+        let mut edits = Vec::new();
+        for x in -9 * n..9 * n {
+            for z in -3 * n..6 * n {
+                for y in 99 * n..106 * n {
+                    let block = if y < 100 * n { BlockId::StoneBricks }
+                        else if (-8 * n..8 * n).contains(&x)
+                            && (-n..n).contains(&z) && y < 103 * n {
+                            materials[((x + 8 * n) / (2 * n)) as usize]
+                        } else { BlockId::Air };
+                    edits.push((IVec3::new(x, y, z), block));
+                }
+            }
+        }
+        for x in [-6, -2, 2, 6] {
+            edits.push((IVec3::new(x * n, 100 * n, 3 * n), BlockId::Torch));
+        }
+        world.set_many(&edits);
+        return;
+    }
     if mode() == "factory" {
         install_factory(world);
         return;
@@ -305,7 +404,7 @@ pub fn apply_survival_phase(
                 .inventory
                 .notify_overflow(crate::world::inventory::Item::Block(BlockId::Stone));
         }
-        _ => {
+        3 => {
             // Phase 3: E-key survival inventory screen open with 2x2 crafting grid & armor preview
             creative.show_palette = true;
             world.adventure.health = 90.0;
@@ -314,5 +413,54 @@ pub fn apply_survival_phase(
             world.inventory.starve_timer = 0.0;
             egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), 2u32));
         }
+        4 | 5 => {
+            // Phases 4-5: the recipe browser. Coal coke's recipes, then the
+            // crafting tree for a battery bank.
+            use crate::world::inventory::Item;
+            creative.show_palette = true;
+            let (item, tab) = if phase == 4 {
+                (Item::Resource(crate::world::factory::COKE as u8), 0u8)
+            } else {
+                (Item::Block(BlockId::BatteryBank), 2u8)
+            };
+            egui_ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new("inventory_page"), 6u32);
+                d.insert_temp(egui::Id::new("jei_selected"), Some(item));
+                d.insert_temp(egui::Id::new("jei_tab"), tab);
+            });
+        }
+        6 => {
+            // Phase 6: the factory health tab, with one assembly of each kind of trouble.
+            creative.show_palette = true;
+            health_sample(world);
+            egui_ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new("inventory_page"), 7u32);
+                d.insert_temp(egui::Id::new("production_mode"), true);
+            });
+        }
+        _ => {
+            creative.show_palette = false;
+        }
+    }
+}
+
+/// A row of assemblies on the survival room's floor, one per health state:
+/// two starved crushers, a starved generator, a paused furnace, an unpowered
+/// furnace, an unconfigured assembler and an idle battery.
+fn health_sample(world: &mut World) {
+    use crate::world::factory::{self, Kind};
+    if !world.factory.nodes.is_empty() {
+        return;
+    }
+    let at = |x: i32| IVec3::new(x, 100, -6);
+    for x in [-6, -4] {
+        factory::fixture_place(world, at(x), Kind::Crusher);
+    }
+    factory::fixture_place(world, at(-2), Kind::Furnace).map(|n| n.enabled = false);
+    factory::fixture_place(world, at(0), Kind::Assembler);
+    factory::fixture_place(world, at(2), Kind::Generator);
+    factory::fixture_place(world, at(4), Kind::Battery);
+    if let Some(f) = factory::fixture_place(world, at(6), Kind::Furnace) {
+        f.input[9] = 64;
     }
 }

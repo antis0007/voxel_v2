@@ -12,6 +12,9 @@ use crate::world::{
 use glam::{IVec3, Quat, Vec3};
 
 mod wand;
+mod hart;
+mod orbital;
+pub use hart::HartPose;
 
 pub struct Model {
     pub vertices: Vec<Vertex3>,
@@ -29,6 +32,18 @@ pub struct Model {
 }
 
 impl Model {
+    /// Author texels before the part rotates, so armour grain follows its joints.
+    pub fn material_box(&mut self, c: Vec3, size: Vec3, rotation: Quat,
+        color: [f32;3], kind: f32, energy: f32) {
+        let mark = self.mark();
+        let previous = self.surface_kind;
+        self.surface_kind = kind;
+        self.cuboid(c, size, Quat::IDENTITY, color, 0.0);
+        self.bake_model_uv_since(mark, c, kind);
+        for vertex in &mut self.vertices[mark..] { vertex.surface[3] = energy.clamp(0.0,1.0); }
+        self.rotate_since(mark, c, rotation);
+        self.surface_kind = previous;
+    }
     pub fn mark(&self) -> usize {
         self.vertices.len()
     }
@@ -73,6 +88,18 @@ impl Model {
     /// the dedicated skin/leather branch instead of inheriting brushed machinery.
     pub fn set_surface_kind(&mut self, kind: f32) {
         self.surface_kind = kind;
+    }
+
+    /// Bake planar UVs before rigid animation; authored body pixels travel with it.
+    pub fn bake_model_uv_since(&mut self, start: usize, origin: Vec3, kind: f32) {
+        for v in &mut self.vertices[start..] {
+            if v.surface[2] != kind { continue; }
+            let p=Vec3::from_array(v.pos)*self.scale-origin;
+            let n=Vec3::from_array(v.normal).abs();
+            let uv=if n.y>=n.x && n.y>=n.z {[p.x,p.z]}
+                else if n.x>=n.z {[p.z,p.y]} else {[p.x,p.y]};
+            v.surface[0]=uv[0];v.surface[1]=uv[1];
+        }
     }
 
     fn triangle(&mut self, mut p: [Vec3; 3], normal: Vec3, color: [f32; 3], glow: f32) {
@@ -323,12 +350,32 @@ impl Model {
     }
 }
 
-pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
+thread_local! {
+    static SCENE_POOL: std::cell::RefCell<Vec<Vertex3>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Return a finished scene buffer so the next `build` reuses its allocation.
+pub fn recycle(vertices: Vec<Vertex3>) {
+    SCENE_POOL.with(|pool| *pool.borrow_mut() = vertices);
+}
+
+pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::DayNightCycle, pixel_angle: f32) -> Vec<Vertex3> {
     let scale = world.voxel_scale.meters();
 
     let viewer = player.pos * scale;
 
     let mut mesh = Model::new(scale);
+    // Reuse last frame's allocation. The scene holds ~400k vertices (orbital
+    // anchorages dominate); growing a fresh Vec to that size every frame cost
+    // several milliseconds of reallocation and page faults.
+    SCENE_POOL.with(|pool| {
+        let mut recycled = std::mem::take(&mut *pool.borrow_mut());
+        recycled.clear();
+        if recycled.capacity() > mesh.vertices.capacity() {
+            mesh.vertices = recycled;
+        }
+    });
+    orbital::build(&mut mesh, world, day, viewer, pixel_angle);
 
     let mut nodes: Vec<_> = world
         .factory
@@ -393,7 +440,11 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
             let r = if cable { 0.075 } else { 0.14 };
 
             let color = if cable {
-                [0.10, 0.37, 0.41]
+                match n.upgrade {
+                    0 => [0.10, 0.37, 0.41],
+                    1 => [0.20, 0.20, 0.22],
+                    _ => [0.30, 0.85, 0.95],
+                }
             } else if n.kind == Kind::FluidPipe {
                 [0.18, 0.54, 0.69]
             } else {
@@ -413,8 +464,8 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                     .nodes
                     .get(&(p + d * step))
                     .is_some_and(|other| {
-                        other.kind == n.kind
-                            || !matches!(other.kind, Kind::Pipe | Kind::Cable | Kind::FluidPipe)
+                        (other.kind == n.kind && (!cable || other.upgrade == n.upgrade))
+                            || (!other.kind.conduit() && !other.kind.structural())
                     })
             };
             let arms: Vec<IVec3> = [
@@ -464,15 +515,7 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                 IVec3::Z,
                 IVec3::NEG_Z,
             ] {
-                if !world
-                    .factory
-                    .nodes
-                    .get(&(p + d * step))
-                    .is_some_and(|other| {
-                        other.kind == n.kind
-                            || !matches!(other.kind, Kind::Pipe | Kind::Cable | Kind::FluidPipe)
-                    })
-                {
+                if !joins(d) {
                     continue;
                 }
 
@@ -494,7 +537,11 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                     // Translucent tube so the items inside can be seen travelling.
                     mesh.glow_beam(c, c + dir * 0.5, r, [0.86, 0.52, 0.26], 0.12, 0.38);
                 } else {
-                    mesh.beam(c, c + dir * 0.5, r, color, 0.0);
+                    mesh.beam(c, c + dir * 0.5, r, color, if cable && n.upgrade == 2 { 0.6 } else { 0.0 });
+                    if cable && n.upgrade == 1 {
+                        // HV armour: an orange warning band.
+                        mesh.beam(c + dir * 0.2, c + dir * 0.26, r * 1.15, [0.85, 0.45, 0.12], 0.0);
+                    }
                 }
 
                 if extractor {
@@ -541,6 +588,159 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                 0.0,
             );
 
+            continue;
+        }
+
+        // Induction matrix parts: steel casing with glowing seams once formed.
+        if matches!(
+            n.kind,
+            Kind::InductionCasing | Kind::InductionPort | Kind::InductionCell | Kind::InductionProvider
+        ) {
+            let glow = if n.formed { 1.0 } else { 0.0 };
+            match n.kind {
+                Kind::InductionCell | Kind::InductionProvider => {
+                    let core = if n.kind == Kind::InductionCell {
+                        [0.25, 0.85, 1.0]
+                    } else {
+                        [1.0, 0.75, 0.25]
+                    };
+                    mesh.cuboid(c, Vec3::splat(0.9), Quat::IDENTITY, dark, 0.0);
+                    mesh.cuboid(c, Vec3::splat(0.5), Quat::IDENTITY, core, 0.4 + 1.4 * glow);
+                }
+                _ => {
+                    mesh.cuboid(c, Vec3::splat(0.996), Quat::IDENTITY, [0.26, 0.29, 0.32], 0.0);
+                    // Corner posts and a recessed seam band on each course.
+                    for x in [0.06, 0.94] {
+                        for z in [0.06, 0.94] {
+                            mesh.cuboid(
+                                o + Vec3::new(x, 0.5, z),
+                                Vec3::new(0.13, 1.0, 0.13),
+                                Quat::IDENTITY,
+                                metal,
+                                0.0,
+                            );
+                        }
+                    }
+                    mesh.cuboid(
+                        c,
+                        Vec3::new(1.004, 0.05, 1.004),
+                        Quat::IDENTITY,
+                        [0.25, 0.80, 0.95],
+                        0.9 * glow,
+                    );
+                    if n.kind == Kind::InductionPort {
+                        let ring = if n.mode == 0 {
+                            [0.30, 0.65, 1.0]
+                        } else {
+                            [1.0, 0.55, 0.20]
+                        };
+                        for d in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z, IVec3::Y] {
+                            let f = d.as_vec3();
+                            let flat = Vec3::ONE - f.abs();
+                            mesh.cuboid(
+                                c + f * 0.5,
+                                flat * 0.46 + f.abs() * 0.02,
+                                Quat::IDENTITY,
+                                ring,
+                                0.5 + 1.2 * glow,
+                            );
+                            mesh.cuboid(c + f * 0.505, flat * 0.26 + f.abs() * 0.02, Quat::IDENTITY, dark, 0.0);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Brick multiblocks: coursed brick bodies, no machine plinth. The
+        // controller adds its door or tuyere on the outward face, glowing
+        // with the hearth temperature.
+        if matches!(
+            n.kind,
+            Kind::CokeBrick | Kind::BlastBrick | Kind::CokeOven | Kind::BlastFurnace
+        ) {
+            let blast = matches!(n.kind, Kind::BlastBrick | Kind::BlastFurnace);
+            let brick = if blast {
+                [0.37, 0.31, 0.28]
+            } else {
+                [0.50, 0.27, 0.17]
+            };
+            let mortar = if blast {
+                [0.19, 0.17, 0.16]
+            } else {
+                [0.29, 0.24, 0.20]
+            };
+            mesh.cuboid(c, Vec3::splat(0.996), Quat::IDENTITY, mortar, 0.0);
+            for k in 0..4 {
+                // Alternate courses differ slightly, as fired bricks do.
+                let tone = if k % 2 == 0 { 1.0 } else { 0.9 };
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.125 + k as f32 * 0.25, 0.5),
+                    Vec3::new(1.0, 0.215, 1.0),
+                    Quat::IDENTITY,
+                    [brick[0] * tone, brick[1] * tone, brick[2] * tone],
+                    0.0,
+                );
+            }
+            if matches!(n.kind, Kind::CokeOven | Kind::BlastFurnace) {
+                let f = n.facing.as_vec3();
+                let side = Vec3::new(f.z.abs(), 0.0, f.x.abs());
+                let depth = f.abs();
+                let max = if blast { 1650.0 } else { 1050.0 };
+                let heat = ((factory::multiblock::temperature(n) as f32 - 20.0) / max).clamp(0.0, 1.0);
+                let ember = [1.0, 0.30 + 0.45 * heat, 0.06 + 0.3 * heat * heat];
+                if blast {
+                    // Tuyere: an iron collar around a white-hot eye.
+                    mesh.beam(c + f * 0.44, c + f * 0.56, 0.21, dark, 0.0);
+                    mesh.beam(c + f * 0.55, c + f * 0.58, 0.16, metal, 0.0);
+                    mesh.cuboid(
+                        c + f * 0.585,
+                        side * 0.16 + Vec3::Y * 0.16 + depth * 0.01,
+                        Quat::IDENTITY,
+                        if heat > 0.05 { ember } else { dark },
+                        heat * 3.2,
+                    );
+                } else {
+                    // Arched iron door with a glowing peep slit.
+                    mesh.cuboid(
+                        c + f * 0.51 - Vec3::Y * 0.05,
+                        side * 0.62 + Vec3::Y * 0.72 + depth * 0.04,
+                        Quat::IDENTITY,
+                        dark,
+                        0.0,
+                    );
+                    mesh.cuboid(
+                        c + f * 0.535 + Vec3::Y * 0.12,
+                        side * 0.38 + Vec3::Y * 0.07 + depth * 0.02,
+                        Quat::IDENTITY,
+                        if heat > 0.05 { ember } else { metal },
+                        heat * 2.4,
+                    );
+                    for x in [-0.22, 0.22] {
+                        mesh.cuboid(
+                            c + f * 0.54 + side * x - Vec3::Y * 0.2,
+                            side * 0.05 + Vec3::Y * 0.08 + depth * 0.03,
+                            Quat::IDENTITY,
+                            metal,
+                            0.0,
+                        );
+                    }
+                }
+                // Status lamp beside the controller face.
+                mesh.cuboid(
+                    c + f * 0.52 + side * 0.4 + Vec3::Y * 0.35,
+                    Vec3::splat(0.06),
+                    Quat::IDENTITY,
+                    if !n.formed {
+                        [0.42, 0.12, 0.10]
+                    } else if active || matches!(n.status, "Coking" | "Smelting") {
+                        [0.16, 0.93, 0.56]
+                    } else {
+                        [0.73, 0.50, 0.17]
+                    },
+                    if n.formed { 1.0 } else { 0.0 },
+                );
+            }
             continue;
         }
 
@@ -979,6 +1179,135 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                 }
             }
 
+            Kind::Transformer => {
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.45, 0.5),
+                    Vec3::new(0.70, 0.50, 0.46),
+                    Quat::IDENTITY,
+                    [0.24, 0.28, 0.22],
+                    0.0,
+                );
+                // Two copper windings and porcelain bushings on top.
+                for x in [0.3, 0.7] {
+                    mesh.beam(
+                        o + Vec3::new(x, 0.42, 0.24),
+                        o + Vec3::new(x, 0.42, 0.76),
+                        0.15,
+                        copper,
+                        if active || n.flow != 0 { 0.25 } else { 0.0 },
+                    );
+                    for k in 0..3 {
+                        mesh.beam(
+                            o + Vec3::new(x, 0.72 + k as f32 * 0.07, 0.5),
+                            o + Vec3::new(x, 0.76 + k as f32 * 0.07, 0.5),
+                            0.06 - k as f32 * 0.008,
+                            [0.86, 0.84, 0.78],
+                            0.0,
+                        );
+                    }
+                }
+                if n.flow != 0 {
+                    let spark = 0.6 + 0.4 * (world.adventure.time * 9.0).sin().abs();
+                    mesh.cuboid(
+                        o + Vec3::new(0.5, 0.95, 0.5),
+                        Vec3::new(0.42, 0.015, 0.015),
+                        Quat::IDENTITY,
+                        [0.55, 0.85, 1.0],
+                        2.0 * spark,
+                    );
+                }
+            }
+
+            Kind::Assembler => {
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.42, 0.5),
+                    Vec3::new(0.86, 0.48, 0.86),
+                    Quat::IDENTITY,
+                    [0.45, 0.42, 0.32],
+                    0.0,
+                );
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.42, 0.06),
+                    Vec3::new(0.38, 0.22, 0.02),
+                    Quat::IDENTITY,
+                    if active { [1.0, 0.82, 0.40] } else { dark },
+                    if active { 1.2 } else { 0.0 },
+                );
+                // Crafting arm sweeping over the bed.
+                let arm = Quat::from_rotation_y(n.phase * 2.6);
+                mesh.beam(
+                    o + Vec3::new(0.5, 0.66, 0.5),
+                    o + Vec3::new(0.5, 0.86, 0.5),
+                    0.07,
+                    dark,
+                    0.0,
+                );
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.86, 0.5) + arm * Vec3::new(0.18, 0.0, 0.0),
+                    Vec3::new(0.40, 0.06, 0.08),
+                    arm,
+                    [0.85, 0.65, 0.20],
+                    0.0,
+                );
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.80, 0.5) + arm * Vec3::new(0.36, 0.0, 0.0),
+                    Vec3::new(0.07, 0.12, 0.07),
+                    arm,
+                    metal,
+                    0.0,
+                );
+            }
+
+            Kind::Battery => {
+                let cap = factory::power::battery_capacity(n.upgrade) as f32;
+                let charge = (n.energy as f32 / cap).clamp(0.0, 1.0);
+                let shell = match n.upgrade {
+                    0 => [0.16, 0.22, 0.24],
+                    1 => [0.24, 0.27, 0.20],
+                    _ => [0.22, 0.18, 0.32],
+                };
+                mesh.cuboid(
+                    o + Vec3::new(0.5, 0.52, 0.52),
+                    Vec3::new(0.80, 0.66, 0.66),
+                    Quat::IDENTITY,
+                    shell,
+                    0.0,
+                );
+                // Three cells with copper terminals on top.
+                for x in [0.27, 0.5, 0.73] {
+                    mesh.beam(
+                        o + Vec3::new(x, 0.85, 0.55),
+                        o + Vec3::new(x, 0.93, 0.55),
+                        0.06,
+                        copper,
+                        0.0,
+                    );
+                }
+                // Front charge gauge: five segments.
+                let lit = (charge * 5.0).ceil() as usize;
+                for k in 0..5 {
+                    let on = k < lit;
+                    mesh.cuboid(
+                        o + Vec3::new(0.30 + k as f32 * 0.10, 0.62, 0.18),
+                        Vec3::new(0.075, 0.12, 0.02),
+                        Quat::IDENTITY,
+                        if on { [0.30, 0.85, 1.0] } else { dark },
+                        if on { 1.3 } else { 0.0 },
+                    );
+                }
+                if n.mode == 3 && n.enabled && n.energy > 0 {
+                    // Mana font: a slow violet wisp above the bank.
+                    let pulse = 0.75 + 0.25 * (world.adventure.time * 2.2).sin();
+                    mesh.glow_orb(
+                        o + Vec3::new(0.5, 1.08 + 0.04 * (world.adventure.time * 1.3).sin(), 0.5),
+                        0.07,
+                        [0.70, 0.45, 1.0],
+                        2.2 * pulse,
+                        0.85,
+                    );
+                }
+            }
+
             _ => {}
         }
 
@@ -1015,13 +1344,16 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
 
     mesh.surface_kind = 0.0;
 
+    world.habitats.models(&mut mesh, viewer);
     for enemy in &world.adventure.enemies {
+        if enemy.habitat.is_some() && enemy.pos.distance(viewer)>90.0 {continue;}
         enemy.model(&mut mesh, world.adventure.time);
     }
     if let Some(companion) = &world.adventure.companion {
         companion.model(&mut mesh, world.adventure.time);
     }
     for shot in &world.adventure.projectiles {
+        let shot_mark = mesh.mark();
         let color = shot.color();
         let dir = shot.velocity.normalize_or_zero();
         if let Some(payload) = shot.payload_color() {
@@ -1073,9 +1405,17 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                 (color[1] * 0.62 + paper[1] * 0.38).min(1.0),
                 (color[2] * 0.62 + paper[2] * 0.38).min(1.0),
             ];
-            mesh.orb(shot.pos, body * 0.38, hot, 1.5);
-            mesh.glow_orb(shot.pos, body * 0.95, color, 1.45, 0.48);
-            mesh.glow_beam(shot.pos - dir * 0.28, shot.pos, 0.016, color, 1.05, 0.38);
+            if shot.hostile {
+                // A pointed voxel dart communicates incoming travel; no soft orb shell.
+                let rotation=Quat::from_rotation_arc(Vec3::Z,if dir.length_squared()>0.5 {dir}else{Vec3::Z});
+                mesh.glow_voxel(shot.pos,Vec3::splat(body*0.75),rotation,hot,1.3,0.96);
+                mesh.glow_voxel(shot.pos-dir*0.13,Vec3::new(body*0.55,body*0.55,0.24),rotation,color,1.0,0.9);
+                mesh.glow_voxel(shot.pos-dir*0.25,Vec3::new(body*0.30,body*0.30,0.08),rotation,color,0.7,0.8);
+            } else {
+                mesh.orb(shot.pos, body * 0.38, hot, 1.5);
+                mesh.glow_orb(shot.pos, body * 0.95, color, 1.45, 0.48);
+                mesh.glow_beam(shot.pos - dir * 0.28, shot.pos, 0.016, color, 1.05, 0.38);
+            }
             if !shot.hostile {
                 let side = dir.any_orthonormal_vector();
                 let up = dir.cross(side).normalize_or_zero();
@@ -1172,6 +1512,14 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
                 );
             }
         }
+        // A newly launched friendly bolt can sit less than a metre from the
+        // camera and cover an entire distant enemy. Bound its apparent size
+        // through geometry, preserving the incoming enemy darts at full size.
+        if !shot.hostile {
+            let distance = (shot.pos-player.eye(world.voxel_scale)*scale).length();
+            let near_scale = (distance/3.0).clamp(0.02,1.0);
+            mesh.scale_since(shot_mark,shot.pos,Vec3::splat(near_scale));
+        }
     }
     let time = world.adventure.time;
     for (idx, drop) in world.inventory.dropped.iter().enumerate() {
@@ -1181,6 +1529,7 @@ pub fn build(world: &World, player: &crate::player::Player) -> Vec<Vertex3> {
         let rot = Quat::from_rotation_y(time * 1.65 + idx as f32 * 0.8)
             * Quat::from_rotation_z((phase * 0.7).cos() * 0.14);
         let (color, emissive, beam_col) = match drop.stack.item {
+            Item::PowerKit(_) => ([0.48, 0.76, 0.88], 0.2, None),
             Item::Block(b) => {
                 let c = b.color((drop.pos / world.voxel_scale.meters()).as_ivec3());
                 let em = if matches!(

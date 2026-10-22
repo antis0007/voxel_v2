@@ -333,17 +333,3 @@ pub fn raycast_block_precise(
     None
 }
 
-pub fn try_move(
-    world: &World,
-    scale: f32,
-    crouch: f32,
-    pos: &mut Vec3,
-    delta: Vec3,
-    ground: &mut bool,
-    sneak: bool,
-) {
-    try_move_local(IVec3::ZERO, world, scale, crouch, pos, delta, ground, sneak)
-}
-pub fn try_step_up(world: &World, scale: f32, crouch: f32, pos: &mut Vec3, delta: Vec3) -> bool {
-    try_step_up_local(IVec3::ZERO, world, scale, crouch, pos, delta)
-}

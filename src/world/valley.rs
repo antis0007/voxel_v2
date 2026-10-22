@@ -226,7 +226,10 @@ fn plan(cfg: &WorldSampleConfig) -> Option<Arc<Plan>> {
 }
 
 fn relief(cfg: &WorldSampleConfig, x: f32, z: f32) -> f32 {
-    let column = super::sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z));
+    // These are deliberately UNCARVED plan-construction probes. Reading or
+    // writing the final-column cache here leaked provisional heights into
+    // ordinary queries (and let an already-carved cached column steer a plan).
+    let column = super::sample_column_uncached(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z));
     cfg.world_y(column.height)
 }
 

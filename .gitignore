@@ -38,3 +38,6 @@ run-*.cmd
 
 # Python bytecode
 __pycache__/
+
+# Local classifier logs and cached advisory results
+.code-advisor/
