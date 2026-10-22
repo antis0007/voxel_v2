@@ -181,7 +181,7 @@ proptest! {
         let t = table();
         let mut cells: [Cell; 8] = std::array::from_fn(|i| {
             let (m, v) = raw[i];
-            match t[m as usize].class {
+            match t.materials()[m as usize].class {
                 C::Void => Cell::EMPTY,
                 C::Liquid | C::Gas => Cell { volume: v, ..Cell::filled(m) },
                 _ => Cell::filled(m),
