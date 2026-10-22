@@ -68,6 +68,10 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
         if t.fuel > 0.0 && t.fuel < 0.5 {
             fail("fuel", format!("fuel {} rounds to 0, which means \"does not burn\"", t.fuel));
         }
+        // A full cell's heat capacity is 64 levels of this, and must fit the u32 the kernel works in.
+        if crate::sim_traits::thermal_mass(def) > u32::MAX / 64 {
+            fail("capacity", format!("density x capacity gives a thermal mass of {} per level; 64 levels must fit 32 bits", crate::sim_traits::thermal_mass(def)));
+        }
         if p.fluid.pressure_response > 2.55 {
             fail("pressure_response", format!("pressure_response {} does not fit 0.01 steps in 8 bits", p.fluid.pressure_response));
         }

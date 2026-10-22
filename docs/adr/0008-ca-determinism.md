@@ -17,6 +17,8 @@ The tick is two Margolus phases, anchors offset by (0,0,0) then (1,1,1). A 2Ã—2Ã
 
 A brick sleeps only after a whole tick in which nothing in it changed and no move was suppressed by a random gate, because a state that is static in one phase may move in the other. A block that changes wakes every brick it spans.
 
+Heat is exchanged in energy, not averaged as temperature. A cell stores a `u16` temperature, so most exchanges move a fraction of a step; each cell takes the whole steps plus one more with exactly the remainder's probability, decided by the positional hash. Energy is conserved in expectation and each exchange errs by less than one step of each cell, with zero mean; it is not conserved exactly, and tests bound the drift. Heat does not run every tick: it conducts every `HEAT_TICK_INTERVAL` ticks and each step carries the skipped ticks' energy, so the rate in simulated time is unchanged. A tick without heat keeps whatever was awake awake, because it says nothing about whether heat is still flowing. The arithmetic is `u32` plus two 64-bit-intermediate primitives, `mul_div_rem` and `mulhi`, which a GPU kernel builds from 32-bit halves because WGSL has no 64-bit integers.
+
 Not covered by this guarantee:
 - rendering, which uses floats;
 - rigid bodies, which use floats and stay CPU-authoritative (ADR 0011).

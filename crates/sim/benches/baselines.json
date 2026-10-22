@@ -1,5 +1,6 @@
 {
-  "brick_fill_chunk": 61326,
-  "brick_set_32k_cells": 403101,
-  "ca_step_262k_cells_all_awake": 15000000
+  "brick_fill_chunk": 63727,
+  "brick_set_32k_cells": 374277,
+  "ca_step_262k_cells_all_awake": 16300000,
+  "ca_step_262k_cells_all_awake_with_heat": 18200000
 }

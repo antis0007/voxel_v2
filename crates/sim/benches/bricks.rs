@@ -3,23 +3,34 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use engine_core::material::{MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::hash::hash_u32;
-use engine_sim::{BrickStore, BRICKS_PER_CHUNK, Cell, step};
+use engine_sim::{AMBIENT_DECIKELVIN, BRICKS_PER_CHUNK, BrickStore, Cell, VOLUME_FULL, step};
 use glam::IVec3;
 use std::time::Duration;
 
-/// Air, stone, sand and water: enough rows for the kernel to have real work.
+/// Air, stone, sand and water, with the thermal data the real table packs, so heat has work to do.
 fn table() -> [SimMaterial; SIM_MATERIAL_ROWS] {
-    let row = |class, kg: f32, flow| SimMaterial { class, density: (kg * 100.0) as u32, flow, ..SimMaterial::INERT };
+    let row = |class, kg: f32, flow, k: f32, cp: u16| {
+        let density = (kg * 100.0) as u32;
+        SimMaterial {
+            class,
+            density,
+            flow,
+            conductivity: (k * 100.0).round() as u16,
+            capacity: cp,
+            thermal_mass: ((density as u64 * cp as u64) >> 10) as u32,
+            ..SimMaterial::INERT
+        }
+    };
     let mut t = [SimMaterial::INERT; SIM_MATERIAL_ROWS];
-    t[0] = row(MovementClass::Void, 1.2, 0);
-    t[1] = row(MovementClass::Solid, 2600.0, 0);
-    t[2] = row(MovementClass::Powder, 1700.0, 0);
-    t[3] = row(MovementClass::Liquid, 1000.0, 255);
+    t[0] = row(MovementClass::Void, 1.2, 0, 0.026, 1005);
+    t[1] = row(MovementClass::Solid, 2600.0, 0, 2.5, 790);
+    t[2] = row(MovementClass::Powder, 1700.0, 0, 0.3, 830);
+    t[3] = row(MovementClass::Liquid, 1000.0, 255, 0.6, 4186);
     t
 }
 
 /// 64^3 cells (262,144) in 2x2x2 chunks: a stone floor, then a third each of sand, water and air.
-fn mixed_region() -> BrickStore {
+fn mixed_region(gradient: bool) -> BrickStore {
     let mut s = BrickStore::new(1024);
     for cy in 0..2 {
         for cz in 0..2 {
@@ -30,11 +41,15 @@ fn mixed_region() -> BrickStore {
                     if p.y == 0 {
                         return Cell::filled(1);
                     }
-                    match hash_u32((p.x as u32) ^ hash_u32((p.y as u32) ^ hash_u32(p.z as u32))) % 3 {
+                    let h = hash_u32((p.x as u32) ^ hash_u32((p.y as u32) ^ hash_u32(p.z as u32)));
+                    // A spread of temperatures makes every block conduct; ambient everywhere makes none.
+                    let temperature = if gradient { AMBIENT_DECIKELVIN + (h >> 8) as u16 % 400 } else { AMBIENT_DECIKELVIN };
+                    let cell = match h % 3 {
                         0 => Cell::filled(2),
-                        1 => Cell { volume: 8, ..Cell::filled(3) },
-                        _ => Cell::EMPTY,
-                    }
+                        1 => Cell { volume: VOLUME_FULL, ..Cell::filled(3) },
+                        _ => return Cell::EMPTY,
+                    };
+                    Cell { temperature, ..cell }
                 })
                 .expect("pool holds 8 chunks");
             }
@@ -90,7 +105,17 @@ fn bricks(c: &mut Criterion) {
 fn ca(c: &mut Criterion) {
     let t = table();
     c.bench_function("ca_step_262k_cells_all_awake", |b| {
-        let mut s = mixed_region();
+        let mut s = mixed_region(false);
+        let mut tick = 0;
+        b.iter(|| {
+            wake_all(&mut s);
+            tick += 1;
+            step(&mut s, &t, 1, tick)
+        })
+    });
+    // The same region with a temperature spread in every cell: every block also conducts heat.
+    c.bench_function("ca_step_262k_cells_all_awake_with_heat", |b| {
+        let mut s = mixed_region(true);
         let mut tick = 0;
         b.iter(|| {
             wake_all(&mut s);

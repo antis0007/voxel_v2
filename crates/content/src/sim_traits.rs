@@ -118,6 +118,13 @@ fn movement_class(def: &MaterialDef) -> MovementClass {
     }
 }
 
+/// Heat capacity of one volume level: density (0.01 kg/m³) × specific heat (J/kg·K) / 1024, in u64 so
+/// the product cannot wrap. `validate` keeps it below the `u32` a full cell needs.
+pub(crate) fn thermal_mass(def: &MaterialDef) -> u32 {
+    let density = (def.physics.density * 100.0).round() as u64;
+    ((density * def.sim.thermal.capacity.round() as u64) >> 10).min(u32::MAX as u64) as u32
+}
+
 /// Pack one validated row. Out-of-range values were rejected by `validate`.
 pub(crate) fn pack(def: &MaterialDef) -> SimMaterial {
     let class = movement_class(def);
@@ -127,6 +134,7 @@ pub(crate) fn pack(def: &MaterialDef) -> SimMaterial {
         class,
         cohesion: (def.sim.cohesion * 255.0).round() as u8,
         density: (def.physics.density * 100.0).round() as u32,
+        thermal_mass: thermal_mass(def),
         flow: if fluid { (255.0 / def.physics.fluid.viscosity.max(1.0)) as u8 } else { 0 },
         pressure: (def.physics.fluid.pressure_response * 100.0).round() as u8,
         electric: electric_decades(def.sim.electric_conductivity),

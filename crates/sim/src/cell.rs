@@ -10,8 +10,10 @@ pub const BRICK_CELLS: usize = (BRICK_SIZE * BRICK_SIZE * BRICK_SIZE) as usize;
 pub const BRICKS_PER_AXIS: i32 = CHUNK_SIZE / BRICK_SIZE;
 pub const BRICKS_PER_CHUNK: usize = (BRICKS_PER_AXIS * BRICKS_PER_AXIS * BRICKS_PER_AXIS) as usize;
 pub const CHUNK_CELLS: usize = BRICK_CELLS * BRICKS_PER_CHUNK;
-/// A cell holding this much of its material is full. Water already uses 0..=8.
-pub const VOLUME_FULL: u8 = 8;
+/// A cell holding this much of its material is full. Sixty-four levels, not the eight the old water
+/// map had: liquids only move when neighbours differ by two levels, so the finest slope a settled
+/// surface can keep is one level per column, and at eight levels that was a visible 12%.
+pub const VOLUME_FULL: u8 = 64;
 /// 293.15 K in tenths of a kelvin: the temperature of a cell nothing has heated.
 pub const AMBIENT_DECIKELVIN: u16 = 2932;
 

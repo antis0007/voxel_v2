@@ -7,7 +7,7 @@
 //! it spans, which is how a change reaches the neighbour across a face.
 use crate::anchors::anchors;
 use crate::cell::{BRICKS_PER_CHUNK, BrickCoord, Cell, brick_and_cell, split_voxel};
-use crate::pinned::PHASE_OFFSETS;
+use crate::pinned::{PHASE_OFFSETS, is_heat_tick};
 use crate::rules::block_rule;
 use crate::store::{BrickStore, NO_SLOT};
 use engine_core::material::{SIM_MATERIAL_ROWS, SimMaterial};
@@ -192,6 +192,7 @@ pub fn step(store: &mut BrickStore, table: &[SimMaterial; SIM_MATERIAL_ROWS], se
     let mut stats = StepStats::default();
     let first = store.take_all_dirty();
     stats.active_bricks = first.len() as u32;
+    let awake_at_start = first.clone();
     run_phase(store, table, seed, tick.wrapping_mul(2), &first, &mut stats);
     // The second phase also steps whatever the first one woke.
     let woken = store.take_all_dirty();
@@ -203,6 +204,13 @@ pub fn step(store: &mut BrickStore, table: &[SimMaterial; SIM_MATERIAL_ROWS], se
     // The next tick steps what either phase touched.
     for b in woken {
         store.wake(b.chunk, b.brick);
+    }
+    // Heat conducts only on heat ticks, so a tick without it says nothing about whether heat is still
+    // flowing: whatever was awake stays awake, and the decision to sleep is made on a heat tick.
+    if !is_heat_tick(tick) {
+        for b in awake_at_start {
+            store.wake(b.chunk, b.brick);
+        }
     }
     stats
 }

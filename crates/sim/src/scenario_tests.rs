@@ -17,7 +17,7 @@ fn sand_falls_piles_and_the_world_goes_idle() {
     let before = total(&s, -BIG, BIG, SAND);
     let ticks = settle(&mut s, &t, 7, 400);
     assert_eq!(total(&s, -BIG, BIG, SAND), before, "sand is conserved");
-    assert_eq!(before, 4 * 4 * 4 * 8);
+    assert_eq!(before, 4 * 4 * 4 * VOLUME_FULL as u32);
     for y in 1..20 {
         for z in -12..12 {
             for x in -12..12 {
@@ -38,18 +38,21 @@ fn sand_falls_piles_and_the_world_goes_idle() {
 fn water_levels_out_in_a_tank_and_nothing_is_lost() {
     let (t, mut s) = (table(), BrickStore::new(2000));
     tank(&mut s, IVec3::new(0, 0, 0), IVec3::new(12, 10, 6));
-    fill(&mut s, IVec3::new(1, 1, 1), IVec3::new(4, 7, 5), water(8));
+    fill(&mut s, IVec3::new(1, 1, 1), IVec3::new(4, 7, 5), water(VOLUME_FULL));
     let before = total(&s, -BIG, BIG, WATER);
     settle(&mut s, &t, 3, 800);
     assert_eq!(total(&s, -BIG, BIG, WATER), before, "water is conserved");
-    // Water only moves when neighbours differ by two eighths, so a settled surface can keep a slope of
-    // one eighth per column plus a one-eighth film that cannot spill. Measured here: about a cell of
-    // tilt across ten columns. Flattening it needs the pressure pass (docs/PLAN2.md, A3 actuals).
+    // Water only moves when neighbours differ by two levels, so a settled surface can keep a slope of
+    // one level (1/64 of a cell) per column and no more. Measured here: 8 levels, an eighth of a cell,
+    // across ten columns; at the old eight levels per cell it was about a cell.
     let column = |x, z| total(&s, IVec3::new(x, 1, z), IVec3::new(x + 1, 10, z + 1), WATER) as i32;
     for z in 1..5 {
         for x in 1..10 {
-            assert!((column(x, z) - column(x + 1, z)).abs() <= 2, "step in the surface at x={x} z={z}");
+            assert!((column(x, z) - column(x + 1, z)).abs() <= 1, "step in the surface at x={x} z={z}");
         }
+        let all: Vec<i32> = (1..11).map(|x| column(x, z)).collect();
+        let spread = all.iter().max().unwrap() - all.iter().min().unwrap();
+        assert!(spread <= 10, "surface tilts {spread} levels across the tank at z={z}: {all:?}");
     }
 }
 
@@ -57,7 +60,7 @@ fn water_levels_out_in_a_tank_and_nothing_is_lost() {
 fn sand_sinks_through_water_and_smoke_rises_through_air() {
     let (t, mut s) = (table(), BrickStore::new(2000));
     tank(&mut s, IVec3::new(0, 0, 0), IVec3::new(5, 14, 5));
-    fill(&mut s, IVec3::new(1, 1, 1), IVec3::new(4, 5, 4), water(8));
+    fill(&mut s, IVec3::new(1, 1, 1), IVec3::new(4, 5, 4), water(VOLUME_FULL));
     fill(&mut s, IVec3::new(1, 5, 1), IVec3::new(4, 7, 4), Cell::filled(SAND));
     settle(&mut s, &t, 1, 800);
     for z in 1..4 {
@@ -131,7 +134,7 @@ fn scatter(seed: u64) -> BrickStore {
         let p = IVec3::new((r % 24) as i32, 1 + ((r >> 8) % 15) as i32, ((r >> 16) % 24) as i32);
         let cell = match (r >> 32) % 6 {
             0 | 1 => Cell::filled(SAND),
-            2 | 3 => water(1 + ((r >> 40) % 8) as u8),
+            2 | 3 => water(1 + ((r >> 40) % VOLUME_FULL as u64) as u8),
             4 => Cell::filled(SMOKE),
             _ => Cell::filled(STONE),
         };
@@ -174,7 +177,7 @@ proptest! {
 
     /// One block never creates or destroys anything and never leaves an invalid cell.
     #[test]
-    fn a_block_conserves_each_material(raw in prop::collection::vec((0u8..7, 1u8..=8), 8), r in any::<u32>(), a in -50i32..50) {
+    fn a_block_conserves_each_material(raw in prop::collection::vec((0u8..7, 1u8..=VOLUME_FULL), 8), r in any::<u32>(), a in -50i32..50) {
         let t = table();
         let mut cells: [Cell; 8] = std::array::from_fn(|i| {
             let (m, v) = raw[i];
@@ -202,7 +205,7 @@ proptest! {
 /// value only on purpose.
 #[test]
 fn the_canonical_scenario_hash_is_pinned() {
-    const PINNED: u64 = 12_899_875_150_996_133_635;
+    const PINNED: u64 = 12_902_218_551_230_034_786;
     let t = table();
     let mut s = scatter(0xC0FFEE);
     for tick in 0..60 {
@@ -238,7 +241,7 @@ fn a_move_that_needs_more_bricks_than_the_pool_has_allocates_none() {
     let setup = |capacity| {
         let mut s = BrickStore::new(capacity);
         for p in [(7, 3), (8, 3)] {
-            put(&mut s, IVec3::new(p.0, 8, p.1), water(8));
+            put(&mut s, IVec3::new(p.0, 8, p.1), water(VOLUME_FULL));
             put(&mut s, IVec3::new(p.0, 8, p.1 - 1), Cell::filled(STONE));
             put(&mut s, IVec3::new(p.0, 8, p.1 + 1), Cell::filled(STONE));
         }
@@ -253,7 +256,7 @@ fn a_move_that_needs_more_bricks_than_the_pool_has_allocates_none() {
     assert!(stats.stalled_blocks > 0, "the block that needed two bricks stalled: {stats:?}");
     assert_eq!(tight.bricks_in_use(), 2, "and took none of the one free slot");
     assert_eq!(total(&tight, -BIG, BIG, WATER), before, "nothing was lost");
-    assert_eq!(at(&tight, IVec3::new(7, 8, 3)), water(8), "the water is where it was");
+    assert_eq!(at(&tight, IVec3::new(7, 8, 3)), water(VOLUME_FULL), "the water is where it was");
     // With room the same world falls.
     let mut roomy = setup(8);
     let stats = step(&mut roomy, &t, 1, 0);

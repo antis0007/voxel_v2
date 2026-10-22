@@ -11,6 +11,8 @@ mod pinned;
 mod rules;
 mod store;
 #[cfg(test)]
+mod heat_tests;
+#[cfg(test)]
 mod scenario_tests;
 #[cfg(test)]
 mod test_support;
@@ -23,5 +25,8 @@ pub use cell::{
 };
 pub use store::{BrickStore, NO_SLOT, PoolFull};
 pub use kernel::{StepStats, step};
-pub use pinned::{Dice, PHASE_OFFSETS, block_hash, flow_gate};
+pub use pinned::{
+    Dice, HEAT_DEADBAND, HEAT_RATE, HEAT_TICK_INTERVAL, PHASE_OFFSETS, block_base, block_hash, flow_gate, is_heat_phase,
+    is_heat_tick, mul_div_rem, mulhi,
+};
 pub use rules::{Outcome, block_rule, idx};

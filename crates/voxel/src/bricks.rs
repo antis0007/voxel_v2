@@ -2,20 +2,24 @@
 //!
 //! A block becomes a cell of its material, full (`VOLUME_FULL`) at ambient
 //! temperature. Water carries its volume: `water(local)` is the partial volume
-//! of a water cell (1..8) and `None` means full, as the existing water map
-//! does. Light and torches are not cell state and stay in the chunk.
+//! of a water cell in eighths (1..8, the existing water map's unit) and `None`
+//! means full. Cells hold sixty-fourths, so eighths scale by exactly 8. Light and torches are not cell state and stay in the chunk.
 use crate::ChunkData;
 use engine_content::BlockId;
 use engine_core::material::MaterialId;
 use engine_sim::{BrickStore, Cell, PoolFull, VOLUME_FULL};
 use glam::IVec3;
 
+/// Levels in the legacy water map: 8 means a full cell.
+const WATER_MAP_FULL: u8 = 8;
+const LEVELS_PER_EIGHTH: u8 = VOLUME_FULL / WATER_MAP_FULL;
+
 fn cell_of(block: BlockId, water_volume: Option<u8>) -> Cell {
     match block {
         BlockId::Air => Cell::EMPTY,
-        BlockId::Water => match water_volume.unwrap_or(VOLUME_FULL).min(VOLUME_FULL) {
+        BlockId::Water => match water_volume.unwrap_or(WATER_MAP_FULL).min(WATER_MAP_FULL) {
             0 => Cell::EMPTY,
-            volume => Cell { volume, ..Cell::filled(MaterialId::from(block).0) },
+            eighths => Cell { volume: eighths * LEVELS_PER_EIGHTH, ..Cell::filled(MaterialId::from(block).0) },
         },
         _ => Cell::filled(MaterialId::from(block).0),
     }
@@ -35,7 +39,8 @@ pub fn load_chunk(
 }
 
 /// Write the stored blocks of `coord` into `chunk` (cells of absent bricks become air) and return
-/// the partial water volumes as (local cell, 1..8). A cell with volume 0 is air, as in the water map.
+/// the partial water volumes as (local cell, 1..7 eighths, rounded to nearest). A cell with volume 0 is air,
+/// as in the water map, and one that rounds to a full eighth count is full.
 pub fn read_chunk(store: &BrickStore, coord: IVec3, chunk: &mut ChunkData) -> Vec<(IVec3, u8)> {
     chunk.blocks.fill(BlockId::Air);
     let mut partial = Vec::new();
@@ -45,8 +50,9 @@ pub fn read_chunk(store: &BrickStore, coord: IVec3, chunk: &mut ChunkData) -> Ve
         }
         let block = BlockId::from_u32(cell.material as u32);
         chunk.blocks[ChunkData::local_index(local.x, local.y, local.z)] = block;
-        if block == BlockId::Water && cell.volume < VOLUME_FULL {
-            partial.push((local, cell.volume));
+        let eighths = (cell.volume as u32 * WATER_MAP_FULL as u32 + VOLUME_FULL as u32 / 2) / VOLUME_FULL as u32;
+        if block == BlockId::Water && (1..WATER_MAP_FULL as u32).contains(&eighths) {
+            partial.push((local, eighths as u8));
         }
     });
     partial.sort_by_key(|(p, _)| ChunkData::local_index(p.x, p.y, p.z));

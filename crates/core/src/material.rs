@@ -40,6 +40,9 @@ pub enum MovementClass {
 pub struct SimMaterial {
     /// 0.01 kg/m³ steps, so a gas lighter than 1 kg/m³ still orders against air.
     pub density: u32,
+    /// Heat capacity of one volume level of this material, `density × capacity / 1024`: a full cell
+    /// holds `VOLUME_FULL` times this many energy units per 0.1 K. Fits `u32` for 64 levels (validated).
+    pub thermal_mass: u32,
     /// Thermal conductivity in 0.01 W/(m·K).
     pub conductivity: u16,
     /// Specific heat in J/(kg·K).
@@ -63,7 +66,7 @@ pub struct SimMaterial {
     pub boils_into: MaterialId,
     pub burns_into: MaterialId,
     pub cools_into: MaterialId,
-    pub reserved: [u8; 5],
+    pub reserved: [u8; 1],
 }
 
 const _: () = assert!(size_of::<SimMaterial>() == 32 && align_of::<SimMaterial>() == 4);
@@ -75,6 +78,7 @@ impl SimMaterial {
     /// Unused rows: empty, inert, never changes.
     pub const INERT: Self = Self {
         density: 0,
+        thermal_mass: 0,
         conductivity: 0,
         capacity: 0,
         melt: 0,
@@ -91,6 +95,6 @@ impl SimMaterial {
         boils_into: MaterialId::NONE,
         burns_into: MaterialId::NONE,
         cools_into: MaterialId::NONE,
-        reserved: [0; 5],
+        reserved: [0; 1],
     };
 }

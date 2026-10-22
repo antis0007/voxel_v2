@@ -27,6 +27,52 @@ THRESHOLD = 0.08
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def pin_to_performance_cores():
+    """Pin this process, and so every bench it starts, to the fastest cores.
+
+    On a hybrid CPU a bench lands on a performance or an efficiency core as the scheduler pleases, and the
+    efficiency cores measured 1.6 to 1.8 times slower here, so the gate would report the core, not the code.
+    One thread per physical core. Windows only, and best effort: with no answer from the OS nothing is pinned.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    k32 = ctypes.windll.kernel32
+    size = ctypes.c_ulong(0)
+    k32.GetSystemCpuSetInformation(None, 0, ctypes.byref(size), None, 0)
+    if size.value == 0:
+        return None
+    buf = ctypes.create_string_buffer(size.value)
+    if not k32.GetSystemCpuSetInformation(buf, size, ctypes.byref(size), None, 0):
+        return None
+    cores, offset = [], 0
+    while offset + 20 <= size.value:
+        entry_size = int.from_bytes(buf[offset:offset + 4], "little")
+        # Entry: size u32, type u32 (0 = CPU set), then id u32, group u16, logical index u8, core u8,
+        # cache u8, numa u8, efficiency class u8.
+        if entry_size == 0:
+            break
+        if int.from_bytes(buf[offset + 4:offset + 8], "little") == 0 and int.from_bytes(buf[offset + 12:offset + 14], "little") == 0:
+            cores.append((buf[offset + 18][0], buf[offset + 14][0], buf[offset + 15][0]))
+        offset += entry_size
+    if not cores:
+        return None
+    best = max(c for c, _, _ in cores)
+    # One logical processor per physical core of the best class: a busy hyperthread sibling slows its partner.
+    first = {}
+    for c, logical, core in cores:
+        if c == best and logical < 64:
+            first[core] = min(first.get(core, 64), logical)
+    mask = sum(1 << i for i in first.values())
+    # The process handle is a 64-bit pseudo-handle; ctypes' default 32-bit types would truncate it.
+    k32.GetCurrentProcess.restype = ctypes.c_void_p
+    k32.SetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    if mask and k32.SetProcessAffinityMask(k32.GetCurrentProcess(), mask):
+        return mask
+    return None
+
+
 def criterion_dir():
     """Where criterion writes: CRITERION_HOME, else <cargo target directory>/criterion.
 
@@ -122,6 +168,7 @@ def report(samples, whole=False):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "run"
+    pin_to_performance_cores()
     flt = sys.argv[2] if len(sys.argv) > 2 else ""
     if mode == "run":
         report(measure(1, flt))

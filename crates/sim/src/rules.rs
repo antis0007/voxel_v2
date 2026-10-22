@@ -3,7 +3,7 @@
 //! any order or in parallel. Behaviour comes from the material table's class,
 //! density, cohesion (folded into class) and flow, never from which block it is.
 use crate::cell::{Cell, VOLUME_FULL};
-use crate::pinned::{Dice, flow_gate};
+use crate::pinned::{Dice, HEAT_DEADBAND, HEAT_RATE, HEAT_TICK_INTERVAL, flow_gate, is_heat_phase, mul_div_rem, mulhi};
 use engine_core::material::{MovementClass, SimMaterial};
 use glam::IVec3;
 
@@ -115,6 +115,71 @@ fn level(t: &[SimMaterial], cells: &mut [Cell; 8], a: usize, b: usize, salt: u32
     }
 }
 
+/// Heat capacity of a cell: its volume levels times the material's thermal mass per level. Zero for
+/// empty space and for an unused material row.
+fn heat_capacity(t: &[SimMaterial], c: &Cell) -> u32 {
+    c.volume as u32 * t[c.material as usize].thermal_mass
+}
+
+/// Move `rem / c` of one 0.1 K step on top of `whole` steps: the fraction is rounded up with exactly that
+/// probability, from `random`, so the expected energy is the exact energy.
+fn steps(whole: u32, rem: u32, c: u32, random: u32) -> u32 {
+    whole + u32::from(mulhi(random, c) < rem)
+}
+
+fn is_void(t: &[SimMaterial], c: &Cell) -> bool {
+    class(t, c) == MovementClass::Void
+}
+
+/// Conduction along one edge. Energy `q = g × d` leaves the hotter cell and enters the colder, where `d`
+/// is the difference and `g` is the conductivity-limited energy per step, never more than half of what
+/// would equalise the pair. Each cell converts its share to whole steps plus a randomly rounded one.
+///
+/// Empty space is the environment: a sink at its stored temperature that does not warm up, so heat
+/// leaving a hot object does not spread into an ever larger volume of air, and a world of air costs
+/// nothing. Returns whether heat is still flowing here, which keeps the brick awake.
+fn conduct(t: &[SimMaterial], cells: &mut [Cell; 8], a: usize, b: usize, salt: u32, dice: &Dice) -> bool {
+    let (void_a, void_b) = (is_void(t, &cells[a]), is_void(t, &cells[b]));
+    if void_a && void_b {
+        return false;
+    }
+    let (ta, tb) = (cells[a].temperature as u32, cells[b].temperature as u32);
+    let d = ta.abs_diff(tb);
+    if d < HEAT_DEADBAND {
+        return false;
+    }
+    let (ka, kb) = (t[cells[a].material as usize].conductivity as u32, t[cells[b].material as usize].conductivity as u32);
+    let (ca, cb) = (heat_capacity(t, &cells[a]), heat_capacity(t, &cells[b]));
+    if ka == 0 || kb == 0 || (!void_a && ca == 0) || (!void_b && cb == 0) {
+        return false;
+    }
+    // Two cells of one material and volume (most solid edges): no division for the mean or the equal-share.
+    let same = cells[a].material == cells[b].material && cells[a].volume == cells[b].volume;
+    let k = if same { ka } else { mul_div_rem(2 * ka, kb, ka + kb).0 };
+    if void_a || void_b {
+        // Only the solid, liquid or gas cell changes; the environment keeps its temperature.
+        let (cell, env_temp) = if void_a { (b, ta) } else { (a, tb) };
+        let c = if void_a { cb } else { ca };
+        let g = (k * HEAT_RATE * HEAT_TICK_INTERVAL).min(c / 2);
+        let (whole, rem) = mul_div_rem(g, d, c);
+        let moved = steps(whole, rem, c, dice.roll(salt)).min(u16::MAX as u32) as u16;
+        let t_cell = &mut cells[cell].temperature;
+        *t_cell = if *t_cell as u32 > env_temp { t_cell.saturating_sub(moved) } else { t_cell.saturating_add(moved) };
+        return true;
+    }
+    let equalise = if same { ca / 2 } else { mul_div_rem(ca, cb, ca + cb).0 };
+    let g = (k * HEAT_RATE * HEAT_TICK_INTERVAL).min(equalise / 2);
+    let (hot, cold) = if ta > tb { (a, b) } else { (b, a) };
+    let (c_hot, c_cold) = (heat_capacity(t, &cells[hot]), heat_capacity(t, &cells[cold]));
+    let (whole_h, rem_h) = mul_div_rem(g, d, c_hot);
+    let (whole_c, rem_c) = if same { (whole_h, rem_h) } else { mul_div_rem(g, d, c_cold) };
+    let down = steps(whole_h, rem_h, c_hot, dice.roll(salt));
+    let up = steps(whole_c, rem_c, c_cold, dice.roll(salt + 1));
+    cells[hot].temperature = cells[hot].temperature.saturating_sub(down.min(u16::MAX as u32) as u16);
+    cells[cold].temperature = cells[cold].temperature.saturating_add(up.min(u16::MAX as u32) as u16);
+    true
+}
+
 /// Apply one phase's rule to the block anchored at `anchor`. `phase_counter` is `2 * tick + phase`.
 pub fn block_rule(t: &[SimMaterial], cells: &mut [Cell; 8], seed: u32, phase_counter: u32, anchor: IVec3) -> Outcome {
     let before = *cells;
@@ -123,7 +188,7 @@ pub fn block_rule(t: &[SimMaterial], cells: &mut [Cell; 8], seed: u32, phase_cou
     for (x, z) in columns {
         fall(t, cells, idx(x, 0, z), idx(x, 1, z));
     }
-    let dice = Dice { seed, phase_counter, anchor };
+    let dice = Dice::new(seed, phase_counter, anchor);
     for (x, z) in columns {
         slide(t, cells, x, z, &dice);
     }
@@ -135,6 +200,18 @@ pub fn block_rule(t: &[SimMaterial], cells: &mut [Cell; 8], seed: u32, phase_cou
             .enumerate()
         {
             level(t, cells, a, b, 2 + (y * 4 + salt) as u32, &dice, &mut pending);
+        }
+    }
+    // Heat runs along the twelve edges of the cube, after matter has moved, on heat ticks only; a uniform block has none.
+    if is_heat_phase(phase_counter) && cells.iter().any(|c| c.temperature != cells[0].temperature) {
+        let mut salt = 16;
+        for a in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                if a & bit == 0 {
+                    pending |= conduct(t, cells, a, a | bit, salt, &dice);
+                    salt += 2;
+                }
+            }
         }
     }
     Outcome { changed: *cells != before, pending }
