@@ -8,7 +8,6 @@ pub(super) struct PostProcess {
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     params: wgpu::Buffer,
     present_layout: wgpu::BindGroupLayout,
@@ -54,6 +53,17 @@ impl PostProcess {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Reverse-Z scene depth for screen-space ambient occlusion.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -107,7 +117,7 @@ impl PostProcess {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let (scene, bind_group) = Self::target(device, config, &layout, &sampler, &params);
+        let scene = Self::target(device, config);
 
         // The resolve writes one texel per art pixel. A nearest-neighbour pass
         // then upscales that small target to the surface. This costs one ninth
@@ -197,7 +207,6 @@ impl PostProcess {
             format: config.format,
             layout,
             sampler,
-            bind_group,
             pipeline,
             params,
             present_layout,
@@ -254,13 +263,7 @@ impl PostProcess {
         self.present_bind_group = Some(bind_group);
     }
 
-    fn target(
-        device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
-        layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-        params: &wgpu::Buffer,
-    ) -> (wgpu::TextureView, wgpu::BindGroup) {
+    fn target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("linear HDR scene before tone mapping"),
             size: wgpu::Extent3d {
@@ -275,31 +278,11 @@ impl PostProcess {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let scene = texture.create_view(&Default::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("scene antialiasing inputs"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&scene),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params.as_entire_binding(),
-                },
-            ],
-        });
-        (scene, bind_group)
+        texture.create_view(&Default::default())
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
-        (self.scene, self.bind_group) =
-            Self::target(device, config, &self.layout, &self.sampler, &self.params);
+        self.scene = Self::target(device, config);
         self.size = (config.width.max(1), config.height.max(1));
         // The low-resolution target is recreated on the next frame at the
         // pixel scale that frame actually uses.
@@ -315,6 +298,7 @@ impl PostProcess {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
         mut settings: [f32; 28],
     ) {
         let debug = settings[3] > 0.5;
@@ -333,6 +317,29 @@ impl PostProcess {
         );
         self.ensure_output(device, output_size);
         let resolved = self.output_view.as_ref().expect("resolve target");
+        // Built per frame: the depth view is recreated whenever the surface is.
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scene antialiasing inputs"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.scene),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                },
+            ],
+        });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -351,7 +358,7 @@ impl PostProcess {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_bind_group(0, &bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 

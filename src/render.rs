@@ -4440,6 +4440,7 @@ impl Gpu {
             &self.queue,
             &mut encoder,
             &view,
+            &self.depth,
             [
                 self.current_lighting.exposure.max(0.01),
                 self.current_lighting.saturation,

@@ -17,6 +17,11 @@ struct ResolveParams {
     zone_look: vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> params: ResolveParams;
+// Reverse-Z scene depth (1 near, 0 far), read for screen-space ambient occlusion.
+@group(0) @binding(3) var scene_depth: texture_depth_2d;
+
+// How much the nearest contact can darken the base colour (0 = none).
+const SSAO_STRENGTH: f32 = 0.6;
 
 // Ordered 8x8 Bayer matrix. The pattern is anchored to output art pixels, so
 // it dithers the final write without crawling screen grain. A 4x4 matrix only
@@ -134,6 +139,43 @@ fn sample_color(uv: vec2<f32>) -> vec3<f32> {
 fn luma(c: vec3<f32>) -> f32 {
     // Perceptual contrast from the linear scene sample.
     return sqrt(max(dot(c, vec3<f32>(0.299, 0.587, 0.114)), 0.0));
+}
+
+// Screen-space ambient occlusion from the depth buffer. A tap closer to the eye
+// than the centre occludes it. The test uses depth ratios, since
+// z_tap / z_centre = d_centre / d_tap for reverse-Z, so it needs no near plane
+// and is independent of voxel scale. Gaps past the falloff are ignored, so far
+// silhouettes cannot halo onto near geometry. `pixel` is in depth-buffer texels.
+fn ssao_factor(pixel: vec2<f32>) -> f32 {
+    let dims = vec2<i32>(textureDimensions(scene_depth));
+    let max_px = dims - vec2<i32>(1);
+    let centre = clamp(vec2<i32>(pixel), vec2<i32>(0), max_px);
+    let d_centre = textureLoad(scene_depth, centre, 0);
+    if (d_centre <= 0.0) {
+        return 1.0; // far plane: sky
+    }
+    let radius = 11.0 * clamp(f32(dims.y) / 1080.0, 0.6, 2.0);
+    // Interleaved gradient noise rotates the disc per pixel, so 12 taps average
+    // into fine grain instead of a fixed pattern.
+    let spin = fract(52.9829189 * fract(0.06711056 * pixel.x + 0.00583715 * pixel.y)) * 6.2831853;
+    var occluded = 0.0;
+    for (var i: u32 = 0u; i < 12u; i = i + 1u) {
+        let fi = f32(i);
+        let angle = fi * 2.3999632 + spin;
+        let r = radius * sqrt((fi + 0.5) / 12.0);
+        let offset = vec2<i32>(vec2<f32>(cos(angle), sin(angle)) * r);
+        let tap = clamp(centre + offset, vec2<i32>(0), max_px);
+        let d_tap = textureLoad(scene_depth, tap, 0);
+        if (d_tap <= 0.0) {
+            continue;
+        }
+        // Positive when the tap is nearer the eye than the centre.
+        let gap = 1.0 - d_centre / d_tap;
+        // Thresholds sit above the depth slope of a flat plane seen at a grazing
+        // angle, so open ground is not darkened; only real steps occlude.
+        occluded += smoothstep(0.02, 0.10, gap) * (1.0 - smoothstep(0.12, 0.35, gap));
+    }
+    return 1.0 - SSAO_STRENGTH * occluded / 12.0;
 }
 
 fn bloom_weight(c: vec3<f32>, threshold: f32) -> vec3<f32> {
@@ -267,7 +309,8 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let edge = smoothstep(0.12, 0.36, contrast) * clamp(params.style.w, 0.0, 1.0);
     // Screen-blend the glow: it brightens dark pixels fully but approaches 1.0
     // asymptotically on bright ones, so adding bloom can never clip the frame.
-    let base_color = center * (1.0 - edge);
+    // Occlusion darkens the lit scene only; the bloom glow added below stays intact.
+    let base_color = center * (1.0 - edge) * ssao_factor((position.xy + vec2<f32>(0.5)) * scale);
     let glow = clamp(bloom * bloom_strength, vec3<f32>(0.0), vec3<f32>(1.0));
     var color = base_color + glow * (vec3<f32>(1.0) - clamp(base_color, vec3<f32>(0.0), vec3<f32>(1.0)));
 
