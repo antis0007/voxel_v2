@@ -327,7 +327,7 @@ fn scheduler_front_keeps_pace_without_backlog_stall() {
     let mut reached = [None::<f32>; 16];
     let mut t = 0.0f32;
     for _frame in 0..(6.0 / dt) as usize {
-        sim.update(&mut world, &player, dt, &mut blocks, &mut chunks);
+        sim.update(&mut world, &player, dt, &mut blocks, &mut chunks, crate::simulation::Budget::UNBOUNDED);
         t += dt;
         for x in 6..16 {
             if reached[x].is_none() && world.water_volume(IVec3::new(x as i32, 101, 8)) > 0 {

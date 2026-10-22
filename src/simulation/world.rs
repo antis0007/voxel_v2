@@ -64,6 +64,10 @@ pub struct WorldSimulation {
     pub status: Option<String>,
 }
 impl WorldSimulation {
+    /// The per-frame wall-clock budget the windowed game grants a pass.
+    pub fn live_budget() -> super::Budget {
+        super::Budget::wall(FRAME_BUDGET)
+    }
     pub fn new() -> Self {
         Self {
             enabled: true,
@@ -198,9 +202,8 @@ impl WorldSimulation {
         dt: f32,
         blocks: &mut HashSet<IVec3>,
         chunks: &mut HashSet<IVec3>,
+        budget: super::Budget,
     ) {
-        let start = Instant::now();
-        let budget_end = start + FRAME_BUDGET;
         self.stats.applied_updates_last_step = 0;
         self.stats.simulated_chunks_last_step = 0;
         self.sources.poll(world);
@@ -216,15 +219,15 @@ impl WorldSimulation {
                 dt,
                 &mut self.sources,
                 &mut self.machine_cursor,
-                (Instant::now() + FACTORY_BUDGET).min(budget_end),
+                budget.child(FACTORY_BUDGET).min(budget),
                 blocks,
                 chunks,
             );
         }
         self.status = self.sources.error.clone().or(self.status.take());
         if self.enabled && !waiting_for_writeback && dt.is_finite() && dt > 0.0 {
-            let rigid_end = (Instant::now() + RIGID_BUDGET).min(budget_end);
-            if Instant::now() < rigid_end {
+            let rigid_end = budget.child(RIGID_BUDGET).min(budget);
+            if rigid_end.has_time() {
                 super::rigid::tick(
                     &mut self.sources,
                     world,
@@ -246,9 +249,9 @@ impl WorldSimulation {
             let interval = (0.08 * self.scale.meters()).max(1.0 / 30.0);
             self.accumulator = (self.accumulator + dt).min(interval * 8.0);
             let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
-            let water_end = Instant::now() + water_budget(world.activity.pending());
+            let water_end = budget.child(water_budget(world.activity.pending()));
             let mut catch_up = 0;
-            while self.accumulator >= interval && catch_up < 4 && Instant::now() < water_end {
+            while self.accumulator >= interval && catch_up < 4 && water_end.has_time() {
                 self.accumulator -= interval;
                 catch_up += 1;
                 world.activity.tick = world.activity.tick.wrapping_add(1);
@@ -285,7 +288,7 @@ impl WorldSimulation {
                 self.touched.clear();
                 let mut cells = 0;
                 for visit in 0..128 {
-                    if cells >= MAX_CELLS || Instant::now() >= water_end {
+                    if cells >= MAX_CELLS || !water_end.has_time() {
                         break;
                     }
                     let preferred = if visit % 4 != 0 {
@@ -331,7 +334,7 @@ impl WorldSimulation {
                         batch.extend_from_slice(&part);
                     }
                     for (i, &p) in batch.iter().enumerate() {
-                        if Instant::now() >= water_end {
+                        if !water_end.has_time() {
                             for &p in &batch[i..] {
                                 world.activity.wake(p);
                             }

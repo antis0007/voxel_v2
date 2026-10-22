@@ -15,6 +15,8 @@ egui-winit = "0.33.3"
 egui-wgpu = "0.33.3"
 winit = "0.30.13"
 image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12.2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
@@ -59,3 +61,6 @@ needless_range_loop = "allow"
 # App-state and library-result enums are built once per session; boxing their
 # large variants adds indirection for no measurable gain.
 large_enum_variant = "allow"
+
+[dev-dependencies]
+insta = "1.49.0"

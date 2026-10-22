@@ -3,7 +3,7 @@ use super::*;
 use crate::player::Player;
 use crate::simulation::residency::Residency;
 use crate::world::chunk_coord_from_world_block;
-use std::time::Instant;
+use crate::simulation::Budget;
 
 pub const WATER_CAPACITY: u32 = 8192;
 
@@ -121,7 +121,7 @@ pub(crate) fn tick_world(
     dt: f32,
     sources: &mut Residency,
     cursor: &mut usize,
-    deadline: Instant,
+    deadline: Budget,
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
@@ -155,7 +155,7 @@ pub(crate) fn tick_world(
         n.work_clock = (n.work_clock + dt).min(0.5);
     }
     for p in machines {
-        if Instant::now() >= deadline {
+        if !deadline.has_time() {
             break;
         }
         *cursor = cursor.wrapping_add(1);
@@ -172,7 +172,7 @@ pub(crate) fn tick_world(
             0.5 / (size * size * size) as f32 / (n.upgrade + 1) as f32
         };
         let mut edits = 0;
-        while n.work_clock >= interval && edits < 16 && Instant::now() < deadline {
+        while n.work_clock >= interval && edits < 16 && deadline.has_time() {
             n.work_clock -= interval;
             edits += 1;
             let cost = if n.kind == Kind::Pump {
@@ -346,7 +346,7 @@ fn drain(
     p: IVec3,
     n: &mut Node,
     sources: &mut Residency,
-    deadline: Instant,
+    deadline: Budget,
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
@@ -358,7 +358,7 @@ fn drain(
     for d in DIRS {
         for a in 0..size {
             for b in 0..size {
-                if changed >= 16 || n.water < quantum || Instant::now() >= deadline {
+                if changed >= 16 || n.water < quantum || !deadline.has_time() {
                     break;
                 }
                 let q = if d.x != 0 {

@@ -3241,7 +3241,7 @@ fn main() -> Result<()> {
                                     if creative.pending_cells()==0
                                         && let Some((cell,_))=hit
                                             && (cell.as_vec3()-eye).length()*world.voxel_scale.meters()<=6.0 {
-                                                let targets=world::expedition::bore_targets(world,cell,player.pos);
+                                                let targets=world::expedition::bore_targets(world,cell,player.pos,simulation::Budget::wall(std::time::Duration::from_millis(2)));
                                                 creative.queue_edit(world,creative::BrushMode::Erase,BlockId::Air,targets);
                                             }
                                     break_edit=false;
@@ -3517,10 +3517,10 @@ fn main() -> Result<()> {
                                 fluid_sim.update(
                                     world,
                                     &player,
-
                                     gameplay_dt,
                                     &mut dirty_blocks,
                                     &mut dirty_chunks,
+                                    simulation::WorldSimulation::live_budget(),
                                 );
                                 if let Some(review)=wand_review.as_mut()
                                     && let Some(shot)=review.observe(world,&player,&creative,&preview) {

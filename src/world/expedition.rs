@@ -757,7 +757,9 @@ pub fn interact(
 }
 
 /// Explicit mining action; ordinary interaction never excavates terrain.
-pub fn bore_targets(world: &mut World, p: IVec3, player: Vec3) -> Vec<IVec3> {
+/// `budget` bounds the flood fill; the windowed game passes 2 ms, headless
+/// runs pass `Budget::UNBOUNDED` so the result depends only on the world.
+pub fn bore_targets(world: &mut World, p: IVec3, player: Vec3, time_budget: crate::simulation::Budget) -> Vec<IVec3> {
     let b = world.get(p);
     if !matches!(
         b,
@@ -791,9 +793,8 @@ pub fn bore_targets(world: &mut World, p: IVec3, player: Vec3) -> Vec<IVec3> {
     let mut queue = VecDeque::from([p]);
     let mut visited = HashSet::new();
     let mut targets = Vec::new();
-    let started = std::time::Instant::now();
     while let Some(cell) = queue.pop_front() {
-        if !targets.is_empty() && started.elapsed() > std::time::Duration::from_millis(2) {
+        if !targets.is_empty() && !time_budget.has_time() {
             break;
         }
         if visited.len() >= budget || !visited.insert(cell) {

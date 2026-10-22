@@ -83,7 +83,7 @@ pub(super) fn tick(
     w: &mut World,
     dt: f32,
     player: (Vec3, Vec3),
-    deadline: std::time::Instant,
+    deadline: super::Budget,
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
@@ -95,7 +95,7 @@ pub(super) fn tick(
         body.debt = (body.debt + dt).min(0.25);
     }
     for _ in 0..count {
-        if w.sandbox.bodies.is_empty() || std::time::Instant::now() >= deadline {
+        if w.sandbox.bodies.is_empty() || !deadline.has_time() {
             break;
         }
         let index = w.sandbox.body_cursor % w.sandbox.bodies.len();
@@ -168,7 +168,7 @@ pub(super) fn tick(
             let steps = ((body.velocity.length() * dt / 0.25).ceil() as usize).clamp(1, 64);
             let mut broke_apart = false;
             for substep in 0..steps {
-                if std::time::Instant::now() >= deadline {
+                if !deadline.has_time() {
                     body.debt =
                         (body.debt + dt * (steps - substep) as f32 / steps as f32).min(0.25);
                     break;
@@ -364,7 +364,7 @@ mod felling_tests {
     use crate::fluid::VoxelScalePreset;
     use crate::simulation::sandbox::RigidBody;
     use crate::world::{World, WorldType};
-    use std::time::{Duration, Instant};
+
 
     /// A felled trunk dropped from height breaks into wood; a slow one does not.
     fn fall(speed_voxels: f32) -> (usize, usize) {
@@ -398,7 +398,7 @@ mod felling_tests {
                 &mut world,
                 1.0 / 60.0,
                 (Vec3::splat(1000.0), Vec3::splat(1001.0)),
-                Instant::now() + Duration::from_secs(1),
+                crate::simulation::Budget::UNBOUNDED,
                 &mut blocks,
                 &mut chunks,
             );
