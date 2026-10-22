@@ -22,7 +22,7 @@ Verify: `just test` (all 414) green; `cargo test repo_layout` green; `git status
 - `justfile`: `check`, `clippy`, `test`, `bench`, `run`, `loc`, `verify` as specified. Single crate until P3, so `[crate]` arg is optional and ignored until then.
 - `scripts/filter.sh` (dedupe, strip ANSI, collapse notes, cap 60). PowerShell is the primary shell on this machine: provide `scripts/filter.py` as the implementation and let `filter.sh` be a thin wrapper (Git Bash exists). **Open question for user: python vs pure sh**.
 - `.cargo/config.toml`: `-Clinker=rust-lld` on `x86_64-pc-windows-msvc` (ships with rustc, no install), `incremental = true` (already default in dev), keep existing opt levels. `mold`/`sccache`/cranelift not available on Windows; record as not applicable. Measure before/after.
-- `.claude/settings.json`: PostToolUse(Edit|Write) → `just check`; Stop → `just verify`. Mirror `.codex/hooks.json` intent, then delete the `.codex` hook with the absolute `D:\AI` venv path or move it under `.claude/`.
+- `.claude/settings.json`: PostToolUse(Edit|Write) → `just check`; Stop → `just verify`. Mirror `.codex/hooks.json` intent, then delete the `.codex` hook with the absolute `D:\AI\venv path or move it under `.claude/`.
 - Tools to install (user machine, not repo): `just`, `tokei`, `cargo-machete`. Note in PLAN.
 - Feature gates: `render`, `audio` as Cargo features now; real isolation comes with crates in P3.
 - Kill the 114-warning replay: fix or `cfg(test)`-gate the trivial ones in this phase so `just check` output is empty on a clean tree (prerequisite for hooks being useful).
@@ -146,4 +146,4 @@ Content moved to data: `assets/materials.ron` (83 blocks), `spells.ron` (80), `r
 6. **Criterion benches** need a library target (`crates/app` is a binary). Low effort once `sim` exists; the ignored `terrain_generation_cost_stays_close_to_the_previous_generator` test becomes the first bench.
 7. **Dead code in `egui_ui/wand_xmb.rs` and `adventure/growth.rs`** (14 warnings): in-progress work on this branch; owner decides. `just clippy` keeps `-A dead_code` until then.
 8. **Mixed CRLF/LF in the working tree**: `.gitattributes` normalises on commit; a one-time `git add --renormalize` plus checkout would make the tree uniform.
-9. **`.codex/hooks.json`** points at an absolute `D:\AI\...` virtualenv; either make it relative or drop it.
+9. **`.codex/hooks.json`** points at an absolute `D:\AI\.` virtualenv; either make it relative or drop it.
