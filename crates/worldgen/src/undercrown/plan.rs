@@ -1,7 +1,7 @@
 //! Authored Undercrown plan. This milestone defines the content contract and a
 //! test fixture only; `Plan::for_config` intentionally returns an empty plan.
 use super::state::ObjectId;
-use crate::world::{BlockId, WorldSampleConfig};
+use crate::{BlockId, WorldSampleConfig};
 use glam::Vec3;
 
 /// Reserve this much solid rock around the authored footprint.
@@ -255,9 +255,8 @@ impl Plan {
         None
     }
 
-    /// Stable test fixture. It is never generated in a real world.
-    #[cfg(test)]
-    pub(crate) fn fixture() -> Self {
+    /// Stable test fixture, also used by the app's interaction tests. Never generated in a real world.
+    pub fn fixture() -> Self {
         let room = RoomSpec {
             id: ObjectId::new(0, 0, 0).expect("fixture room id"),
             kind: RoomKind::Landing,
@@ -972,8 +971,8 @@ fn d(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
-    use crate::world::WorldType;
+    use engine_core::VoxelScalePreset;
+    use crate::WorldType;
 
     fn cfg(version: u32, scale: VoxelScalePreset) -> WorldSampleConfig {
         WorldSampleConfig {

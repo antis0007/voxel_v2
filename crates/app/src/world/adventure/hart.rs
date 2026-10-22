@@ -527,7 +527,7 @@ pub fn install_review(world: &mut World, player: &mut Player, variant: u8, diffi
             for x in -19 * n..=19 * n {
                 let cell = IVec3::new(x, 80 * n + y, z);
                 let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5) * scale;
-                if let Some(block) = super::super::prism_sanctum::block(p, scale) {
+                if let Some(block) = crate::world::prism_sanctum::block(p, scale) {
                     edits.push((cell, block));
                 }
             }

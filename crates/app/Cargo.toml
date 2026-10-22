@@ -9,6 +9,8 @@ edition.workspace = true
 engine_core = { path = "../core" }
 engine_content = { path = "../content" }
 engine_audio = { path = "../audio" }
+engine_voxel = { path = "../voxel" }
+engine_worldgen = { path = "../worldgen" }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 env_logger = "0.11"

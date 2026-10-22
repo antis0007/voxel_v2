@@ -8,9 +8,10 @@
 //! - **metres** (`Vec3`): player, camera and physics positions; voxel = metres / scale.
 pub mod coords;
 pub mod fast_hash;
+pub mod hash;
 pub mod scale;
 pub mod time;
 
-pub use coords::{CHUNK_SIZE, chunk_coord_from_world_block, floor_div};
+pub use coords::{CHUNK_SIZE, PADDED_CHUNK_SIZE, chunk_coord_from_world_block, floor_div};
 pub use scale::VoxelScalePreset;
 pub use time::Budget;

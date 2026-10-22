@@ -757,7 +757,7 @@ impl World {
             self.install_disk_chunk(c, data);
         } else {
             self.chunks
-                .insert(c, Arc::new(ChunkData::generate(&self.sample_config(), c)));
+                .insert(c, Arc::new(engine_worldgen::generate(&self.sample_config(), c)));
         }
         Ok(())
     }
@@ -1129,7 +1129,7 @@ mod encoding {
     fn sample_chunk() -> (IVec3, ChunkData, HashMap<IVec3, u8>) {
         let cfg = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
         let coord = IVec3::new(1, 1, -2);
-        let mut data = ChunkData::generate(&cfg, coord);
+        let mut data = engine_worldgen::generate(&cfg, coord);
         let mut water = HashMap::new();
         for (i, light) in data.light.iter_mut().enumerate() {
             *light = (i % 300 / 20) as u8;
@@ -1186,7 +1186,7 @@ mod encoding {
             for z in -3..3 {
                 for y in 0..3 {
                     let c = IVec3::new(x, y, z);
-                    let data = ChunkData::generate(&cfg, c);
+                    let data = engine_worldgen::generate(&cfg, c);
                     v1 += encode_v1(c, 1, &data, &HashMap::new()).len();
                     v2 += encode(c, 1, &data, &HashMap::new()).len();
                     chunks += 1;

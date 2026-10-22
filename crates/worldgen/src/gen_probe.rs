@@ -17,7 +17,7 @@ fn cfg(version: u32) -> WorldSampleConfig {
         generator_version: version,
         seed: 424242,
         world_type: WorldType::Hills,
-        voxel_scale: crate::fluid::VoxelScalePreset::OneMeter,
+        voxel_scale: engine_core::VoxelScalePreset::OneMeter,
     }
 }
 
@@ -34,7 +34,7 @@ fn best(mut pass: impl FnMut() -> usize) -> (f64, usize) {
 }
 
 fn each_voxel(c: &WorldSampleConfig, mut f: impl FnMut(IVec3, ColumnSample, &RegionProfiles) -> bool) -> usize {
-    let size = crate::mesh::PADDED_CHUNK_SIZE;
+    let size = engine_core::PADDED_CHUNK_SIZE;
     let mut n = 0;
     for coord in chunks() {
         let origin = coord * CHUNK_SIZE - IVec3::ONE;
@@ -107,7 +107,7 @@ fn gen_probe_cave_noise_reach() {
     for version in [15u32, 16] {
         let c = cfg(version);
         let (mut below, mut noise, mut cols, mut haw_sum, mut depth_sum) = (0u64, 0u64, 0u64, 0f64, 0f64);
-        let size = crate::mesh::PADDED_CHUNK_SIZE;
+        let size = engine_core::PADDED_CHUNK_SIZE;
         for coord in chunks() {
             let origin = coord * CHUNK_SIZE - IVec3::ONE;
             for z in 0..size {
@@ -185,7 +185,7 @@ fn gen_probe_thread_state() {
                 for cz in -2..2 {
                     for cy in -2..3 {
                         let chunk =
-                            crate::world::generate_padded(&c, glam::IVec3::new(cx, cy, cz), &never)
+                            crate::generate_padded(&c, glam::IVec3::new(cx, cy, cz), &never)
                                 .unwrap();
                         solid += chunk.blocks.iter().filter(|b| **b != B::Air).count();
                     }

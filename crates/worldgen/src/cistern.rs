@@ -1,6 +1,6 @@
 //! One placed waterworks. Older generators do not sample it.
 use super::{BlockId as B, WorldSampleConfig};
-use crate::world::adventure::growth::SizeClass;
+use engine_content::SizeClass;
 use glam::Vec3;
 
 pub fn landing_offset() -> f32 {
@@ -67,8 +67,8 @@ pub fn garden_spore_local() -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
-    use crate::world::{WorldSampleConfig, WorldType};
+    use engine_core::VoxelScalePreset;
+    use crate::{WorldSampleConfig, WorldType};
 
     fn cfg(version: u32) -> WorldSampleConfig {
         WorldSampleConfig {

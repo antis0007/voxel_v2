@@ -4,7 +4,7 @@ use super::{BlockId as B, World, adventure};
 use crate::mesh::models::Model;
 use glam::{IVec3, Quat, Vec3};
 mod persistence;
-pub(crate) mod region;
+pub(crate) use engine_worldgen::habitats_region as region;
 pub(crate) mod review;
 
 const MAX_SOURCES: usize = 64;

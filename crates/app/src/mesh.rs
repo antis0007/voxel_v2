@@ -38,7 +38,7 @@ pub struct ChunkMesh {
 }
 
 pub const CHUNK_PAD: i32 = 1;
-pub const PADDED_CHUNK_SIZE: i32 = CHUNK_SIZE + 2; // 34
+pub use engine_core::PADDED_CHUNK_SIZE;
 #[cfg(test)]
 mod terrain_contract;
 /// Vertical inset (in voxel units) keeping free water surfaces recessed below

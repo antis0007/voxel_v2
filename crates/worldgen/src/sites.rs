@@ -3,7 +3,7 @@
 use super::{BlockId as B, WorldSampleConfig, WorldType, hash2, sample_column, value_noise2};
 use glam::{IVec3, Vec3};
 use std::cell::RefCell;
-use crate::fast_hash::FastMap;
+use engine_core::fast_hash::FastMap;
 use std::collections::HashMap;
 
 fn region_span(cfg: &WorldSampleConfig) -> f32 {
@@ -870,7 +870,7 @@ thread_local! {
 }
 
 /// Surface height above the Holy Mountain shaft; sampled once per world configuration.
-pub(crate) fn holy_ground(cfg: &WorldSampleConfig) -> f32 {
+pub fn holy_ground(cfg: &WorldSampleConfig) -> f32 {
     shaft_ground(cfg)
 }
 
@@ -1061,7 +1061,7 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
         return None;
     }
     let m = (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
-    if let Some(block) = super::habitats::region::sample(cfg, m) {
+    if let Some(block) = crate::habitats_region::sample(cfg, m) {
         return Some(block);
     }
     let terrain_top = (height + 1) as f32 * cfg.voxel_meters();
@@ -1740,9 +1740,9 @@ mod holy_mountain {
     use super::*;
     #[test]
     fn spawn_has_a_brick_mouth_and_a_carved_shaft() {
-        use crate::fluid::VoxelScalePreset;
+        use engine_core::VoxelScalePreset;
         let world =
-            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+            crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
         let cfg = world.sample_config();
         let ground = sample_column(&cfg, cfg.blocks_for_height(18.0), 0).height;
         let mouth = world.get(IVec3::new(19, ground + 2, 0));
@@ -1757,13 +1757,13 @@ mod causeway_review {
     use super::*;
     #[test]
     fn causeway_deck_gap_and_reward_exist_at_each_voxel_scale() {
-        use crate::fluid::VoxelScalePreset;
+        use engine_core::VoxelScalePreset;
         for scale in [
             VoxelScalePreset::OneMeter,
             VoxelScalePreset::HalfMeter,
             VoxelScalePreset::QuarterMeter,
         ] {
-            let mut world = crate::world::World::with_seed(WorldType::Hills, scale, 3040332434);
+            let mut world = crate::test_world::World::with_seed(WorldType::Hills, scale, 3040332434);
             // The causeway chamber is a variant-2 cavern. From generator version
             // 25 the Prism Sanctum replaces variant-2 caverns, so this layout only
             // generates for worlds saved before that version. Pin to the last one.
@@ -1797,12 +1797,12 @@ mod causeway_review {
 #[cfg(test)]
 mod generator_16_structures {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
+    use engine_core::VoxelScalePreset;
 
     fn column_has_roof(cfg: &WorldSampleConfig, x: f32, z: f32, ground: f32) -> Option<bool> {
         let v = cfg.voxel_meters();
         let at = |y: f32| {
-            crate::world::sample_block(
+            crate::sample_block(
                 cfg,
                 IVec3::new(
                     (x / v).floor() as i32,
@@ -1830,7 +1830,7 @@ mod generator_16_structures {
     #[test]
     fn every_site_kind_is_roofed_in_the_real_world() {
         for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter] {
-            let world = crate::world::World::with_seed(WorldType::Hills, scale, 3040332434);
+            let world = crate::test_world::World::with_seed(WorldType::Hills, scale, 3040332434);
             let cfg = world.sample_config();
             assert!(cfg.generator_version >= 16);
             let mut seen = [false; 6];
@@ -1878,7 +1878,7 @@ mod generator_16_structures {
 
     #[test]
     fn homesteads_exist_and_are_roofed() {
-        let world = crate::world::World::with_seed(
+        let world = crate::test_world::World::with_seed(
             WorldType::Hills,
             VoxelScalePreset::OneMeter,
             3040332434,
@@ -1920,7 +1920,7 @@ mod generator_16_structures {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3040332434);
         let world =
-            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, seed);
+            crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, seed);
         let cfg = world.sample_config();
         let mut best: [Option<(f32, Site)>; 6] = [None; 6];
         for rx in -6..=6 {
@@ -1995,14 +1995,14 @@ mod generator_16_structures {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3040332434);
         let world =
-            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, seed);
+            crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, seed);
         let cfg = world.sample_config();
         let mut found = 0;
         for r in (100..2000).step_by(60) {
             for a in 0..48 {
                 let t = a as f32 / 48.0 * std::f32::consts::TAU;
                 let (x, z) = ((t.cos() * r as f32) as i32, (t.sin() * r as f32) as i32);
-                let h = crate::world::terrain_height(&cfg, x, z);
+                let h = crate::terrain_height(&cfg, x, z);
                 if h <= 11 && found < 8 {
                     println!("water: x={x} z={z} bed={h}");
                     found += 1;
@@ -2015,12 +2015,12 @@ mod generator_16_structures {
 #[cfg(test)]
 mod generator_17_caverns {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
+    use engine_core::VoxelScalePreset;
 
     #[test]
     fn binding_circle_is_dry_and_holds_an_artifact() {
         let world =
-            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+            crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
         let cfg = world.sample_config();
         assert!(cfg.generator_version >= 17);
         let mut found = false;
@@ -2047,7 +2047,7 @@ mod generator_17_caverns {
                 .height as f32;
                 let floor = (ground - 18.0 - n * 25.0).floor();
                 let at = |dx: f32, dy: f32, dz: f32| {
-                    crate::world::sample_block(
+                    crate::sample_block(
                         &cfg,
                         IVec3::new(
                             (ax + dx).floor() as i32,
@@ -2085,8 +2085,8 @@ mod generator_17_caverns {
 #[cfg(test)]
 mod stage_bench {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
-    use crate::world::{World, WorldType};
+    use engine_core::VoxelScalePreset;
+    use crate::{test_world::World, WorldType};
 
     /// `cargo test --release sites::stage_bench -- --ignored --nocapture`
     #[test]
@@ -2100,7 +2100,7 @@ mod stage_bench {
         let mut voxels = Vec::new();
         for z in 0..34 {
             for x in 0..34 {
-                let h = crate::world::terrain_height(&cfg, origin.x + x, origin.z + z);
+                let h = crate::terrain_height(&cfg, origin.x + x, origin.z + z);
                 for y in 0..34 {
                     voxels.push((origin + IVec3::new(x, y, z), h));
                 }

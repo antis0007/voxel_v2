@@ -1,5 +1,5 @@
 //! Generator 27's connected teaching site. Historical worlds retain their terrain.
-use crate::world::{BlockId as B, WorldSampleConfig, WorldType};
+use crate::{BlockId as B, WorldSampleConfig, WorldType};
 use glam::Vec3;
 
 pub const LANTERN: Vec3 = Vec3::new(294.5, 0.0, 38.5);

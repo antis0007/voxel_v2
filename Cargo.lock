@@ -667,6 +667,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_voxel"
+version = "0.1.0"
+dependencies = [
+ "engine_content",
+ "engine_core",
+ "glam",
+ "serde",
+]
+
+[[package]]
+name = "engine_worldgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "engine_content",
+ "engine_core",
+ "engine_voxel",
+ "glam",
+]
+
+[[package]]
 name = "env_filter"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1412,6 +1433,8 @@ dependencies = [
  "engine_audio",
  "engine_content",
  "engine_core",
+ "engine_voxel",
+ "engine_worldgen",
  "env_logger",
  "glam",
  "image",

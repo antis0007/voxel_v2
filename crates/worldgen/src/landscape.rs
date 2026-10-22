@@ -20,7 +20,7 @@ fn desert_climate(temperature: f32, moisture: f32) -> bool {
 
 // Generator-10 savanna climate, also used by distant vegetation. Older hot,
 // very dry desert rules take priority. Preserve these thresholds for old saves.
-pub(crate) fn savanna_climate(temperature: f32, moisture: f32) -> bool {
+pub fn savanna_climate(temperature: f32, moisture: f32) -> bool {
     temperature > 0.56 && moisture < 0.49 && !desert_climate(temperature, moisture)
 }
 
@@ -94,7 +94,7 @@ fn climate(x: f32, z: f32, seed: u32) -> (f32, f32) {
 
 /// Cheap far-field ecology, using the same climate as editable terrain.
 /// No erosion tiles are allocated to place visual vegetation.
-pub(crate) fn visual_ecology(
+pub fn visual_ecology(
     cfg: &WorldSampleConfig,
     x: f32,
     z: f32,
@@ -166,7 +166,7 @@ pub struct TectonicSample {
 
 /// Generator 15 stretches plates, belts and shelves by this factor so continents are
 /// several kilometres across instead of 500 m patchwork. All profile widths stretch with it.
-pub(crate) fn tectonic_zoom(generator_version: u32) -> f32 {
+pub fn tectonic_zoom(generator_version: u32) -> f32 {
     if generator_version >= 15 { 2.4 } else { 1.0 }
 }
 
@@ -176,8 +176,8 @@ thread_local! {
     // Tectonics depend only on XZ. Cave-column generation used to recompute the
     // full plate solve for every solid voxel; this keeps it to once per column
     // per worker while preserving exact results.
-    static TECTONIC_CACHE: std::cell::RefCell<crate::fast_hash::FastMap<TectonicKey, TectonicSample>>
-        = std::cell::RefCell::new(crate::fast_hash::FastMap::default());
+    static TECTONIC_CACHE: std::cell::RefCell<engine_core::fast_hash::FastMap<TectonicKey, TectonicSample>>
+        = std::cell::RefCell::new(engine_core::fast_hash::FastMap::default());
     // Voxel loops walk y fastest, so the next query is nearly always the same
     // column. One remembered entry answers it without hashing at all.
     static TECTONIC_LAST: std::cell::Cell<Option<(TectonicKey, TectonicSample)>>
@@ -574,7 +574,7 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32, footprint: f
 
 // Visual far-field samples do not need a 48-step erosion simulation per region.
 // Editable chunks and the inner backdrop rings retain the exact generator.
-pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, BlockId) {
+pub fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, BlockId) {
     preview_surface_lod(cfg, x, z, 8.0)
 }
 
@@ -582,7 +582,7 @@ pub(crate) fn preview_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, 
 /// from the same filtered evaluator as `preview_surface_lod`. The whole-voxel
 /// column height steps by one voxel, which turns gentle slopes into bands when
 /// a normal is taken over a few tens of metres; this keeps the slope continuous.
-pub(crate) fn preview_height_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> f32 {
+pub fn preview_height_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> f32 {
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
         return super::distant_surface(cfg, x, z).0 * cfg.voxel_meters();
     }
@@ -591,7 +591,7 @@ pub(crate) fn preview_height_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footpr
 
 /// Visual far-field sample. `footprint` is the horizon ring spacing in metres: terrain
 /// detail finer than that is faded out instead of aliasing into spikes.
-pub(crate) fn preview_surface_lod(
+pub fn preview_surface_lod(
     cfg: &WorldSampleConfig,
     x: i32,
     z: i32,
@@ -1882,12 +1882,12 @@ pub(super) fn geological_stratum(
 #[cfg(test)]
 mod tectonics_and_oceans {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
+    use engine_core::VoxelScalePreset;
 
     #[test]
     fn seeded_tectonics_creates_oceans_coasts_mountain_belts_and_geological_strata() {
         let world =
-            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+            crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
         let cfg = world.sample_config();
 
         let mut ocean_columns = 0;
@@ -1982,7 +1982,7 @@ mod tectonics_and_oceans {
     fn generator_15_shores_are_continuous_and_world_has_variety() {
         use super::super::terrain_variety as tv;
         let world =
-            crate::world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
+            crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 17);
         let base = world.sample_config();
         let measure = |version: u32| {
             let mut cfg = base;

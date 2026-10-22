@@ -1,0 +1,16 @@
+# World generation: terrain, biomes, trees, sites, dungeons, valleys, the
+# undercrown plan. Pure functions of WorldSampleConfig; no runtime state.
+[package]
+name = "engine_worldgen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine_core = { path = "../core" }
+engine_content = { path = "../content" }
+engine_voxel = { path = "../voxel" }
+anyhow = "1"
+glam = "0.32.0"
+
+[lints]
+workspace = true

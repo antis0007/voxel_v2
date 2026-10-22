@@ -124,7 +124,7 @@ impl Residency {
                                     Ok(data)
                                 } else {
                                     Ok(DiskChunk {
-                                        chunk: Arc::new(ChunkData::generate(&job.cfg, job.coord)),
+                                        chunk: Arc::new(engine_worldgen::generate(&job.cfg, job.coord)),
                                         water: Arc::default(),
                                     })
                                 }

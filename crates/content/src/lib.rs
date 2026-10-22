@@ -1,3 +1,6 @@
+mod size_class;
+pub use size_class::SizeClass;
+
 use glam::IVec3;
 use std::sync::LazyLock;
 

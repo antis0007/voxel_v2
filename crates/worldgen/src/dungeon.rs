@@ -7,7 +7,7 @@ use super::architecture::{Building, Door, Palette, Roof, Windows, Wing, WingSpec
 use super::{BlockId as B, WorldSampleConfig, WorldType, hash2, sample_column};
 use glam::Vec3;
 use std::cell::RefCell;
-use crate::fast_hash::FastMap;
+use engine_core::fast_hash::FastMap;
 use std::rc::Rc;
 
 mod bearer_hall;
@@ -1995,7 +1995,7 @@ pub fn sanctum_fights(cfg: &WorldSampleConfig, ground: f32) -> [(Vec3, u32, u8);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
+    use engine_core::VoxelScalePreset;
 
     fn cfg(scale: VoxelScalePreset, seed: u32) -> WorldSampleConfig {
         WorldSampleConfig {
@@ -2153,7 +2153,7 @@ mod tests {
                 for cz in -2..2 {
                     for cy in -2..3 {
                         let chunk =
-                            crate::world::generate_padded(&c, glam::IVec3::new(cx, cy, cz), &never)
+                            crate::generate_padded(&c, glam::IVec3::new(cx, cy, cz), &never)
                                 .unwrap();
                         solid += chunk.blocks.iter().filter(|b| **b != B::Air).count();
                     }
@@ -2199,25 +2199,25 @@ mod tests {
         let version = std::env::var("PROFILE_VERSION")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(crate::world::CURRENT_GENERATOR_VERSION);
+            .unwrap_or(crate::CURRENT_GENERATOR_VERSION);
         let c = WorldSampleConfig {
             generator_version: version,
             seed: 424242,
             world_type: WorldType::Hills,
             voxel_scale: VoxelScalePreset::OneMeter,
         };
-        let size = crate::mesh::PADDED_CHUNK_SIZE;
+        let size = engine_core::PADDED_CHUNK_SIZE;
         let chunks: Vec<IVec3> = (6..10)
             .flat_map(|cx| (-2..2).flat_map(move |cz| (-2..3).map(move |cy| IVec3::new(cx, cy, cz))))
             .collect();
         // One timer per whole sweep: per-call timers cost more than the calls.
-        let sweep = |name: &str, f: &dyn Fn(IVec3, i32, i32, crate::world::ColumnSample, i32) -> usize| {
+        let sweep = |name: &str, f: &dyn Fn(IVec3, i32, i32, crate::ColumnSample, i32) -> usize| {
             let mut best = f64::MAX;
             let mut sink = 0;
             for _ in 0..3 {
                 let t = std::time::Instant::now();
                 for &ch in &chunks {
-                    let origin = ch * crate::world::CHUNK_SIZE - IVec3::ONE;
+                    let origin = ch * crate::CHUNK_SIZE - IVec3::ONE;
                     for z in 0..size {
                         for x in 0..size {
                             let col = sample_column(&c, origin.x + x, origin.z + z);
@@ -2260,12 +2260,12 @@ mod tests {
             let m = (o + IVec3::new(x, y, z)).as_vec3();
             super::super::landscape::sample_tectonics_zoomed(m.x, m.z, c.seed, 2.4).fold_wave as usize
         });
-        let profiles_for = |o: IVec3| crate::world::RegionProfiles::new(&c, o.x, o.z, size);
+        let profiles_for = |o: IVec3| crate::RegionProfiles::new(&c, o.x, o.z, size);
         let mut best = f64::MAX;
         for _ in 0..3 {
             let t = std::time::Instant::now();
             for &ch in &chunks {
-                let origin = ch * crate::world::CHUNK_SIZE - IVec3::ONE;
+                let origin = ch * crate::CHUNK_SIZE - IVec3::ONE;
                 let profiles = profiles_for(origin);
                 for z in 0..size {
                     for x in 0..size {

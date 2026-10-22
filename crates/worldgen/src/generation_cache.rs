@@ -1,7 +1,7 @@
 //! Per-worker bounded caches. No locks are held while evaluating dependencies.
 use super::{BushProfile, ColumnSample, TreeProfile, WorldSampleConfig};
 use std::cell::RefCell;
-use crate::fast_hash::FastMap;
+use engine_core::fast_hash::FastMap;
 
 #[derive(Default)]
 struct Cache {

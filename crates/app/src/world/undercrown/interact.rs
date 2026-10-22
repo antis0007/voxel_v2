@@ -2,8 +2,7 @@
 //!
 //! This milestone wires the contract but ships no props, so the public path is
 //! inert. Tests exercise the same functions with a fixture plan.
-use super::plan::{Action, Plan};
-use super::state::{State, flags};
+use engine_worldgen::undercrown::{Action, Plan, State, flags};
 use crate::player::Player;
 use crate::world::interaction::Prompt;
 use crate::world::{World, trace};

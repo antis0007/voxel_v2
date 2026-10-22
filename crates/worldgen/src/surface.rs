@@ -587,7 +587,7 @@ pub(super) fn location(cfg: &WorldSampleConfig, m: Vec3) -> Option<&'static str>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fluid::VoxelScalePreset;
+    use engine_core::VoxelScalePreset;
 
     fn config() -> WorldSampleConfig {
         WorldSampleConfig {
@@ -617,13 +617,13 @@ mod tests {
         );
         for w in &p.waysides {
             assert!(
-                !crate::world::sites::surface_reserved(&cfg, w.x, w.z),
+                !crate::sites::surface_reserved(&cfg, w.x, w.z),
                 "wayside overlaps an authored site or homestead"
             );
         }
         for n in &p.nooks {
             assert!(
-                !crate::world::sites::surface_reserved(&cfg, n.x, n.z),
+                !crate::sites::surface_reserved(&cfg, n.x, n.z),
                 "nook overlaps an authored site or homestead"
             );
         }

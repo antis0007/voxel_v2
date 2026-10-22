@@ -239,7 +239,7 @@ fn exact_test_sources(cache:&mut ChunkCache,coords:HashSet<IVec3>) {
 #[test]
 #[ignore="actual RTX4090 destinations; equal-revision COW and water invalidation"]
 fn local_source_changes_cancel_old_gpu_candidates_but_not_unrelated_publication() {
-    use crate::{fluid::VoxelScalePreset,world::{World,WorldType,ChunkData}};
+    use crate::{fluid::VoxelScalePreset,world::{World,WorldType}};
     for change in 0..5 {
         let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
         let mut world=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);
@@ -259,7 +259,7 @@ fn local_source_changes_cancel_old_gpu_candidates_but_not_unrelated_publication(
         let mut changed=original.clone();
         match change {
             0=>{Arc::make_mut(&mut changed.chunks).insert(IVec3::ZERO,
-                Arc::new(ChunkData::generate(&changed.cfg,IVec3::ZERO)));}
+                Arc::new(engine_worldgen::generate(&changed.cfg,IVec3::ZERO)));}
             1=>{world.water_levels.insert(IVec3::ZERO,4);changed.water_levels=Arc::new(world.water_levels.snapshot_all());}
             2=>{world.water_levels.remove(&IVec3::ZERO);changed.water_levels=Arc::new(world.water_levels.snapshot_all());}
             _=>{Arc::make_mut(&mut changed.regions.records).insert(IVec3::ZERO,crate::world::regions::controlled_source_record(2));}
@@ -284,7 +284,7 @@ fn local_source_changes_cancel_old_gpu_candidates_but_not_unrelated_publication(
 #[test]
 #[ignore="actual RTX4090 fixtures; late worker and uniform source cancellation"]
 fn local_source_cancellation_discards_uniform_ready_and_late_old_worker_result() {
-    use crate::{fluid::VoxelScalePreset,world::{World,WorldType,ChunkData}};
+    use crate::{fluid::VoxelScalePreset,world::{World,WorldType}};
     let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
     let mut world=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);
     let original=world.snapshot();exact_test_sources(&mut cache,HashSet::from([IVec3::ZERO]));
@@ -294,7 +294,7 @@ fn local_source_cancellation_discards_uniform_ready_and_late_old_worker_result()
     s.ready_meshes.push_back(empty);
     let old_cancel=Arc::new(AtomicBool::new(false));s.meshing.insert(key,(42,old_cancel.clone()));
     let mut changed=original.clone();Arc::make_mut(&mut changed.chunks).insert(IVec3::ZERO,
-        Arc::new(ChunkData::generate(&changed.cfg,IVec3::ZERO)));
+        Arc::new(engine_worldgen::generate(&changed.cfg,IVec3::ZERO)));
     s.invalidate_changed_sources(&changed,&mut cache);
     assert!(s.ready_meshes.is_empty());assert!(old_cancel.load(Ordering::Relaxed));assert!(!s.meshing.contains_key(&key));
     let late=cpu(&s,0,world.revision(),42,3);

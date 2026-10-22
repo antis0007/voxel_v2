@@ -2,6 +2,8 @@ use glam::IVec3;
 
 /// Cells per chunk edge.
 pub const CHUNK_SIZE: i32 = 32;
+/// Chunk plus a one-voxel halo on every side, as meshing reads it.
+pub const PADDED_CHUNK_SIZE: i32 = CHUNK_SIZE + 2;
 
 /// Floor division: `-1 / 32 == -1`, unlike Rust's truncating `/`.
 pub fn floor_div(a: i32, b: i32) -> i32 {

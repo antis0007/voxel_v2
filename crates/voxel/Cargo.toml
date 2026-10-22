@@ -1,0 +1,16 @@
+# Voxel world data: chunk storage and the per-world sample configuration.
+# Generation lives in engine_worldgen; runtime edits, regions and streaming
+# still live in the app until Phase 4.
+[package]
+name = "engine_voxel"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine_core = { path = "../core" }
+engine_content = { path = "../content" }
+glam = "0.32.0"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[lints]
+workspace = true

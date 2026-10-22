@@ -22,7 +22,7 @@ fn digest(cfg: &WorldSampleConfig, coords: &[IVec3]) -> u64 {
 #[test]
 #[ignore]
 fn gen_golden() {
-    use crate::fluid::VoxelScalePreset as S;
+    use engine_core::VoxelScalePreset as S;
     // Surface, deep, sites (starter ruin near z=-42), shore, caves, dungeons.
     let mut coords = Vec::new();
     for cx in [-9, -3, 0, 2, 6, 11] {
