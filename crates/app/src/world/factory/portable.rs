@@ -2,7 +2,7 @@
 //! drops, death, sorting and saves. They never substitute for ordinary recipes.
 use super::{Kind, Node, induction, power};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PowerKit {
     pub kind: Kind,
     pub energy: u32,

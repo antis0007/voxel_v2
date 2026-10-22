@@ -1,0 +1,431 @@
+// Crafting recipes: hand (no station), workbench, and crystal-tech. Edit here, not in Rust.
+// Items are inventory::Item variants; `cargo test recipes_ron_round_trips` checks the format.
+(
+    hand: [
+        (
+            name: "Oak planks",
+            output: (
+                item: Block(Planks),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Log), 1),
+            ],
+            description: "Split timber logs into sturdy building planks.",
+        ),
+        (
+            name: "Artificer workbench",
+            output: (
+                item: Block(Workbench),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Planks), 4),
+            ],
+            description: "2×2 plank bench. Place and press F to assemble machines and bores.",
+        ),
+        (
+            name: "Torch (Coal)",
+            output: (
+                item: Block(Torch),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Planks), 1),
+                (Resource(3), 1),
+            ],
+            description: "Wall or floor torch crafted from planks and coal.",
+        ),
+        (
+            name: "Torch (Lumen)",
+            output: (
+                item: Block(Torch),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Planks), 1),
+                (Resource(4), 1),
+            ],
+            description: "Wall or floor torch fuelled by luminous mushroom fibre.",
+        ),
+        (
+            name: "Torch (Log & Coal)",
+            output: (
+                item: Block(Torch),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Log), 1),
+                (Resource(3), 1),
+            ],
+            description: "Field torch split directly from raw timber and coal.",
+        ),
+        (
+            name: "Stone bricks",
+            output: (
+                item: Block(StoneBricks),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Stone), 4),
+            ],
+            description: "Dress four stone blocks into fitted masonry.",
+        ),
+        (
+            name: "Cobblestone",
+            output: (
+                item: Block(Cobblestone),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Stone), 2),
+            ],
+            description: "Knap rough stone into high-grip cobblestone.",
+        ),
+        (
+            name: "Ore processor",
+            output: (
+                item: Block(Smelter),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Cobblestone), 4),
+            ],
+            description: "Field smelter. Place and press F to smelt ores with coal.",
+        ),
+        (
+            name: "Sandstone",
+            output: (
+                item: Block(Sandstone),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Sand), 4),
+            ],
+            description: "Compact loose sand into load-bearing sandstone.",
+        ),
+        (
+            name: "Mirage bricks",
+            output: (
+                item: Block(MirageBrick),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(StoneBricks), 2),
+                (Block(Crystal), 1),
+            ],
+            description: "Illusion masonry. Looks like stone bricks; you walk straight through it.",
+        ),
+        (
+            name: "Star glass",
+            output: (
+                item: Block(StarGlass),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Crystal), 1),
+                (Block(Basalt), 2),
+            ],
+            description: "Dark glass with a captive night sky. Glitters under its own light.",
+        ),
+        (
+            name: "Fungal rations",
+            output: (
+                item: Food(FungalRation),
+                count: 2,
+            ),
+            ingredients: [
+                (Resource(13), 1),
+                (Resource(4), 1),
+            ],
+            description: "Restores +38 hunger and +8 health per ration.",
+        ),
+        (
+            name: "Roasted mushroom",
+            output: (
+                item: Food(RoastedCap),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(RedCap), 1),
+                (Resource(3), 1),
+            ],
+            description: "Roast ember mushroom caps over coal (+24 hunger, +4 health).",
+        ),
+        (
+            name: "Spore trailcake",
+            output: (
+                item: Food(Trailcake),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(GlowCap), 1),
+                (Resource(13), 1),
+            ],
+            description: "Travel ration made from luminous caps and fungal biomass (+32 hunger).",
+        ),
+        (
+            name: "Copper sword",
+            output: (
+                item: Weapon(1),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 2),
+                (Resource(4), 1),
+            ],
+            description: "Balanced melee blade (22 base damage).",
+        ),
+        (
+            name: "Kinetic maul",
+            output: (
+                item: Weapon(5),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 3),
+                (Resource(16), 1),
+                (Resource(17), 1),
+            ],
+            description: "Heavy impact weapon. Third strike launches loose rigid assemblies.",
+        ),
+        (
+            name: "Rigid assembly core",
+            output: (
+                item: Block(RigidCore),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 2),
+                (Resource(16), 1),
+            ],
+            description: "Place beside planks or logs. The connected frame becomes a physical assembly.",
+        ),
+        (
+            name: "Copper helm",
+            output: (
+                item: Armor(Head, Copper),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 2),
+                (Resource(4), 1),
+            ],
+            description: "Head protection (+8% damage reduction).",
+        ),
+        (
+            name: "Copper cuirass",
+            output: (
+                item: Armor(Chest, Copper),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 4),
+            ],
+            description: "Chest protection (+8% damage reduction).",
+        ),
+        (
+            name: "Copper greaves",
+            output: (
+                item: Armor(Legs, Copper),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 3),
+            ],
+            description: "Leg protection (+8% damage reduction).",
+        ),
+        (
+            name: "Copper boots",
+            output: (
+                item: Armor(Feet, Copper),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 2),
+            ],
+            description: "Footwear protection (+8% damage reduction).",
+        ),
+        (
+            name: "Lumen miner\'s helm",
+            output: (
+                item: Armor(Head, Lumen),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 2),
+                (Resource(5), 1),
+                (Resource(4), 2),
+            ],
+            description: "Head armor (+12% reduction) with built-in underground lantern beam.",
+        ),
+        (
+            name: "Steel helm",
+            output: (
+                item: Armor(Head, Steel),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 2),
+                (Resource(4), 1),
+            ],
+            description: "Heavy head armor (+14% damage reduction).",
+        ),
+        (
+            name: "Steel cuirass",
+            output: (
+                item: Armor(Chest, Steel),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 4),
+            ],
+            description: "Heavy chest armor (+14% damage reduction).",
+        ),
+        (
+            name: "Steel greaves",
+            output: (
+                item: Armor(Legs, Steel),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 3),
+            ],
+            description: "Heavy leg armor (+14% damage reduction).",
+        ),
+        (
+            name: "Steel boots",
+            output: (
+                item: Armor(Feet, Steel),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 2),
+            ],
+            description: "Heavy boots (+14% damage reduction).",
+        ),
+        (
+            name: "Steel sword",
+            output: (
+                item: Weapon(2),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 2),
+                (Resource(16), 1),
+            ],
+            description: "Heavy steel blade (32 base damage).",
+        ),
+    ],
+    bench: [
+        (
+            name: "Mulch leaves",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Leaves), 4),
+            ],
+            description: "Pack leaves into biomass.",
+        ),
+        (
+            name: "Mulch pine needles",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(PineLeaves), 4),
+            ],
+            description: "Pack pine needles into biomass.",
+        ),
+        (
+            name: "Mulch planks",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Planks), 2),
+            ],
+            description: "Chip offcuts into biomass.",
+        ),
+        (
+            name: "Coke oven bricks",
+            output: (
+                item: Block(CokeOvenBrick),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Clay), 2),
+                (Block(Sand), 2),
+            ],
+            description: "Fired clay and sand. 26 bricks around a coke oven door form the oven.",
+        ),
+        (
+            name: "Blast bricks",
+            output: (
+                item: Block(BlastBrick),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(StoneBricks), 2),
+                (Block(Clay), 1),
+                (Resource(19), 1),
+            ],
+            description: "Coke-bonded refractory. 35 bricks around a tuyere form a blast furnace.",
+        ),
+    ],
+    crystal_tech: [
+        (
+            name: "Resonant crystal block",
+            output: (
+                item: Block(Crystal),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(5), 1),
+            ],
+            description: "Re-form mined crystal for building, mirage masonry or star glass. Mining returns the same crystal quantity.",
+        ),
+        (
+            name: "Copper cladding",
+            output: (
+                item: Block(CopperBlock),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(6), 4),
+            ],
+            description: "Reflective copper building block for workshops and machine halls.",
+        ),
+        (
+            name: "Resonant star glass",
+            output: (
+                item: Block(StarGlass),
+                count: 4,
+            ),
+            ingredients: [
+                (Resource(5), 2),
+                (Block(Sand), 4),
+                (Resource(18), 1),
+            ],
+            description: "Essence-infused crystal glass. A later alternative to the basalt recipe, with a captive starfield and polished finish.",
+        ),
+        (
+            name: "Mithril infusion",
+            output: (
+                item: Block(MithrilBlock),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(15), 2),
+                (Resource(5), 2),
+                (Resource(18), 1),
+                (Resource(17), 1),
+            ],
+            description: "Infuse steel with crystal, essence and an arcane core. Hard pale-blue building metal with a restrained travelling sheen.",
+        ),
+    ],
+)

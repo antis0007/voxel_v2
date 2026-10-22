@@ -10,7 +10,7 @@ pub const EQUIP_SLOTS: usize = 4;
 pub const CRAFT_SLOTS: usize = 9;
 pub const HAND_GRID: [usize; 4] = [0, 1, 3, 4];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum EquipSlot {
     Head = 0,
@@ -51,7 +51,7 @@ impl EquipSlot {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum ArmorTier {
     Copper = 1,
@@ -70,7 +70,7 @@ impl ArmorTier {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum FoodKind {
     FungalRation = 0,
@@ -113,7 +113,7 @@ impl FoodKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Item {
     Block(BlockId),
     PowerKit(factory::portable::PowerKit),
@@ -351,7 +351,7 @@ impl Item {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ItemStack {
     pub item: Item,
     pub count: u32,
@@ -383,331 +383,13 @@ pub struct PickupNotice {
     pub overflow: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct CraftingRecipe {
     pub name: &'static str,
     pub output: ItemStack,
     pub ingredients: &'static [(Item, u32)],
     pub description: &'static str,
 }
-
-pub const HAND_RECIPES: &[CraftingRecipe] = &[
-    CraftingRecipe {
-        name: "Oak planks",
-        output: ItemStack {
-            item: Item::Block(BlockId::Planks),
-            count: 4,
-        },
-        ingredients: &[(Item::Block(BlockId::Log), 1)],
-        description: "Split timber logs into sturdy building planks.",
-    },
-    CraftingRecipe {
-        name: "Artificer workbench",
-        output: ItemStack {
-            item: Item::Block(BlockId::Workbench),
-            count: 1,
-        },
-        ingredients: &[(Item::Block(BlockId::Planks), 4)],
-        description: "2×2 plank bench. Place and press F to assemble machines and bores.",
-    },
-    CraftingRecipe {
-        name: "Torch (Coal)",
-        output: ItemStack {
-            item: Item::Block(BlockId::Torch),
-            count: 4,
-        },
-        ingredients: &[(Item::Block(BlockId::Planks), 1), (Item::Resource(3), 1)],
-        description: "Wall or floor torch crafted from planks and coal.",
-    },
-    CraftingRecipe {
-        name: "Torch (Lumen)",
-        output: ItemStack {
-            item: Item::Block(BlockId::Torch),
-            count: 4,
-        },
-        ingredients: &[(Item::Block(BlockId::Planks), 1), (Item::Resource(4), 1)],
-        description: "Wall or floor torch fuelled by luminous mushroom fibre.",
-    },
-    CraftingRecipe {
-        name: "Torch (Log & Coal)",
-        output: ItemStack {
-            item: Item::Block(BlockId::Torch),
-            count: 4,
-        },
-        ingredients: &[(Item::Block(BlockId::Log), 1), (Item::Resource(3), 1)],
-        description: "Field torch split directly from raw timber and coal.",
-    },
-    CraftingRecipe {
-        name: "Stone bricks",
-        output: ItemStack {
-            item: Item::Block(BlockId::StoneBricks),
-            count: 4,
-        },
-        ingredients: &[(Item::Block(BlockId::Stone), 4)],
-        description: "Dress four stone blocks into fitted masonry.",
-    },
-    CraftingRecipe {
-        name: "Cobblestone",
-        output: ItemStack {
-            item: Item::Block(BlockId::Cobblestone),
-            count: 2,
-        },
-        ingredients: &[(Item::Block(BlockId::Stone), 2)],
-        description: "Knap rough stone into high-grip cobblestone.",
-    },
-    CraftingRecipe {
-        name: "Ore processor",
-        output: ItemStack {
-            item: Item::Block(BlockId::Smelter),
-            count: 1,
-        },
-        ingredients: &[(Item::Block(BlockId::Cobblestone), 4)],
-        description: "Field smelter. Place and press F to smelt ores with coal.",
-    },
-    CraftingRecipe {
-        name: "Sandstone",
-        output: ItemStack {
-            item: Item::Block(BlockId::Sandstone),
-            count: 2,
-        },
-        ingredients: &[(Item::Block(BlockId::Sand), 4)],
-        description: "Compact loose sand into load-bearing sandstone.",
-    },
-    CraftingRecipe {
-        name: "Mirage bricks",
-        output: ItemStack {
-            item: Item::Block(BlockId::MirageBrick),
-            count: 4,
-        },
-        ingredients: &[
-            (Item::Block(BlockId::StoneBricks), 2),
-            (Item::Block(BlockId::Crystal), 1),
-        ],
-        description: "Illusion masonry. Looks like stone bricks; you walk straight through it.",
-    },
-    CraftingRecipe {
-        name: "Star glass",
-        output: ItemStack {
-            item: Item::Block(BlockId::StarGlass),
-            count: 2,
-        },
-        ingredients: &[
-            (Item::Block(BlockId::Crystal), 1),
-            (Item::Block(BlockId::Basalt), 2),
-        ],
-        description: "Dark glass with a captive night sky. Glitters under its own light.",
-    },
-    CraftingRecipe {
-        name: "Fungal rations",
-        output: ItemStack {
-            item: Item::Food(FoodKind::FungalRation),
-            count: 2,
-        },
-        ingredients: &[(Item::Resource(13), 1), (Item::Resource(4), 1)],
-        description: "Restores +38 hunger and +8 health per ration.",
-    },
-    CraftingRecipe {
-        name: "Roasted mushroom",
-        output: ItemStack {
-            item: Item::Food(FoodKind::RoastedCap),
-            count: 2,
-        },
-        ingredients: &[(Item::Block(BlockId::RedCap), 1), (Item::Resource(3), 1)],
-        description: "Roast ember mushroom caps over coal (+24 hunger, +4 health).",
-    },
-    CraftingRecipe {
-        name: "Spore trailcake",
-        output: ItemStack {
-            item: Item::Food(FoodKind::Trailcake),
-            count: 2,
-        },
-        ingredients: &[(Item::Block(BlockId::GlowCap), 1), (Item::Resource(13), 1)],
-        description: "Travel ration made from luminous caps and fungal biomass (+32 hunger).",
-    },
-    CraftingRecipe {
-        name: "Copper sword",
-        output: ItemStack {
-            item: Item::Weapon(1),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(6), 2), (Item::Resource(4), 1)],
-        description: "Balanced melee blade (22 base damage).",
-    },
-    CraftingRecipe {
-        name: "Kinetic maul",
-        output: ItemStack {
-            item: Item::Weapon(5),
-            count: 1,
-        },
-        ingredients: &[
-            (Item::Resource(15), 3),
-            (Item::Resource(16), 1),
-            (Item::Resource(17), 1),
-        ],
-        description: "Heavy impact weapon. Third strike launches loose rigid assemblies.",
-    },
-    CraftingRecipe {
-        name: "Rigid assembly core",
-        output: ItemStack {
-            item: Item::Block(BlockId::RigidCore),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(15), 2), (Item::Resource(16), 1)],
-        description: "Place beside planks or logs. The connected frame becomes a physical assembly.",
-    },
-    CraftingRecipe {
-        name: "Copper helm",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Head, ArmorTier::Copper),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(6), 2), (Item::Resource(4), 1)],
-        description: "Head protection (+8% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Copper cuirass",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Chest, ArmorTier::Copper),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(6), 4)],
-        description: "Chest protection (+8% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Copper greaves",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Legs, ArmorTier::Copper),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(6), 3)],
-        description: "Leg protection (+8% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Copper boots",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Feet, ArmorTier::Copper),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(6), 2)],
-        description: "Footwear protection (+8% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Lumen miner's helm",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Head, ArmorTier::Lumen),
-            count: 1,
-        },
-        ingredients: &[
-            (Item::Resource(6), 2),
-            (Item::Resource(5), 1),
-            (Item::Resource(4), 2),
-        ],
-        description: "Head armor (+12% reduction) with built-in underground lantern beam.",
-    },
-    CraftingRecipe {
-        name: "Steel helm",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Head, ArmorTier::Steel),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(15), 2), (Item::Resource(4), 1)],
-        description: "Heavy head armor (+14% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Steel cuirass",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Chest, ArmorTier::Steel),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(15), 4)],
-        description: "Heavy chest armor (+14% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Steel greaves",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Legs, ArmorTier::Steel),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(15), 3)],
-        description: "Heavy leg armor (+14% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Steel boots",
-        output: ItemStack {
-            item: Item::Armor(EquipSlot::Feet, ArmorTier::Steel),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(15), 2)],
-        description: "Heavy boots (+14% damage reduction).",
-    },
-    CraftingRecipe {
-        name: "Steel sword",
-        output: ItemStack {
-            item: Item::Weapon(2),
-            count: 1,
-        },
-        ingredients: &[(Item::Resource(15), 2), (Item::Resource(16), 1)],
-        description: "Heavy steel blade (32 base damage).",
-    },
-];
-
-/// Grid recipes that only make sense once the factory has started: shell
-/// bricks for the multiblocks. Machine kits are generated from
-/// `factory::Kind::recipe` so the workbench buttons and the grid agree.
-const BENCH_RECIPES: &[CraftingRecipe] = &[
-    CraftingRecipe {
-        name: "Mulch leaves",
-        output: ItemStack {
-            item: Item::Resource(13),
-            count: 1,
-        },
-        ingredients: &[(Item::Block(BlockId::Leaves), 4)],
-        description: "Pack leaves into biomass.",
-    },
-    CraftingRecipe {
-        name: "Mulch pine needles",
-        output: ItemStack {
-            item: Item::Resource(13),
-            count: 1,
-        },
-        ingredients: &[(Item::Block(BlockId::PineLeaves), 4)],
-        description: "Pack pine needles into biomass.",
-    },
-    CraftingRecipe {
-        name: "Mulch planks",
-        output: ItemStack {
-            item: Item::Resource(13),
-            count: 1,
-        },
-        ingredients: &[(Item::Block(BlockId::Planks), 2)],
-        description: "Chip offcuts into biomass.",
-    },
-    CraftingRecipe {
-        name: "Coke oven bricks",
-        output: ItemStack {
-            item: Item::Block(BlockId::CokeOvenBrick),
-            count: 4,
-        },
-        ingredients: &[
-            (Item::Block(BlockId::Clay), 2),
-            (Item::Block(BlockId::Sand), 2),
-        ],
-        description: "Fired clay and sand. 26 bricks around a coke oven door form the oven.",
-    },
-    CraftingRecipe {
-        name: "Blast bricks",
-        output: ItemStack {
-            item: Item::Block(BlockId::BlastBrick),
-            count: 4,
-        },
-        ingredients: &[
-            (Item::Block(BlockId::StoneBricks), 2),
-            (Item::Block(BlockId::Clay), 1),
-            (Item::Resource(factory::COKE as u8), 1),
-        ],
-        description: "Coke-bonded refractory. 35 bricks around a tuyere form a blast furnace.",
-    },
-];
 
 impl CraftingRecipe {
     /// Machine kits, multiblock bricks and anything with more than four
@@ -719,39 +401,57 @@ impl CraftingRecipe {
     }
 }
 
-// Append after existing machine kits: assembler targets persist recipe indices.
-const CRYSTAL_TECH_RECIPES: &[CraftingRecipe] = &[
-    CraftingRecipe {
-        name: "Resonant crystal block",
-        output: ItemStack { item: Item::Block(BlockId::Crystal), count: 1 },
-        ingredients: &[(Item::Resource(5), 1)],
-        description: "Re-form mined crystal for building, mirage masonry or star glass. Mining returns the same crystal quantity.",
-    },
-    CraftingRecipe {
-        name: "Copper cladding",
-        output: ItemStack { item: Item::Block(BlockId::CopperBlock), count: 1 },
-        ingredients: &[(Item::Resource(6), 4)],
-        description: "Reflective copper building block for workshops and machine halls.",
-    },
-    CraftingRecipe {
-        name: "Resonant star glass",
-        output: ItemStack { item: Item::Block(BlockId::StarGlass), count: 4 },
-        ingredients: &[(Item::Resource(5), 2), (Item::Block(BlockId::Sand), 4), (Item::Resource(18), 1)],
-        description: "Essence-infused crystal glass. A later alternative to the basalt recipe, with a captive starfield and polished finish.",
-    },
-    CraftingRecipe {
-        name: "Mithril infusion",
-        output: ItemStack { item: Item::Block(BlockId::MithrilBlock), count: 1 },
-        ingredients: &[(Item::Resource(15), 2), (Item::Resource(5), 2), (Item::Resource(18), 1), (Item::Resource(17), 1)],
-        description: "Infuse steel with crystal, essence and an arcane core. Hard pale-blue building metal with a restrained travelling sheen.",
-    },
-];
+/// Owned form of a recipe as it sits in `assets/recipes.ron`. Converted once
+/// into the `'static` `CraftingRecipe` rows the game uses.
+#[derive(serde::Deserialize)]
+struct RecipeRow {
+    name: String,
+    output: ItemStack,
+    ingredients: Vec<(Item, u32)>,
+    description: String,
+}
 
-/// Every grid recipe; new additions follow machine kits to preserve saved targets.
+impl From<RecipeRow> for CraftingRecipe {
+    fn from(row: RecipeRow) -> Self {
+        CraftingRecipe {
+            name: Box::leak(row.name.into_boxed_str()),
+            output: row.output,
+            ingredients: Box::leak(row.ingredients.into_boxed_slice()),
+            description: Box::leak(row.description.into_boxed_str()),
+        }
+    }
+}
+
+/// Hand, workbench and crystal-tech recipes from `assets/recipes.ron`.
+#[derive(Debug, PartialEq, serde::Serialize)]
+struct RecipeTables {
+    hand: Vec<CraftingRecipe>,
+    bench: Vec<CraftingRecipe>,
+    crystal_tech: Vec<CraftingRecipe>,
+}
+
+#[derive(serde::Deserialize)]
+struct RecipeTableRows {
+    hand: Vec<RecipeRow>,
+    bench: Vec<RecipeRow>,
+    crystal_tech: Vec<RecipeRow>,
+}
+
+const RECIPES_RON: &str = include_str!("../../../../assets/recipes.ron");
+static RECIPES: std::sync::LazyLock<RecipeTables> = std::sync::LazyLock::new(|| {
+    let rows: RecipeTableRows =
+        ron::from_str(RECIPES_RON).unwrap_or_else(|error| panic!("assets/recipes.ron: {error}"));
+    let convert = |v: Vec<RecipeRow>| v.into_iter().map(CraftingRecipe::from).collect();
+    RecipeTables { hand: convert(rows.hand), bench: convert(rows.bench), crystal_tech: convert(rows.crystal_tech) }
+});
+pub fn hand_recipes() -> &'static [CraftingRecipe] {
+    &RECIPES.hand
+}
+
 pub fn all_recipes() -> &'static [CraftingRecipe] {
     static ALL: std::sync::LazyLock<Vec<CraftingRecipe>> = std::sync::LazyLock::new(|| {
-        let mut all: Vec<CraftingRecipe> = HAND_RECIPES.to_vec();
-        all.extend_from_slice(BENCH_RECIPES);
+        let mut all: Vec<CraftingRecipe> = RECIPES.hand.clone();
+        all.extend_from_slice(&RECIPES.bench);
         for kind in factory::Kind::ALL {
             let cost = kind.recipe();
             if kind.structural() || cost.iter().any(|&(_, n)| n % 64 != 0) {
@@ -771,7 +471,7 @@ pub fn all_recipes() -> &'static [CraftingRecipe] {
                 description: "Machine assembly. Right-click to place on the metre grid.",
             });
         }
-        all.extend_from_slice(CRYSTAL_TECH_RECIPES);
+        all.extend_from_slice(&RECIPES.crystal_tech);
         all
     });
     &ALL
@@ -2407,5 +2107,42 @@ mod tests {
             pointer_release(true, Some(hotbar), None, 1),
             PointerRelease::Keep
         );
+    }
+}
+
+#[cfg(test)]
+mod recipe_table {
+    use super::*;
+
+    /// Serialising the loaded tables reproduces the file (minus its comment
+    /// header), so the file is the single source of truth.
+    #[test]
+    fn recipes_ron_round_trips() {
+        let text = ron::ser::to_string_pretty(&*RECIPES, ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
+        let file = RECIPES_RON.replace('\r', "");
+        let body = match file.find("\n(\n") {
+            Some(i) => &file[i + 1..],
+            None => file.as_str(),
+        };
+        let (a, b) = (text.trim_end(), body.trim_end());
+        if a != b {
+            let i = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            let lo = i.saturating_sub(60);
+            panic!(
+                "assets/recipes.ron differs from the loaded tables at byte {i}; run `cargo test dump_recipes_ron -- --ignored`.\n table: {:?}\n  file: {:?}",
+                &a[lo..(i + 60).min(a.len())],
+                &b[lo..(i + 60).min(b.len())]
+            );
+        }
+    }
+
+    /// Rewrites assets/recipes.ron from the loaded tables (keeps the header).
+    #[test]
+    #[ignore = "writes assets/recipes.ron"]
+    fn dump_recipes_ron() {
+        let header = RECIPES_RON.split("(").next().unwrap_or("");
+        let text = ron::ser::to_string_pretty(&*RECIPES, ron::ser::PrettyConfig::new()).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/recipes.ron");
+        std::fs::write(path, format!("{header}{text}")).unwrap();
     }
 }
