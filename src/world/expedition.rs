@@ -470,14 +470,13 @@ pub fn harvest(
     }
     blocks.insert(p);
     mark_chunk_and_neighbors_dirty(chunks, p);
-    if block == B::Log {
-        if let Some(cells) = fell_tree(world, p) {
+    if block == B::Log
+        && let Some(cells) = fell_tree(world, p) {
             for cell in cells {
                 blocks.insert(cell);
                 mark_chunk_and_neighbors_dirty(chunks, cell);
             }
         }
-    }
     true
 }
 
@@ -604,14 +603,13 @@ pub fn blast_harvest(
     }
     blocks.insert(p);
     mark_chunk_and_neighbors_dirty(chunks, p);
-    if b == B::Log {
-        if let Some(cells) = fell_tree(world, p) {
+    if b == B::Log
+        && let Some(cells) = fell_tree(world, p) {
             for cell in cells {
                 blocks.insert(cell);
                 mark_chunk_and_neighbors_dirty(chunks, cell);
             }
         }
-    }
     true
 }
 

@@ -515,11 +515,10 @@ impl Adventure {
                         wet_cells.push(cell);
                     }
                     let anchor = factory::anchor(cell, factory::step(world));
-                    if let Some(node) = world.factory.nodes.get_mut(&anchor) {
-                        if node.kind.powered() {
+                    if let Some(node) = world.factory.nodes.get_mut(&anchor)
+                        && node.kind.powered() {
                             node.energy = 64;
                         }
-                    }
                 }
             }
         }
@@ -740,11 +739,10 @@ impl Adventure {
                     hit = true;
                 }
             }
-            if (eye - bloom.pos).length() < 3.2 && line(world, bloom.pos, eye) {
-                if self.health > 0.0 {
+            if (eye - bloom.pos).length() < 3.2 && line(world, bloom.pos, eye)
+                && self.health > 0.0 {
                     self.health = (self.health + healing).min(max_health);
                 }
-            }
             if hit {
                 self.hit = 0.14;
             }

@@ -67,7 +67,7 @@ impl SandboxReview {
         for x in 304..336 {
             for y in h..h + 32 {
                 for z in -4..4 {
-                    let arch = x < 310 || x >= 330 || y >= h + 25;
+                    let arch = !(310..330).contains(&x) || y >= h + 25;
                     edits.push((
                         IVec3::new(x, y, z),
                         if arch { B::StoneBricks } else { B::Air },
@@ -126,14 +126,13 @@ impl SandboxReview {
         self.rounded = p.pos;
     }
     pub fn observe(&mut self, p: &Player) {
-        if (25.0..30.0).contains(&self.elapsed) {
-            if p.precise_pos != self.before {
+        if (25.0..30.0).contains(&self.elapsed)
+            && p.precise_pos != self.before {
                 self.moved_samples += 1;
                 if p.pos == self.rounded {
                     self.precision_samples += 1;
                 }
             }
-        }
     }
     pub fn tick(
         &mut self,
@@ -277,8 +276,8 @@ impl SandboxReview {
                 }
             }
         }
-        if let Some(rx) = &self.loading {
-            if let Ok(result) = rx.try_recv() {
+        if let Some(rx) = &self.loading
+            && let Ok(result) = rx.try_recv() {
                 self.loading = None;
                 match result {
                     Ok(loaded) => {
@@ -312,7 +311,6 @@ impl SandboxReview {
                     Err(e) => println!("[sandbox-review] load=FAIL {e:#}"),
                 }
             }
-        }
         if self.elapsed >= 38.0 && self.phase == 7 {
             println!(
                 "[sandbox-review] resumed={} complete=YES",

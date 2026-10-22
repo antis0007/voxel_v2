@@ -214,8 +214,6 @@ impl Kind {
             8
         } else if self == Self::InductionCasing {
             2
-        } else if self.structural() {
-            1
         } else {
             1
         }
@@ -1104,21 +1102,19 @@ pub fn dismantle(
     let mut inventory = world.inventory.clone();
     let item = portable.map(Item::PowerKit).unwrap_or(Item::Block(node.kind.block()));
     let mut fits = inventory.try_insert(ItemStack::new(item, 1)).1 == 0;
-    if let Some(kind) = assembler::stock_kind(&node) {
-        if node.stock > 0 {
+    if let Some(kind) = assembler::stock_kind(&node)
+        && node.stock > 0 {
             fits &= inventory.try_insert(ItemStack { item: Item::Block(kind.block()), count: node.stock }).1 == 0;
         }
-    }
     let mut refunds = std::array::from_fn::<_, RESOURCE_COUNT, _>(|i| node.input[i] + node.output[i]);
     for level in 0..if portable.is_some() { 0 } else { node.upgrade } {
         for &(i, n) in node.kind.upgrade_cost(level) { refunds[i] += n; }
     }
     // Hearth inputs are reserved at batch start, unlike electrical processors.
-    if matches!(node.kind, Kind::CokeOven | Kind::BlastFurnace) {
-        if let Some(process) = node.process() {
+    if matches!(node.kind, Kind::CokeOven | Kind::BlastFurnace)
+        && let Some(process) = node.process() {
             for (i, n) in process.inputs { refunds[i] += n; }
         }
-    }
     for (i, amount) in refunds.into_iter().enumerate() {
         let total = amount + inventory.resource_remainders[i];
         if total >= 64 {
@@ -1318,7 +1314,7 @@ impl Factory {
                 n.excavation = read()?;
                 ensure!(
                     n.water <= extraction::WATER_CAPACITY
-                        && n.water % (64 / (size * size * size) as u32) == 0
+                        && n.water.is_multiple_of(64 / (size * size * size) as u32)
                         && (n.water == 0 || n.kind.water_port()),
                     "Invalid fluid buffer"
                 );

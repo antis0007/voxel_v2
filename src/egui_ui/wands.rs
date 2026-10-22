@@ -215,11 +215,10 @@ pub(super) fn paint_cast_block_brackets(
         if !block_slots.contains(&act.slot) {
             block_slots.push(act.slot);
         }
-        if let Some(p_slot) = act.payload_slot {
-            if !block_slots.contains(&p_slot) {
+        if let Some(p_slot) = act.payload_slot
+            && !block_slots.contains(&p_slot) {
                 block_slots.push(p_slot);
             }
-        }
     }
 
     // 1. Primary Cast-Block Bracket when modifiers or multicasts bind 2+ slots together
@@ -244,8 +243,8 @@ pub(super) fn paint_cast_block_brackets(
 
     // 2. Secondary cyan Trigger -> Payload tether arc
     for act in &eval.actions {
-        if let Some(p_slot) = act.payload_slot {
-            if let (Some(r_carrier), Some(r_payload)) =
+        if let Some(p_slot) = act.payload_slot
+            && let (Some(r_carrier), Some(r_payload)) =
                 (slot_rects.get(act.slot), slot_rects.get(p_slot))
             {
                 let y = r_carrier.top() - 2.0;
@@ -257,7 +256,6 @@ pub(super) fn paint_cast_block_brackets(
                 painter.line_segment([c0, c1], stroke);
                 painter.line_segment([c1, Pos2::new(c1.x, y + 3.0)], stroke);
             }
-        }
     }
 }
 

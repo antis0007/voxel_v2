@@ -97,7 +97,7 @@ impl DetailPlan {
                     if chunk.sky_visibility(top, Vec3::Y) < 0.7 {
                         continue;
                     }
-                    let meadow_pebble = grass && (h >> 12) % 7 == 0;
+                    let meadow_pebble = grass && (h >> 12).is_multiple_of(7);
                     let grass = grass && !meadow_pebble;
                     let mut color = b.color(p);
                     if meadow_pebble {

@@ -34,7 +34,7 @@ impl Review {
         for (i,n) in [(8,16),(6,16),(5,2)] { w.inventory.try_insert(ItemStack::new(Item::Resource(i),n)); }
         w.sync_from_inventory();
         p.pos=Vec3::new(1100.5,97.0,-895.5); p.precise_pos=p.pos.as_dvec3(); p.vel=Vec3::ZERO;
-        p.yaw=0.0; p.pitch=-0.24; p.flying=true;
+        p.yaw=0.0; p.pitch = -0.24; p.flying=true;
         day.set_day_index(1); day.set_time_of_day(0.12); day.set_day_length_seconds(600.0);
         self.report(w, "fixture");
     }
@@ -258,7 +258,7 @@ impl Review {
             }
             "look-console" => {
                 p.pos=Vec3::new(1100.5,97.0,-895.5); p.precise_pos=p.pos.as_dvec3(); p.vel=Vec3::ZERO;
-                p.pitch=-0.24; creative.show_palette=true;
+                p.pitch = -0.24; creative.show_palette=true;
                 self.report(w,text);
             }
             "hide" => { creative.show_palette=false; }

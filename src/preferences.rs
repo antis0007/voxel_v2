@@ -341,45 +341,6 @@ fn read(path: &std::path::Path) -> Result<(Preferences, Vec<u8>)> {
     ensure!(b.len() <= 1024, "Preferences exceed size limit");
     Ok((Preferences::decode(&b)?, b))
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ui_scale_round_trips() {
-        let mut preferences = Preferences::default();
-        preferences.ui_scale = 1.35;
-        let bytes = preferences.bytes();
-        let decoded = Preferences::decode(&bytes).expect("preferences must decode");
-        assert!((decoded.ui_scale - 1.35).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn version_five_preferences_default_to_full_scale() {
-        let bytes = Preferences::default().bytes();
-        let mut body = bytes[..8 + 24 * 4].to_vec();
-        body[..8].copy_from_slice(b"VXPRF005");
-        body.extend_from_slice(&hash(&body).to_le_bytes());
-        let decoded = Preferences::decode(&body).expect("legacy preferences must decode");
-        assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
-    }
-
-    #[test]
-    fn a_saved_one_point_zero_scale_migrates_to_the_default() {
-        let mut preferences = Preferences::default();
-        preferences.ui_scale = 1.0;
-        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
-        assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
-    }
-
-    #[test]
-    fn out_of_range_ui_scale_is_clamped() {
-        let mut preferences = Preferences::default();
-        preferences.ui_scale = 9.0;
-        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
-        assert_eq!(decoded.ui_scale, UI_SCALE_MAX);
-    }
-}
 
 fn write(value: Preferences) -> Result<()> {
     fs::create_dir_all(storage::save_directory())?;
@@ -530,5 +491,44 @@ impl PreferenceStore {
                 self.retry = Instant::now() + Duration::from_secs(5);
             }
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_scale_round_trips() {
+        let mut preferences = Preferences::default();
+        preferences.ui_scale = 1.35;
+        let bytes = preferences.bytes();
+        let decoded = Preferences::decode(&bytes).expect("preferences must decode");
+        assert!((decoded.ui_scale - 1.35).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn version_five_preferences_default_to_full_scale() {
+        let bytes = Preferences::default().bytes();
+        let mut body = bytes[..8 + 24 * 4].to_vec();
+        body[..8].copy_from_slice(b"VXPRF005");
+        body.extend_from_slice(&hash(&body).to_le_bytes());
+        let decoded = Preferences::decode(&body).expect("legacy preferences must decode");
+        assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
+    }
+
+    #[test]
+    fn a_saved_one_point_zero_scale_migrates_to_the_default() {
+        let mut preferences = Preferences::default();
+        preferences.ui_scale = 1.0;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
+    }
+
+    #[test]
+    fn out_of_range_ui_scale_is_clamped() {
+        let mut preferences = Preferences::default();
+        preferences.ui_scale = 9.0;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.ui_scale, UI_SCALE_MAX);
     }
 }

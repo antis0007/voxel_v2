@@ -262,12 +262,11 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
             }
         });
     });
-    if let Some(mode) = n.kind.modes().get(n.mode as usize) {
-        if n.kind != Kind::Furnace || n.mode == 1 {
+    if let Some(mode) = n.kind.modes().get(n.mode as usize)
+        && (n.kind != Kind::Furnace || n.mode == 1) {
             let short = mode.split(':').next().unwrap_or(mode);
             row(ui, "Mode", short, PAPER);
         }
-    }
     match n.kind {
         Kind::Battery | Kind::InductionPort | Kind::Transformer => {
             if let Some((stored, cap, rate)) = probe.pool {
@@ -437,7 +436,7 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
     let mut outputs: Vec<(usize, u32)> = (0..NAMES.len()).filter(|&i| n.output[i] > 0).map(|i| (i, n.output[i])).collect();
     outputs.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
     if n.kind == Kind::Storage || n.kind == Kind::Feeder {
-        inputs.extend(outputs.drain(..));
+        inputs.append(&mut outputs);
         stacks(ui, "Holds", &inputs);
     } else {
         stacks(ui, "In", &inputs);

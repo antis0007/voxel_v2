@@ -168,7 +168,7 @@ impl VideoWriter {
             receipt.width = job.width;
             receipt.height = job.height;
         }
-        if job.width % 2 != 0 || job.height % 2 != 0 {
+        if !job.width.is_multiple_of(2) || !job.height.is_multiple_of(2) {
             return Err(std::io::Error::other(
                 "yuv420p requires even native dimensions",
             ));

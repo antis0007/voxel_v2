@@ -12,6 +12,7 @@ pub struct PowerKit {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::{fluid::VoxelScalePreset, world::{World, WorldType, inventory::{Item, ItemStack, SurvivalInventory}}};

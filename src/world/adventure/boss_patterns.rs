@@ -35,7 +35,7 @@ pub(super) fn plan(e: &mut Enemy, feet: Vec3, eye: Vec3, ward_visible: bool) {
         21
     } else if ward_visible || e.encounter.stationary > 1.2 || distance < 4.5 {
         20
-    } else if e.kind == 7 && e.attacks % 3 == 0 {
+    } else if e.kind == 7 && e.attacks.is_multiple_of(3) {
         21
     } else if e.encounter.motion.length() > 2.0 {
         23

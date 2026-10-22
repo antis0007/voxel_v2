@@ -2,3 +2,8 @@
 # every cargo project on this machine at Pyrenet's shared cache; this overrides it.
 [build]
 target-dir = "target"
+
+# rust-lld ships with the toolchain (no install) and links faster than
+# link.exe for this binary. Measured in docs/PLAN.md P1.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

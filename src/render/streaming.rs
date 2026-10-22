@@ -238,11 +238,10 @@ impl ChunkCache {
                 if current {return Some(Arc::clone(previous));}
                 // Refresh the selected edge first. An identity-only replacement
                 // must not switch sides and force an unrelated parent rebuild.
-                if collect_dependencies(previous.column,&mut dependencies) {
-                    if let Some(input) = collar::Input::new(previous.column,previous.side,&dependencies) {
+                if collect_dependencies(previous.column,&mut dependencies)
+                    && let Some(input) = collar::Input::new(previous.column,previous.side,&dependencies) {
                         return Some(input);
                     }
-                }
             }
         }
         // Retain only the best 64 candidates instead of sorting every column.
@@ -254,9 +253,8 @@ impl ChunkCache {
                 i64::from(x).abs_diff(i64::from(self.center_chunk.x))
                     .saturating_add(i64::from(z).abs_diff(i64::from(self.center_chunk.z))),x,z);
             if columns.len() < 64 {columns.push(key);}
-            else if let Some(mut worst) = columns.peek_mut() {
-                if key < *worst {*worst=key;}
-            }
+            else if let Some(mut worst) = columns.peek_mut()
+                && key < *worst {*worst=key;}
         }
         for (_,_,x,z) in columns.into_sorted_vec() {
             let column = (x,z);
@@ -511,12 +509,11 @@ impl ChunkCache {
         self.visible_coords.clear();
         self.visible_coords.extend(self.visible.iter().map(|key|key.coord));
         for &coord in &self.horizon_pin_coords {
-            if !self.visible_coords.contains(&coord) {
-                if let Some(mesh)=self.gpu_meshes.get(&coord) {
+            if !self.visible_coords.contains(&coord)
+                && let Some(mesh)=self.gpu_meshes.get(&coord) {
                     self.visible.push(ChunkKey { coord,lod:mesh.lod });
                     self.visible_coords.insert(coord);
                 }
-            }
         }
         for index in 0..self.visible.len() {
             let coord=self.visible[index].coord;
@@ -887,9 +884,9 @@ impl ChunkCache {
     }
 
     fn activate_lod(&mut self, key: ChunkKey) -> bool {
-        if !self.dirty_meshes.contains(&key.coord) {
-            if let Some(mesh) = self.gpu_meshes.get_mut(&key.coord) {
-                if mesh.lod_invariant || mesh.lod == key.lod {
+        if !self.dirty_meshes.contains(&key.coord)
+            && let Some(mesh) = self.gpu_meshes.get_mut(&key.coord)
+                && (mesh.lod_invariant || mesh.lod == key.lod) {
                     let ownership_changed = mesh.lod != key.lod;
                     if ownership_changed {
                         mesh.boundary_profile = mesh.boundary_profile.as_ref()
@@ -902,8 +899,6 @@ impl ChunkCache {
                     }
                     return true;
                 }
-            }
-        }
         let Some(mesh) = self.lod_meshes.take(key) else {
             return false;
         };
@@ -1713,9 +1708,8 @@ impl ChunkStreamer {
                 continue;
             }
             if !seed_activity { cache.edit_proxies.source_only_completed += 1; }
-            if seed_activity && cache.ordinary_source_interested(key.coord) && cache.seeded_sources.insert(key.coord) {
-                if let Some(mask) = activity { cache.simulation_seeds.push((key.coord, mask)); }
-            }
+            if seed_activity && cache.ordinary_source_interested(key.coord) && cache.seeded_sources.insert(key.coord)
+                && let Some(mask) = activity { cache.simulation_seeds.push((key.coord, mask)); }
             // A uniform volume INCLUDING its halo exposes no faces at any
             // detail level. Bypass source residency, workers and mesh scratch.
             let block = chunk_data.blocks[0];

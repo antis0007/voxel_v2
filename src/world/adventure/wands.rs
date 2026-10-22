@@ -671,7 +671,7 @@ pub fn evaluate_programmed(
 /// One hit in four is a critical hit. Deterministic in the clock and the
 /// target so a replay of the same fight rolls the same dice.
 pub(super) fn crit_roll(time: f32, slot: u32) -> bool {
-    super::discovery::mix32(time.to_bits() ^ slot.wrapping_mul(0x9e37_79b1)) % 4 == 0
+    super::discovery::mix32(time.to_bits() ^ slot.wrapping_mul(0x9e37_79b1)).is_multiple_of(4)
 }
 
 /// Cast a ray from a position in metres. `raycast_block` works in voxel
@@ -1013,7 +1013,7 @@ impl Adventure {
                     played_cue.get_or_insert(Cue::Bloom);
                 }
                 _ => {
-                    if act.mods.unstable && (idx as u32 + self.time.to_bits()) % 5 == 0 {
+                    if act.mods.unstable && (idx as u32 + self.time.to_bits()).is_multiple_of(5) {
                         self.spawn_voxel_burst(
                             eye + forward * 0.4,
                             [0.95, 0.55, 0.15],

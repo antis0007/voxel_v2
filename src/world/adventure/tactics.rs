@@ -21,7 +21,7 @@ pub(super) fn heading(
 ) -> Vec3 {
     let toward = ((goal - e.pos) * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
     // Change approach after each committed attack, rather than orbiting forever.
-    let side = Vec3::new(-toward.z, 0.0, toward.x) * if (e.slot + e.attacks / 2) % 2 == 0 { 1.0 } else { -1.0 };
+    let side = Vec3::new(-toward.z, 0.0, toward.x) * if (e.slot + e.attacks / 2).is_multiple_of(2) { 1.0 } else { -1.0 };
     let mut direction = toward;
     if chasing && e.visible {
         if brawler(e.kind) && e.encounter.mechanic() != encounters::Mechanic::Hexer {
@@ -101,10 +101,10 @@ pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut 
         return;
     }
     let count = if e.encounter.mechanic() == encounters::Mechanic::Suppressor {
-        if e.attacks % 2 == 0 { 5 } else { 2 }
+        if e.attacks.is_multiple_of(2) { 5 } else { 2 }
     } else if e.kind == 5 || e.kind == 15 {
         5
-    } else if e.kind == 4 || e.kind == 1 && e.attacks % 2 == 0 {
+    } else if e.kind == 4 || e.kind == 1 && e.attacks.is_multiple_of(2) {
         3
     } else if e.kind == 2 {
         2

@@ -1242,23 +1242,23 @@ fn block_icon_texel(block: BlockId, color: Color32, top: bool, x: u32, y: u32) -
     let hash = ((x * 13 + y * 7 + block.as_u32() * 3) % 11) as f32;
     let mut tint = shade_color(color, 0.96 + hash * 0.008);
     match block {
-        BlockId::Grass | BlockId::SnowGrass if !top && y > 1 + (x % 3 == 0) as u32 => {
+        BlockId::Grass | BlockId::SnowGrass if !top && y > 1 + x.is_multiple_of(3) as u32 => {
             tint = shade_color(material_color32(BlockId::Dirt), 0.78 + hash * 0.012);
         }
         BlockId::Log if top => {
             tint = shade_color(
                 material_color32(BlockId::Planks),
-                if ((x as f32 - 3.5).hypot(y as f32 - 3.5) as u32) % 2 == 0 {
+                if ((x as f32 - 3.5).hypot(y as f32 - 3.5) as u32).is_multiple_of(2) {
                     1.02
                 } else {
                     0.85
                 },
             );
         }
-        BlockId::Log => tint = shade_color(color, if (x + y / 4) % 4 == 0 { 0.69 } else { 0.99 }),
+        BlockId::Log => tint = shade_color(color, if (x + y / 4).is_multiple_of(4) { 0.69 } else { 0.99 }),
         BlockId::Planks if y % 3 == 2 => tint = shade_color(color, 0.66),
         BlockId::StoneBricks | BlockId::WeatheredBricks
-            if y % 4 == 3 || (x + y / 4 * 4) % 8 == 0 =>
+            if y % 4 == 3 || (x + y / 4 * 4).is_multiple_of(8) =>
         {
             tint = shade_color(color, 0.58)
         }
@@ -2515,12 +2515,11 @@ impl EguiUi {
     ) -> UiAction {
         let mut action = UiAction::None;
         // Opt-in screenshots exercise the real screens without opening a save.
-        if matches!(mode, UiMode::Playing) {
-            if let Some(page) = grimoire::review_page() {
+        if matches!(mode, UiMode::Playing)
+            && let Some(page) = grimoire::review_page() {
                 creative_state.show_palette = true;
                 self.ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), page));
             }
-        }
         if !creative_state.any_ui_open()
             || self
                 .ctx
@@ -2529,11 +2528,10 @@ impl EguiUi {
             self.drag_source = None;
             self.drag_target_slot = None;
         }
-        if matches!(mode, UiMode::Playing) {
-            if let Some(error) = &self.region_error {
+        if matches!(mode, UiMode::Playing)
+            && let Some(error) = &self.region_error {
                 front_end::storage_notice(&self.ctx, error);
             }
-        }
         let time_label = format_clock(time_state.time_of_day);
         let move_speed_mps = player.vel.xz().length() * selected_voxel_scale.meters();
         player.selected_block = creative_state.selected_block();
@@ -3108,8 +3106,8 @@ impl EguiUi {
         if let Some(block) = self.drag_source.map(|source| match source {
             DragSource::Palette(block) => block,
             DragSource::Hotbar(slot) => creative_state.hotbar()[slot],
-        }) {
-            if let Some(pointer_pos) = self.ctx.input(|i| i.pointer.interact_pos()) {
+        })
+            && let Some(pointer_pos) = self.ctx.input(|i| i.pointer.interact_pos()) {
                 let painter = self.ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Tooltip,
                     egui::Id::new("material_drag_preview"),
@@ -3120,7 +3118,6 @@ impl EguiUi {
                 );
                 draw_voxel_icon(&painter, rect, block);
             }
-        }
 
         action
     }

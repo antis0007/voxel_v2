@@ -218,7 +218,7 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
             let (px, pz) = trail.at(t);
             let (tx, tz) = trail.tangent(t);
             let (nx, nz) = (-tz, tx);
-            let roll = hash2(ti as i32, k as i32 + 7, cfg.seed.wrapping_add(0x51ED));
+            let roll = hash2(ti as i32, k + 7, cfg.seed.wrapping_add(0x51ED));
             let offset = 4.1 + roll * 0.8;
             let x = px + nx * offset;
             let z = pz + nz * offset;
@@ -342,18 +342,16 @@ pub(super) fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32, terrain_top:
     let plan = plan(cfg);
 
     for nook in &plan.nooks {
-        if (m.x - nook.x).abs() <= 5.2 && (m.z - nook.z).abs() <= 5.2 {
-            if let Some(b) = nook_block(cfg, nook, p, m) {
+        if (m.x - nook.x).abs() <= 5.2 && (m.z - nook.z).abs() <= 5.2
+            && let Some(b) = nook_block(cfg, nook, p, m) {
                 return Some(b);
             }
-        }
     }
     for w in &plan.waysides {
-        if (m.x - w.x).abs() <= 5.2 && (m.z - w.z).abs() <= 5.2 {
-            if let Some(b) = wayside_block(cfg, w, p, m) {
+        if (m.x - w.x).abs() <= 5.2 && (m.z - w.z).abs() <= 5.2
+            && let Some(b) = wayside_block(cfg, w, p, m) {
                 return Some(b);
             }
-        }
     }
 
     let mut best: Option<(f32, &Trail)> = None;
@@ -496,7 +494,7 @@ fn nook_block(cfg: &WorldSampleConfig, n: &Nook, p: IVec3, m: Vec3) -> Option<B>
         });
     }
     // Carve the room and its short mouth.
-    if by >= -floor_depth + 1 && by < wall_top && (r < 2.9 || (mouth && r < 4.7)) {
+    if by > -floor_depth && by < wall_top && (r < 2.9 || (mouth && r < 4.7)) {
         // Bench against the inner wall, clear of the entrance.
         if by < -floor_depth + 2 && lx > 1.0 && lx < 2.1 && lz.abs() < 1.2 {
             return Some(B::Planks);
@@ -507,7 +505,7 @@ fn nook_block(cfg: &WorldSampleConfig, n: &Nook, p: IVec3, m: Vec3) -> Option<B>
         return Some(B::Air);
     }
     // Retaining wall.
-    if (2.9..4.05).contains(&r) && by >= -floor_depth + 1 && by < wall_top && !mouth {
+    if (2.9..4.05).contains(&r) && by > -floor_depth && by < wall_top && !mouth {
         return Some(B::WeatheredBricks);
     }
     // Low stone roof with a crystal skylight.
@@ -516,6 +514,72 @@ fn nook_block(cfg: &WorldSampleConfig, n: &Nook, p: IVec3, m: Vec3) -> Option<B>
             return Some(B::Crystal);
         }
         return Some(B::WeatheredBricks);
+    }
+    None
+}
+
+/// True when vegetation should leave space for the trail, a wayside, or a nook.
+/// Called only for actual tree/bush voxels, so it does not burden empty sky.
+pub(super) fn trail_clears(cfg: &WorldSampleConfig, m: Vec3) -> bool {
+    if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
+        return false;
+    }
+    let plan = plan(cfg);
+    if plan
+        .trails
+        .iter()
+        .any(|t| t.nearest(m.x, m.z).0 < t.half_width + 1.6)
+    {
+        return true;
+    }
+    if plan
+        .waysides
+        .iter()
+        .any(|w| (m.x - w.x).hypot(m.z - w.z) < 5.8)
+    {
+        return true;
+    }
+    plan.nooks
+        .iter()
+        .any(|n| (m.x - n.x).hypot(m.z - n.z) < 6.5)
+}
+
+/// Diegetic name for the biome/location HUD. These labels are intentionally
+/// local and small; they give the surface a human scale without inventing a
+/// second quest layer.
+pub(super) fn location(cfg: &WorldSampleConfig, m: Vec3) -> Option<&'static str> {
+    if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
+        return None;
+    }
+    // Authored places own their labels; a trail may run up to the door without
+    // renaming the ruin.
+    if super::sites::surface_reserved(cfg, m.x, m.z) {
+        return None;
+    }
+    let plan = plan(cfg);
+    if plan
+        .nooks
+        .iter()
+        .any(|n| (m.x - n.x).hypot(m.z - n.z) < 6.0)
+    {
+        return Some("Bank hollow");
+    }
+    for w in &plan.waysides {
+        if (m.x - w.x).hypot(m.z - w.z) < 6.0 {
+            return Some(match w.kind {
+                0 => "Cairn of the quiet road",
+                1 => "Wayfarer's rest",
+                2 => "Twin-stone wayshrine",
+                _ => "The long overlook",
+            });
+        }
+    }
+    if plan
+        .trails
+        .iter()
+        .any(|t| t.nearest(m.x, m.z).0 < t.half_width + 3.0)
+    {
+        return Some("The surveyor's trace");
     }
     None
 }
@@ -631,70 +695,4 @@ mod tests {
         let floor = block(&cfg, IVec3::new(x, nook.height - 1, z), nook.height, ground);
         assert_eq!(floor, Some(B::Cobblestone), "nook has no floor");
     }
-}
-
-/// True when vegetation should leave space for the trail, a wayside, or a nook.
-/// Called only for actual tree/bush voxels, so it does not burden empty sky.
-pub(super) fn trail_clears(cfg: &WorldSampleConfig, m: Vec3) -> bool {
-    if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
-        return false;
-    }
-    let plan = plan(cfg);
-    if plan
-        .trails
-        .iter()
-        .any(|t| t.nearest(m.x, m.z).0 < t.half_width + 1.6)
-    {
-        return true;
-    }
-    if plan
-        .waysides
-        .iter()
-        .any(|w| (m.x - w.x).hypot(m.z - w.z) < 5.8)
-    {
-        return true;
-    }
-    plan.nooks
-        .iter()
-        .any(|n| (m.x - n.x).hypot(m.z - n.z) < 6.5)
-}
-
-/// Diegetic name for the biome/location HUD. These labels are intentionally
-/// local and small; they give the surface a human scale without inventing a
-/// second quest layer.
-pub(super) fn location(cfg: &WorldSampleConfig, m: Vec3) -> Option<&'static str> {
-    if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
-        return None;
-    }
-    // Authored places own their labels; a trail may run up to the door without
-    // renaming the ruin.
-    if super::sites::surface_reserved(cfg, m.x, m.z) {
-        return None;
-    }
-    let plan = plan(cfg);
-    if plan
-        .nooks
-        .iter()
-        .any(|n| (m.x - n.x).hypot(m.z - n.z) < 6.0)
-    {
-        return Some("Bank hollow");
-    }
-    for w in &plan.waysides {
-        if (m.x - w.x).hypot(m.z - w.z) < 6.0 {
-            return Some(match w.kind {
-                0 => "Cairn of the quiet road",
-                1 => "Wayfarer's rest",
-                2 => "Twin-stone wayshrine",
-                _ => "The long overlook",
-            });
-        }
-    }
-    if plan
-        .trails
-        .iter()
-        .any(|t| t.nearest(m.x, m.z).0 < t.half_width + 3.0)
-    {
-        return Some("The surveyor's trace");
-    }
-    None
 }

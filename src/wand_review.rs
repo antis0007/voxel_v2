@@ -55,160 +55,6 @@ pub struct Review {
     failures: usize,
     polish: bool,
 }
-
-#[cfg(test)]
-mod acceptance {
-    use super::*;
-    use crate::{
-        fluid::VoxelScalePreset,
-        world::{
-            WorldType,
-            inventory::{Item, ItemStack},
-        },
-    };
-    #[test]
-    fn wand_blast_keeps_full_radius_and_preview_at_every_scale() {
-        for scale in [
-            VoxelScalePreset::OneMeter,
-            VoxelScalePreset::HalfMeter,
-            VoxelScalePreset::QuarterMeter,
-        ] {
-            let w = World::with_seed(WorldType::Superflat, scale, 17);
-            let mut c = CreativeState::default();
-            c.sync_world_scale(scale.meters());
-            c.tool = ToolKind::ExplosiveWand;
-            c.explosion_radius = 8;
-            let hit = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
-            let ray = RaycastTarget {
-                hit: Some(hit),
-                place: Some(hit + IVec3::Z),
-            };
-            let preview = creative::get_preview(&c, &w, ray, false, false, false, false);
-            let cells = creative::blast_targets(&c, &w, ray);
-            assert_eq!(preview.total_cells, cells.len());
-            assert_eq!(
-                cells.iter().map(|p| p.x).max().unwrap(),
-                (8.0 / scale.meters()) as i32
-            );
-            c.queue_blast(&w, cells, Some(preview.clone()));
-            c.update_feedback(0.1);
-            let moved = creative::get_preview(
-                &c,
-                &w,
-                RaycastTarget {
-                    hit: Some(hit - IVec3::Z * 20),
-                    place: Some(hit - IVec3::Z * 19),
-                },
-                false,
-                false,
-                false,
-                false,
-            );
-            assert_eq!(preview.segments, moved.segments);
-            c.cancel_edits();
-            assert_eq!(c.pending_cells(), 0);
-        }
-    }
-    #[test]
-    fn wand_idle_previews_match_primary_action_at_every_scale() {
-        for scale in [
-            VoxelScalePreset::OneMeter,
-            VoxelScalePreset::HalfMeter,
-            VoxelScalePreset::QuarterMeter,
-        ] {
-            let w = World::with_seed(WorldType::Superflat, scale, 17);
-            let mut c = CreativeState::default();
-            c.sync_world_scale(scale.meters());
-            let hit = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
-            let ray = RaycastTarget {
-                hit: Some(hit),
-                place: Some(hit + IVec3::Z),
-            };
-            for tool in [
-                ToolKind::Hand,
-                ToolKind::Brush,
-                ToolKind::AreaTool,
-                ToolKind::ExplosiveWand,
-            ] {
-                c.tool = tool;
-                let idle = creative::get_preview(&c, &w, ray, false, false, false, false);
-                let pressed = creative::get_preview(&c, &w, ray, false, true, false, false);
-                assert_eq!(idle.segments, pressed.segments, "{tool:?} {scale:?}");
-                if tool != ToolKind::ExplosiveWand {
-                    let alt = creative::get_preview(&c, &w, ray, false, false, true, false);
-                    let right = creative::get_preview(&c, &w, ray, true, false, false, false);
-                    assert_eq!(alt.segments, right.segments, "{tool:?} {scale:?}");
-                }
-            }
-        }
-    }
-    #[test]
-    fn wand_blast_drops_loot_when_pack_is_full_at_every_scale() {
-        for scale in [
-            VoxelScalePreset::OneMeter,
-            VoxelScalePreset::HalfMeter,
-            VoxelScalePreset::QuarterMeter,
-        ] {
-            let mut w = World::with_seed(WorldType::Superflat, scale, 17);
-            let item = Item::Block(B::Sand);
-            let stack = Some(ItemStack::new(item, w.inventory.stack_limit(item)));
-            w.inventory.hotbar.fill(stack);
-            w.inventory.pack.fill(stack);
-            w.sync_from_inventory();
-            let cell = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
-            w.set(cell, B::StoneBricks);
-            let mut dirty = HashSet::new();
-            let mut chunks = HashSet::new();
-            assert!(crate::world::expedition::blast_harvest(
-                &mut w,
-                cell,
-                &mut dirty,
-                &mut chunks
-            ));
-            assert_eq!(w.get(cell), B::Air);
-            assert!(
-                w.inventory
-                    .dropped
-                    .iter()
-                    .any(|d| d.stack.item == Item::Block(B::StoneBricks) && d.stack.count == 1)
-            );
-            let limit = w.inventory.stack_limit(Item::Block(B::StoneBricks));
-            w.inventory.dropped[0].stack.count = limit;
-            w.set(cell, B::StoneBricks);
-            assert!(crate::world::expedition::blast_harvest(
-                &mut w,
-                cell,
-                &mut dirty,
-                &mut chunks
-            ));
-            assert_eq!(w.inventory.dropped.len(), 2);
-            assert!(
-                w.inventory
-                    .dropped
-                    .iter()
-                    .all(|d| d.stack.count <= w.inventory.stack_limit(d.stack.item))
-            );
-            for _ in 0..(1.0 / scale.meters().powi(3)) as usize {
-                w.set(cell, B::IronOre);
-                assert!(crate::world::expedition::blast_harvest(
-                    &mut w,
-                    cell,
-                    &mut dirty,
-                    &mut chunks
-                ));
-            }
-            assert_eq!(
-                w.inventory
-                    .dropped
-                    .iter()
-                    .filter(|d| d.stack.item == Item::Resource(2))
-                    .map(|d| d.stack.count)
-                    .sum::<u32>(),
-                1
-            );
-        }
-    }
-}
 impl Review {
     pub fn from_env(benchmark: bool) -> Option<Self> {
         if !benchmark {
@@ -574,5 +420,159 @@ impl Review {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod acceptance {
+    use super::*;
+    use crate::{
+        fluid::VoxelScalePreset,
+        world::{
+            WorldType,
+            inventory::{Item, ItemStack},
+        },
+    };
+    #[test]
+    fn wand_blast_keeps_full_radius_and_preview_at_every_scale() {
+        for scale in [
+            VoxelScalePreset::OneMeter,
+            VoxelScalePreset::HalfMeter,
+            VoxelScalePreset::QuarterMeter,
+        ] {
+            let w = World::with_seed(WorldType::Superflat, scale, 17);
+            let mut c = CreativeState::default();
+            c.sync_world_scale(scale.meters());
+            c.tool = ToolKind::ExplosiveWand;
+            c.explosion_radius = 8;
+            let hit = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
+            let ray = RaycastTarget {
+                hit: Some(hit),
+                place: Some(hit + IVec3::Z),
+            };
+            let preview = creative::get_preview(&c, &w, ray, false, false, false, false);
+            let cells = creative::blast_targets(&c, &w, ray);
+            assert_eq!(preview.total_cells, cells.len());
+            assert_eq!(
+                cells.iter().map(|p| p.x).max().unwrap(),
+                (8.0 / scale.meters()) as i32
+            );
+            c.queue_blast(&w, cells, Some(preview.clone()));
+            c.update_feedback(0.1);
+            let moved = creative::get_preview(
+                &c,
+                &w,
+                RaycastTarget {
+                    hit: Some(hit - IVec3::Z * 20),
+                    place: Some(hit - IVec3::Z * 19),
+                },
+                false,
+                false,
+                false,
+                false,
+            );
+            assert_eq!(preview.segments, moved.segments);
+            c.cancel_edits();
+            assert_eq!(c.pending_cells(), 0);
+        }
+    }
+    #[test]
+    fn wand_idle_previews_match_primary_action_at_every_scale() {
+        for scale in [
+            VoxelScalePreset::OneMeter,
+            VoxelScalePreset::HalfMeter,
+            VoxelScalePreset::QuarterMeter,
+        ] {
+            let w = World::with_seed(WorldType::Superflat, scale, 17);
+            let mut c = CreativeState::default();
+            c.sync_world_scale(scale.meters());
+            let hit = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
+            let ray = RaycastTarget {
+                hit: Some(hit),
+                place: Some(hit + IVec3::Z),
+            };
+            for tool in [
+                ToolKind::Hand,
+                ToolKind::Brush,
+                ToolKind::AreaTool,
+                ToolKind::ExplosiveWand,
+            ] {
+                c.tool = tool;
+                let idle = creative::get_preview(&c, &w, ray, false, false, false, false);
+                let pressed = creative::get_preview(&c, &w, ray, false, true, false, false);
+                assert_eq!(idle.segments, pressed.segments, "{tool:?} {scale:?}");
+                if tool != ToolKind::ExplosiveWand {
+                    let alt = creative::get_preview(&c, &w, ray, false, false, true, false);
+                    let right = creative::get_preview(&c, &w, ray, true, false, false, false);
+                    assert_eq!(alt.segments, right.segments, "{tool:?} {scale:?}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn wand_blast_drops_loot_when_pack_is_full_at_every_scale() {
+        for scale in [
+            VoxelScalePreset::OneMeter,
+            VoxelScalePreset::HalfMeter,
+            VoxelScalePreset::QuarterMeter,
+        ] {
+            let mut w = World::with_seed(WorldType::Superflat, scale, 17);
+            let item = Item::Block(B::Sand);
+            let stack = Some(ItemStack::new(item, w.inventory.stack_limit(item)));
+            w.inventory.hotbar.fill(stack);
+            w.inventory.pack.fill(stack);
+            w.sync_from_inventory();
+            let cell = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
+            w.set(cell, B::StoneBricks);
+            let mut dirty = HashSet::new();
+            let mut chunks = HashSet::new();
+            assert!(crate::world::expedition::blast_harvest(
+                &mut w,
+                cell,
+                &mut dirty,
+                &mut chunks
+            ));
+            assert_eq!(w.get(cell), B::Air);
+            assert!(
+                w.inventory
+                    .dropped
+                    .iter()
+                    .any(|d| d.stack.item == Item::Block(B::StoneBricks) && d.stack.count == 1)
+            );
+            let limit = w.inventory.stack_limit(Item::Block(B::StoneBricks));
+            w.inventory.dropped[0].stack.count = limit;
+            w.set(cell, B::StoneBricks);
+            assert!(crate::world::expedition::blast_harvest(
+                &mut w,
+                cell,
+                &mut dirty,
+                &mut chunks
+            ));
+            assert_eq!(w.inventory.dropped.len(), 2);
+            assert!(
+                w.inventory
+                    .dropped
+                    .iter()
+                    .all(|d| d.stack.count <= w.inventory.stack_limit(d.stack.item))
+            );
+            for _ in 0..(1.0 / scale.meters().powi(3)) as usize {
+                w.set(cell, B::IronOre);
+                assert!(crate::world::expedition::blast_harvest(
+                    &mut w,
+                    cell,
+                    &mut dirty,
+                    &mut chunks
+                ));
+            }
+            assert_eq!(
+                w.inventory
+                    .dropped
+                    .iter()
+                    .filter(|d| d.stack.item == Item::Resource(2))
+                    .map(|d| d.stack.count)
+                    .sum::<u32>(),
+                1
+            );
+        }
     }
 }

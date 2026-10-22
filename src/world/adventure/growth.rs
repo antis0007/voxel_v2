@@ -307,7 +307,7 @@ fn rebuild_root(world: &mut World, id: u32) {
     let span = (size.half_width() / scale).floor() as i32;
     let mut cells = Vec::new();
     for y in 0..=top.max(1) {
-        let cap = y >= top.max(1) - 0;
+        let cap = y >= top.max(1);
         for x in -span..=span {
             for z in -span..=span {
                 if !cap && (x != 0 || z != 0) {
@@ -431,7 +431,7 @@ pub fn emit_world(adventure: &mut Adventure, event: GrowthEvent, pos: Vec3) {
             spawned += 1;
         }
     }
-    let burst = if ring { recipe.burst } else { recipe.burst };
+    let burst = recipe.burst;
     for i in 0..burst {
         if adventure.particles.len() >= 480 {
             break;
@@ -538,11 +538,10 @@ pub fn cultivate(world: &mut World) {
         if d.x.abs() + d.y.abs() + d.z.abs() != 1 {
             continue;
         }
-        if apply_growth(world, GrowthTarget::Companion(id), 1).is_ok() {
-            if let Some(n) = world.factory.nodes.get_mut(&p) {
+        if apply_growth(world, GrowthTarget::Companion(id), 1).is_ok()
+            && let Some(n) = world.factory.nodes.get_mut(&p) {
                 n.input[13] = n.input[13].saturating_sub(1);
             }
-        }
     }
 }
 
@@ -576,13 +575,12 @@ pub fn carry_step(world: &mut World) -> CarryState {
         return CarryState::Idle;
     };
     if world.inventory.dropped[idx].stack.count > carry {
-        if let Some(c) = world.adventure.companion.as_mut() {
-            if !c.wait_played {
+        if let Some(c) = world.adventure.companion.as_mut()
+            && !c.wait_played {
                 c.wait_played = true;
                 let pos = c.pos;
                 emit_world(&mut world.adventure, GrowthEvent::Reject, pos);
             }
-        }
         return CarryState::Waiting;
     }
     let pad = (to.as_vec3() + Vec3::splat(0.5)) * scale;

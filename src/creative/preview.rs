@@ -123,8 +123,8 @@ pub(super) fn boundary(
         }
         return out;
     }
-    if c.tool == ToolKind::AreaTool && c.area_tool.shape == AreaFootprintShape::Circle {
-        if let (Some(h), Some(p)) = (ray.hit, ray.place) {
+    if c.tool == ToolKind::AreaTool && c.area_tool.shape == AreaFootprintShape::Circle
+        && let (Some(h), Some(p)) = (ray.hit, ray.place) {
             let n = p - h;
             let axis = if n.x != 0 {
                 0
@@ -153,7 +153,6 @@ pub(super) fn boundary(
             }
             return out;
         }
-    }
     let min = cells.iter().fold(cells[0], |a, &b| a.min(b)).as_vec3();
     let max = cells.iter().fold(cells[0], |a, &b| a.max(b)).as_vec3() + Vec3::ONE;
     let mut out = Vec::new();

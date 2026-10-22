@@ -8,11 +8,10 @@ pub(super) const FIRST_VERSION: u32 = 28;
 pub(super) fn complete_loop(
     edges: &[(f32, usize, usize)], tree: &[(usize, usize)], extra: &mut Vec<(usize, usize)>,
 ) {
-    if extra.is_empty() {
-        if let Some(&(_, a, b)) = edges.iter().find(|(_, a, b)| !tree.contains(&(*a, *b))) {
+    if extra.is_empty()
+        && let Some(&(_, a, b)) = edges.iter().find(|(_, a, b)| !tree.contains(&(*a, *b))) {
             extra.push((a, b));
         }
-    }
 }
 
 /// Prefer an ordinary terminal room, then an ordinary room on a loop. An

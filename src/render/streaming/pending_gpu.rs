@@ -94,13 +94,12 @@ impl ChunkStreamer {
     /// Scope validation + normal queue ordering, not a GPU-idle/completion fence.
     pub(super) fn poll_pending_uploads(&mut self, device:&wgpu::Device, lost:&AtomicBool, cache:&mut ChunkCache,
         max_publications:usize, started:Instant) -> (usize,usize,usize) {
-        if !self.pending_uploads.is_empty() {
-            if let Err(error)=device.poll(wgpu::PollType::Poll) {
+        if !self.pending_uploads.is_empty()
+            && let Err(error)=device.poll(wgpu::PollType::Poll) {
                 for pending in &mut self.pending_uploads {
                     pending.check=None;pending.failure=Some(format!("GPU polling failed: {error}"));
                 }
             }
-        }
         if lost.load(Ordering::Acquire) {
             for pending in &mut self.pending_uploads {
                 pending.check=None;pending.failure=Some("GPU device loss reported during pending publication".into());

@@ -334,11 +334,10 @@ fn load_selected(id: &str) -> Result<SavedSession> {
         }
     }
     for path in slot_paths() {
-        if let Ok(h) = header(&path) {
-            if h.id == id {
+        if let Ok(h) = header(&path)
+            && h.id == id {
                 candidates.push((h.saved, path));
             }
-        }
     }
     ensure!(
         !candidates.is_empty(),
@@ -517,8 +516,8 @@ impl WorldLibrary {
                 }
             }
         }
-        if !self.active {
-            if let Some(command) = self.queue.pop_front() {
+        if !self.active
+            && let Some(command) = self.queue.pop_front() {
                 let loading = matches!(command, Command::Load(_));
                 match self.tx.try_send(command) {
                     Ok(()) => {
@@ -531,7 +530,6 @@ impl WorldLibrary {
                     }
                 }
             }
-        }
         loaded
     }
 }

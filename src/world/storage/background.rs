@@ -513,12 +513,11 @@ impl Reclaimer {
             let mut fingerprint = [0; 8];
             file.read_exact(&mut fingerprint)?;
             let fingerprint = u64::from_le_bytes(fingerprint);
-            if let Some((old_len, old_hash, entries)) = self.cache.get(&path) {
-                if *old_len == len && *old_hash == fingerprint {
+            if let Some((old_len, old_hash, entries)) = self.cache.get(&path)
+                && *old_len == len && *old_hash == fingerprint {
                     refs.push(Arc::clone(entries));
                     continue;
                 }
-            }
             let entries = Arc::new(references(&read_manifest(&path)?)?);
             refs.push(Arc::clone(&entries));
             self.cache.insert(path, (len, fingerprint, entries));

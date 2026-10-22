@@ -190,11 +190,10 @@ pub(crate) fn configure_gpu_residency(adapter: &wgpu::Adapter) {
 
 fn query(adapter: &wgpu::Adapter, info: &wgpu::AdapterInfo) -> Option<Memory> {
     #[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
-    if info.backend == wgpu::Backend::Vulkan {
-        if let Some(memory) = query_vulkan(adapter) {
+    if info.backend == wgpu::Backend::Vulkan
+        && let Some(memory) = query_vulkan(adapter) {
             return Some(memory);
         }
-    }
     query_dxgi(info)
 }
 

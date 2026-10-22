@@ -290,7 +290,7 @@ impl ShadowRenderer {
         let lambda = 0.65;
         let n_world = (0.1 * scale).max(0.1);
         let target_f = (render_settings.view_distance_chunks as f32 * CHUNK_SIZE as f32).max(128.0);
-        let f_world = target_f.min(512.0).max(192.0) * scale;
+        let f_world = target_f.clamp(192.0, 512.0) * scale;
 
         let mut splits = [0.0; CASCADE_COUNT + 1];
         splits[0] = n_world;

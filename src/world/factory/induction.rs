@@ -53,11 +53,10 @@ impl Factory {
     pub(super) fn scatter_matrix_energy(&mut self) {
         let mut groups: std::collections::HashMap<IVec3, Vec<IVec3>> = Default::default();
         for (&p, n) in &self.nodes {
-            if part(n.kind) {
-                if let Some(pool) = n.pool {
+            if part(n.kind)
+                && let Some(pool) = n.pool {
                     groups.entry(pool).or_default().push(p);
                 }
-            }
         }
         for mut members in groups.into_values() {
             members.sort_by_key(|p| (p.x, p.y, p.z));
@@ -75,12 +74,11 @@ impl Factory {
             }
             // A damaged/legacy matrix may have fewer cells than its charge.
             // Keep that charge on a port, offline, until capacity is restored.
-            if energy > 0 {
-                if let Some(p) = members.iter().find(|p| self.nodes[p].kind == Kind::InductionPort)
+            if energy > 0
+                && let Some(p) = members.iter().find(|p| self.nodes[p].kind == Kind::InductionPort)
                     .or_else(|| members.iter().find(|p| self.nodes[p].kind == Kind::InductionCell)) {
                     self.nodes.get_mut(p).unwrap().energy += energy as u32;
                 }
-            }
         }
     }
 

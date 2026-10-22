@@ -119,7 +119,7 @@ pub fn state_sheet(ctx: &egui::Context) {
                 ui.spacing_mut().interact_size.y = 16.0;
                 egui::ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 60.0).max(150.0))
-                    .show(ui, |ui| super::magic_fx::motion_setting(ui));
+                    .show(ui, super::magic_fx::motion_setting);
             });
         return;
     }

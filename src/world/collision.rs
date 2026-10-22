@@ -32,14 +32,12 @@ pub fn collides_world_local(world: &World, min: Vec3, max: Vec3, origin: IVec3) 
                 if world.solid(origin + IVec3::new(x, y, z)) {
                     if let Some(bounds) =
                         super::factory::conduit_bounds(world, origin + IVec3::new(x, y, z))
-                    {
-                        if !bounds.iter().any(|&(a, b)| {
+                        && !bounds.iter().any(|&(a, b)| {
                             min.cmplt(b - origin.as_vec3()).all()
                                 && max.cmpgt(a - origin.as_vec3()).all()
                         }) {
                             continue;
                         }
-                    }
                     return true;
                 }
             }
@@ -290,8 +288,8 @@ pub fn raycast_block_precise(
         .saturating_add(3)
         .min(65_536);
     for _ in 0..max_steps {
-        if world.get(cell + offset).is_ray_pickable() {
-            if super::factory::conduit_bounds(world, cell + offset).is_none_or(|bounds| {
+        if world.get(cell + offset).is_ray_pickable()
+            && super::factory::conduit_bounds(world, cell + offset).is_none_or(|bounds| {
                 bounds.into_iter().any(|(a, b)| {
                     super::factory::ray_box(
                         origin,
@@ -304,7 +302,6 @@ pub fn raycast_block_precise(
             }) {
                 return Some((cell + offset, prev + offset));
             }
-        }
 
         prev = cell;
 

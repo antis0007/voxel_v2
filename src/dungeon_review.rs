@@ -18,7 +18,7 @@ pub fn camera(player: &mut Player, cfg: &WorldSampleConfig, elapsed: f32) -> boo
         "motion" => {
             // Slow entry-to-exit dolly, then a held view of the jib. No teleports
             // or motion before streaming warmup; timings are recorded by CLI.
-            let t = (elapsed - 14.0).max(0.0).min(24.0);
+            let t = (elapsed - 14.0).clamp(0.0, 24.0);
             (Vec3::new(35.0 + t, 1.7, 0.0), Vec3::new(47.0, 6.0, 5.5 * jib_side))
         }
         _ => (Vec3::new(35.0, 1.7, 0.0), Vec3::new(51.0, 6.0, 2.0 * jib_side)),

@@ -78,13 +78,11 @@ pub fn bind_world(id: &str) {
     if active.as_ref() == Some(&root) {
         return;
     }
-    if s.palette != s.saved {
-        if let Some(old) = active.as_ref() {
-            if let Err(e) = write_palette(&old.join("materials.vmat"), s.palette) {
+    if s.palette != s.saved
+        && let Some(old) = active.as_ref()
+            && let Err(e) = write_palette(&old.join("materials.vmat"), s.palette) {
                 eprintln!("[material-world] save failed: {e}");
             }
-        }
-    }
     *active = Some(root.clone());
     *s = Studio {
         selected: 12,
@@ -268,10 +266,10 @@ pub fn draw(
                 s.palette.tints[12]=[0.68,0.85,1.35,0.38];s.palette.properties[12][0]=0.6;s.palette.tints[6]=[0.65,0.8,1.2,-1.0];}
         });
         if s.palette!=before {s.pending.get_or_insert(before);s.redo.clear();}
-        if !ctx.input(|i|i.pointer.any_down()) {if let Some(p)=s.pending.take(){s.undo.push(p);if s.undo.len()>128{s.undo.remove(0);}}}
+        if !ctx.input(|i|i.pointer.any_down())&& let Some(p)=s.pending.take(){s.undo.push(p);if s.undo.len()>128{s.undo.remove(0);}}
         ui.horizontal(|ui|{
-            if review_button(ui,"Undo").clicked(){if let Some(p)=s.undo.pop(){let old=s.palette;s.redo.push(old);s.palette=p;}}
-            if review_button(ui,"Redo").clicked(){if let Some(p)=s.redo.pop(){let old=s.palette;s.undo.push(old);s.palette=p;}}
+            if review_button(ui,"Undo").clicked()&& let Some(p)=s.undo.pop(){let old=s.palette;s.redo.push(old);s.palette=p;}
+            if review_button(ui,"Redo").clicked()&& let Some(p)=s.redo.pop(){let old=s.palette;s.undo.push(old);s.palette=p;}
             if review_button(ui,"Reset all").clicked(){let old=s.palette;s.undo.push(old);s.redo.clear();s.palette=Palette::default();}
         });
         ui.horizontal(|ui|{
@@ -280,13 +278,12 @@ pub fn draw(
             if review_button(ui,"Load palette").clicked(){match load(){
                 Ok(p)=>{let old=s.palette;s.undo.push(old);s.redo.clear();s.palette=p;s.status="Palette loaded".into();},Err(e)=>s.status=e};}
         });
-        if !ctx.input(|i|i.pointer.any_down()) && s.palette!=s.saved {
-            if let Some(root)=WORLD_PATH.lock().unwrap().as_ref() {
+        if !ctx.input(|i|i.pointer.any_down()) && s.palette!=s.saved
+            && let Some(root)=WORLD_PATH.lock().unwrap().as_ref() {
                 match write_palette(&root.join("materials.vmat"),s.palette) {
                     Ok(())=>s.saved=s.palette,Err(e)=>s.status=format!("World palette not saved: {e}"),
                 }
             }
-        }
         if !s.status.is_empty(){ui.small(&s.status);}
     });
 }
@@ -335,8 +332,8 @@ pub fn review_input(ctx: &egui::Context, input: &mut egui::RawInput) {
     if (4..34).contains(&step) {
         let index = (step - 4) / 5;
         let phase = (step - 4) % 5;
-        if phase < 3 {
-            if let Some(rect) = ctx.data_mut(|d| {
+        if phase < 3
+            && let Some(rect) = ctx.data_mut(|d| {
                 d.get_temp::<egui::Rect>(egui::Id::new(("studio-review", labels[index])))
             }) {
                 input.focused = true;
@@ -350,7 +347,6 @@ pub fn review_input(ctx: &egui::Context, input: &mut egui::RawInput) {
                     });
                 }
             }
-        }
         if phase == 3 {
             let palette = snapshot();
             let expected = if index == 2 || index == 4 { 1.0 } else { 0.68 };

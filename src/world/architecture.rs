@@ -414,8 +414,8 @@ impl Wing {
 
     fn flight(&self, t: usize, p: Vec3, slab: f32) -> Option<(f32, f32)> {
         let st = self.stair?;
-        let row = if t % 2 == 0 { st.ra } else { st.ra + 1 };
-        let up = t % 2 == 0;
+        let row = if t.is_multiple_of(2) { st.ra } else { st.ra + 1 };
+        let up = t.is_multiple_of(2);
         let (xa, xb) = (
             st.sx as f32 * self.cell,
             (st.sx + st.len) as f32 * self.cell,
@@ -470,11 +470,10 @@ impl Wing {
         if !inside {
             return None;
         }
-        if self.chimney {
-            if let Some(b) = self.chimney_block(p, v, w, d, top) {
+        if self.chimney
+            && let Some(b) = self.chimney_block(p, v, w, d, top) {
                 return Some(b);
             }
-        }
         let s = ((p.y / self.h) as usize).min(self.storeys - 1);
         let fy = p.y - s as f32 * self.h;
         let rel = fy - slab;
@@ -483,11 +482,10 @@ impl Wing {
             if t >= self.storeys - 1 || t == usize::MAX {
                 continue;
             }
-            if let Some((top_y, _)) = self.flight(t, p, slab) {
-                if p.y <= top_y && p.y > top_y - tread {
+            if let Some((top_y, _)) = self.flight(t, p, slab)
+                && p.y <= top_y && p.y > top_y - tread {
                     return Some(B::Planks);
                 }
-            }
         }
         let wt = v.max(0.6);
         let (ex, ez) = (p.x.min(w - p.x), p.z.min(d - p.z));

@@ -532,11 +532,10 @@ pub fn get_preview(
     preview_pressed: bool,
     is_executing: bool,
 ) -> PreviewResult {
-    if creative.tool == ToolKind::ExplosiveWand {
-        if let Some((preview, _)) = &creative.blast_preview {
+    if creative.tool == ToolKind::ExplosiveWand
+        && let Some((preview, _)) = &creative.blast_preview {
             return preview.clone();
         }
-    }
     let key = PreviewKey {
         cfg: world.sample_config(),
         revision: if matches!(
@@ -567,11 +566,10 @@ pub fn get_preview(
                 | ((is_executing as u64) << 4),
         ],
     };
-    if let Some((cached, result)) = creative.preview_cache.borrow().as_ref() {
-        if *cached == key {
+    if let Some((cached, result)) = creative.preview_cache.borrow().as_ref()
+        && *cached == key {
             return result.clone();
         }
-    }
     let result = generate_preview(
         creative,
         world,
@@ -636,8 +634,8 @@ fn generate_preview(
                     target.y.div_euclid(side),
                     target.z.div_euclid(side),
                 ) * side;
-                if mode == BrushMode::Place && side > 1 {
-                    if let (Some(hit), Some(place)) = (raycast.hit, raycast.place) {
+                if mode == BrushMode::Place && side > 1
+                    && let (Some(hit), Some(place)) = (raycast.hit, raycast.place) {
                         let normal = place - hit;
                         for axis in 0..3 {
                             if normal[axis] > 0 {
@@ -647,7 +645,6 @@ fn generate_preview(
                             }
                         }
                     }
-                }
                 for z in 0..side {
                     for y in 0..side {
                         for x in 0..side {
@@ -937,9 +934,7 @@ fn preview_wand_blocks(
         let target = if build_mode { p + normal } else { p };
         let target_block = world.get(target);
         let exposed = world.get(p + normal).is_empty() || world.get(p + normal).is_liquid();
-        if exposed
-            && ((build_mode && (target_block.is_empty() || target_block.is_liquid()))
-                || !build_mode)
+        if exposed && (!build_mode || target_block.is_empty() || target_block.is_liquid())
         {
             out.push(target);
         }

@@ -746,8 +746,11 @@ mod tests {
         let shader = include_str!("../shaders/world_shader.wgsl");
         assert!(shader.contains("const HORIZON_COLUMN_M: f32 = 64.0;"));
         assert!(shader.contains("return ao < -1.125 && ao > -1.375;"));
+        #[allow(clippy::assertions_on_constants)] // the test exists to pin these constants
+        {
         assert!(COLUMN_AO < -1.125 && COLUMN_AO > -1.375, "tag outside the shader's column range");
         assert!(COLUMN_AO < 0.0 && COLUMN_AO > -1.5, "tag must stay a backdrop value");
+        }
         // CPU consumers (collar eligibility, water-depth lerp) must still see
         // columns as plain backdrop, and must not see anything else as one.
         let backdrop = super::super::edits::is_backdrop_ao;

@@ -28,12 +28,26 @@ Verify: `just test` (all 414) green; `cargo test repo_layout` green; `git status
 - Kill the 114-warning replay: fix or `cfg(test)`-gate the trivial ones in this phase so `just check` output is empty on a clean tree (prerequisite for hooks being useful).
 Verify: `just verify` green; `just check` prints 0 lines on clean tree; timing table in PLAN.
 
+P1 measurements (2026-10-22, warm `target/`, `touch src/fast_hash.rs` before each; best-of-2 steady passes after one discarded first pass):
+
+| Command | link.exe (before) | rust-lld (after) |
+|---|---|---|
+| `cargo check --all-targets` | 1.7–2.2 s | 2.0 s |
+| `cargo test --no-run` | 4.4–5.4 s | 3.6–3.9 s |
+| `cargo build` (dev) | 16.2–22.0 s | 3.9–4.1 s |
+| full rebuild (`cargo build` after config change) | 1 m 54 s | 1 m 33 s |
+| `cargo nextest run` (413 tests) | 17.7 s | 5.3 s (after the shared-lock fix; the 25 s timing test is ignored) |
+| `cargo clippy --all-targets` (incremental) | 12.2 s | — |
+
+Not applicable on this machine: `mold` (Linux only), `sccache`/cranelift (not installed; no shared cache to gain from on one workstation). `incremental` is already on for `dev`. Feature-gating `render`/`audio` inside one crate buys nothing (any edit rechecks the whole crate), so that moves to the P3 workspace split instead of adding stub modules now. `cargo machete`: no unused dependencies.
+
 ### P2 — Headless deterministic engine  · LOC −500 net (replaces env-var review hooks) · risk: medium
 - `--headless`: build `World` + `Simulation` + `Factory` + `Adventure` without `Gpu`/winit; requires separating the per-step gameplay loop from main.rs:3074 into a `sim::tick(world, input, steps)` fn (move, not logic change).
 - Fix the two wall-clock-dependent paths (extraction deadline, expedition budget) → per-tick work counts. Run factory/expedition per step, not batched `dt` (gameplay-visible; guard with a scenario test first). **Stop-and-ask item**: this alters gameplay timing.
 - One `Rng` (splitmix64) in `core`, seeded from world seed + tick; replace 8 ad-hoc hashes where used for randomness (keep positional hashes for noise).
 - Scenario runner: `assets/scenarios/*.ron` → actions (place, cast, build, advance N) + assertions; JSON summary; nonzero exit on failure. `insta` snapshots of world-state hash per scenario. Offscreen wgpu render → PNG hash only for the existing fixed-pose capture path (`--benchmark-capture-frames`), gated by a `gpu-tests` feature.
 - Invariant checkers (debug): chunk/LOD residency consistency, item conservation per factory tick, no NaN in rigid/thermal.
+- Design note (from reading the code, 2026-10-22): the whole `WorldSimulation::update` (src/simulation/world.rs) is wall-clock budgeted: `FRAME_BUDGET` 2.5 ms, `FACTORY_BUDGET` 0.75 ms, `RIGID_BUDGET` 0.6 ms, `water_budget(pending)`, plus `Instant`-based deadlines threaded into `factory::extraction::tick_world` and a 2 ms cap in `expedition.rs`. The live game must keep these (frame pacing), so the fix is one `Budget` value passed down: `Budget::Wall(deadline)` in the windowed loop, `Budget::Unbounded` in headless and tests. `Instant::now() < deadline` checks become `budget.has_time()`. Behaviour of the windowed game is unchanged; headless runs do the same work every time. The per-frame order to reproduce in `sim::tick` is: `expedition.tick(dt)` → `factory::step` → `factory.tick(dt)` → N × `update_player(STEP)` → `adventure::tick(dt)` → `activity.merge(seeds)` → `WorldSimulation::update(dt)` → `day_night.advance(dt)` (main.rs:3032–3731).
 - Deps to add: `ron`, `serde`, `insta` (dev), `criterion` (dev). **Dependency decision for user.**
 - `docs/TESTING.md` (1 page).
 Verify: `just run assets/scenarios/smoke.ron` exit 0; `just test` green; snapshot of 3 scenarios committed.

@@ -482,44 +482,6 @@ fn warden(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
     super::enemy_presentation::warden(e, m, time, wind, hit);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use glam::IVec3;
-
-    #[test]
-    fn proven_families_have_shared_definitions() {
-        for kind in [0, 1, 4, 5, 10, 11, 12, 13] {
-            let s = species(kind).expect("family must exist");
-            assert!(s.health > 0.0 && s.body_height > 0.0 && s.body_width > 0.0);
-            assert!(!s.name.is_empty());
-        }
-        assert_eq!(species(0).unwrap().role, Role::Skirmisher);
-        assert_eq!(species(1).unwrap().role, Role::Rooted);
-        assert!(species(4).unwrap().flying);
-        assert!(!species(5).unwrap().flying);
-        assert!(!species(5).unwrap().brawler);
-        assert_eq!(species(10).unwrap().name, "Threshold Mimic");
-        assert_eq!(species(11).unwrap().name, "Cistern Lamprey");
-        assert_eq!(species(12).unwrap().name, "Kiln Crawler");
-        assert_eq!(species(13).unwrap().name, "Vault Porter");
-        assert!(
-            species(3).is_none(),
-            "unproven families use the old fallback"
-        );
-    }
-
-    #[test]
-    fn warden_guard_is_breakable_without_save_state() {
-        let mut enemy = Enemy::new(IVec3::ZERO, 0, 5, Vec3::ZERO, 0);
-        assert!(enemy.guard);
-        enemy.health = enemy.max_health() * 0.49;
-        assert!(enemy.check_guard_break());
-        assert!(!enemy.guard);
-        assert!(!enemy.check_guard_break());
-    }
-}
-
 // ---- Deep-encounter families -------------------------------------------------
 
 fn mimic(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
@@ -833,5 +795,43 @@ fn porter(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
                 0.0,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::IVec3;
+
+    #[test]
+    fn proven_families_have_shared_definitions() {
+        for kind in [0, 1, 4, 5, 10, 11, 12, 13] {
+            let s = species(kind).expect("family must exist");
+            assert!(s.health > 0.0 && s.body_height > 0.0 && s.body_width > 0.0);
+            assert!(!s.name.is_empty());
+        }
+        assert_eq!(species(0).unwrap().role, Role::Skirmisher);
+        assert_eq!(species(1).unwrap().role, Role::Rooted);
+        assert!(species(4).unwrap().flying);
+        assert!(!species(5).unwrap().flying);
+        assert!(!species(5).unwrap().brawler);
+        assert_eq!(species(10).unwrap().name, "Threshold Mimic");
+        assert_eq!(species(11).unwrap().name, "Cistern Lamprey");
+        assert_eq!(species(12).unwrap().name, "Kiln Crawler");
+        assert_eq!(species(13).unwrap().name, "Vault Porter");
+        assert!(
+            species(3).is_none(),
+            "unproven families use the old fallback"
+        );
+    }
+
+    #[test]
+    fn warden_guard_is_breakable_without_save_state() {
+        let mut enemy = Enemy::new(IVec3::ZERO, 0, 5, Vec3::ZERO, 0);
+        assert!(enemy.guard);
+        enemy.health = enemy.max_health() * 0.49;
+        assert!(enemy.check_guard_break());
+        assert!(!enemy.guard);
+        assert!(!enemy.check_guard_break());
     }
 }

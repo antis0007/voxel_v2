@@ -932,13 +932,12 @@ impl SurvivalInventory {
         if count == 0 {
             return;
         }
-        if let Some(existing) = &mut self.pickup_notice {
-            if !existing.overflow && existing.item == item && existing.seconds > 0.2 {
+        if let Some(existing) = &mut self.pickup_notice
+            && !existing.overflow && existing.item == item && existing.seconds > 0.2 {
                 existing.count = existing.count.saturating_add(count);
                 existing.seconds = 2.6;
                 return;
             }
-        }
         self.pickup_notice = Some(PickupNotice {
             item,
             count,
@@ -993,25 +992,22 @@ impl SurvivalInventory {
     pub fn count_item_with_transient(&self, item: Item, include_transient: bool) -> u32 {
         let mut total = 0u32;
         for slot in self.hotbar.iter().chain(self.pack.iter()) {
-            if let Some(stack) = slot {
-                if stack.item == item {
+            if let Some(stack) = slot
+                && stack.item == item {
                     total = total.saturating_add(stack.count);
                 }
-            }
         }
         if include_transient {
             for slot in &self.craft_grid {
-                if let Some(stack) = slot {
-                    if stack.item == item {
+                if let Some(stack) = slot
+                    && stack.item == item {
                         total = total.saturating_add(stack.count);
                     }
-                }
             }
-            if let Some(stack) = self.cursor {
-                if stack.item == item {
+            if let Some(stack) = self.cursor
+                && stack.item == item {
                     total = total.saturating_add(stack.count);
                 }
-            }
         }
         total
     }
@@ -1070,13 +1066,12 @@ impl SurvivalInventory {
             if remaining == 0 {
                 break;
             }
-            if let Some(existing) = slot {
-                if existing.item == stack.item && existing.count < max {
+            if let Some(existing) = slot
+                && existing.item == stack.item && existing.count < max {
                     let add = remaining.min(max - existing.count);
                     existing.count += add;
                     remaining -= add;
                 }
-            }
         }
 
         // Pass 2: fill empty slots (hotbar first, then pack).
@@ -1109,13 +1104,12 @@ impl SurvivalInventory {
             if remaining == 0 {
                 break;
             }
-            if let Some(existing) = slot {
-                if existing.item == stack.item && existing.count < max {
+            if let Some(existing) = slot
+                && existing.item == stack.item && existing.count < max {
                     let add = remaining.min(max - existing.count);
                     existing.count += add;
                     remaining -= add;
                 }
-            }
         }
 
         for slot in self.pack.iter_mut().chain(self.hotbar.iter_mut()) {
@@ -1153,8 +1147,8 @@ impl SurvivalInventory {
             if remaining == 0 {
                 break;
             }
-            if let Some(stack) = slot {
-                if stack.item == item {
+            if let Some(stack) = slot
+                && stack.item == item {
                     let take = remaining.min(stack.count);
                     stack.count -= take;
                     remaining -= take;
@@ -1162,11 +1156,10 @@ impl SurvivalInventory {
                         *slot = None;
                     }
                 }
-            }
         }
-        if remaining > 0 {
-            if let Some(cursor) = &mut self.cursor {
-                if cursor.item == item {
+        if remaining > 0
+            && let Some(cursor) = &mut self.cursor
+                && cursor.item == item {
                     let take = remaining.min(cursor.count);
                     cursor.count -= take;
                     remaining -= take;
@@ -1174,8 +1167,6 @@ impl SurvivalInventory {
                         self.cursor = None;
                     }
                 }
-            }
-        }
         debug_assert_eq!(remaining, 0);
         true
     }
@@ -1185,15 +1176,14 @@ impl SurvivalInventory {
         let Some(slot) = self.hotbar.get_mut(slot_index) else {
             return false;
         };
-        if let Some(stack) = slot {
-            if stack.item == expected && stack.count > 0 {
+        if let Some(stack) = slot
+            && stack.item == expected && stack.count > 0 {
                 stack.count -= 1;
                 if stack.count == 0 {
                     *slot = None;
                 }
                 return true;
             }
-        }
         self.remove_item(expected, 1)
     }
 
@@ -1308,8 +1298,8 @@ impl SurvivalInventory {
         };
 
         // 1. If the item is armor and not already in Equipment, try moving to its matching Equipment slot first.
-        if !matches!(addr, SlotAddr::Equipment(_)) {
-            if let Some(equip_slot) = stack.item.equip_slot() {
+        if !matches!(addr, SlotAddr::Equipment(_))
+            && let Some(equip_slot) = stack.item.equip_slot() {
                 let equip_idx = equip_slot as usize;
                 if self.equipment[equip_idx].is_none() {
                     self.equipment[equip_idx] = Some(ItemStack {
@@ -1323,7 +1313,6 @@ impl SurvivalInventory {
                     return true;
                 }
             }
-        }
 
         let original_count = stack.count;
         let max = self.stack_limit(stack.item);
@@ -1335,13 +1324,12 @@ impl SurvivalInventory {
                     if stack.count == 0 {
                         break;
                     }
-                    if let Some(existing) = dst {
-                        if existing.item == stack.item && existing.count < max {
+                    if let Some(existing) = dst
+                        && existing.item == stack.item && existing.count < max {
                             let add = stack.count.min(max - existing.count);
                             existing.count += add;
                             stack.count -= add;
                         }
-                    }
                 }
                 for dst in &mut self.pack {
                     if stack.count == 0 {
@@ -1363,13 +1351,12 @@ impl SurvivalInventory {
                     if stack.count == 0 {
                         break;
                     }
-                    if let Some(existing) = dst {
-                        if existing.item == stack.item && existing.count < max {
+                    if let Some(existing) = dst
+                        && existing.item == stack.item && existing.count < max {
                             let add = stack.count.min(max - existing.count);
                             existing.count += add;
                             stack.count -= add;
                         }
-                    }
                 }
                 for dst in &mut self.hotbar {
                     if stack.count == 0 {
@@ -1405,11 +1392,10 @@ impl SurvivalInventory {
         }
         let a = self.slot(addr);
         let b = self.hotbar[hotbar_idx];
-        if let Some(stack_b) = b {
-            if !self.slot_accepts(addr, stack_b.item) {
+        if let Some(stack_b) = b
+            && !self.slot_accepts(addr, stack_b.item) {
                 return;
             }
-        }
         if let Some(target) = self.slot_mut(addr) {
             *target = b;
             self.hotbar[hotbar_idx] = a;
@@ -1419,14 +1405,13 @@ impl SurvivalInventory {
     /// Double-click gather (Minecraft / Mouse Tweaks): pulls loose partial stacks of the held
     /// cursor item (or the item in `addr` if cursor is empty) into `self.cursor` up to its stack limit.
     pub fn gather_to_cursor(&mut self, addr: SlotAddr) {
-        if self.cursor.is_none() {
-            if let Some(stack) = self.slot(addr) {
+        if self.cursor.is_none()
+            && let Some(stack) = self.slot(addr) {
                 if let Some(slot) = self.slot_mut(addr) {
                     *slot = None;
                 }
                 self.cursor = Some(stack);
             }
-        }
         let Some(mut cursor) = self.cursor else {
             return;
         };
@@ -1445,8 +1430,8 @@ impl SurvivalInventory {
                 if cursor.count >= max {
                     break;
                 }
-                if let Some(st) = slot {
-                    if st.item == cursor.item && (!partial_only || st.count < max) {
+                if let Some(st) = slot
+                    && st.item == cursor.item && (!partial_only || st.count < max) {
                         let take = (max - cursor.count).min(st.count);
                         st.count -= take;
                         cursor.count += take;
@@ -1454,7 +1439,6 @@ impl SurvivalInventory {
                             *slot = None;
                         }
                     }
-                }
             }
         }
         self.cursor = Some(cursor);
@@ -1510,13 +1494,12 @@ impl SurvivalInventory {
             match addr {
                 SlotAddr::Hotbar(_) => {
                     for dst in &mut self.pack {
-                        if let Some(ex) = dst {
-                            if ex.item == one.item && ex.count < max {
+                        if let Some(ex) = dst
+                            && ex.item == one.item && ex.count < max {
                                 ex.count += 1;
                                 moved = true;
                                 break;
                             }
-                        }
                     }
                     if !moved {
                         for dst in &mut self.pack {
@@ -1530,13 +1513,12 @@ impl SurvivalInventory {
                 }
                 _ => {
                     for dst in &mut self.hotbar {
-                        if let Some(ex) = dst {
-                            if ex.item == one.item && ex.count < max {
+                        if let Some(ex) = dst
+                            && ex.item == one.item && ex.count < max {
                                 ex.count += 1;
                                 moved = true;
                                 break;
                             }
-                        }
                     }
                     if !moved {
                         for dst in &mut self.hotbar {
@@ -1569,8 +1551,8 @@ impl SurvivalInventory {
             match addr {
                 SlotAddr::Hotbar(_) => {
                     for src in &mut self.pack {
-                        if let Some(st) = src {
-                            if st.item == target_item {
+                        if let Some(st) = src
+                            && st.item == target_item {
                                 st.count -= 1;
                                 if st.count == 0 {
                                     *src = None;
@@ -1578,13 +1560,12 @@ impl SurvivalInventory {
                                 found = true;
                                 break;
                             }
-                        }
                     }
                 }
                 _ => {
                     for src in self.pack.iter_mut().chain(self.hotbar.iter_mut()) {
-                        if let Some(st) = src {
-                            if st.item == target_item {
+                        if let Some(st) = src
+                            && st.item == target_item {
                                 st.count -= 1;
                                 if st.count == 0 {
                                     *src = None;
@@ -1592,7 +1573,6 @@ impl SurvivalInventory {
                                 found = true;
                                 break;
                             }
-                        }
                     }
                 }
             }
@@ -1662,13 +1642,12 @@ impl SurvivalInventory {
                 if pack_st.count == 0 {
                     break;
                 }
-                if let Some(hot_st) = h_slot {
-                    if hot_st.item == pack_st.item && hot_st.count < max {
+                if let Some(hot_st) = h_slot
+                    && hot_st.item == pack_st.item && hot_st.count < max {
                         let add = pack_st.count.min(max - hot_st.count);
                         hot_st.count += add;
                         pack_st.count -= add;
                     }
-                }
             }
             self.pack[p_idx] = if pack_st.count > 0 {
                 Some(pack_st)
@@ -1807,11 +1786,10 @@ impl SurvivalInventory {
     /// If pack/hotbar are full, keeps remainder in `craft_grid` or `cursor` so zero items are ever lost.
     pub fn return_transient_to_pack(&mut self) {
         let mut leftover: Vec<ItemStack> = Vec::new();
-        if let Some(cursor) = self.cursor.take() {
-            if let Some(rest) = self.stash_stack(cursor) {
+        if let Some(cursor) = self.cursor.take()
+            && let Some(rest) = self.stash_stack(cursor) {
                 leftover.push(rest);
             }
-        }
         let grid = std::mem::take(&mut self.craft_grid);
         for stack in grid.into_iter().flatten() {
             if let Some(rest) = self.stash_stack(stack) {
@@ -1900,8 +1878,8 @@ impl SurvivalInventory {
                 if needed == 0 {
                     break;
                 }
-                if let Some(stack) = slot {
-                    if stack.item == req_item {
+                if let Some(stack) = slot
+                    && stack.item == req_item {
                         let take = needed.min(stack.count);
                         stack.count -= take;
                         needed -= take;
@@ -1909,7 +1887,6 @@ impl SurvivalInventory {
                             *slot = None;
                         }
                     }
-                }
             }
             debug_assert_eq!(needed, 0);
         }
@@ -1953,11 +1930,10 @@ impl SurvivalInventory {
         };
         // First return any existing craft_grid items to pack/hotbar if they fit.
         for i in 0..CRAFT_SLOTS {
-            if let Some(stack) = self.craft_grid[i] {
-                if !self.can_insert(stack) {
+            if let Some(stack) = self.craft_grid[i]
+                && !self.can_insert(stack) {
                     return false;
                 }
-            }
         }
         for i in 0..CRAFT_SLOTS {
             if let Some(stack) = self.craft_grid[i].take() {
@@ -2381,7 +2357,7 @@ mod tests {
         let stone_slot = inv
             .pack
             .iter()
-            .position(|s| s.map_or(false, |st| st.item == stone))
+            .position(|s| s.is_some_and(|st| st.item == stone))
             .unwrap();
         inv.middle_click_slot(SlotAddr::Pack(stone_slot));
         assert_eq!(inv.cursor, Some(ItemStack::new(stone, 64)));

@@ -840,10 +840,10 @@ impl Adventure {
             heart_restored: self.heart_restored(),
             route: self.route.clone(),
             quest: None,
-            relic_focus: self.relic_focus.clone(),
-            undercrown_focus: self.undercrown_focus.clone(),
+            relic_focus: self.relic_focus,
+            undercrown_focus: self.undercrown_focus,
             boss: self.boss_view.clone(),
-            enemy_focus: self.enemy_focus.clone(),
+            enemy_focus: self.enemy_focus,
             respawn_point: self.respawn_point,
             last_death_pos: self.last_death_pos,
         }
@@ -961,17 +961,17 @@ impl Adventure {
                 // selections are deterministic from the site id and seed, so a
                 // cleared record can never resurrect a different family on load.
                 if id.z == 2 || id.z == 3 {
-                    if variation % 2 == 0 {
+                    if variation.is_multiple_of(2) {
                         kind = 10; // Threshold Mimic in a cache room.
                     }
-                } else if id.z >= 4 || (slot > 0 && variation % 3 == 0) {
+                } else if id.z >= 4 || (slot > 0 && variation.is_multiple_of(3)) {
                     const DEEP: [u32; 4] = [10, 11, 12, 13];
                     kind = DEEP[((variation / 7 + slot + id.z.unsigned_abs()) % 4) as usize];
                 }
                 // High-menace sites occasionally field a size-varied brute.
                 // Keeping it rare preserves the existing encounter rhythm while
                 // making a dangerous site read differently at a glance.
-                if menace >= 2 && slot == 0 && variation % 3 == 0 {
+                if menace >= 2 && slot == 0 && variation.is_multiple_of(3) {
                     kind = 9;
                 }
                 if self.enemies.iter().filter(|e|e.habitat.is_none()).count() >= MAX_ENEMIES
@@ -1147,8 +1147,8 @@ impl Adventure {
         // cave pools put the ring on the visible surface.
         let water_impact = std::mem::take(&mut player.water_impact);
         let water_exit = std::mem::take(&mut player.water_exit);
-        if water_impact > 0.25 || water_exit {
-            if let Some(surface) = world.water_surface_at(feet + Vec3::Y * (0.35 * scale)) {
+        if (water_impact > 0.25 || water_exit)
+            && let Some(surface) = world.water_surface_at(feet + Vec3::Y * (0.35 * scale)) {
                 let strength = (water_impact / 7.0).clamp(0.22, 1.0)
                     * if water_exit && water_impact <= 0.25 {
                         0.58
@@ -1158,7 +1158,6 @@ impl Adventure {
                 self.splash(surface, strength);
                 world.disturb_water_surface(surface, strength);
             }
-        }
         let (player_min, player_max) =
             super::player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t);
         let player_min = player_min * scale - Vec3::splat(0.10);
@@ -1384,15 +1383,14 @@ impl Adventure {
             .collect();
         let mut navigation_budget = 1;
         for e in &mut self.enemies {
-            if !e.visible {
-                if let Some((_, _, seen)) = alerts
+            if !e.visible
+                && let Some((_, _, seen)) = alerts
                     .iter()
                     .find(|(p, site, _)| *site == e.site && (*p - e.pos).length_squared() < 144.0)
                 {
                     e.last_seen = *seen;
                     e.alert = e.alert.max(3.0);
                 }
-            }
             if e.health <= 0.0 {
                 continue;
             }
@@ -1939,13 +1937,11 @@ impl Adventure {
                 shot.pos = end;
                 if !shot.splashed
                     && world.get((shot.pos / scale).floor().as_ivec3()) == super::BlockId::Water
-                {
-                    if let Some(surface) = world.water_surface_at(shot.pos) {
+                    && let Some(surface) = world.water_surface_at(shot.pos) {
                         shot.splashed = true;
                         let strength = (shot.velocity.length() * 0.032).clamp(0.18, 0.85);
                         self.splash(surface, strength);
                     }
-                }
                 if shot.hostile {
                     if shot.pos.cmpge(player_min).all() && shot.pos.cmple(player_max).all() {
                         if self.ward > 0.0 && self.ward_hits > 0 {

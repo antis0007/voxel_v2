@@ -78,7 +78,7 @@ mod priority_tests {
         cache.published_columns.insert((0, 0), vec![repair]);
         cache.dirty_meshes.insert(repair);
         let key = |coord| ChunkKey { coord, lod: 0 };
-        let mut order = vec![key(repair), key(newer), key(old + IVec3::Y), key(missing), key(old), key(tied), key(tied + IVec3::Y)];
+        let mut order = [key(repair), key(newer), key(old + IVec3::Y), key(missing), key(old), key(tied), key(tied + IVec3::Y)];
         order.sort_by_key(|&k| ChunkStreamer::ready_chunk_priority(&cache, k));
         assert_eq!(order[0].coord, missing, "missing ordinary cover keeps emergency priority");
         let tied_members: HashSet<_> = order[1..3].iter().map(|k| k.coord).collect();

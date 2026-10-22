@@ -11,8 +11,10 @@ filter := "python -I scripts/filter.py --"
 check crate="":
     {{filter}} cargo check -q --all-targets --message-format=short
 
+# dead_code stays a warning until the P4 dead-code pass lands (docs/PLAN.md);
+# every other warning is an error.
 clippy crate="":
-    {{filter}} cargo clippy -q --all-targets --message-format=short -- -D warnings
+    {{filter}} cargo clippy -q --all-targets --message-format=short -- -D warnings -A dead_code
 
 test crate="" filter="":
     cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar {{filter}}

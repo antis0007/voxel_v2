@@ -1398,7 +1398,7 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                 // surface[3] = -4 marks a spark, so it is not swayed as flame.
                 let spark_hash = |spark: usize, k: f32| {
                     ((spark as f32 * 19.19 + k * 7.31 + base.x * 12.9898 + base.z * 78.233).sin()
-                        * 43758.5453)
+                        * 43_758.547)
                         .fract()
                         .abs()
                 };

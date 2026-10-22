@@ -2214,13 +2214,12 @@ fn structure_block(
     let bush_cell_z = floor_div(p.z, bush_cell_size);
     for cell_z in (bush_cell_z - 1)..=(bush_cell_z + 1) {
         for cell_x in (bush_cell_x - 1)..=(bush_cell_x + 1) {
-            if let Some(bush) = profiles.bush(cfg, cell_x, cell_z) {
-                if bush_contains(cfg, bush, p)
+            if let Some(bush) = profiles.bush(cfg, cell_x, cell_z)
+                && bush_contains(cfg, bush, p)
                     && !surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters())
                 {
                     return BlockId::Bush;
                 }
-            }
         }
     }
 
@@ -2334,13 +2333,11 @@ fn sample_block_with(
         if p.y <= cfg.water_level() {
             return BlockId::Water;
         }
-        if cfg.generator_version >= 14 {
-            if let Some(surface) = profiles.river_top(cfg, p.x, p.z) {
-                if cfg.world_y(p.y) < surface {
+        if cfg.generator_version >= 14
+            && let Some(surface) = profiles.river_top(cfg, p.x, p.z)
+                && cfg.world_y(p.y) < surface {
                     return BlockId::Water;
                 }
-            }
-        }
         return BlockId::Air;
     }
 
@@ -2952,8 +2949,8 @@ impl World {
                 if block_changed[i] {
                     self.water_levels.remove_velocity(&p);
                 }
-                if block_changed[i] || volume == 0 || volume == 8 {
-                    if let Some(cell) = self
+                if (block_changed[i] || volume == 0 || volume == 8)
+                    && let Some(cell) = self
                         .sandbox
                         .cells
                         .get_mut(&crate::simulation::sandbox::key(p))
@@ -2961,7 +2958,6 @@ impl World {
                         cell.fuel = 0.0;
                         cell.gas = 0;
                     }
-                }
             }
             self.regions.mark_dirty(from_chunk);
             self.wake_acting(from);
@@ -3258,9 +3254,9 @@ pub fn mark_chunk_and_neighbors_dirty(dirty: &mut HashSet<IVec3>, block: IVec3) 
 #[cfg(test)]
 fn default_seed(world_type: WorldType) -> u32 {
     match world_type {
-        WorldType::Superflat => 0x51f1_001,
-        WorldType::Hills => 0x51f1_002,
-        WorldType::Ridged => 0x51f1_003,
+        WorldType::Superflat => 0x051f_1001,
+        WorldType::Hills => 0x051f_1002,
+        WorldType::Ridged => 0x051f_1003,
     }
 }
 

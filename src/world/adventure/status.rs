@@ -341,7 +341,7 @@ pub fn roll(
     if base % 100 >= chance {
         return Affixes::default();
     }
-    let count = if menace >= 3 || (menace >= 2 && mix(base, 7) % 4 == 0) {
+    let count = if menace >= 3 || (menace >= 2 && mix(base, 7).is_multiple_of(4)) {
         2
     } else {
         1

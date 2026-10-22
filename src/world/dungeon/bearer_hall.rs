@@ -25,7 +25,7 @@ pub(super) fn block(x: f32, y: f32, z: f32, w: f32, d: f32, seed: u32) -> B {
     // Piers join the deck to the foundation rather than floating under it.
     if ((x - 10.0).abs() < 1.0 || (x - (w - 10.0)).abs() < 1.0)
         && (side - 3.5).abs() < 1.0 && y < 0.0 {
-        return if y < -5.0 || y > -2.0 { B::Limestone } else { B::Basalt };
+        return if !(-5.0..=-2.0).contains(&y) { B::Limestone } else { B::Basalt };
     }
     // A seed-mirrored asymmetric diagonal jib, safely outside the central lane.
     let jib_z = mid + if seed & 1 == 0 { 7.0 } else { -7.0 };
@@ -48,7 +48,7 @@ pub(super) fn block(x: f32, y: f32, z: f32, w: f32, d: f32, seed: u32) -> B {
     let rib = (x - 6.0).abs() < 0.6 || (x - w * 0.5).abs() < 0.6
         || (x - (w - 6.0)).abs() < 0.6;
     if rib && (z < 1.0 || z >= d - 1.0) {
-        return if y < 1.0 || y > HEIGHT - 2.0 { B::Limestone } else { B::Basalt };
+        return if !(1.0..=HEIGHT - 2.0).contains(&y) { B::Limestone } else { B::Basalt };
     }
     if rib && y >= HEIGHT - 1.0 { return B::Limestone; }
     // Quiet memorials flank the exit; they have no circuit or puzzle role.

@@ -38,19 +38,12 @@ const ATMOSPHERE_LUT_WORKGROUP_SIZE_Y: u32 = 8;
 const TRANSMITTANCE_LUT_MAX_ALTITUDE_M: f32 = 60_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub struct AtmosphereRuntimeState {
     pub mode: AtmosphereMode,
     pub debug_view: RenderDebugView,
 }
 
-impl Default for AtmosphereRuntimeState {
-    fn default() -> Self {
-        Self {
-            mode: AtmosphereMode::default(),
-            debug_view: RenderDebugView::default(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]

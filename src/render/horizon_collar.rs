@@ -102,7 +102,7 @@ impl Installed {
 
 fn axes(side: usize) -> (usize, usize, f32) {
     let axis = if side < 2 { 0 } else { 2 };
-    (axis, 2 - axis, if side % 2 == 0 { -1.0 } else { 1.0 })
+    (axis, 2 - axis, if side.is_multiple_of(2) { -1.0 } else { 1.0 })
 }
 fn dry(v: &Vertex3) -> bool {
     // Material-family allowlist, preserving packed original block identity.
@@ -161,7 +161,7 @@ fn section(tri: &[Vertex3], axis: usize, plane: f32, along: usize) -> Option<[Ve
 impl Prepared {
     /// Final encoded/compacted mesh, on its worker; never scan GPU data/frame thread.
     pub(crate) fn from_mesh(coord: IVec3, mesh: &ChunkMesh, cancel: &AtomicBool) -> Self {
-        if mesh.indices.len() > MAX_INDICES || mesh.indices.len() % 3 != 0 {
+        if mesh.indices.len() > MAX_INDICES || !mesh.indices.len().is_multiple_of(3) {
             return Self::Missing;
         }
         let Some(x) = coord.x.checked_mul(32) else {

@@ -114,7 +114,7 @@ fn habitat(mesh:&mut Model,p:Vec3,day:&DayNightCycle,key:u32) {
                 let at=c+Vec3::X*x+radial*240.0;
                 part(mesh,at,Vec3::new(585.0,10.0,2.0*240.0*(step*0.5).tan()),q,
                     if i%4==0 {DARK} else {SHELL},if i%4==0 {1.0} else {0.0});
-                if (i+bay+key as usize)%3==0 {
+                if (i+bay + key as usize).is_multiple_of(3) {
                     mesh.cuboid(at+radial*6.0,Vec3::new(450.0,0.2,0.5),q,[0.79,0.61,0.32],0.65);
                 }
             }

@@ -190,7 +190,7 @@ impl Adventure {
             .into_iter()
             .filter(|id| !usable.contains(id))
             .collect();
-        let peek = !ahead.is_empty() && (usable.is_empty() || mix32(salt ^ 0xa11e) % 6 == 0);
+        let peek = !ahead.is_empty() && (usable.is_empty() || mix32(salt ^ 0xa11e).is_multiple_of(6));
         let pool = if peek { &ahead } else { &usable };
         if pool.is_empty() {
             return None;

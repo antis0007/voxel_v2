@@ -210,17 +210,18 @@ impl Adventure {
                     },
                 }
             });
-        if let Some(forward) = direction {
-            if let Some(focus) = self.station_focus(world, eye, forward) {
+        if let Some(forward) = direction
+            && let Some(focus) = self.station_focus(world, eye, forward) {
                 self.relic_focus = Some(focus);
             }
-        }
 
         let mut closest_boss = None;
         let mut closest_boss_distance_squared = BOSS_VIEW_RANGE * BOSS_VIEW_RANGE;
         let mut focused_enemy = None;
         let mut best_enemy_score = f32::INFINITY;
         for enemy in &self.enemies {
+            // NaN health counts as dead; keep the negated form on purpose.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
             if !(enemy.health > 0.0) {
                 continue;
             }
@@ -409,15 +410,14 @@ impl Adventure {
         if self.enemies.iter().filter(|e|e.habitat.is_none()).count() >= MAX_ENEMIES {
             return false;
         }
-        if kind == tollkeeper::KIND {
-            if let Some(saved) = self.tollkeepers.get(&relic.site) {
+        if kind == tollkeeper::KIND
+            && let Some(saved) = self.tollkeepers.get(&relic.site) {
                 let mut enemy=Enemy::new(relic.site,3,kind,relic.pos,0);
                 tollkeeper::restore(&mut enemy,saved);
                 if !free(world,enemy.pos,kind) { return false; }
                 self.enemies.push(enemy);
                 return true;
             }
-        }
         for i in 0..24 {
             let a = i as f32 * 2.4;
             let p = relic.pos + Vec3::new(a.cos(), 0.0, a.sin()) * (4.0 + (i / 8) as f32);

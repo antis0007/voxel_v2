@@ -323,11 +323,10 @@ impl Factory {
                 } else if n.kind.stores_power() {
                     net.batteries += 1;
                     net.battery_flow += n.flow;
-                    if let Some(s) = self.store_of(*p) {
-                        if !pools.contains(&s.pool) {
+                    if let Some(s) = self.store_of(*p)
+                        && !pools.contains(&s.pool) {
                             pools.push(s.pool);
                         }
-                    }
                 } else if n.kind.powered() {
                     net.machines += 1;
                 }

@@ -29,11 +29,10 @@ impl SampleCache {
             ^ (position.y as u32).wrapping_mul(0xd8163841)
             ^ (position.z as u32).wrapping_mul(0xcb1ab31f);
         let slot = (hash ^ (hash >> 16)) as usize & (CAPACITY - 1);
-        if let Some((cached, block)) = self.entries[slot] {
-            if cached == position {
+        if let Some((cached, block)) = self.entries[slot]
+            && cached == position {
                 return block;
             }
-        }
         let block = sample_block(&config, position);
         self.entries[slot] = Some((position, block));
         block

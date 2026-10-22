@@ -403,8 +403,8 @@ fn draw_survival_slot(
             .data_mut(|d| d.get_temp::<Option<Item>>(egui::Id::new("surv_hovered_item")))
             .flatten()
     });
-    if let (Some(st), Some(target_item)) = (stack, match_item) {
-        if st.item == target_item && !is_hovered {
+    if let (Some(st), Some(target_item)) = (stack, match_item)
+        && st.item == target_item && !is_hovered {
             painter.rect_stroke(
                 rect.shrink(1.0),
                 0,
@@ -412,7 +412,6 @@ fn draw_survival_slot(
                 egui::StrokeKind::Inside,
             );
         }
-    }
     if lmb_split_visited.contains(&addr) {
         painter.rect_filled(
             rect.shrink(2.0),
@@ -473,12 +472,11 @@ fn draw_survival_slot(
             }
         }
         show_item_tooltip(&response, stack, inv);
-    } else if let SlotAddr::Equipment(i) = addr {
-        if let Some(eq) = EquipSlot::from_index(i) {
+    } else if let SlotAddr::Equipment(i) = addr
+        && let Some(eq) = EquipSlot::from_index(i) {
             draw_equipment_silhouette(painter, rect, eq);
             response.clone().on_hover_text(eq.hint());
         }
-    }
 
     // Interactions, matching Minecraft's inventory pointer:
     // - Left press picks the stack up immediately. Releasing on that same slot
@@ -603,17 +601,14 @@ fn draw_survival_slot(
     let lmb_release = ui
         .ctx()
         .input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-    if !shift && !ctrl && lmb_split_origin.is_some() && over && (lmb_down || lmb_release) {
-        if !lmb_split_visited.contains(&addr) {
-            if let Some(orig) = *lmb_split_origin {
-                if inv.slot_accepts(addr, orig.item)
+    if !shift && !ctrl && lmb_split_origin.is_some() && over && (lmb_down || lmb_release)
+        && !lmb_split_visited.contains(&addr)
+            && let Some(orig) = *lmb_split_origin
+                && inv.slot_accepts(addr, orig.item)
                     && inv.slot(addr).is_none_or(|s| s.item == orig.item)
                 {
                     lmb_split_visited.push(addr);
                 }
-            }
-        }
-    }
 
     response
 }
@@ -1042,8 +1037,8 @@ fn draw_survival_pack_view(
                             &mut lmb_split_visited,
                             &mut lmb_split_origin,
                         );
-                        if resp.double_clicked() {
-                            if let Some(ItemStack {
+                        if resp.double_clicked()
+                            && let Some(ItemStack {
                                 item: Item::Food(_),
                                 ..
                             }) = survival.hotbar[slot]
@@ -1051,7 +1046,6 @@ fn draw_survival_pack_view(
                                 creative.select_slot(slot);
                                 *action = UiAction::Factory(crate::world::factory::Action::EatRation);
                             }
-                        }
                     }
                     ui.end_row();
                 });
@@ -1174,7 +1168,7 @@ fn draw_survival_pack_view(
                                     }
                                 }
                                 col_count += 1;
-                                if col_count % cols == 0 {
+                                if col_count.is_multiple_of(cols) {
                                     ui.end_row();
                                 }
                             }
@@ -1316,8 +1310,8 @@ fn draw_survival_pack_view(
     }
 
     // Floating cursor item preview when holding a stack in survival inventory
-    if let Some(cursor) = survival.cursor {
-        if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
+    if let Some(cursor) = survival.cursor
+        && let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
             let p = ui.ctx().layer_painter(egui::LayerId::new(
                 egui::Order::Tooltip,
                 egui::Id::new("survival_cursor_item"),
@@ -1354,7 +1348,6 @@ fn draw_survival_pack_view(
                 p.galley(at, galley, presentation::AMBER);
             }
         }
-    }
 }
 
 pub(super) fn draw(

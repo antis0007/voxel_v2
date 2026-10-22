@@ -61,11 +61,10 @@ pub fn sample(cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
     if (m.x - 342.5).abs() < 1.0 && (m.z - 48.5).abs() < 1.0 && (2.0..3.0).contains(&m.y) {
         return Some(B::MushroomStem);
     }
-    if cfg.generator_version >= 29 {
-        if let Some(block) = garden_details(m, hollow, nursery) {
+    if cfg.generator_version >= 29
+        && let Some(block) = garden_details(m, hollow, nursery) {
             return Some(block);
         }
-    }
     if hollow && (m.x - 294.0).abs() < 5.0 && (m.z - 48.0).abs() < 5.0 {
         return Some(B::Air); // Open sinkhole, including a visible distant landmark.
     }

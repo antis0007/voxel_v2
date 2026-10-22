@@ -40,7 +40,7 @@ fn ingredients(ui: &mut egui::Ui, cost: &[(usize, u32)], inventory: &Expedition)
 fn stack_text(n: u32) -> String {
     if n == 0 {
         String::new()
-    } else if n % 64 == 0 {
+    } else if n.is_multiple_of(64) {
         format!("{}", n / 64)
     } else {
         format!("{:.1}", n as f32 / 64.0)
@@ -923,11 +923,10 @@ fn generator_panel(
         if ui.button(if node.enabled { "Pause" } else { "Start" }).clicked() {
             *action = UiAction::Factory(Action::Toggle(pos));
         }
-        if node.kind.water_port() && node.water > 0 {
-            if ui.button(if node.draining { "Close drain" } else { "Drain coolant" }).clicked() {
+        if node.kind.water_port() && node.water > 0
+            && ui.button(if node.draining { "Close drain" } else { "Drain coolant" }).clicked() {
                 *action = UiAction::Factory(Action::Drain(pos));
             }
-        }
     });
     let _ = inventory;
 }
@@ -1420,9 +1419,8 @@ pub(super) fn draw(
                     if ui.button("Load").on_hover_text("Load matching supplies from your pack").clicked(){*action=UiAction::Factory(Action::Load(*pos));}
                     if ui.button("Unload").on_hover_text("Return all input and output items to your pack").clicked(){*action=UiAction::Factory(Action::Collect(*pos));}
                     if ui.button(if node.enabled {"Pause"}else{"Start"}).clicked(){*action=UiAction::Factory(Action::Toggle(*pos));}
-                    if node.kind.water_port() && node.water>0 {
-                        if ui.button(if node.draining {"Close drain"}else{"Drain water"}).on_hover_text("Pauses the machine and releases stored water into free neighbouring cells. Clear the outlet before dismantling.").clicked(){*action=UiAction::Factory(Action::Drain(*pos));}
-                    }
+                    if node.kind.water_port() && node.water>0
+                        && ui.button(if node.draining {"Close drain"}else{"Drain water"}).on_hover_text("Pauses the machine and releases stored water into free neighbouring cells. Clear the outlet before dismantling.").clicked(){*action=UiAction::Factory(Action::Drain(*pos));}
                     upgrade_button(ui,*pos,node,inventory,action);
                 });
             }

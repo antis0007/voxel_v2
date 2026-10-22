@@ -94,7 +94,7 @@ fn visit(
     cancel: &AtomicBool,
     mut emit: impl FnMut(Corner) -> bool,
 ) -> Option<usize> {
-    if mesh.indices.len() > INDEX_LIMIT || mesh.indices.len() % 3 != 0 {
+    if mesh.indices.len() > INDEX_LIMIT || !mesh.indices.len().is_multiple_of(3) {
         return None;
     }
     let mut count = 0usize;
@@ -143,14 +143,13 @@ impl Prepared {
         }) else {
             return Self::default();
         };
-        if let Some(baseline) = baseline {
-            if equal && baseline.0.proof.corners.len() == count {
+        if let Some(baseline) = baseline
+            && equal && baseline.0.proof.corners.len() == count {
                 return Self {
                     proof: Some(baseline.0.proof.clone()),
                     equal_to: Some(baseline.clone()),
                 };
             }
-        }
         Self {
             proof: Self::capture(mesh, count, cancel),
             equal_to: None,

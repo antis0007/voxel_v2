@@ -204,15 +204,14 @@ impl BuildTarget {
     fn validate(&self, snapshot: &crate::world::WorldSnapshot, eye: Vec3, hidden: f32, coverage: &ResidentCoverage, scope_only: bool) -> bool {
         let index=usize::from(scope_only);
         let eye_bits=eye.to_array().map(f32::to_bits);
-        if let Some(cached)=&self.validation.borrow()[index] {
-            if cached.eye==eye_bits && cached.hidden==hidden.to_bits()
+        if let Some(cached)=&self.validation.borrow()[index]
+            && cached.eye==eye_bits && cached.hidden==hidden.to_bits()
                 && cached.coverage.as_ref()==coverage
                 && cached.snapshot.cfg==snapshot.cfg
                 && Arc::ptr_eq(&cached.snapshot.chunks,&snapshot.chunks)
                 && Arc::ptr_eq(&cached.snapshot.water_levels,&snapshot.water_levels)
                 && Arc::ptr_eq(&cached.snapshot.regions.root,&snapshot.regions.root)
                 && Arc::ptr_eq(&cached.snapshot.regions.records,&snapshot.regions.records) { return cached.valid; }
-        }
         let valid=self.snapshot.cfg == snapshot.cfg
             && Arc::ptr_eq(&self.snapshot.regions.root, &snapshot.regions.root)
             && (scope_only || !edits::changes_visible_resident(&self.snapshot, snapshot, eye, hidden, coverage))
@@ -228,15 +227,14 @@ impl BuildTarget {
         // Desired targets are immutable between coalesced checks. Cache the
         // whole comparison, including the structural scan, across those frames.
         let eye_bits=other.eye.to_array().map(f32::to_bits);
-        if let Some(cached)=&self.validation.borrow()[2] {
-            if cached.eye==eye_bits && cached.hidden==other.hidden_radius.to_bits()
+        if let Some(cached)=&self.validation.borrow()[2]
+            && cached.eye==eye_bits && cached.hidden==other.hidden_radius.to_bits()
                 && cached.coverage==other.coverage
                 && cached.snapshot.cfg==other.snapshot.cfg
                 && Arc::ptr_eq(&cached.snapshot.chunks,&other.snapshot.chunks)
                 && Arc::ptr_eq(&cached.snapshot.water_levels,&other.snapshot.water_levels)
                 && Arc::ptr_eq(&cached.snapshot.regions.root,&other.snapshot.regions.root)
                 && Arc::ptr_eq(&cached.snapshot.regions.records,&other.snapshot.regions.records) { return cached.valid; }
-        }
         let scale=self.snapshot.cfg.voxel_meters();
         let valid = !edits::structural_changed(&self.snapshot,&other.snapshot,self.center)
             && !self.omitted.iter().any(|&(lo,hi)| self.coverage.contains_bounds(lo*scale,hi*scale,scale)
@@ -520,11 +518,9 @@ impl Horizon {
             .worker
             .as_ref()
             .is_some_and(|worker| worker.is_finished())
-        {
-            if self.worker.take().unwrap().join().is_err() {
+            && self.worker.take().unwrap().join().is_err() {
                 eprintln!("[horizon] worker panicked; keeping the last published mesh");
             }
-        }
     }
 
     fn update_mesh(
@@ -669,8 +665,8 @@ impl Horizon {
             })
         {
             self.rejected_stale += 1;
-            if self.rejected_stale <= 8 && std::env::var("VOXEL_HORIZON_TRACE").as_deref()==Ok("1") {
-                if let Some(target) = &self.active {
+            if self.rejected_stale <= 8 && std::env::var("VOXEL_HORIZON_TRACE").as_deref()==Ok("1")
+                && let Some(target) = &self.active {
                     edits::trace_changes(
                         &target.snapshot,
                         &world.snapshot(),
@@ -678,7 +674,6 @@ impl Horizon {
                         target.hidden_radius,
                     );
                 }
-            }
             eprintln!(
                 "[horizon] reject_stale={} stage=build_or_upload",
                 self.rejected_stale
@@ -704,13 +699,12 @@ impl Horizon {
                         !target.valid_for_resident(&world.snapshot(), eye, hidden_radius, &self.resident)
                     }) {
                         if self.rejected_stale < 8 && (std::env::var("VOXEL_HORIZON_TRACE").as_deref()==Ok("1")
-                            || std::env::var("VOXEL_HORIZON_REJECT_TRACE").as_deref()==Ok("1")) {
-                            if let Some(target) = &self.active {
+                            || std::env::var("VOXEL_HORIZON_REJECT_TRACE").as_deref()==Ok("1"))
+                            && let Some(target) = &self.active {
                                 let snapshot = world.snapshot();
                                 eprintln!("[horizon-reject] eye={eye:?} strict_radius={hidden_radius} omitted={}",target.omitted.len());
                                 edits::trace_rejection(&target.snapshot,&snapshot,&target.omitted,eye,hidden_radius,&self.resident);
                             }
-                        }
                         self.rejected_stale += 1;
                         self.samples = samples;
                         self.fail_active(now);
@@ -1311,8 +1305,8 @@ fn build_with_focus(
                 let heights = corners.map(|index| mesh.vertices[index as usize].pos[1]);
                 let split = horizon_inner_split(level, x, z, corners, &owner);
                 let mut middle = None;
-                if split.is_none() {
-                    if let Some(&(bx,bz)) = refinement_points.get(&(base+z*SIDE+x)) {
+                if split.is_none()
+                    && let Some(&(bx,bz)) = refinement_points.get(&(base+z*SIDE+x)) {
                         let &(height,block,_) = samples.get(&(bx,bz))?;
                         let height = height - HORIZON_SINK_VOXELS;
                         let parent = if diagonal_a_to_d(heights[0],heights[1],heights[2],heights[3]) {
@@ -1336,7 +1330,6 @@ fn build_with_focus(
                             refinement_refined += 1;
                         }
                     }
-                }
                 let (triangles, count) = horizon_refinement_triangles(corners, heights, split, middle);
                 for triangle in &triangles[..count] {
                     let positions =

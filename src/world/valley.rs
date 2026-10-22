@@ -140,19 +140,15 @@ pub(super) fn architecture(cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
     if (m.x - plan.tower.x).abs() < 28.0
         && (m.z - plan.tower.z).abs() < 28.0
         && (m.x - plan.tower.x).hypot(m.z - plan.tower.z) < 28.0
-    {
-        if let Some(b) = tower(&plan, cfg, m) {
+        && let Some(b) = tower(&plan, cfg, m) {
             return Some(b);
         }
-    }
     if (m.x - plan.hamlet.x).abs() < 52.0
         && (m.z - plan.hamlet.z).abs() < 52.0
         && (m.x - plan.hamlet.x).hypot(m.z - plan.hamlet.z) < 52.0
-    {
-        if let Some(b) = hamlet(&plan, cfg, m) {
+        && let Some(b) = hamlet(&plan, cfg, m) {
             return Some(b);
         }
-    }
     None
 }
 
@@ -454,7 +450,7 @@ fn timber(role: u8, lx: f32, ly: f32, lz: f32, w: f32, d: f32, v: f32) -> Option
         if inside && (role == 1 || role == 3) && lx.abs() < v.max(0.5) * 0.5 + 0.05 && ly < wall_top
         {
             let doorway = (lz + hd * 0.3).abs() < 0.9f32.max(v * 0.75) && ly < 2.3f32.max(v * 2.0);
-            if !doorway && !(two && stair_plank(lx, ly, lz, hw, hd)) {
+            if !(doorway || two && stair_plank(lx, ly, lz, hw, hd)) {
                 return Some(B::Planks);
             }
         }
@@ -486,7 +482,7 @@ fn tower(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         return gallery;
     }
     let r = lx.hypot(lz);
-    if r > 8.5 || ly < -8.0 || ly > 15.0 {
+    if r > 8.5 || !(-8.0..=15.0).contains(&ly) {
         return None;
     }
     if r > 6.4 {
@@ -521,7 +517,7 @@ fn tower(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         return None;
     }
     let storey = (ly / STOREY).floor();
-    let on_floor = (ly % STOREY) < 0.34f32.max(vox) && storey >= 1.0 && storey <= 3.0 && r < 3.55;
+    let on_floor = (ly % STOREY) < 0.34f32.max(vox) && (1.0..=3.0).contains(&storey) && r < 3.55;
     if on_floor && !stair_hole(storey as i32, lx, lz) {
         return Some(if storey == 2.0 {
             B::StoneBricks
@@ -529,11 +525,10 @@ fn tower(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
             B::Planks
         });
     }
-    if let Some(tread) = flight(ly, lx, lz) {
-        if ly < tread && ly > tread - 0.85f32.max(vox) {
+    if let Some(tread) = flight(ly, lx, lz)
+        && ly < tread && ly > tread - 0.85f32.max(vox) {
             return Some(B::Planks);
         }
-    }
     if wall && ly < 11.6 && !door && !window {
         return Some(B::StoneBricks);
     }
@@ -578,7 +573,7 @@ fn tower_floor(cfg: &WorldSampleConfig, plan: &Plan) -> f32 {
 fn buttress(lx: f32, ly: f32, lz: f32) -> Option<B> {
     let lean = lx < -4.2 && lx > -7.2 && lz.abs() < 2.4;
     if lean && (-0.2..3.2).contains(&ly) {
-        let shell = lx < -6.7 || lz.abs() > 1.9 || ly < 0.3 || ly > 2.8;
+        let shell = lx < -6.7 || lz.abs() > 1.9 || !(0.3..=2.8).contains(&ly);
         return Some(if shell { B::Planks } else { B::Air });
     }
     let rib = lx > 4.2 && lx < 6.6 && lz.abs() < 0.7 && ly < 7.0 - (lx - 4.2) * 1.4 && ly > -0.2;
@@ -641,7 +636,7 @@ fn gallery(lx: f32, ly: f32, lz: f32) -> Option<B> {
         return None;
     }
     let shell = if pocket {
-        lz > 4.5 || lx < 14.8 || lx > 17.2 || ly < -6.05
+        lz > 4.5 || !(14.8..=17.2).contains(&lx) || ly < -6.05
     } else {
         lz.abs() > 1.25 || ly < -6.05 || lx > 17.6
     };

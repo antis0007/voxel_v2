@@ -229,7 +229,7 @@ pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
                         for (sort,label) in [(Sort::Recent,"Recent"),(Sort::Name,"A–Z"),(Sort::Favorites,"Favorites first")] {
                             if tab(ui,label,owner.browser.sort==sort).clicked(){owner.browser.sort=sort;}
                         }
-                        if tab(ui,"★ Only favorites",owner.browser.only_favorites).clicked(){owner.browser.only_favorites=!owner.browser.only_favorites;}
+                        if tab(ui,"★ Only favorites",owner.browser.only_favorites).clicked(){owner.browser.only_favorites = !owner.browser.only_favorites;}
                         if ui.small_button("Refresh").clicked(){result=UiAction::RefreshWorlds;}
                     }); }
                     if owner.library_loading {ui.label(RichText::new("Opening your world… Terrain will be prepared before movement begins.").color(Color32::LIGHT_GREEN));}

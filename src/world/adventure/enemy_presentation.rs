@@ -297,8 +297,8 @@ pub(super) fn fallback(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32
         let strike = strike(e);
         for (side, z, phase) in [
             (-1.0_f32, -0.28, 0.0),
-            (1.0, -0.28, 3.14),
-            (-1.0, 0.30, 3.14),
+            (1.0, -0.28, std::f32::consts::PI),
+            (-1.0, 0.30, std::f32::consts::PI),
             (1.0, 0.30, 0.0),
         ] {
             let step = (e.phase * 3.8 + phase).sin() * 0.10 * (1.0 - wind) * e.gait;

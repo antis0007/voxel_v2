@@ -1,0 +1,8 @@
+# Text files are stored and checked out with LF so diffs and hashes are the
+# same on every machine; binaries are never diffed or converted.
+* text=auto eol=lf
+*.png binary
+*.ttf binary
+*.gif binary
+*.zip binary
+*.exe binary

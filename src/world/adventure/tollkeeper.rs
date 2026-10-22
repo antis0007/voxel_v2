@@ -331,7 +331,7 @@ pub(super) fn tick(
                 None
             };
             if let Some(kind) = choice {
-                e.toll.follow = e.toll.enraged && kind == Action::Thrust && e.attacks % 3 == 0;
+                e.toll.follow = e.toll.enraged && kind == Action::Thrust && e.attacks.is_multiple_of(3);
                 begin(
                     e,
                     kind,
@@ -802,7 +802,7 @@ pub fn review_input(world: &World, player: &mut Player, input: &mut crate::playe
     }
     // Script normal movement keys through update_player: gravity, steps and cover stay real.
     let t = world.adventure.time;
-    let target = if ((t / 5.0) as u32) % 2 == 0 {
+    let target = if ((t / 5.0) as u32).is_multiple_of(2) {
         Vec3::new(-2.5, 80.0, 6.5)
     } else {
         Vec3::new(2.5, 80.0, 8.5)

@@ -186,11 +186,10 @@ thread_local! {
 
 pub fn sample_tectonics_zoomed(wx: f32, wz: f32, seed: u32, zoom: f32) -> TectonicSample {
     let key = (wx.to_bits(), wz.to_bits(), seed, zoom.to_bits());
-    if let Some((last, value)) = TECTONIC_LAST.get() {
-        if last == key {
+    if let Some((last, value)) = TECTONIC_LAST.get()
+        && last == key {
             return value;
         }
-    }
     let value = match TECTONIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
         Some(hit) => hit,
         None => {
@@ -754,8 +753,8 @@ fn tile(key: TileKey) -> Arc<Tile> {
         } else {
             // Never evict an in-flight initialization: neighboring workers join
             // the same erosion calculation instead of rebuilding it in parallel.
-            if cache.entries.len() >= 1024 {
-                if let Some(i) = cache
+            if cache.entries.len() >= 1024
+                && let Some(i) = cache
                     .recent
                     .iter()
                     .position(|k| cache.entries.get(k).is_some_and(|c| c.get().is_some()))
@@ -763,7 +762,6 @@ fn tile(key: TileKey) -> Arc<Tile> {
                     let old = cache.recent.remove(i).unwrap();
                     cache.entries.remove(&old);
                 }
-            }
             let cell = Arc::new(OnceLock::new());
             cache.entries.insert(key, Arc::clone(&cell));
             cache.recent.push_back(key);
@@ -893,8 +891,7 @@ fn classify_landscape(
         }
     } else if cfg.generator_version >= 10
         && moisture > 0.78
-        && h >= 16.5
-        && h < 24.0
+        && (16.5..24.0).contains(&h)
         && slope < 0.14
     {
         Biome::Fen
@@ -1447,8 +1444,8 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         }
         if cfg.generator_version >= 15 && wx.hypot(wz) > 110.0 {
             use super::terrain_variety as tv;
-            if let Some(a) = tv::anomaly(wx, wz, cfg.seed).filter(|_| s.height > 20.0) {
-                if let Some((top, under)) =
+            if let Some(a) = tv::anomaly(wx, wz, cfg.seed).filter(|_| s.height > 20.0)
+                && let Some((top, under)) =
                     tv::anomaly_surface(&a, wx, wz, cfg.seed, s.height, s.slope)
                 {
                     if !matches!(surface, BlockId::SnowGrass | BlockId::Ice) {
@@ -1461,7 +1458,6 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
                         tv::Landform::Mesa | tv::Landform::Canyon => 0.0,
                     };
                 }
-            }
             let shore = tv::shore(wx, wz, cfg.seed, s.temperature, s.moisture);
             if let Some((top, under)) = tv::shore_surface(
                 wx,
@@ -1532,11 +1528,10 @@ thread_local! {
 
 fn bedrock_column(wx: f32, wz: f32, seed: u32) -> BedrockColumn {
     let key = (wx.to_bits(), wz.to_bits(), seed);
-    if let Some((last, column)) = BEDROCK_LAST.get() {
-        if last == key {
+    if let Some((last, column)) = BEDROCK_LAST.get()
+        && last == key {
             return column;
         }
-    }
     // Low-frequency warp bends beds into long gentle waves instead of flat stripes.
     let warp = (value_noise2(wx / 170.0, wz / 170.0, seed.wrapping_add(9947)) - 0.5) * 16.0;
     let region = value_noise2(wx / 1100.0, wz / 1100.0, seed.wrapping_add(9951));

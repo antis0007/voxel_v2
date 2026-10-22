@@ -240,10 +240,9 @@ pub(super) fn apply(
             let q=chunk(b.low);
             resident_omissions.entry((q.x,q.z)).and_modify(|(lo,hi)|{*lo=lo.min(b.low);*hi=hi.max(b.high);}).or_insert((b.low,b.high));
             false
-        } else if b.structural {
+        } else if b.structural || bounds_visible(snapshot, b.low.as_vec3(), b.high.as_vec3(), eye, hidden, coverage) {
             true
-        } else if bounds_visible(snapshot, b.low.as_vec3(), b.high.as_vec3(), eye, hidden, coverage) { true }
-        else { omitted.push((b.low.as_vec3(), b.high.as_vec3())); false }
+        } else { omitted.push((b.low.as_vec3(), b.high.as_vec3())); false }
     });
     // All these bricks have the same complete-column owner. Keep one immutable
     // obligation per column instead of rechecking thousands of equivalent GPU
@@ -430,7 +429,7 @@ pub(super) fn apply(
             }
             append(&mut clipped, &poly);
         }
-        crate::mesh::encode_water(&source, &mut clipped);
+        crate::mesh::encode_water(source, &mut clipped);
         for v in &mut clipped.vertices {
             if v.surface[2] % 64.0 != 8.0 && v.surface[2] % 64.0 != 40.0 && v.surface[3] >= 0.0 {
                 v.surface[3] = 4.0
@@ -899,15 +898,14 @@ fn occluded_bounds(snapshot: &WorldSnapshot, low: Vec3, high: Vec3, eye: Vec3) -
                 }
                 signature.finish()
             };
-            if let Some(proof) = cache.planes.get(&key) {
-                if proof.signature == with_water(&proof.free_water) {
+            if let Some(proof) = cache.planes.get(&key)
+                && proof.signature == with_water(&proof.free_water) {
                     if proof.blocked {
                         return true;
                     } else {
                         continue;
                     }
                 }
-            }
             let mut blocked = true;
             let mut free_water = Vec::new();
             'cells: for z in a.z..=b.z {

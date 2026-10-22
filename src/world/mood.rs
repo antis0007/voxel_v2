@@ -334,7 +334,7 @@ mod tests {
                         e.kind,
                         SkyEvent::GoldenHaze | SkyEvent::Rainbow | SkyEvent::PearlFog
                     ) {
-                        assert!(t >= 1.0 / 6.0 && t < 4.0 / 6.0, "{:?} at t={t}", e.kind);
+                        assert!((1.0 / 6.0..4.0 / 6.0).contains(&t), "{:?} at t={t}", e.kind);
                     }
                 }
             }

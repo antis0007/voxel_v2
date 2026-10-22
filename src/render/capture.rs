@@ -153,36 +153,6 @@ pub(crate) fn flush(timeout: Duration) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn capture_writer_flush_preserves_pixels() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("voxel-capture-{}-{nonce}.png", std::process::id()));
-        let pixels = vec![255, 10, 20, 255, 30, 40, 200, 255];
-        enqueue(EncodeJob {
-            path: path.clone(),
-            rgba: pixels.clone(),
-            width: 2,
-            height: 1,
-        });
-        assert!(
-            flush(Duration::from_secs(2)),
-            "writer did not drain before the deadline"
-        );
-        let decoded = image::open(&path).unwrap().to_rgba8();
-        assert_eq!(decoded.dimensions(), (2, 1));
-        assert_eq!(decoded.into_raw(), pixels);
-        std::fs::remove_file(path).unwrap();
-    }
-}
-
 pub(super) struct PendingCapture {
     buffer: wgpu::Buffer,
     path: PathBuf,
@@ -295,5 +265,35 @@ impl PendingCapture {
             height: self.height,
         });
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_writer_flush_preserves_pixels() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("voxel-capture-{}-{nonce}.png", std::process::id()));
+        let pixels = vec![255, 10, 20, 255, 30, 40, 200, 255];
+        enqueue(EncodeJob {
+            path: path.clone(),
+            rgba: pixels.clone(),
+            width: 2,
+            height: 1,
+        });
+        assert!(
+            flush(Duration::from_secs(2)),
+            "writer did not drain before the deadline"
+        );
+        let decoded = image::open(&path).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (2, 1));
+        assert_eq!(decoded.into_raw(), pixels);
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -119,7 +119,7 @@ fn plan(e: &Enemy, distance: f32) -> Attack {
     // The Rime family contests its editable crown with physical actions. Its identity
     // no longer depends on shard fans, frost circles, or a damage-permission window.
     if variant(e) == 0 { return if distance < 4.0 { Attack::Sweep } else { Attack::Charge }; }
-    if distance < 3.3 && e.attacks % 3 != 0 {
+    if distance < 3.3 && !e.attacks.is_multiple_of(3) {
         return Attack::Sweep;
     }
     let patterns = match (variant(e), e.menace.min(2), e.hart.enraged) {
@@ -678,8 +678,8 @@ pub fn review_cast(world: &mut World, player: &mut Player) -> bool {
         let junction = world.adventure.enemies.iter().find(|e| e.kind==8)
             .filter(|e| e.hart.crown.phase==hart_crown::Phase::Warn && e.hart.crown.clock<0.7)
             .map(|e| (e.hart.crown.root,e.hart.crown.target));
-        if let Some((root,target))=junction {
-            if !CUT.swap(true,Ordering::Relaxed) {
+        if let Some((root,target))=junction
+            && !CUT.swap(true,Ordering::Relaxed) {
                 let s=world.voxel_scale.meters();
                 let delta=target-(root.as_vec3()+Vec3::splat(0.5))*s;
                 let across=if delta.x.abs()>=delta.z.abs(){IVec3::Z}else{IVec3::X};
@@ -693,7 +693,6 @@ pub fn review_cast(world: &mut World, player: &mut Player) -> bool {
                 world.adventure=adventure;
                 println!("[hart-crown-review] SCRIPTED utility cut removed={removed} root={root:?}; remaining ice is ordinary world material");
             }
-        }
     }
     if std::env::var_os("VOXEL_HART_CAST").is_none() {
         return false;

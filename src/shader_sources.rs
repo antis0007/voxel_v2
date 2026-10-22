@@ -45,15 +45,6 @@ pub(crate) fn current_validation_source(source: String, manifest: &std::path::Pa
     }
     Ok(output)
 }
-
-#[cfg(test)]
-mod validation_receipt {
-    #[test]
-    fn embedded_world_matches_the_build_validator_source() {
-        assert_eq!(format!("{:016x}",super::source_fingerprint(&super::world_shader_source())),
-            env!("VOXEL_VALIDATED_WORLD_FNV"),"copied source timestamps reused a stale shader validation result");
-    }
-}
 pub(crate) const UI_MAGIC_SHADER: &str = include_str!("shaders/ui_magic.wgsl");
 const CAMERA_LIGHTING_WGSL: &str = include_str!("shaders/camera_lighting_shared.wgsl");
 const LIGHTING_WGSL: &str = include_str!("shaders/lighting_shared.wgsl");
@@ -176,4 +167,13 @@ pub(crate) fn indirect_shader_source(composite: bool) -> String {
             include_str!("shaders/indirect_gather.wgsl")
         }
     )
+}
+
+#[cfg(test)]
+mod validation_receipt {
+    #[test]
+    fn embedded_world_matches_the_build_validator_source() {
+        assert_eq!(format!("{:016x}",super::source_fingerprint(&super::world_shader_source())),
+            env!("VOXEL_VALIDATED_WORLD_FNV"),"copied source timestamps reused a stale shader validation result");
+    }
 }

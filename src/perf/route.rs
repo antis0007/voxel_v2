@@ -127,12 +127,11 @@ impl RouteTiming {
             return;
         }
         self.finished = true;
-        if let Some(mut output) = self.output.take() {
-            if let Err(error) = output.flush() {
+        if let Some(mut output) = self.output.take()
+            && let Err(error) = output.flush() {
                 self.io_failed = true;
                 eprintln!("[route-timing] CSV flush failed: {error}");
             }
-        }
         let quantile = |index: usize, fraction: f64| {
             let mut values: Vec<f32> = self.samples.iter().map(|v| v[index]).collect();
             values.sort_unstable_by(f32::total_cmp);

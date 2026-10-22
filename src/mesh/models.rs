@@ -865,7 +865,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                         0.0,
                     );
 
-                    for angle in [0.0, 1.57, 3.14, 4.71] {
+                    for angle in [0.0, std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 3.0 * std::f32::consts::FRAC_PI_2] {
                         let a = angle + n.phase * 4.5 * if x < 0.5 { 1.0 } else { -1.0 };
 
                         mesh.cuboid(
@@ -1470,7 +1470,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                         _ => Vec3::ZERO,
                     };
                     for i in 0..2 {
-                        let a = world.adventure.time * 0.8 + i as f32 * 3.14;
+                        let a = world.adventure.time * 0.8 + i as f32 * std::f32::consts::PI;
                         let p = shot.pos
                             + (side * a.cos() + up * a.sin()) * (0.1 + i as f32 * 0.02)
                             + lift;

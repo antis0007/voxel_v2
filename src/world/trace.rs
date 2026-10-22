@@ -19,35 +19,6 @@ fn box_entry(a: Vec3, d: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
     }
     (hi >= lo).then_some(lo)
 }
-
-#[cfg(test)]
-mod acceptance {
-    use super::*;
-    use crate::{
-        fluid::VoxelScalePreset,
-        world::{BlockId, WorldType},
-    };
-    #[test]
-    fn wand_trace_hits_single_voxel_walls_from_both_sides_at_every_scale() {
-        for scale in [
-            VoxelScalePreset::OneMeter,
-            VoxelScalePreset::HalfMeter,
-            VoxelScalePreset::QuarterMeter,
-        ] {
-            let mut w = World::with_seed(WorldType::Superflat, scale, 17);
-            let cell = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
-            w.set(cell, BlockId::Stone);
-            let center = (cell.as_vec3() + Vec3::splat(0.5)) * scale.meters();
-            for sign in [-1.0, 1.0] {
-                let a = center + Vec3::X * sign * (0.5 * scale.meters() + 0.005);
-                let b = center - Vec3::X * sign * 3.0;
-                let (impact, hit) = solid(&w, a, b).expect("thin wall must stop bolt");
-                assert_eq!(hit, cell);
-                assert!((impact.x - center.x) * sign >= 0.5 * scale.meters());
-            }
-        }
-    }
-}
 pub(crate) fn solid(world: &World, a: Vec3, b: Vec3) -> Option<(Vec3, IVec3)> {
     let scale = world.voxel_scale.meters();
     let delta = b - a;
@@ -98,4 +69,33 @@ pub(crate) fn solid(world: &World, a: Vec3, b: Vec3) -> Option<(Vec3, IVec3)> {
         next[axis] += stride[axis];
     }
     None
+}
+
+#[cfg(test)]
+mod acceptance {
+    use super::*;
+    use crate::{
+        fluid::VoxelScalePreset,
+        world::{BlockId, WorldType},
+    };
+    #[test]
+    fn wand_trace_hits_single_voxel_walls_from_both_sides_at_every_scale() {
+        for scale in [
+            VoxelScalePreset::OneMeter,
+            VoxelScalePreset::HalfMeter,
+            VoxelScalePreset::QuarterMeter,
+        ] {
+            let mut w = World::with_seed(WorldType::Superflat, scale, 17);
+            let cell = IVec3::new(0, (150.0 / scale.meters()) as i32, 0);
+            w.set(cell, BlockId::Stone);
+            let center = (cell.as_vec3() + Vec3::splat(0.5)) * scale.meters();
+            for sign in [-1.0, 1.0] {
+                let a = center + Vec3::X * sign * (0.5 * scale.meters() + 0.005);
+                let b = center - Vec3::X * sign * 3.0;
+                let (impact, hit) = solid(&w, a, b).expect("thin wall must stop bolt");
+                assert_eq!(hit, cell);
+                assert!((impact.x - center.x) * sign >= 0.5 * scale.meters());
+            }
+        }
+    }
 }

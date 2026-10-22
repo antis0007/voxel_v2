@@ -147,7 +147,7 @@ pub(super) fn step(
             c.fuel = (c.fuel - 1.0).max(0.0);
             if c.fuel == 0.0 {
                 replace = Some(B::Ash);
-            } else if w.activity.tick % 4 == 0 {
+            } else if w.activity.tick.is_multiple_of(4) {
                 let q = p + IVec3::Y;
                 if admission(w, p, q)
                     && w.sandbox.can_admit(&[q])
@@ -224,8 +224,8 @@ pub(super) fn step(
             return count;
         }
     }
-    if let Some(q) = steam_at {
-        if admission(w, p, q)
+    if let Some(q) = steam_at
+        && admission(w, p, q)
             && w.sandbox.can_admit(&[q])
             && s.read(w, q).is_some_and(|(id, _)| id == B::Air)
             && s.prepare(w, &[q])
@@ -243,7 +243,6 @@ pub(super) fn step(
             changed(q, blocks, chunks);
             count += 1;
         }
-    }
     w.sandbox.set(p, c);
     if replace.is_none() && matches!(b, B::Smoke | B::Steam) {
         if c.gas == 0 {

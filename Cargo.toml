@@ -45,3 +45,17 @@ inherits = "release"
 lto = false
 codegen-units = 16
 incremental = true
+
+# Lints that only generate noise in this codebase. Each is allowed on purpose:
+# too_many_arguments / type_complexity flag the renderer plumbing that the P3
+# workspace split restructures; field_reassign_with_default and
+# needless_range_loop are style-only and their rewrites read worse in the
+# SoA-style loops here. Everything else is denied by `just clippy`.
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+field_reassign_with_default = "allow"
+needless_range_loop = "allow"
+# App-state and library-result enums are built once per session; boxing their
+# large variants adds indirection for no measurable gain.
+large_enum_variant = "allow"

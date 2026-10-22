@@ -160,6 +160,9 @@ fn copy_writable(source: &Path, target: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         let mut permissions = fs::metadata(target)?.permissions();
+        // Imported copies must be writable; this clears a read-only bit, it does
+        // not widen access for other users.
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(target, permissions)?;
     }

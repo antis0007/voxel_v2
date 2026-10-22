@@ -76,6 +76,8 @@ pub(super) fn focus_with_plan(
         return None;
     }
     let length_squared = forward.length_squared();
+    // Rejects NaN as well as zero; keep the negated form on purpose.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     if !(length_squared > 0.0) {
         return None;
     }

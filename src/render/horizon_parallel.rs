@@ -80,7 +80,7 @@ where
         worker()
     } else {
         std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..workers).map(|_| scope.spawn(&worker)).collect();
+            let handles: Vec<_> = (0..workers).map(|_| scope.spawn(worker)).collect();
             // Join every worker, so none outlives an early failure.
             let mut all = Vec::with_capacity(block_count);
             for handle in handles {

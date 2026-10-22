@@ -54,7 +54,7 @@ pub(super) fn summarize(cfg:WorldSampleConfig,center:(i32,i32),samples:&Samples,
 }
 
 fn cell_in_quality_domain(level:usize,x:usize,z:usize)->bool {
-    level==0 || !(x>=HALF/2 && x<HALF+HALF/2 && z>=HALF/2 && z<HALF+HALF/2)
+    level==0 || !((HALF/2..HALF+HALF/2).contains(&x) && (HALF/2..HALF+HALF/2).contains(&z))
 }
 
 pub(super) struct View {
@@ -94,7 +94,7 @@ impl Selector {
         // Retain one existing compact neighbourhood through turns and small
         // movement. Coarsen only after the unit feature falls below0.7pixel.
         self.held.retain(|c|scale*view.focal/(c.position-view.eye).length().max(scale)>=0.7);
-        if self.held.is_empty(){if let Some(&(c,_))=ranked.first(){self.held.push(c);}}
+        if self.held.is_empty()&& let Some(&(c,_))=ranked.first(){self.held.push(c);}
         self.held.truncate(1);
         let mut wanted=Vec::new();
         for c in &self.held {

@@ -1027,7 +1027,7 @@ mod tests {
         assert_eq!(save_version(b"VXWSAV24").unwrap(), 24);
         let next = format!("VXWSAV{:02}", SAVE_VERSION + 1);
         assert!(save_version(next.as_bytes()).is_err(), "a future version must be rejected");
-        let magic_version = ((MAGIC[6] - b'0') * 10 + (MAGIC[7] - b'0')) as u8;
+        let magic_version = (MAGIC[6] - b'0') * 10 + (MAGIC[7] - b'0');
         assert_eq!(magic_version, SAVE_VERSION);
     }
 

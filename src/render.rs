@@ -3166,8 +3166,8 @@ impl Gpu {
 
     /// Create a cloud render texture.
     /// Base usages are always:
-    ///   - RENDER_ATTACHMENT
-    ///   - TEXTURE_BINDING
+    ///     - RENDER_ATTACHMENT
+    ///     - TEXTURE_BINDING
     /// `extra_usages` adds any additional flags needed by the specific role
     /// (for example COPY_SRC for cloud_current/cloud_target, COPY_DST for history).
     fn create_cloud_texture(
@@ -4413,13 +4413,12 @@ impl Gpu {
                     }
                 }
                 frame_stats.terrain_draw_calls = terrain_draw_calls;
-                if self.scene_vertices > 0 {
-                    if let Some(stream) = &self.scene_stream {
+                if self.scene_vertices > 0
+                    && let Some(stream) = &self.scene_stream {
                         pass.set_vertex_buffer(0, stream.slice::<Vertex3>(self.scene_vertices));
                         pass.draw(0..self.scene_vertices as u32, 0..1);
                         frame_stats.terrain_draw_calls += 1;
                     }
-                }
                 frame_stats.terrain_indices = terrain_indices;
             }
         }
@@ -4791,23 +4790,21 @@ impl Gpu {
             )
         });
 
-        if let Some(slot_index) = gpu_timestamp_slot {
-            if gpu_query_count != 0 {
+        if let Some(slot_index) = gpu_timestamp_slot
+            && gpu_query_count != 0 {
                 self.gpu_profiler
                     .as_ref()
                     .expect("profiler slot allocated without profiler")
                     .resolve_results(&mut encoder, slot_index, gpu_query_count);
             }
-        }
 
         let submit_start = Instant::now();
         self.queue.submit(Some(encoder.finish()));
-        if let Some(slot_index) = gpu_timestamp_slot {
-            if let Some(profiler) = self.gpu_profiler.as_mut() {
+        if let Some(slot_index) = gpu_timestamp_slot
+            && let Some(profiler) = self.gpu_profiler.as_mut() {
                 profiler.mark_submitted(slot_index, gpu_query_count, gpu_pass_queries,
                     frame_stats.frame_id, frame_stats.config_id);
             }
-        }
         frame_stats.submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
 
         if let Some(mut capture) = capture {

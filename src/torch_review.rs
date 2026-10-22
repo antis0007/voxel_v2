@@ -157,11 +157,10 @@ pub fn camera(player: &mut Player, scale: f32) {
     player.fly_mode = FlyMode::Noclip;
     player.crouch_t = 0.0;
     player.selected_block = BlockId::Stone;
-    if mode() == "factory" {
-        if let Some(offset) = factory_review_focus() {
+    if mode() == "factory"
+        && let Some(offset) = factory_review_focus() {
             player.pos = (Vec3::new(offset.x as f32 + 0.5, 101.5 + offset.y as f32, offset.z as f32 + 3.5)) / scale;
         }
-    }
 }
 
 fn factory_review_focus() -> Option<IVec3> {
@@ -456,7 +455,9 @@ fn health_sample(world: &mut World) {
     for x in [-6, -4] {
         factory::fixture_place(world, at(x), Kind::Crusher);
     }
-    factory::fixture_place(world, at(-2), Kind::Furnace).map(|n| n.enabled = false);
+    if let Some(n) = factory::fixture_place(world, at(-2), Kind::Furnace) {
+        n.enabled = false;
+    }
     factory::fixture_place(world, at(0), Kind::Assembler);
     factory::fixture_place(world, at(2), Kind::Generator);
     factory::fixture_place(world, at(4), Kind::Battery);

@@ -117,7 +117,7 @@ fn build_anchorage_local(mesh: &mut Model, class: Class, key: u32) -> std::ops::
                 let tangent=Vec3::new(-a.sin(),0.0,a.cos());
                 let wc=c+radial*tube*0.056+tangent*window*length*0.29;
                 mesh.cuboid(wc,Vec3::new(tube*0.004,tube*0.022,length*0.21),q,
-                    if (i+key as usize)%5==0 {[0.24,0.39,0.41]} else {[0.85,0.64,0.34]},0.65);
+                    if (i + key as usize).is_multiple_of(5) {[0.24,0.39,0.41]} else {[0.85,0.64,0.34]},0.65);
             }
             let a0=i as f32*step;
             let a1=(i+1) as f32*step;

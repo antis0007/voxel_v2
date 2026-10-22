@@ -224,11 +224,10 @@ fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
     let (rx, rz) = ((x / span).round() as i32, (z / span).round() as i32);
     for dz in -1..=1 {
         for dx in -1..=1 {
-            if let Some(s) = site(cfg, rx + dx, rz + dz) {
-                if (s.x - x).hypot(s.z - z) < 44.0 {
+            if let Some(s) = site(cfg, rx + dx, rz + dz)
+                && (s.x - x).hypot(s.z - z) < 44.0 {
                     return None;
                 }
-            }
         }
     }
     let v = cfg.voxel_meters();
@@ -372,11 +371,10 @@ pub(super) fn surface_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool 
         cfg,
         (x / HOME_CELL).round() as i32,
         (z / HOME_CELL).round() as i32,
-    ) {
-        if (h.x - x).hypot(h.z - z) < h.reach + 4.0 {
+    )
+        && (h.x - x).hypot(h.z - z) < h.reach + 4.0 {
             return true;
         }
-    }
     super::dungeon::reserved(cfg, Vec3::new(x, 0.0, z))
 }
 
@@ -444,11 +442,10 @@ pub fn next_relic(cfg: &WorldSampleConfig, origin: Vec3, collected: u32) -> Opti
     let rz = (origin.z / region_span(cfg)).round() as i32;
     for x in rx - 5..=rx + 5 {
         for z in rz - 5..=rz + 5 {
-            if let Some(s) = site(cfg, x, z) {
-                if s.kind == target {
+            if let Some(s) = site(cfg, x, z)
+                && s.kind == target {
                     consider(s.kind, site_point(s, Vec3::Y));
                 }
-            }
         }
     }
     if target == 8 && collected & 4 == 0 {
@@ -878,11 +875,10 @@ pub(crate) fn holy_ground(cfg: &WorldSampleConfig) -> f32 {
 }
 
 fn shaft_ground(cfg: &WorldSampleConfig) -> f32 {
-    if let Some((c, g)) = SHAFT_GROUND.get() {
-        if c == *cfg {
+    if let Some((c, g)) = SHAFT_GROUND.get()
+        && c == *cfg {
             return g;
         }
-    }
     let g = sample_column(cfg, cfg.blocks_for_height(18.0), 0).height as f32 * cfg.voxel_meters();
     SHAFT_GROUND.set(Some((*cfg, g)));
     g
@@ -926,11 +922,10 @@ fn noita_v16(cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
             return Some(B::Air);
         }
     }
-    if (20.0..92.0).contains(&below) {
-        if let Some(b) = super::dungeon::vault(cfg, m, ground) {
+    if (20.0..92.0).contains(&below)
+        && let Some(b) = super::dungeon::vault(cfg, m, ground) {
             return Some(b);
         }
-    }
     let mouth = (-4.5..1.0).contains(&below) && dx.abs() < 2.4 && dz.abs() < 2.4;
     let opening = dx.abs() < 1.5 && dz.abs() < 1.5 && (-3.6..0.2).contains(&below);
     if mouth && !opening {
@@ -1073,20 +1068,17 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
     if let Some(carved) = noita_descent(cfg, m) {
         return Some(carved);
     }
-    if cfg.generator_version >= 14 {
-        if let Some(built) = super::valley::architecture(cfg, m) {
+    if cfg.generator_version >= 14
+        && let Some(built) = super::valley::architecture(cfg, m) {
             return Some(built);
         }
-    }
     let rx = (m.x / region_span(cfg)).round() as i32;
     let rz = (m.z / region_span(cfg)).round() as i32;
-    if cfg.generator_version >= 9 && rz != 0 && m.x.abs() < 32.0 && (-130.0..0.0).contains(&m.z) {
-        if let Some(s) = site(cfg, 0, 0) {
-            if let Some(b) = sample_site(s, cfg, m, terrain_top) {
+    if cfg.generator_version >= 9 && rz != 0 && m.x.abs() < 32.0 && (-130.0..0.0).contains(&m.z)
+        && let Some(s) = site(cfg, 0, 0)
+            && let Some(b) = sample_site(s, cfg, m, terrain_top) {
                 return Some(b);
             }
-        }
-    }
     // The valley hamlet and tower own their ground. Older box sites stay outside it.
     if cfg.generator_version >= 14 && super::valley::reserves(cfg, m.x, m.z) {
         return None;
@@ -1102,18 +1094,15 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
     } else {
         rz as f32 * region_span(cfg)
     };
-    if (m.x - center_x).abs() <= 48.0 && (m.z - center_z).abs() <= 84.0 {
-        if let Some(s) = site(cfg, rx, rz) {
-            if let Some(b) = sample_site(s, cfg, m, terrain_top) {
+    if (m.x - center_x).abs() <= 48.0 && (m.z - center_z).abs() <= 84.0
+        && let Some(s) = site(cfg, rx, rz)
+            && let Some(b) = sample_site(s, cfg, m, terrain_top) {
                 return Some(b);
             }
-        }
-    }
-    if cfg.generator_version >= 16 {
-        if let Some(b) = homestead_block(cfg, m, terrain_top) {
+    if cfg.generator_version >= 16
+        && let Some(b) = homestead_block(cfg, m, terrain_top) {
             return Some(b);
         }
-    }
     // Trails and roadside places are sampled after authored sites so they can
     // connect to a ruin without cutting through its rooms.
     super::surface::block(cfg, p, height, terrain_top)
@@ -1197,7 +1186,7 @@ fn dress_chamber(variant: u32, dx: f32, dz: f32, dy: f32, roof: f32, v: f32) -> 
             if r < 1.15 && dy >= v && dy < v * 2.0 {
                 return Some(B::Water);
             }
-            if r >= 1.15 && r < 2.15 && dy >= v && dy < v * 2.0 {
+            if (1.15..2.15).contains(&r) && dy >= v && dy < v * 2.0 {
                 return Some(B::StoneBricks);
             }
             let plinths = [
@@ -1265,13 +1254,12 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
             return None;
         }
     }
-    if cfg.generator_version >= 20 {
-        if let Some(b) = super::cistern::sample(cfg, m) {
+    if cfg.generator_version >= 20
+        && let Some(b) = super::cistern::sample(cfg, m) {
             return Some(b);
         }
-    }
     let depth = height as f32 * cfg.voxel_meters() - m.y;
-    if depth < 9.0 || depth > 70.0 {
+    if !(9.0..=70.0).contains(&depth) {
         return None;
     }
     if let Some(floor) = gallery_floor(cfg, p, m) {
@@ -1347,11 +1335,10 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
         11.0
     };
     let roof = roof_base - ellipse * 5.0 + (dx * 0.21).sin();
-    if variant == 2 && cfg.generator_version >= super::prism_sanctum::FIRST_VERSION {
-        if let Some(block) = super::prism_sanctum::block(Vec3::new(dx, dy, dz), cfg.voxel_meters()) {
+    if variant == 2 && cfg.generator_version >= super::prism_sanctum::FIRST_VERSION
+        && let Some(block) = super::prism_sanctum::block(Vec3::new(dx, dy, dz), cfg.voxel_meters()) {
             return Some(block);
         }
-    }
     // The broken road is an optional construction puzzle, with a walkable floor detour.
     // Version-gated so existing worlds retain their terrain and discoveries.
     if cfg.generator_version >= 12
@@ -1371,9 +1358,8 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
             return Some(B::StoneBricks);
         }
         if (8.0..11.0).contains(&dz)
-            && dx >= -7.0
-            && dx < 14.0
-            && (dx < -1.5 || dx > 1.5)
+            && (-7.0..14.0).contains(&dx)
+            && !(-1.5..=1.5).contains(&dx)
             && (3.0..4.0).contains(&dy)
         {
             return Some(B::StoneBricks);
@@ -1394,11 +1380,10 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
         return Some(B::Air);
     }
     if ellipse < 1.0 && dy > 0.0 && dy < roof {
-        if cfg.generator_version >= 17 {
-            if let Some(dressed) = dress_chamber(variant, dx, dz, dy, roof, cfg.voxel_meters()) {
+        if cfg.generator_version >= 17
+            && let Some(dressed) = dress_chamber(variant, dx, dz, dy, roof, cfg.voxel_meters()) {
                 return Some(dressed);
             }
-        }
         if dy < cfg.voxel_meters() {
             return Some(B::FungalSoil);
         }
@@ -1607,7 +1592,7 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
                             out.push((
                                 IVec3::new(x, z + layer as i32 * 1000, 0),
                                 point,
-                                kind | ((layer as u32) << 8),
+                                kind | (layer << 8),
                             ));
                         }
                     }

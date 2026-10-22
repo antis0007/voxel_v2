@@ -210,7 +210,7 @@ impl ChunkCache {
                     **coord != key.coord && mesh.bytes > 0
                         && !self.horizon_pin_coords.contains(*coord)
                         && !self.published_coords.contains(*coord)
-                        && !self.edit_proxies.contains(*coord)
+                        && !self.edit_proxies.contains(coord)
                         && !self.pending_gpu.contains(coord)
                         && self.residency_rank(**coord) > rank
                 })
@@ -267,7 +267,7 @@ impl ChunkCache {
             // Requested membership may grow while the old column is still
             // published. Resource pressure must not silently unpublish it.
             let mut victims: Vec<_> = self.gpu_meshes.keys()
-                .filter(|q| !self.horizon_pin_coords.contains(*q) && !self.published_coords.contains(*q) && !self.edit_proxies.contains(*q) && !self.pending_gpu.contains(q))
+                .filter(|q| !self.horizon_pin_coords.contains(*q) && !self.published_coords.contains(*q) && !self.edit_proxies.contains(q) && !self.pending_gpu.contains(q))
                 .copied().collect();
             victims.sort_unstable_by_key(|coord| std::cmp::Reverse(self.residency_rank(*coord)));
             for coord in victims {

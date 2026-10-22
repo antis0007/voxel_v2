@@ -10,6 +10,7 @@ mod tests {
     /// Everything allowed at the repo root. Add a real project entry here on
     /// purpose; scratch files, logs, zips, patches and launchers stay outside.
     const ROOT_FILES: &[&str] = &[
+        ".gitattributes",
         ".gitignore",
         "AGENTS.md",
         "CLAUDE.md",

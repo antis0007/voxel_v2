@@ -213,7 +213,7 @@ pub(super) fn disguise(e: &Enemy, m: &mut Model, time: f32) -> bool {
         [0.12, 0.10, 0.08],
         0.0,
     );
-    if ((time * 0.8) as u32 + e.slot) % 5 == 0 {
+    if ((time * 0.8) as u32 + e.slot).is_multiple_of(5) {
         m.glow_voxel(
             e.pos + Vec3::new(0.05, 0.18, -0.32),
             Vec3::splat(0.05),

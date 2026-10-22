@@ -294,12 +294,11 @@ impl WorldSimulation {
                         None
                     };
                     let c = preferred.or_else(|| {
-                        if (visit / 4 + world.activity.tick as usize) % 2 == 0 {
-                            if let Some(c) = self.ready.pop_front() {
+                        if (visit / 4 + world.activity.tick as usize).is_multiple_of(2)
+                            && let Some(c) = self.ready.pop_front() {
                                 self.ready_set.remove(&c);
                                 return Some(c);
                             }
-                        }
                         world.activity.next_fair()
                     });
                     let Some(c) = c else {

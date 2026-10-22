@@ -634,7 +634,7 @@ fn pit_block(seed: u32, r: &Room, rx: f32, rz: f32, fy: f32, wt: f32) -> B {
         if dx < 0.9 && dz < 0.9 && y < 0.8 {
             return B::StoneBricks;
         }
-        if dx < 0.5 && dz < 0.5 && y >= 0.8 && y < 1.8 {
+        if dx < 0.5 && dz < 0.5 && (0.8..1.8).contains(&y) {
             return B::SurveyCache;
         }
         if dx > 1.4 && dz < 0.5 && y < 1.0 && (rx - qcx).abs() > 2.6 {
@@ -701,7 +701,7 @@ fn labyrinth(seed: u32, r: &Room, rx: f32, rz: f32, fy: f32, v: f32) -> Option<B
         }
     };
     let opens_east =
-        |i: i32, j: i32| -> bool { !(i == nx - 1 && j == nz - 1) && !opens_north(i, j) };
+        |i: i32, j: i32| -> bool { !(opens_north(i, j) || i == nx - 1 && j == nz - 1) };
     // The way in: one gap in the south boundary wall.
     let entry = (key(0, 0, 3402) * nx as f32) as i32 % nx;
     let solid = if on_vline && on_hline {
@@ -795,7 +795,7 @@ impl Dungeon {
         let (out, t) = r.annex_frame(a, rx, rz);
         let reach = wt + ANNEX_DEPTH;
         let carve = out >= -0.01 && out < reach && t.abs() < ANNEX_HALF_W;
-        if carve && fy >= 0.0 && fy < ANNEX_H {
+        if carve && (0.0..ANNEX_H).contains(&fy) {
             if out < wt {
                 return Some(B::MirageVoid);
             }
@@ -1158,7 +1158,7 @@ impl Dungeon {
                 continue;
             }
             let inside_xz = m.x >= c.x0 && m.x < c.x1 && m.z >= c.z0 && m.z < c.z1;
-            if inside_xz && fy >= 0.0 && fy < CORR_H {
+            if inside_xz && (0.0..CORR_H).contains(&fy) {
                 // A standing torch every nine metres keeps corridors readable.
                 let (along, lateral) = if c.along_x {
                     (m.x, m.z - (c.z0 + w))
@@ -1281,11 +1281,10 @@ impl Dungeon {
         if let Some(block) = self.dress_v18(cfg, r, rx, rz, fy, v) {
             return Some(block);
         }
-        if cfg.generator_version >= 19 {
-            if let Some(block) = room_interest(self.seed, r, rx, rz, fy, v) {
+        if cfg.generator_version >= 19
+            && let Some(block) = room_interest(self.seed, r, rx, rz, fy, v) {
                 return Some(block);
             }
-        }
         let (w, d) = (r.x1 - r.x0, r.z1 - r.z0);
         let (mx, mz) = (w * 0.5, d * 0.5);
         let lane = (rx - mx).abs() < 1.9 || (rz - mz).abs() < 1.9;
@@ -1387,7 +1386,7 @@ impl Dungeon {
                 if ax < 1.0 + unit * 0.5 && az < 1.0 + unit * 0.5 && fy < 1.0f32.max(v) {
                     return Some(B::StoneBricks);
                 }
-                if ax < 0.5 && az < 0.5 && fy >= 1.0 && fy < 2.0 {
+                if ax < 0.5 && az < 0.5 && (1.0..2.0).contains(&fy) {
                     return Some(B::SurveyCache);
                 }
                 if ax > mx - 1.6 && az > mz - 1.6 && fy < 2.0 {
@@ -1398,7 +1397,7 @@ impl Dungeon {
                 if rz > d - 2.5 && (rx - mx).abs() < 1.6 && fy < 1.0f32.max(v) {
                     return Some(B::StoneBricks);
                 }
-                if rz > d - 2.0 && (rx - mx).abs() < 0.5 && fy >= 1.0 && fy < 2.0 {
+                if rz > d - 2.0 && (rx - mx).abs() < 0.5 && (1.0..2.0).contains(&fy) {
                     return Some(B::Crystal);
                 }
                 if rz > d - 2.5 && ((rx - mx).abs() - 3.0).abs() < 0.5 && fy < v {
@@ -1469,7 +1468,7 @@ impl Dungeon {
             }
             Kind::Cosmos => {
                 // The orb: one crystal hung in the middle of the dark.
-                if (rx - mx).abs() < 0.7 && (rz - mz).abs() < 0.7 && fy >= 2.6 && fy < 3.6 {
+                if (rx - mx).abs() < 0.7 && (rz - mz).abs() < 0.7 && (2.6..3.6).contains(&fy) {
                     return Some(B::Crystal);
                 }
                 if !lane {
@@ -1534,8 +1533,8 @@ impl Dungeon {
         if let Some(b) = self.shaft_block(cfg, m) {
             return Some(b);
         }
-        if let (Some(g), Some((sx, sz, top))) = (&self.gatehouse, self.shaft) {
-            if m.y >= top - 1.0 {
+        if let (Some(g), Some((sx, sz, top))) = (&self.gatehouse, self.shaft)
+            && m.y >= top - 1.0 {
                 if let Some(b) = g.sample(
                     Vec3::new(m.x - sx, m.y - top, m.z - sz),
                     cfg.voxel_meters(),
@@ -1545,7 +1544,6 @@ impl Dungeon {
                 }
                 return None;
             }
-        }
         // Keep two metres of rock over every void so rooms never breach the surface.
         let surface = (height + 1) as f32 * cfg.voxel_meters();
         if m.y > surface - 2.0 {
@@ -2068,11 +2066,10 @@ mod tests {
         for r in 2..9i32 {
             for ix in -r..=r {
                 for iz in -r..=r {
-                    if ix.abs().max(iz.abs()) == r {
-                        if let Some(d) = cell_at(c, ix, iz) {
+                    if ix.abs().max(iz.abs()) == r
+                        && let Some(d) = cell_at(c, ix, iz) {
                             return d;
                         }
-                    }
                 }
             }
         }

@@ -81,13 +81,12 @@ pub(super) fn hurt(e: &mut Enemy, damage: f32) {
     if damage < 18.0 {
         return;
     }
-    if let Some(run) = &mut e.matron.run {
-        if run.kind == Action::Plant && run.phase() == Phase::Prepare {
+    if let Some(run) = &mut e.matron.run
+        && run.kind == Action::Plant && run.phase() == Phase::Prepare {
             run.interrupt();
             e.matron.pending_drop = true;
             e.matron.interrupted += 1;
         }
-    }
 }
 
 pub(super) fn tick(
@@ -111,8 +110,7 @@ pub(super) fn tick(
         if let Some(source) = e
             .habitat
             .and_then(|id| world.habitats.sources.iter_mut().find(|s| s.id == id))
-        {
-            if source.feed >= 64 {
+            && source.feed >= 64 {
                 if e.matron.pods < 2 {
                     source.feed -= 64;
                     source.feed_used = source.feed_used.saturating_add(64);
@@ -125,13 +123,11 @@ pub(super) fn tick(
                     e.matron.spores += 6;
                 }
             }
-        }
     }
-    if e.matron.pending_drop {
-        if place(e, world, e.pos + Vec3::new(1.6, 0.0, 0.0)) {
+    if e.matron.pending_drop
+        && place(e, world, e.pos + Vec3::new(1.6, 0.0, 0.0)) {
             e.matron.pending_drop = false;
         }
-    }
     let mut damage = 0.0;
     if let Some(mut run) = e.matron.run.take() {
         if e.stagger > 0.3 && run.phase() == Phase::Prepare {
@@ -250,12 +246,12 @@ pub(super) fn tick(
         .habitat
         .and_then(|id| super::super::habitats::brood_target(world, id, e.home));
     let kind = if active && distance < 3.5 {
-        if e.attacks % 2 == 0 {
+        if e.attacks.is_multiple_of(2) {
             Action::Stamp
         } else {
             Action::Rake
         }
-    } else if e.matron.pods > 0 && bed.is_some() && (e.attacks % 3 == 0 || !active) {
+    } else if e.matron.pods > 0 && bed.is_some() && (e.attacks.is_multiple_of(3) || !active) {
         Action::Plant
     } else if active && e.matron.spores >= 6 {
         Action::Pollen

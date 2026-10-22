@@ -21,7 +21,7 @@ fn probe_approach_hill_materials() {
         world_type: world::WorldType::Hills,
         voxel_scale: crate::fluid::VoxelScalePreset::OneMeter,
     };
-    let eye = Vec3::new(2581.8630, 53.6200, -3893.5686);
+    let eye = Vec3::new(2_581.863, 53.6200, -3893.5686);
     let (yaw, pitch) = (0.600041_f32, -0.2_f32);
     let forward = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
     let right = forward.cross(Vec3::Y).normalize();

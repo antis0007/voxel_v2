@@ -191,9 +191,7 @@ fn pressure_outlet(sources: &mut Residency, world: &mut World, p: IVec3) -> Opti
                 world.activity.wake(p);
                 return None;
             }
-            let Some((id, amount)) = sources.read(world, q) else {
-                return None;
-            };
+            let (id, amount) = sources.read(world, q)?;
             if !matches!(id, B::Air | B::Water) {
                 continue;
             }
@@ -437,9 +435,7 @@ pub(super) fn step(
         && (world.activity.tick == 0
             || (world.activity.tick as usize)
                 .wrapping_add(p.x as usize)
-                .wrapping_add(p.z as usize)
-                % 8
-                == 0)
+                .wrapping_add(p.z as usize).is_multiple_of(8))
         && sources
             .read(world, p)
             .is_some_and(|(id, v)| id == B::Water && v > 1)
