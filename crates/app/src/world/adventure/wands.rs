@@ -137,7 +137,6 @@ pub struct CastAction {
     /// touch the carrier. An empty payload leaves this at the default shot.
     pub payload_mods: ShotMods,
     pub follow: Option<u32>,
-    pub follow_slot: Option<usize>,
     pub mods: ShotMods,
 }
 
@@ -452,7 +451,6 @@ pub fn evaluate_programmed(
                 payload_slot,
                 payload_mods: ShotMods::default(),
                 follow: None,
-                follow_slot: None,
                 mods: ShotMods::default(),
             });
         }
@@ -553,7 +551,6 @@ pub fn evaluate_programmed(
             let mut payload_slot = None;
             let mut payload_mods = ShotMods::default();
             let mut follow = None;
-            let mut follow_slot = None;
             if attach_trigger && (projectile(fired) || fired == 34) {
                 // Payload is a separate cast. Stat cards between the carrier
                 // and the payload spell wrap the payload, not the carrier.
@@ -585,7 +582,6 @@ pub fn evaluate_programmed(
                         let after_s = loadout.slot(after);
                         if after != scan && is_effect(after_s) {
                             follow = Some(after_s);
-                            follow_slot = Some(after);
                             mana_cost += inscriptions::cost(after_s, discoveries) * 0.85;
                             last_slot = after;
                             cur = after;
@@ -608,7 +604,6 @@ pub fn evaluate_programmed(
                     payload_slot,
                     payload_mods,
                     follow,
-                    follow_slot,
                     mods,
                 });
             }
@@ -632,7 +627,6 @@ pub fn evaluate_programmed(
             payload_slot: None,
             payload_mods: ShotMods::default(),
             follow: None,
-            follow_slot: None,
             mods,
         });
         mana_cost += inscriptions::cost(0, discoveries);

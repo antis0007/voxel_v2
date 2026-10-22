@@ -27,8 +27,6 @@ pub struct WeatherFieldSummary {
 #[derive(Clone, Copy, Debug)]
 pub struct WeatherClipmapDescriptor {
     pub level: usize,
-    pub span_m: f32,
-    pub resolution: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -182,8 +180,6 @@ impl WeatherClipmapLevel {
         let mut level = Self {
             descriptor: WeatherClipmapDescriptor {
                 level,
-                span_m,
-                resolution,
             },
             region: WeatherRegion {
                 origin_m: Vec2::ZERO,

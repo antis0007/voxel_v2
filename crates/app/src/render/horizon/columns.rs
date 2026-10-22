@@ -612,28 +612,6 @@ fn emit_walls(
     emitted
 }
 
-/// Stand a tree on the column surface that covers it, not the smooth surface.
-/// `base` is in metres, and so is the returned point.
-pub(super) fn rest_on_surface(cfg: &WorldSampleConfig, center: (i32, i32), base: Vec3) -> Vec3 {
-    if !enabled() {
-        return base;
-    }
-    let center = (center.0 as f32, center.1 as f32);
-    let Some(index) = owner(center, base.x, base.z) else {
-        return base;
-    };
-    let (_, column_m) = BANDS[index];
-    let kx = (base.x / column_m).floor() as i32;
-    let kz = (base.z / column_m).floor() as i32;
-    let corners = [(0, 0), (0, 1), (1, 1), (1, 0)]
-        .map(|(dx, dz)| sample_corner(cfg, column_m, kx + dx, kz + dz));
-    let column = Column {
-        index: (kx, kz),
-        origin: (kx as f32 * column_m, kz as f32 * column_m),
-        corners,
-    };
-    Vec3::new(base.x, column.height(column_m, base.x, base.z) * cfg.voxel_meters(), base.z)
-}
 
 #[cfg(test)]
 mod tests {

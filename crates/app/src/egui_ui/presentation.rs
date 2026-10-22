@@ -10,16 +10,6 @@ pub(super) const AMBER: Color32 = super::grimoire::GOLD;
 pub(super) const DANGER: Color32 = Color32::from_rgb(225, 105, 91);
 pub(super) const MANA: Color32 = Color32::from_rgb(0x70, 0xc9, 0xcf);
 
-pub(super) fn keycap(ui: &mut egui::Ui, key: &str) {
-    egui::Frame::new()
-        .fill(INK)
-        .stroke(egui::Stroke::new(1.0, EDGE))
-        .inner_margin(egui::Margin::symmetric(5, 1))
-        .corner_radius(0)
-        .show(ui, |ui| {
-            ui.label(RichText::new(key).monospace().size(11.0).color(PAPER));
-        });
-}
 
 pub(super) fn apply_theme(ctx: &egui::Context) {
     ctx.tessellation_options_mut(|o| {

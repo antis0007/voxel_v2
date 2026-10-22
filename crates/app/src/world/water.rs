@@ -58,14 +58,8 @@ impl WaterSnapshot {
     pub fn get(&self, p: &IVec3) -> Option<&u8> {
         self.chunks.get(&chunk_coord_from_world_block(*p))?.get(p)
     }
-    pub fn contains_key(&self, p: &IVec3) -> bool {
-        self.get(p).is_some()
-    }
     pub fn iter(&self) -> impl Iterator<Item = (&IVec3, &u8)> {
         self.chunks.values().flat_map(|m| m.iter())
-    }
-    pub fn keys(&self) -> impl Iterator<Item = &IVec3> {
-        self.iter().map(|(p, _)| p)
     }
     pub fn in_box(&self, min: IVec3, max: IVec3) -> impl Iterator<Item = (&IVec3, &u8)> + '_ {
         let lo = chunk_coord_from_world_block(min);
@@ -192,6 +186,7 @@ impl WaterLevels {
     pub fn capacity(&self) -> usize {
         self.capacity + self.chunks.capacity()
     }
+    #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = (&IVec3, &u8)> {
         self.chunks.values().flat_map(|m| m.iter())
     }

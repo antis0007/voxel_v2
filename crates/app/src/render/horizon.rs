@@ -172,9 +172,11 @@ fn same_collar(a:Option<&Arc<collar::Input>>,b:Option<&Arc<collar::Input>>)->boo
 }
 
 impl BuildTarget {
+    #[cfg(test)]
     fn valid_for(&self, snapshot: &crate::world::WorldSnapshot) -> bool {
         self.valid_for_coverage(snapshot, self.eye, self.hidden_radius)
     }
+    #[cfg(test)]
     fn valid_for_coverage(
         &self,
         snapshot: &crate::world::WorldSnapshot,

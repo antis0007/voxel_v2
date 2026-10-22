@@ -31,6 +31,7 @@ const BLADES: u32 = 6;
 /// that gathers tufts into loose patches with open gaps between them. Pure
 /// function of world column, so chunk reloads and remeshes keep placement.
 const PATCH_METRES: f32 = 5.0;
+#[cfg(test)]
 fn patch_field(x: i32, z: i32) -> f32 {
     patch_field_metres(x as f32, z as f32)
 }

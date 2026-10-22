@@ -1431,7 +1431,6 @@ fn gen_weather_texture_data() -> Vec<u8> {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct LoadingProgress {
-    pub stage_label: &'static str,
     pub detail: &'static str,
     pub progress_01: f32,
 }
@@ -1536,7 +1535,6 @@ pub struct GpuPendingInit {
     invert_outline_stream: Option<DynamicVertexBuffer>,
     ui_stream: Option<DynamicVertexBuffer>,
 
-    last_error: Option<anyhow::Error>,
 }
 impl GpuBootstrap {
     pub async fn new(window: Arc<Window>) -> Result<Self> {
@@ -1799,7 +1797,6 @@ impl GpuBootstrap {
             invert_outline_stream: None,
             ui_stream: None,
 
-            last_error: None,
         }
     }
 }
@@ -1807,32 +1804,26 @@ impl GpuPendingInit {
     pub fn progress(&self) -> LoadingProgress {
         match self.stage {
             GpuInitStage::CoreBindings => LoadingProgress {
-                stage_label: "Renderer bootstrap",
                 detail: "Creating uniform buffers and bind-group layouts…",
                 progress_01: 0.20,
             },
             GpuInitStage::CloudFields => LoadingProgress {
-                stage_label: "Renderer bootstrap",
                 detail: "Uploading cloud/weather textures…",
                 progress_01: 0.45,
             },
             GpuInitStage::ShaderModules => LoadingProgress {
-                stage_label: "Renderer bootstrap",
                 detail: "Compiling shader modules…",
                 progress_01: 0.65,
             },
             GpuInitStage::Pipelines => LoadingProgress {
-                stage_label: "Renderer bootstrap",
                 detail: "Creating render pipelines…",
                 progress_01: 0.82,
             },
             GpuInitStage::Finalize => LoadingProgress {
-                stage_label: "Renderer bootstrap",
                 detail: "Finalizing renderer resources…",
                 progress_01: 0.92,
             },
             GpuInitStage::Complete => LoadingProgress {
-                stage_label: "Renderer bootstrap",
                 detail: "Done",
                 progress_01: 1.0,
             },

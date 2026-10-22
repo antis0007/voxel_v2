@@ -34,10 +34,6 @@ fn patch() -> Option<Patch> {
     })
 }
 
-pub(super) fn contains(x: f32, z: f32) -> bool {
-    patch().is_some_and(|p| (x - p.x).abs().max((z - p.z).abs()) <= p.span * 0.5)
-}
-
 pub(super) fn apply(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
     if voxel_reference() {
         return;

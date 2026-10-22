@@ -578,6 +578,7 @@ fn relevant(snapshot: &WorldSnapshot, q: IVec3, eye: Vec3, hidden: f32) -> bool 
 
 /// An edit omitted by a proven occluder at build time must be rebuilt before
 /// a new view can expose it, even if the underlying saved content is unchanged.
+#[cfg(test)]
 pub(super) fn scope_covers(
     omitted: &Omitted,
     current: &WorldSnapshot,
@@ -637,6 +638,7 @@ fn submerged_water(snapshot: &WorldSnapshot, p: IVec3) -> bool {
 /// y=0 does not make the whole y=0..31 chunk a visible surface dependency.
 /// Unknown/cold versions fail conservatively; the retained procedural base lets
 /// that edit stage retry without rerunning regional terrain generation.
+#[cfg(test)]
 pub(super) fn changes_visible(
     old: &WorldSnapshot,
     new: &WorldSnapshot,

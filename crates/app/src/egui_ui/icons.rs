@@ -14,7 +14,6 @@ pub enum Icon {
     Machine(Kind),
     Spell(u32),
     Wand(u8),
-    Heart,
     Torch,
     Bore,
     Sword(u32),
@@ -71,21 +70,6 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
                 "     333     ",
             ][..],
             C::from_rgb(150, 109, 73),
-        ),
-        Icon::Heart => (
-            &[
-                "  333   333  ",
-                " 32223 32223 ",
-                "3221223221223",
-                "3221111111123",
-                " 32111111123 ",
-                "  321111123  ",
-                "   3211123   ",
-                "    32123    ",
-                "     323     ",
-                "      3      ",
-            ],
-            C::from_rgb(195, 66, 69),
         ),
         Icon::Bore => (
             &[

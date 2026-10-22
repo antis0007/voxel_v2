@@ -147,6 +147,7 @@ impl Hook {
         (TAU - rel).rem_euclid(TAU) / (self.n - EARTH_RATE)
     }
     /// Centripetal load on the tip relative to the hub, in g.
+    #[cfg(test)]
     pub fn tip_load_g(&self) -> f64 {
         self.spin * self.spin * self.tether_m / 9.81
     }

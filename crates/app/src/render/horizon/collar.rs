@@ -325,16 +325,6 @@ impl Input {
             dependencies: dependencies.to_vec(),
         }))
     }
-    pub(crate) fn neighbor(&self) -> Option<(i32, i32)> {
-        let (x, z) = self.column;
-        match self.side {
-            0 => Some((x.checked_sub(1)?, z)),
-            1 => Some((x.checked_add(1)?, z)),
-            2 => Some((x, z.checked_sub(1)?)),
-            3 => Some((x, z.checked_add(1)?)),
-            _ => None,
-        }
-    }
     /// The strip and both transverse caps must be outside every resident owner.
     /// Requiring the diagonal neighbours too avoids masked caps at corners.
     pub(crate) fn unowned_columns(&self) -> Option<[(i32, i32); 3]> {
@@ -355,17 +345,6 @@ impl Input {
             [(x, z), (x.checked_sub(1)?, z), (x.checked_add(1)?, z)]
         })
     }
-    pub(crate) fn same_installation(&self, other: &Self) -> bool {
-        self.column == other.column
-            && self.side == other.side
-            && self.dependencies.len() == other.dependencies.len()
-            && self
-                .dependencies
-                .iter()
-                .zip(&other.dependencies)
-                .all(|(a, b)| Arc::ptr_eq(a, b))
-    }
-
     /// Current eligible edge proofs can outlive an identity-only replacement
     /// (for example interior water changes). Exact edge equality avoids rebuilding
     /// the parent/shadows solely because an unrelated part of the column changed.
@@ -523,7 +502,6 @@ fn append_survivor(
 
 #[derive(Clone)]
 pub(crate) struct Ranges {
-    pub common: Range<u32>,
     pub collared: Range<u32>,
     pub uncollared: Range<u32>,
 }
@@ -792,7 +770,6 @@ pub(crate) fn apply(
     mesh.vertices.extend(patch.vertices);
     mesh.indices = kept;
     Some(Outcome::Applied(Ranges {
-        common: 0..common_end,
         collared: common_end..collared_end,
         uncollared: collared_end..uncollared_end,
     }))

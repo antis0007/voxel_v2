@@ -432,7 +432,6 @@ pub enum Action {
     SetFilter(IVec3, Option<usize>),
     UpgradeMachine(IVec3),
     Wand,
-    SelectSpell(u32),
     SetWandSlot(u32, u32),
     SwapWandSlots(u32, u32),
     SetWandMode(u32),
@@ -746,11 +745,6 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
             if mode <= 3 {
                 world.adventure.loadout.mode = mode;
             }
-        }
-        Action::SelectSpell(spell) => {
-            world
-                .adventure
-                .set_wand_slot(world.adventure.loadout.cursor as u32, spell);
         }
         Action::Wand => {
             if at_bench(world, player)

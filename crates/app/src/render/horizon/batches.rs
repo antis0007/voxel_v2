@@ -29,6 +29,7 @@ impl DrawBatch {
     }
 }
 
+#[cfg(test)]
 pub fn partition(mesh: &mut ChunkMesh, scale: f32, origin: (i32, i32)) -> Vec<DrawBatch> {
     partition_variants(mesh,scale,origin,None)
 }

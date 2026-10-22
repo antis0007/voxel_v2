@@ -92,9 +92,6 @@ pub struct Row {
 }
 
 impl Row {
-    pub fn total(&self) -> u32 {
-        self.counts.iter().sum()
-    }
     /// The problem that affects the most assemblies of this kind.
     pub fn main_issue(&self) -> Option<(Health, u32)> {
         worst(&self.counts)
