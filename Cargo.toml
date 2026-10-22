@@ -27,6 +27,13 @@ lto = false
 codegen-units = 16
 incremental = true
 
+# `cargo bench` (`just bench`): release optimisation with the fast-compile
+# settings of release-fast, so the perf gate does not pay for thin LTO.
+[profile.bench]
+lto = false
+codegen-units = 16
+incremental = true
+
 # Lints that only generate noise in this codebase. Each is allowed on purpose:
 # too_many_arguments / type_complexity flag the renderer plumbing that the P3
 # workspace split restructures; field_reassign_with_default and

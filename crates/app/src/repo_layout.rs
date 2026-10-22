@@ -97,6 +97,31 @@ mod tests {
     /// exists. Paths are tokens starting with `crates/`, `assets/`, `docs/`,
     /// `scripts/`, `tools/` or `.claude/`; a token containing `*`, `<` or `{`
     /// is a pattern and is skipped.
+    /// GPU tests get their adapter from `engine_gpu::test_adapter()`, so
+    /// `just test-gpu` controls backend selection and fails without a GPU.
+    /// Only that helper and the windowed renderer may request an adapter.
+    #[test]
+    fn only_engine_gpu_and_the_renderer_request_an_adapter() {
+        let root = repo_root();
+        let allowed = [root.join("crates/gpu/src/lib.rs"), root.join("crates/app/src/render.rs")];
+        let mut stack = vec![root.join("crates")];
+        let mut offenders = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).expect("read crates dir") {
+                let path = entry.expect("crates entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && !allowed.contains(&path)
+                    && fs::read_to_string(&path).expect("read source").contains(concat!("request", "_adapter("))
+                {
+                    offenders.push(path.strip_prefix(&root).unwrap_or(&path).display().to_string());
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "use engine_gpu::test_adapter() instead of request_adapter in {offenders:?}");
+    }
+
     #[test]
     fn agent_docs_name_only_existing_paths_and_commands() {
         let root = repo_root();
@@ -110,7 +135,7 @@ mod tests {
                         files.push(skill);
                     }
                 } else if path.extension().is_some_and(|e| e == "md")
-                    && path.file_name().is_some_and(|n| n != "AUDIT.md")
+                    && path.file_name().is_some_and(|n| n != "AUDIT.md" && n != "PLAN2.md")
                 {
                     files.push(path);
                 }
@@ -140,8 +165,10 @@ mod tests {
                 let mut rest = line;
                 while let Some(i) = rest.find("just ") {
                     rest = &rest[i + 5..];
-                    let cmd: String = rest.chars().take_while(|c| c.is_ascii_lowercase() || *c == '_').collect();
-                    if !cmd.is_empty() && !recipes.iter().any(|r| r == &cmd) {
+                    let cmd: String =
+                        rest.chars().take_while(|c| c.is_ascii_lowercase() || *c == '_' || *c == '-').collect();
+                    let cmd = cmd.trim_end_matches('-');
+                    if !cmd.is_empty() && !recipes.iter().any(|r| r == cmd) {
                         missing.push(format!("{name}: `just {cmd}` is not a recipe"));
                     }
                 }

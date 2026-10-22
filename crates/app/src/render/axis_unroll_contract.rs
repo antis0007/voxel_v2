@@ -1,7 +1,7 @@
 //! PREPARED ONLY: actual loop reference vs production unrolled helpers on native GPU.
 #[test]
 #[ignore = "native Vulkan pilot contract; requires the explicitly assigned GPU slot"]
-fn axis_unroll_actual_shader_equivalence() {
+fn gpu_axis_unroll_actual_shader_equivalence() {
     fn function<'a>(source: &'a str, name: &str) -> &'a str {
         let start = source.find(&format!("fn {name}(")).expect(name);
         let open = source[start..].find('{').unwrap() + start;
@@ -84,9 +84,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         cases.push([m,v,l,f0,[0.,1.,0.,0.]]);
         checks.push(("random finite",false,false,false));
     }
-    let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends:wgpu::Backends::VULKAN,..Default::default()});
-    let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = engine_gpu::test_adapter();
     let (device,queue)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label:Some("actual loop versus unrolled shader helpers"),source:wgpu::ShaderSource::Wgsl(wgsl.into())});

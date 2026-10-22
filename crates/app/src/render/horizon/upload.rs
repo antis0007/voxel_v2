@@ -178,10 +178,8 @@ mod validation_contract {
 
     #[test]
     #[ignore="actual RTX4090 Vulkan scoped upload checks; run serially"]
-    fn horizon_upload_waits_for_validation_and_rejects_invalid_allocations() {
-        let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor{
-            backends:wgpu::Backends::VULKAN,..Default::default()});
-        let adapter=pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    fn gpu_horizon_upload_waits_for_validation_and_rejects_invalid_allocations() {
+        let adapter = engine_gpu::test_adapter();
         let info=adapter.get_info();
         assert!(info.name.contains("4090"),"required RTX4090, got {info:?}");
         println!("[horizon-upload-contract] adapter={info:?}");

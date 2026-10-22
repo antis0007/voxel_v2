@@ -2,7 +2,7 @@ use super::ResidentCoverage;
 
 #[test]
 #[ignore = "native Vulkan compute readback; run explicitly with the shared GPU slot"]
-fn production_water_ownership_edges_and_corners() {
+fn gpu_production_water_ownership_edges_and_corners() {
     use bytemuck::Zeroable;
     let camera_source = include_str!("../shaders/camera_lighting_shared.wgsl");
     let world_source = include_str!("../shaders/world_shader.wgsl");
@@ -25,11 +25,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#
     );
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = engine_gpu::test_adapter();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production water ownership contract"),

@@ -3,19 +3,8 @@ use super::*;
 use crate::mesh::Vertex3;
 use std::sync::atomic::AtomicU8;
 
-fn requested_adapter() -> wgpu::Adapter {
-    let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor{backends:wgpu::Backends::VULKAN,..Default::default()});
-    let adapter=pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference:wgpu::PowerPreference::HighPerformance,..Default::default()
-    })).unwrap();
-    let info=adapter.get_info();println!("[pending-gpu-test] adapter={info:?}");
-    if let Ok(name)=std::env::var("VOXEL_TEST_ADAPTER_NAME") {
-        assert!(info.name.contains(&name),"Required adapter {name:?}, got {:?}",info.name);
-    }
-    adapter
-}
 fn setup() -> (wgpu::Device,wgpu::Queue,ChunkCache,ChunkStreamer) {
-    let adapter=requested_adapter();
+    let adapter=engine_gpu::test_adapter();
     let(device,queue)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mut cache=ChunkCache::new(IVec3::ZERO);
     cache.visible=vec![ChunkKey{coord:IVec3::ZERO,lod:0}];cache.rebuild_visible_sets();
@@ -54,7 +43,7 @@ fn stage(device:&wgpu::Device,queue:&wgpu::Queue,cache:&mut ChunkCache,s:&mut Ch
 
 #[test]
 #[ignore="native production keyed GPU publication Pending/Ready contract; Root slot only"]
-fn pending_gpu_success_and_error_keep_old_cover_until_validation() {
+fn gpu_pending_success_and_error_keep_old_cover_until_validation() {
     for completion in [1,2] {
         let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
         let old_revision=cache.gpu_mesh_revision;let old_owners=cache.published_coords.clone();
@@ -82,7 +71,7 @@ fn pending_gpu_success_and_error_keep_old_cover_until_validation() {
 
 #[test]
 #[ignore="native production edit/interest/LOD revalidation; Root slot only"]
-fn pending_gpu_edit_interest_and_lod_changes_revalidate_before_commit() {
+fn gpu_pending_edit_interest_and_lod_changes_revalidate_before_commit() {
     for change in 0..3 {
         let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,0);
         if change==2 {cache.center_chunk=IVec3::new(1000,0,1000);}
@@ -104,7 +93,7 @@ fn pending_gpu_edit_interest_and_lod_changes_revalidate_before_commit() {
 
 #[test]
 #[ignore="native production world reset and upload-token ownership; Root slot only"]
-fn pending_gpu_world_reset_and_newer_tokens_cannot_publish_or_clear_new_work() {
+fn gpu_pending_world_reset_and_newer_tokens_cannot_publish_or_clear_new_work() {
     for reset in [true,false] {
         let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
         let state=Arc::new(AtomicU8::new(0));let mut c=cpu(&s,0,10,0,3);
@@ -142,10 +131,10 @@ fn pending_gpu_world_reset_and_newer_tokens_cannot_publish_or_clear_new_work() {
 
 #[test]
 #[ignore="actual small-limit GPU scoped validation failure, no OOM; Root slot only"]
-fn pending_gpu_actual_scoped_error_never_installs_invalid_destination() {
+fn gpu_pending_actual_scoped_error_never_installs_invalid_destination() {
     let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
     let old_revision=cache.gpu_mesh_revision;
-    let adapter=requested_adapter();
+    let adapter=engine_gpu::test_adapter();
     let(small,small_queue)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor{
         required_limits:wgpu::Limits{max_buffer_size:4096,..Default::default()},..Default::default()})).unwrap();
     let c=cpu(&s,0,10,9,128); // 7168 vertex bytes: small, but above the requested device limit.
@@ -165,7 +154,7 @@ fn pending_gpu_actual_scoped_error_never_installs_invalid_destination() {
 
 #[test]
 #[ignore="actual nonblocking validation progress without capture/profiler; Root slot only"]
-fn pending_gpu_real_success_progresses_without_capture_or_profiler() {
+fn gpu_pending_real_success_progresses_without_capture_or_profiler() {
     let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
     let c=cpu(&s,0,10,0,3);
     let lease=cache.reserve_pending_gpu(c.key,std::mem::size_of_val(c.mesh.vertices.as_slice())+c.mesh.indices.len()*4).unwrap();
@@ -185,7 +174,7 @@ fn pending_gpu_real_success_progresses_without_capture_or_profiler() {
 
 #[test]
 #[ignore="native handles with synthetic budget metadata; not physical VRAM pressure; Root slot only"]
-fn pending_gpu_accounting_includes_overlap_and_dynamic_supplemental_membership() {
+fn gpu_pending_accounting_includes_overlap_and_dynamic_supplemental_membership() {
     let(device,queue,mut cache,s)=setup();seed_old(&device,&queue,&mut cache,&s,0);
     let q=IVec3::ZERO;let key=ChunkKey{coord:q,lod:0};
     cache.horizon_pin_coords.insert(q);
@@ -209,7 +198,7 @@ fn pending_gpu_accounting_includes_overlap_and_dynamic_supplemental_membership()
 
 #[test]
 #[ignore="actual GPU destinations plus controlled device-health race; Root native slot"]
-fn pending_gpu_health_signal_changes_during_ready_poll_cannot_publish() {
+fn gpu_pending_health_signal_changes_during_ready_poll_cannot_publish() {
     let(device,queue,mut cache,mut s)=setup();
     seed_old(&device,&queue,&mut cache,&s,2);
     let old_revision=cache.gpu_mesh_revision;
@@ -238,7 +227,7 @@ fn exact_test_sources(cache:&mut ChunkCache,coords:HashSet<IVec3>) {
 
 #[test]
 #[ignore="actual RTX4090 destinations; equal-revision COW and water invalidation"]
-fn local_source_changes_cancel_old_gpu_candidates_but_not_unrelated_publication() {
+fn gpu_local_source_changes_cancel_old_gpu_candidates_but_not_unrelated_publication() {
     use crate::{fluid::VoxelScalePreset,world::{World,WorldType}};
     for change in 0..5 {
         let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
@@ -283,7 +272,7 @@ fn local_source_changes_cancel_old_gpu_candidates_but_not_unrelated_publication(
 
 #[test]
 #[ignore="actual RTX4090 fixtures; late worker and uniform source cancellation"]
-fn local_source_cancellation_discards_uniform_ready_and_late_old_worker_result() {
+fn gpu_local_source_cancellation_discards_uniform_ready_and_late_old_worker_result() {
     use crate::{fluid::VoxelScalePreset,world::{World,WorldType}};
     let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
     let mut world=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);
@@ -307,7 +296,7 @@ fn local_source_cancellation_discards_uniform_ready_and_late_old_worker_result()
 
 #[test]
 #[ignore="actual RTX4090 fixture; first exact owner must not use old cached handles"]
-fn local_source_enrollment_precedes_first_quality_column_admission() {
+fn gpu_local_source_enrollment_precedes_first_quality_column_admission() {
     use crate::{fluid::VoxelScalePreset,world::{World,WorldType}};
     let(device,queue,mut cache,mut s)=setup();
     let mut world=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);let snapshot=world.snapshot();

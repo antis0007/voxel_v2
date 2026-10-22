@@ -1,7 +1,7 @@
 //! Execute the production vertex finish-resolution block against real palette data.
 #[test]
 #[ignore = "native Vulkan actual VS finish block; run explicitly in the shared GPU slot"]
-fn unset_rock_finish_preserves_authored_palette_on_actual_vs_block() {
+fn gpu_unset_rock_finish_preserves_authored_palette_on_actual_vs_block() {
     use crate::{material::BlockId, material_studio::Palette};
     let source = include_str!("../shaders/world_shader.wgsl");
     let start = source
@@ -57,11 +57,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
 }}
 "#
     );
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = engine_gpu::test_adapter();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production rock finish resolution"),

@@ -1,0 +1,14 @@
+# GPU plumbing outside the renderer: the adapter GPU tests use today; device
+# creation, readback and the bind-group table move here in Phase B
+# (docs/PLAN2.md).
+[package]
+name = "engine_gpu"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wgpu = "27.0.1"
+pollster = "0.4.0"
+
+[lints]
+workspace = true

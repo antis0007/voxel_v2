@@ -1,7 +1,7 @@
 //! Stage-isolated generation timing for the v15/v16 terrain cost regression.
 //!
-//! Each stage runs as its own whole pass over the same 80 chunks as
-//! `terrain_generation_cost_stays_close_to_the_previous_generator`, in the
+//! Each stage runs as its own whole pass over the same 80 chunks (a hillside
+//! the `terrain` bench also samples), in the
 //! real call order and with no per-voxel timers, so one stage cannot warm a
 //! cache for another. Run:
 //! `cargo test gen_probe -- --ignored --nocapture --test-threads=1`

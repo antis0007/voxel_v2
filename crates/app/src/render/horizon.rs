@@ -1777,13 +1777,7 @@ mod continuity_contract {
     #[test]
     #[ignore = "actual Vulkan upload/provenance stress; run explicitly, serially"]
     fn gpu_publication_rejects_edit_and_world_switch_at_both_stages() {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .unwrap();
+        let adapter = engine_gpu::test_adapter();
         println!("[horizon-gpu-contract] adapter={:?}", adapter.get_info());
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();

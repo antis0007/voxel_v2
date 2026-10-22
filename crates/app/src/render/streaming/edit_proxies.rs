@@ -32,9 +32,8 @@ mod priority_tests {
 
     #[test]
     #[ignore = "native Vulkan buffers for exact proxy LOD activation; run serially"]
-    fn invariant_lod_activation_publishes_ready_edit_column() {
-        let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor {backends:wgpu::Backends::VULKAN,..Default::default()});
-        let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    fn gpu_invariant_lod_activation_publishes_ready_edit_column() {
+        let adapter = engine_gpu::test_adapter();
         let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let q=IVec3::new(50,0,0);
         let mut cache=ChunkCache::new(IVec3::ZERO);

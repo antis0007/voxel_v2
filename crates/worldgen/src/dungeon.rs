@@ -2136,63 +2136,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "wall-clock ratio; flaky under parallel test load (1.07x-1.98x on the same binary). Tracked in docs/PLAN.md debt; moves to `just bench` in P2."]
-    fn terrain_generation_cost_stays_close_to_the_previous_generator() {
-        use std::sync::atomic::AtomicBool;
-        let never = AtomicBool::new(false);
-        let time = |version: u32| {
-            let c = WorldSampleConfig {
-                generator_version: version,
-                seed: 424242,
-                world_type: WorldType::Hills,
-                voxel_scale: VoxelScalePreset::OneMeter,
-            };
-            let start = std::time::Instant::now();
-            let mut solid = 0usize;
-            for cx in 6..10 {
-                for cz in -2..2 {
-                    for cy in -2..3 {
-                        let chunk =
-                            crate::generate_padded(&c, glam::IVec3::new(cx, cy, cz), &never)
-                                .unwrap();
-                        solid += chunk.blocks.iter().filter(|b| **b != B::Air).count();
-                    }
-                }
-            }
-            (start.elapsed().as_secs_f64(), solid)
-        };
-        // Wall-clock on a shared, hybrid-core machine is bimodal per process: the
-        // same binary measured v16 at 1.07x and 1.9x of v15 depending on which core
-        // the test thread landed on, steady within each process. Timing one version
-        // after the other therefore compared two different machines. Alternating
-        // short blocks and keeping each version's best gives both versions the same
-        // chance to hit the fast state. Each block warms its own thread-local and
-        // tile caches first (the discarded call), so a version switch costs neither.
-        let mut old = f64::MAX;
-        let mut new = f64::MAX;
-        for round in 0..4 {
-            for version in if round % 2 == 0 { [15, 16] } else { [16, 15] } {
-                let _ = time(version);
-                let t = time(version).0;
-                if version == 15 {
-                    old = old.min(t);
-                } else {
-                    new = new.min(t);
-                }
-            }
-        }
-        println!(
-            "terrain generation: v15 {old:.3}s, v16 {new:.3}s ({:.2}x)",
-            new / old
-        );
-        assert!(
-            new < old * 1.35 + 0.05,
-            "v16 generation is {:.2}x slower than v15",
-            new / old
-        );
-    }
-
-    #[test]
     #[ignore]
     fn profile_generation_stages() {
         use glam::IVec3;

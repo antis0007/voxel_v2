@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 #[ignore = "native Vulkan depth readback; run explicitly with the shared GPU slot"]
-fn far_shadow_gpu_ownership_and_invalidation() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+fn gpu_far_shadow_gpu_ownership_and_invalidation() {
+    let adapter = engine_gpu::test_adapter();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("shadow ownership contract"),
@@ -213,7 +209,7 @@ fn far_shadow_gpu_ownership_and_invalidation() {
 
 #[test]
 #[ignore = "native Vulkan production world/shadow sparse lookup; run serially"]
-fn dense_sparse_world_and_shadow_ownership_match_after_origin_shift() {
+fn gpu_dense_sparse_world_and_shadow_ownership_match_after_origin_shift() {
     use bytemuck::Zeroable;
     use std::collections::HashSet;
     let camera = include_str!("../shaders/camera_lighting_shared.wgsl");
@@ -240,11 +236,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#
     );
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = engine_gpu::test_adapter();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("actual world and shadow sparse ownership"),

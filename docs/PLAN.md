@@ -113,7 +113,7 @@ Write `docs/AUDIT.md` (sections A–H above) and `docs/PLAN.md` (section P), com
 
 ### Remaining debt (post-plan, LOC-per-effort)
 Filled in at the end of P4. Entries opened during execution:
-- `world::dungeon::tests::terrain_generation_cost_stays_close_to_the_previous_generator` is `#[ignore]`d: it asserts a wall-clock ratio and reads 1.07x-1.98x on the same binary under parallel test load. Replace with a criterion bench in P2 (`just bench terrain_generation`), then delete the test.
+- Resolved 2026-10-22 (PLAN2 Phase 0): the ignored wall-clock ratio test in `dungeon.rs` is deleted; `crates/worldgen/benches/terrain.rs` replaces it under the `just bench-check` gate.
 
 ### P0 log
 - 2026-10-22: baseline commit `55c7f90`. Root scratch moved to `C:\dev\voxel_v2_scratch\root-junk-2026-10-22`. Pre-existing failures fixed: audio cue gain now equal-power (`1/sqrt(n)`, the test's spec); save-version test asserts `SAVE_VERSION + 1` instead of a literal; causeway test pinned to generator version 24 (Prism Sanctum replaces variant-2 caverns from 25); storage tests passed the temp *directory* as the save slot, so every test shared one `Temp\regions\test-world` lock under nextest parallelism; now they pass the save file, as production does.
@@ -143,7 +143,7 @@ Content moved to data: `assets/materials.ron` (83 blocks), `spells.ron` (80), `r
 3. **`World` decoupling → `sim`, `render`, `ui`, thin `app` crates**. High effort (88 adventure functions and 18 simulation functions take `&mut World`); no line savings by itself, but it is the structural goal from `docs/adr/0001-workspace-split.md`.
 4. **God functions**: `Gpu::step_inner` ~1,100 lines, `Adventure::update` ~1,500, the `main.rs` event loop ~3,000, `build_ui` 630. Pure extraction; medium effort each; needs captures for the render ones.
 5. **Hand-rolled save codecs** (16 `encode`/`decode` pairs, ~1,500 lines) → serde with a version bump to 29 and a loader for ≤ 28. Medium-high effort; every old save fixture must round-trip.
-6. **Criterion benches** need a library target (`crates/app` is a binary). Low effort once `sim` exists; the ignored `terrain_generation_cost_stays_close_to_the_previous_generator` test becomes the first bench.
+6. **Criterion benches**: done for crates with a library (PLAN2 Phase 0, `just bench`). App-internal benches still need `crates/app` split into lib + bin; deferred while several sessions edit `main.rs`.
 7. **Dead code in `egui_ui/wand_xmb.rs` and `adventure/growth.rs`** (14 warnings): in-progress work on this branch; owner decides. `just clippy` keeps `-A dead_code` until then.
 8. **Mixed CRLF/LF in the working tree**: `.gitattributes` normalises on commit; a one-time `git add --renormalize` plus checkout would make the tree uniform.
 9. **`.codex/hooks.json`** points at an absolute `D:\AI\...` virtualenv; either make it relative or drop it.

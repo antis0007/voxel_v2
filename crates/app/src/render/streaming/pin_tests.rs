@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 #[ignore = "native Vulkan buffers for atomic vertical membership; run serially"]
-fn published_column_survives_pending_vertical_expansion() {
-    let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor {backends:wgpu::Backends::VULKAN,..Default::default()});
-    let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+fn gpu_published_column_survives_pending_vertical_expansion() {
+    let adapter = engine_gpu::test_adapter();
     let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mesh=||ChunkGpuMesh { boundary_profile:None, vertex_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("column member"),size:16,usage:wgpu::BufferUsages::VERTEX,mapped_at_creation:false}),index_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("column member indices"),size:16,usage:wgpu::BufferUsages::INDEX,mapped_at_creation:false}),index_count:3,lod:0,lod_invariant:false,bytes:32 };
     let a=IVec3::ZERO;let b=IVec3::Y;
@@ -36,9 +35,8 @@ fn published_column_survives_pending_vertical_expansion() {
 
 #[test]
 #[ignore = "native Vulkan buffers for retained-column ownership; run serially"]
-fn retained_columns_keep_draw_mask_dirty_and_budget_ownership() {
-    let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor { backends:wgpu::Backends::VULKAN, ..Default::default() });
-    let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+fn gpu_retained_columns_keep_draw_mask_dirty_and_budget_ownership() {
+    let adapter = engine_gpu::test_adapter();
     let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mesh=|| ChunkGpuMesh { boundary_profile:None,
         vertex_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("pin fixture vertices"),size:16,usage:wgpu::BufferUsages::VERTEX,mapped_at_creation:false}),
@@ -80,12 +78,8 @@ fn retained_columns_keep_draw_mask_dirty_and_budget_ownership() {
 
 #[test]
 #[ignore = "native Vulkan buffers for edited-source LOD retirement; run serially"]
-fn edited_source_cannot_resurrect_previous_or_inactive_lods() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+fn gpu_edited_source_cannot_resurrect_previous_or_inactive_lods() {
+    let adapter = engine_gpu::test_adapter();
     let (device, _) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     // index_count identifies distinct fixture sources; these buffers are not drawn.
     let mesh = |lod, index_count| ChunkGpuMesh { boundary_profile:None,
@@ -136,11 +130,8 @@ fn edited_source_cannot_resurrect_previous_or_inactive_lods() {
 
 #[test]
 #[ignore = "native Vulkan retained pin ownership beyond dense window; run serially"]
-fn sparse_pin_survives_world_origin_shift_and_matches_actual_child_draws() {
-    let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends:wgpu::Backends::VULKAN,..Default::default()
-    });
-    let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+fn gpu_sparse_pin_survives_world_origin_shift_and_matches_actual_child_draws() {
+    let adapter = engine_gpu::test_adapter();
     let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let coord=IVec3::new(-600,0,-620);
     let mut cache=ChunkCache::new(coord);

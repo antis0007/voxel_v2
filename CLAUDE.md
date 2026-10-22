@@ -13,7 +13,7 @@ Rust + wgpu voxel game: variable voxel scale, cellular water/sand, factory autom
 Content lives in `assets/*.ron` (materials, spells, recipes, machines, bestiary) with round-trip tests; scenarios in `assets/scenarios/`.
 
 ## Commands (the only ones)
-`just check` · `just clippy` · `just test [substring]` · `just run [scenario.ron]` · `just loc` · `just verify` (pre-commit gate: check, clippy, tests, LOC). `just bench` lands with a lib target. Output is filtered: errors first, warnings as counts, 60 lines max.
+`just check` · `just clippy` · `just test [substring]` · `just test-gpu [substring]` (`gpu_*` tests, needs a GPU) · `just run [scenario.ron]` · `just bench [name]` · `just bench-save` (new baseline) · `just loc` · `just session-report` (end every session with it) · `just clean` (build outputs only) · `just verify` (pre-commit gate: check, clippy, tests, `just bench-check` perf gate, LOC). Output is filtered: errors first, warnings as counts, 60 lines max.
 
 ## Invariants
 - Coordinates: voxel `IVec3` (cell = `VoxelScalePreset::meters()`), chunk `IVec3` (32³ cells, floor division), metres `Vec3` for player/camera/physics. Padded chunk = 34³ (one-voxel halo).

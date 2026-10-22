@@ -5,8 +5,26 @@ One command gates everything: `just verify` (check, clippy, tests, LOC report).
 ## Unit tests
 
 `just test` runs every `#[test]` in the workspace with nextest. `just test <substring>`
-runs a subset. No test needs a GPU or a window; visual review is a separate,
-manual capture process (`docs/design/VISUAL_DIRECTION_EXECUTION.md`).
+runs a subset. No test in `just test` needs a GPU or a window; visual review is a
+separate, manual capture process (`docs/design/VISUAL_DIRECTION_EXECUTION.md`).
+
+## GPU tests
+
+Tests that need a GPU are named `gpu_*`, carry `#[ignore = "..."]`, and get their
+adapter from `engine_gpu::test_adapter()`. `just test-gpu [substring]` runs them one
+at a time and fails (never skips) when no adapter exists. `WGPU_BACKEND=dx12`
+picks another backend (default Vulkan); `VOXEL_TEST_ADAPTER_NAME=4090` requires a
+specific adapter. A layout test rejects any other code that requests an adapter.
+
+## Benches and the perf gate
+
+Criterion benches live in `crates/<crate>/benches/`, with their baselines in
+`benches/baselines.json` beside them (median nanoseconds). `just bench [name]` runs
+once and prints the delta; `just bench-check` (part of `just verify`) takes the
+median of 3 runs and fails above +8% or on a bench with no baseline; `just bench-save`
+records new baselines, which are committed with the reason. A new bench is a
+`[[bench]]` entry with `harness = false` in its crate's `Cargo.toml` plus a
+`just bench-save`. Example: `crates/worldgen/benches/terrain.rs`.
 
 ## Scenarios: how an agent plays the game
 

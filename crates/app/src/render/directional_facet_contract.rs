@@ -1,7 +1,7 @@
 //! Executes extracted production directional facet WGSL and its original BRDF.
 #[test]
 #[ignore = "native Vulkan pilot contract; requires the explicitly assigned GPU slot"]
-fn directional_facet_pilot_actual_shader_contract() {
+fn gpu_directional_facet_pilot_actual_shader_contract() {
     fn function<'a>(source: &'a str, name: &str) -> &'a str {
         let start = source.find(&format!("fn {name}(")).expect(name);
         let open = source[start..].find('{').unwrap() + start;
@@ -90,9 +90,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             [0.4,0.8,-0.3,0.],[0.04,0.04,0.04,1.],[0.,1.,0.,0.]]);
         checks.push(("invalid macro fallback",false,false,true));
     }
-    let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends:wgpu::Backends::VULKAN,..Default::default()});
-    let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = engine_gpu::test_adapter();
     let (device,queue)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label:Some("actual production directional facet helpers"),source:wgpu::ShaderSource::Wgsl(wgsl.into())});

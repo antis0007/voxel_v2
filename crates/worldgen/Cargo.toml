@@ -14,3 +14,11 @@ glam = "0.32.0"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+# Criterion benches: `just bench`; baselines in benches/baselines.json.
+[[bench]]
+name = "terrain"
+harness = false
