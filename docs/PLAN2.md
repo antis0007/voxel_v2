@@ -179,9 +179,17 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - Nothing reads the new columns yet; scenario hashes are unchanged, 389 tests pass.
 
 **A2. Brick store** in `engine_sim::bricks`.
-- Cell record: `material u8 | volume u8 | temp u16 | aux u16` (8 B/cell, 4 KiB per 8³ brick).
+- Cell record: `material u8 | volume u8 | temperature u16 | pressure i16 | charge i16` (8 B/cell, 4 KiB per 8³ brick; the earlier `aux u16` summed to 6 bytes).
 - Sparse brick pointer table, a pool allocator, and conversion to and from `ChunkData` plus the water map.
 - Proptests: round-trip, coordinate conversions, pool reuse.
+
+**A2 actuals (2026-10-22).**
+- New crate `engine_sim` (`crates/sim`, deps: `engine_core`, `bytemuck`): `Cell`, `Scale`, `BrickCoord`, `BrickStore` with a per-chunk `u64` dirty mask, a pointer table and a fixed-capacity pool. A layout test enforces that it depends on no engine crate but core.
+- Chunk conversion is `engine_voxel::{load_chunk, read_chunk}`, round-tripped with proptest over random chunks including partial water. The gas amounts in `ThermalCell` are not part of the cell yet.
+- `crates/sim/benches/bricks.rs`: `brick_fill_chunk` ≈ 70 µs, `brick_set_32k_cells` ≈ 0.75 ms. Baselines committed.
+- The perf gate flaked while peers compiled (+16% to +118% on a bench that reads +0.9% when quiet), so a failing pass is now measured once more before it fails (ADR 0006).
+- Not done: neighbour wake across brick faces (A3, with the kernel that needs it); `Scale` is stored but only `FINEST` is produced; the mirror lag (A6).
+- 403 tests pass; scenario hashes unchanged (nothing in the game reads bricks yet).
 
 **A3. CPU reference kernels.** These are what agents debug against.
 - Margolus 2×2×2 block update with an offset alternating per tick, so each block is updated by one thread and mass conservation is a per-block invariant.

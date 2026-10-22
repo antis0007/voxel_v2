@@ -9,7 +9,8 @@ Usage:
 Every crate with a `benches/` directory is benched. Its baselines live in
 `crates/<crate>/benches/baselines.json` as {bench id: median nanoseconds}.
 `check` fails on a bench slower than baseline by more than THRESHOLD and on a
-bench with no baseline (record one with `just bench-save`). Runs are whole
+bench with no baseline (record one with `just bench-save`), after one
+re-measurement, because concurrent builds skew a pass. Runs are whole
 passes over every bench, so A/B noise is interleaved rather than batched
 (docs/adr/0006-benches-and-perf-gate.md).
 """
@@ -101,6 +102,10 @@ def main():
         report(measure(1, flt))
     elif mode == "check":
         failures = report(measure(RUNS, ""))
+        if failures:
+            # Peer builds on a shared workstation skew whole passes; a real regression fails twice.
+            print("over threshold; measuring once more before failing")
+            failures = report(measure(RUNS, ""))
         print(f"bench gate: {failures} failure(s), median of {RUNS} runs, threshold +{THRESHOLD:.0%}")
         sys.exit(1 if failures else 0)
     elif mode == "save":

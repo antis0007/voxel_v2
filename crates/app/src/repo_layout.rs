@@ -122,6 +122,19 @@ mod tests {
         assert!(offenders.is_empty(), "use engine_gpu::test_adapter() instead of request_adapter in {offenders:?}");
     }
 
+    /// The cellular simulation reads the packed material table and nothing else,
+    /// so no rule can depend on which block it is (docs/adr/0007-bricks-and-scale.md).
+    #[test]
+    fn engine_sim_depends_on_no_engine_crate_but_core() {
+        let manifest = fs::read_to_string(repo_root().join("crates/sim/Cargo.toml")).expect("sim manifest");
+        let deps: Vec<&str> = manifest
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("engine_") && !l.starts_with("engine_core") && !l.starts_with("engine_sim"))
+            .collect();
+        assert!(deps.is_empty(), "engine_sim may depend only on engine_core, found {deps:?}");
+    }
+
     #[test]
     fn agent_docs_name_only_existing_paths_and_commands() {
         let root = repo_root();

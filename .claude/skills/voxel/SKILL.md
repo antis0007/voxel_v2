@@ -7,6 +7,8 @@ description: Chunks, world generation, regions and saves — engine_voxel, engin
 
 Where: `crates/voxel/src/` (`ChunkData` 32³ blocks + light + torches, `WorldSampleConfig`, `WorldType`, height constants), `crates/worldgen/src/` (`lib.rs` = climate, columns, trees, caves, `sample_block`, `generate`, `generate_padded`; one module per feature: `landscape`, `sites`, `dungeon`, `valley`, `surface`, `terrain_variety`, `zones`, `undercrown`…), app side `crates/app/src/world.rs` (`World`: `get`/`set`, snapshots, day cycle), `world/regions.rs` (append-only 8×8×8-chunk region files), `world/storage.rs` (quicksave, `SAVE_VERSION`), `world/resident.rs`, `world/activity.rs`.
 
+Bricks: `crates/sim/src/` (`engine_sim`) stores the cellular world as 8³ bricks inside 32³ chunks with a `u64` dirty mask per chunk; `crates/voxel/src/bricks.rs` converts `ChunkData` to and from it. Nothing reads it in the game yet (Phase A3+, `docs/PLAN2.md`).
+
 Coordinates: voxel `IVec3`, chunk `IVec3` = `floor_div(voxel, 32)`, metres = voxel × `VoxelScalePreset::meters()`. Generation code is written in metres and converted with `cfg.blocks_for_height` so every scale shares a landscape.
 
 Generator rule: `CURRENT_GENERATOR_VERSION` (30) is what new worlds use; every historical gate (`cfg.generator_version >= N`) must stay literal because old saves regenerate unedited chunks from their own version. A test pins a bit-exact golden for generation (`gen_golden.rs`); `generation_bench` tests in `worldgen/src/lib.rs` compare generator versions.

@@ -1,6 +1,6 @@
 # Voxel world data: chunk storage and the per-world sample configuration.
 # Generation lives in engine_worldgen; runtime edits, regions and streaming
-# still live in the app until Phase 4.
+# still live in the app until Phase 4. `bricks` converts chunks to engine_sim bricks.
 [package]
 name = "engine_voxel"
 version.workspace = true
@@ -9,8 +9,12 @@ edition.workspace = true
 [dependencies]
 engine_core = { path = "../core" }
 engine_content = { path = "../content" }
+engine_sim = { path = "../sim" }
 glam = "0.32.0"
 serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+proptest = { version = "1.11", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

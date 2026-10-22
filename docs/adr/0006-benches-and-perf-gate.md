@@ -11,6 +11,7 @@ Date: 2026-10-22. Status: accepted.
 **Gate.** `just bench-check` runs in `just verify`:
 - It takes 3 whole passes over every bench, interleaved rather than batched, and uses the median per bench.
 - It fails above +8% or on a bench with no baseline.
+- A failing pass is measured once more and only a second failure fails the gate: `brick_set_32k_cells` read +16% to +118% while peer sessions compiled and +0.9% on a quiet machine. A real regression fails both passes.
 - These settings hold until a quiet baseline machine exists. On this workstation, warm runs of `terrain_generate_8_chunks` agreed within ≈1.5% (88.5, 89.2, 89.7 ms), and a 15% injected regression failed the gate.
 - The ignored wall-clock ratio test it replaces read anywhere from 1.07× to 1.98× on the same binary.
 

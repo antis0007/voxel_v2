@@ -1,0 +1,24 @@
+# GPU-resident cellular world: the 8^3 brick store, its per-chunk dirty masks and
+# (from A3) the CPU reference and GPU kernels. Depends on engine_core only, so
+# no rule here can name a block: it reads the packed material table
+# (docs/PLAN2.md Phase A, docs/adr/0007-bricks-and-scale.md).
+[package]
+name = "engine_sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine_core = { path = "../core" }
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.32.0"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+proptest = { version = "1.11", default-features = false, features = ["std"] }
+
+[[bench]]
+name = "bricks"
+harness = false
+
+[lints]
+workspace = true
