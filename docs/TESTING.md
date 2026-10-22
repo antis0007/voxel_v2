@@ -4,9 +4,9 @@ One command gates everything: `just verify` (check, clippy, tests, LOC report).
 
 ## Unit tests
 
-`just test` runs every `#[test]` with nextest. `just test <substring>` runs a
-subset. Tests that need a GPU or a window do not exist; review captures are a
-separate, manual process (`AGENTS.md`).
+`just test` runs every `#[test]` in the workspace with nextest. `just test <substring>`
+runs a subset. No test needs a GPU or a window; visual review is a separate,
+manual capture process (`docs/design/VISUAL_DIRECTION_EXECUTION.md`).
 
 ## Scenarios: how an agent plays the game
 
@@ -18,7 +18,7 @@ scenario's steps without a window or GPU, and prints one JSON line:
 ```
 
 Exit status is 0 when every `Expect` passed, 1 when one failed, 2 when the file
-did not parse. The runner is `src/headless.rs`; the format is RON:
+did not parse. The runner is `crates/app/src/headless.rs`; the format is RON:
 
 ```
 Scenario(
@@ -39,7 +39,7 @@ Checks: `Block`, `BlockAt`, `Water { offset, min }` (volume 0–8), `PlayerY`,
 
 ## Determinism
 
-Every simulation pass takes a `simulation::Budget`. The windowed game passes
+Every simulation pass takes an `engine_core::Budget`. The windowed game passes
 wall-clock budgets so frames keep pacing; scenarios pass `Budget::UNBOUNDED`
 and wait for chunk generation after each tick (`WorldSimulation::settle`), so
 the same file always does the same work and ends with the same `hash` (resident
@@ -52,10 +52,18 @@ have seeded in generated terrain stays asleep until an edit wakes it.
 
 ## Snapshots
 
-`src/headless.rs` runs every file in `assets/scenarios/` and compares its JSON
-summary with `src/snapshots/*.snap` through `insta`. A changed hash means
-gameplay changed: either fix the regression or, if the change is intended, run
-`INSTA_UPDATE=always just test` and commit the new snapshot with the reason.
+The headless tests run every file in `assets/scenarios/` and compare its JSON
+summary with `crates/app/src/snapshots/*.snap` through `insta`. A changed hash
+means gameplay changed: fix the regression or, if the change is intended, run
+`INSTA_UPDATE=always just test headless` and commit the new snapshot with the
+reason.
+
+## Content tables
+
+`assets/{materials,spells,recipes,machines,bestiary}.ron` each have a
+`*_ron_round_trips` test: serialising the loaded table must reproduce the file.
+Edit values in the file; if you change a struct, run the ignored
+`dump_*_ron` test to rewrite the file in the new shape.
 
 ## Adding a scenario
 

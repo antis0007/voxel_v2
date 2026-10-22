@@ -93,7 +93,7 @@ Boundary decision taken with the user: `World` owns physics, factory and adventu
 Commit per crate: `refactor(<crate>): -<N> LOC, <why>`.
 
 ### P5 — Docs  · LOC −11,000 docs · risk: low
-`CLAUDE.md` ≤ 60 lines (replaces `AGENTS.md`; keep the flicker/pixel-grid invariants, they are real), `docs/ARCHITECTURE.md` ≤ 1 page, `docs/TESTING.md`, `.claude/skills/{render,physics,automation,adventure,voxel}/SKILL.md` ≤ 40 lines, `docs/adr/NNNN-*.md` for: workspace split, RON content, serde saves, headless scenarios, deleted review harness. Move the 110 other docs to an archive **outside the repo** (or a single `docs/history/` tarball-free dir if the user wants them kept in git — **ask**). Every path/command grepped before writing.
+`CLAUDE.md` ≤ 60 lines (replaces `AGENTS.md`; keep the flicker/pixel-grid invariants, they are real), `docs/ARCHITECTURE.md` ≤ 1 page, `docs/TESTING.md`, `.claude/skills/{render,physics,automation,adventure,voxel}/SKILL.md` ≤ 40 lines, `docs/adr/NNNN-*.md` for: workspace split, RON content, serde saves, headless scenarios, deleted review harness. Move the other docs to an archive **outside the repo** (done: `C:\devoxel_v2_scratch\docs-archive-2026-10-22`; design references the code still follows stay in `docs/design/`). Every path/command grepped before writing.
 Verify: script that extracts `src/...`/`crates/...` paths and `just ...` commands from docs and checks each exists/runs.
 
 ### Decisions taken (2026-10-22, user-approved)
@@ -118,3 +118,32 @@ Filled in at the end of P4. Entries opened during execution:
 ### P0 log
 - 2026-10-22: baseline commit `55c7f90`. Root scratch moved to `C:\dev\voxel_v2_scratch\root-junk-2026-10-22`. Pre-existing failures fixed: audio cue gain now equal-power (`1/sqrt(n)`, the test's spec); save-version test asserts `SAVE_VERSION + 1` instead of a literal; causeway test pinned to generator version 24 (Prism Sanctum replaces variant-2 caverns from 25); storage tests passed the temp *directory* as the save slot, so every test shared one `Temp\regions\test-world` lock under nextest parallelism; now they pass the save file, as production does.
 
+## Results (2026-10-22, end of this pass)
+
+| Measure | Before | After |
+|---|---|---|
+| Rust lines (all crates) | 121,941 | 114902 |
+| WGSL lines | 9,356 | 9291 |
+| Agent-facing docs lines (CLAUDE.md, docs/*.md, adr, skills) | 12,858 across 115 files | 537 across 16 files (+9 design references kept) |
+| Crates | 1 | 6 |
+| Tests (nextest) | 413 run, 6 failing | 380 run, 0 failing (42 left with the deleted fluid stack; 10 added) |
+| `cargo check` warnings | 114 | 23 (all in the two in-progress modules plus 9 unread fields) |
+| `just verify` | did not exist | ~25 s warm (check 2 s, clippy 12 s, tests 8 s) |
+| Dev build after a one-file touch | 16–22 s (link.exe) | 4 s (rust-lld) |
+
+Rust per crate:
+
+| `core` | 230 |\n| `content` | 637 |\n| `audio` | 871 |\n| `voxel` | 120 |\n| `worldgen` | 15307 |\n| `app` | 97649 |\n
+Content moved to data: `assets/materials.ron` (83 blocks), `spells.ron` (80), `recipes.ron` (3 tables), `machines.ron` (27), `bestiary.ron` (9), each with a round-trip test.
+
+### Remaining debt, ranked by lines saved per effort
+
+1. **Review harness → scenarios** (~4,000 Rust lines, 70 env hooks, 40 flags, 16 scripts). Medium effort per scene once the `--benchmark-scenario` bridge exists; see `docs/adr/0005-review-harness.md`. Also unblocks the render/ui crate peel (render → `terrain_review`, `material_studio`; ui → `torch_review`).
+2. **Icon sprites → asset file** (~700 lines in `crates/app/src/egui_ui/icons.rs`). Low effort; the tier arithmetic in `art()` stays in code.
+3. **`World` decoupling → `sim`, `render`, `ui`, thin `app` crates**. High effort (88 adventure functions and 18 simulation functions take `&mut World`); no line savings by itself, but it is the structural goal from `docs/adr/0001-workspace-split.md`.
+4. **God functions**: `Gpu::step_inner` ~1,100 lines, `Adventure::update` ~1,500, the `main.rs` event loop ~3,000, `build_ui` 630. Pure extraction; medium effort each; needs captures for the render ones.
+5. **Hand-rolled save codecs** (16 `encode`/`decode` pairs, ~1,500 lines) → serde with a version bump to 29 and a loader for ≤ 28. Medium-high effort; every old save fixture must round-trip.
+6. **Criterion benches** need a library target (`crates/app` is a binary). Low effort once `sim` exists; the ignored `terrain_generation_cost_stays_close_to_the_previous_generator` test becomes the first bench.
+7. **Dead code in `egui_ui/wand_xmb.rs` and `adventure/growth.rs`** (14 warnings): in-progress work on this branch; owner decides. `just clippy` keeps `-A dead_code` until then.
+8. **Mixed CRLF/LF in the working tree**: `.gitattributes` normalises on commit; a one-time `git add --renormalize` plus checkout would make the tree uniform.
+9. **`.codex/hooks.json`** points at an absolute `D:\AI\...` virtualenv; either make it relative or drop it.

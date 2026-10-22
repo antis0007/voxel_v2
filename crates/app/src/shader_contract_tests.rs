@@ -1,7 +1,7 @@
 //! Fast static checks on the WGSL sources. They run in milliseconds and need
 //! no GPU. naga validation of every composed program already runs in build.rs;
 //! these tests cover what naga cannot see: unused files, the single-pixel-grid
-//! rule from AGENTS.md, and calls to helpers that were renamed or removed.
+//! rule from .claude/skills/render/SKILL.md, and calls to helpers that were renamed or removed.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -44,7 +44,7 @@ fn included_shader_files() -> BTreeSet<String> {
 
 #[test]
 fn every_shader_file_is_included_by_the_build() {
-    // AGENTS.md: a new .wgsl file that is not listed in shader_sources.rs is
+    // CLAUDE.md: a new .wgsl file that is not listed in shader_sources.rs is
     // silently unused. Catch it here instead of at review time.
     let on_disk = shader_files();
     let included = included_shader_files();
@@ -66,7 +66,7 @@ fn every_included_shader_file_exists() {
     );
 }
 
-/// Rule from AGENTS.md "One pixel size": procedural detail sits on the single
+/// Rule from .claude/skills/render/SKILL.md "One pixel size": procedural detail sits on the single
 /// PIXEL_RES lattice. A second cells-per-metre constant, or a multi-texel cell
 /// written as `PIXEL_RES * 0.5`, is a second grid. Lines that legitimately
 /// need one are listed in ALLOWED_GRID_LINES with a reason.
@@ -96,7 +96,7 @@ fn procedural_detail_uses_one_pixel_grid() {
     }
     assert!(
         violations.is_empty(),
-        "second pixel grid found (AGENTS.md rule):\n{}",
+        "second pixel grid found (render skill rule):\n{}",
         violations.join("\n")
     );
 }

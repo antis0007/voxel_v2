@@ -152,7 +152,7 @@ pub(crate) const SHADOW_SHADER: &str = concat!(include_str!("shaders/terrain_det
 pub(crate) const UI_SHADER: &str = include_str!("shaders/ui_shader.wgsl");
 pub(crate) const POSTPROCESS_SHADER: &str = concat!(include_str!("shaders/color_shared.wgsl"), "\n", include_str!("shaders/postprocess.wgsl"));
 pub(crate) const PRESENT_SHADER: &str = concat!(include_str!("shaders/color_shared.wgsl"), "\n", include_str!("shaders/present.wgsl"));
-// Kept on purpose (docs/superpowers/specs/2026-10-19-expedition-depth-design.md):
+// Kept on purpose (docs/design/EXPEDITION_DEPTH_DESIGN.md):
 // validated by build.rs, not yet dispatched by the runtime.
 #[allow(dead_code)]
 pub(crate) const FLUID_SHADER: &str = include_str!("fluid_compute.wgsl");

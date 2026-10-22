@@ -1,6 +1,6 @@
 //! Repo-layout guards. A scratch file at the repo root or a WGSL file that no
 //! program includes is picked up by nobody, but agents still read and edit it.
-//! These tests fail loudly instead. See AGENTS.md, "Repo hygiene".
+//! These tests fail loudly instead. See CLAUDE.md, "Don't".
 
 #[cfg(test)]
 mod tests {
@@ -12,7 +12,6 @@ mod tests {
     const ROOT_FILES: &[&str] = &[
         ".gitattributes",
         ".gitignore",
-        "AGENTS.md",
         "CLAUDE.md",
         "RTK.md",
         "Cargo.toml",
@@ -93,4 +92,64 @@ mod tests {
             "WGSL files not included by src/shader_sources.rs (silently unused): {unregistered:?}"
         );
     }
+
+    /// Every repo path and `just` command named in the agent-facing docs
+    /// exists. Paths are tokens starting with `crates/`, `assets/`, `docs/`,
+    /// `scripts/`, `tools/` or `.claude/`; a token containing `*`, `<` or `{`
+    /// is a pattern and is skipped.
+    #[test]
+    fn agent_docs_name_only_existing_paths_and_commands() {
+        let root = repo_root();
+        let mut files = vec![root.join("CLAUDE.md")];
+        for dir in ["docs", "docs/adr", ".claude/skills"] {
+            for entry in fs::read_dir(root.join(dir)).expect("docs dir") {
+                let path = entry.expect("doc entry").path();
+                if path.is_dir() {
+                    let skill = path.join("SKILL.md");
+                    if skill.is_file() {
+                        files.push(skill);
+                    }
+                } else if path.extension().is_some_and(|e| e == "md")
+                    && path.file_name().is_some_and(|n| n != "AUDIT.md")
+                {
+                    files.push(path);
+                }
+            }
+        }
+        let justfile = fs::read_to_string(root.join("justfile")).expect("justfile");
+        let recipes: Vec<String> = justfile
+            .lines()
+            .filter(|l| !l.starts_with([' ', '#', '\t']) && l.contains(':') && !l.starts_with("set "))
+            .filter_map(|l| l.split([' ', ':']).next().map(str::to_owned))
+            .filter(|n| !n.is_empty() && !n.contains('='))
+            .collect();
+        let mut missing = Vec::new();
+        for file in files {
+            let text = fs::read_to_string(&file).expect("read doc");
+            let name = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            for raw in text.split(|c: char| c.is_whitespace() || "`()[],;:\"'<>|".contains(c)) {
+                let token = raw.trim_end_matches(['.', '*']);
+                let is_path = ["crates/", "assets/", "docs/", "scripts/", "tools/", ".claude/"]
+                    .iter()
+                    .any(|p| token.starts_with(p));
+                if is_path && !token.contains(['*', '{', '…']) && !root.join(token).exists() {
+                    missing.push(format!("{name}: path `{token}`"));
+                }
+            }
+            for line in text.lines() {
+                let mut rest = line;
+                while let Some(i) = rest.find("just ") {
+                    rest = &rest[i + 5..];
+                    let cmd: String = rest.chars().take_while(|c| c.is_ascii_lowercase() || *c == '_').collect();
+                    if !cmd.is_empty() && !recipes.iter().any(|r| r == &cmd) {
+                        missing.push(format!("{name}: `just {cmd}` is not a recipe"));
+                    }
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "docs name things that do not exist:\n{}", missing.join("\n"));
+    }
+
 }
