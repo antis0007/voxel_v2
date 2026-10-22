@@ -188,7 +188,7 @@ mod tests {
         for x in -4..4 {
             put(&mut s, IVec3::new(x, 6, 3), BlockId::Stone);
         }
-        let table = &*engine_content::SIM_TABLE;
+        let table = &*engine_content::SIM_RULES;
         for tick in 0..60 {
             engine_sim::step(&mut s, table, 1, tick);
         }
@@ -210,3 +210,7 @@ mod tests {
         assert_eq!((store.bricks_in_use(), store.chunk_count()), (0, 0));
     }
 }
+
+#[cfg(test)]
+#[path = "bricks_chemistry_tests.rs"]
+mod chemistry_tests;

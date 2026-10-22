@@ -3,6 +3,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use engine_core::material::{MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::hash::hash_u32;
+use engine_core::reaction::{ReactionTable, SimRules};
 use engine_sim::{AMBIENT_DECIKELVIN, BRICKS_PER_CHUNK, BrickStore, Cell, VOLUME_FULL, step};
 use glam::IVec3;
 use std::time::Duration;
@@ -103,7 +104,7 @@ fn bricks(c: &mut Criterion) {
 /// The Phase A exit number: every brick of a 262,144-cell region awake, one tick (two Margolus phases).
 /// 60 ticks per second needs this under 16.7 ms.
 fn ca(c: &mut Criterion) {
-    let t = table();
+    let t = SimRules::new(table(), ReactionTable::default());
     c.bench_function("ca_step_262k_cells_all_awake", |b| {
         let mut s = mixed_region(false);
         let mut tick = 0;

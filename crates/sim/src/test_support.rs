@@ -2,6 +2,7 @@
 //! and helpers to build, measure and settle small worlds.
 use crate::*;
 use engine_core::material::{MovementClass as C, SIM_MATERIAL_ROWS, SimMaterial};
+use engine_core::reaction::{ReactionTable, SimRules};
 use glam::IVec3;
 
 pub(crate) const AIR: u8 = 0;
@@ -14,7 +15,12 @@ pub(crate) const LAVA: u8 = 6;
 pub(crate) const FOAM: u8 = 7;
 pub(crate) const HEAVY: u8 = 8;
 
-pub(crate) fn table() -> [SimMaterial; SIM_MATERIAL_ROWS] {
+/// The synthetic materials with no reactions.
+pub(crate) fn table() -> SimRules {
+    SimRules::new(materials(), ReactionTable::default())
+}
+
+pub(crate) fn materials() -> [SimMaterial; SIM_MATERIAL_ROWS] {
     // Thermal data as the real table packs it: conductivity in 0.01 W/(m K), specific heat in J/(kg K),
     // and a thermal mass per level of density x specific heat / 1024.
     let row = |class, kg_m3: f32, flow, k: f32, cp: u16| {
@@ -97,7 +103,7 @@ pub(crate) fn total(s: &BrickStore, lo: IVec3, hi: IVec3, material: u8) -> u32 {
 }
 
 /// Step until no brick is awake. Returns the ticks it took; panics past `limit`.
-pub(crate) fn settle(s: &mut BrickStore, t: &[SimMaterial; SIM_MATERIAL_ROWS], seed: u32, limit: u32) -> u32 {
+pub(crate) fn settle(s: &mut BrickStore, t: &SimRules, seed: u32, limit: u32) -> u32 {
     for tick in 0..limit {
         step(s, t, seed, tick);
         if s.active_bricks() == 0 {
@@ -108,7 +114,8 @@ pub(crate) fn settle(s: &mut BrickStore, t: &[SimMaterial; SIM_MATERIAL_ROWS], s
 }
 
 /// Total heat energy over a box: every cell's heat capacity times its temperature.
-pub(crate) fn energy(s: &BrickStore, t: &[SimMaterial], lo: IVec3, hi: IVec3) -> u128 {
+pub(crate) fn energy(s: &BrickStore, t: &SimRules, lo: IVec3, hi: IVec3) -> u128 {
+    let t = t.materials();
     let mut sum = 0u128;
     for y in lo.y..hi.y {
         for z in lo.z..hi.z {

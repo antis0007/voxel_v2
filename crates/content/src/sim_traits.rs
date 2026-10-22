@@ -8,6 +8,7 @@
 //! (docs/PLAN2.md Phase D) replaces them with measured constants.
 use super::{ALL_BLOCK_IDS, BlockId, MATERIAL_TABLE, MaterialDef, MatterState};
 use engine_core::material::{MaterialId, MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
+use engine_core::reaction::SimRules;
 use std::sync::LazyLock;
 
 /// Heat, fuel and state-change properties. Missing fields take the generic solid's.
@@ -161,6 +162,18 @@ pub static SIM_TABLE: LazyLock<[SimMaterial; SIM_MATERIAL_ROWS]> = LazyLock::new
         table[def.id as usize] = pack(def);
     }
     table
+});
+
+/// What the cellular kernels run on: `SIM_TABLE` plus the compiled reactions.
+pub static SIM_RULES: LazyLock<SimRules> = LazyLock::new(|| {
+    use crate::reactions::{REACTIONS_RON, ReactionRow, compile};
+    let rows: Vec<ReactionRow> =
+        ron::from_str(REACTIONS_RON).unwrap_or_else(|error| panic!("assets/reactions.ron: {error}"));
+    let reactions = compile(&rows, REACTIONS_RON, &SIM_TABLE)
+        .unwrap_or_else(|errors| panic!("invalid reactions:
+{}", errors.join("
+")));
+    SimRules::new(*SIM_TABLE, reactions)
 });
 
 impl BlockId {

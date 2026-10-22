@@ -216,6 +216,33 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 
 **A5. GPU kernels.**
 - A WGSL port of A3/A4.
+**A4 actuals (2026-10-22).** Phase changes, burning and contact reactions run in the CPU reference kernel. Nothing new is in Rust per material.
+- **Two sources, one pass** (`engine_sim` `react.rs`), on heat ticks after conduction:
+  - The material table drives melting, boiling, condensing (deterministic at the tabled point) and burning (at or above `ignite`, spent into `burns_into` with chance 1/`fuel` per heat tick, so `fuel` is the expected burn time in heat ticks).
+  - `assets/reactions.ron` holds pair and single-cell rows: reactants (a block, or `Burnable` = every material with an ignition point), optional temperature bounds on `a` (kelvin or `Ignition`), a rate per heat tick, products and product temperatures.
+- **One roll per heat tick:** each lattice edge lies inside a block of exactly one of a heat tick's two Margolus phases, so a pair rolls once. Every cell lies in a block of both, so single-cell rows and burning roll on the first phase only (an independent review caught them rolling twice, which made fire last half as long as written; a test over 1,024 flames now pins it). Phase changes need no roll and are checked on both phases.
+- **Order inside a block:** pair reactions along the 12 edges first, then single-cell rows, burning, and phase changes. Contact wins: lava touching water becomes basalt even though conduction has already brought the water past boiling. A cell's material changes at most once per pass, but a row that only re-heats a cell (a burning log lighting the air) does not use up its change.
+- **Shared types:** `engine_core::reaction` holds the packed 16-byte `Reaction`, the `ReactionTable` (pair index stored in both orders, with the condition kept on the cell it was written for) and `SimRules` (materials + reactions + a per-material "can change" flag, so a block of inert matter skips the pass). `step` and `block_rule` now take `&SimRules`, and `engine_content::SIM_RULES` is the real one.
+- **The compiler** (`engine_content` `reactions.rs`) validates every row and cites `assets/reactions.ron:LINE`:
+  - rate must be in (0, 1]; temperatures in range; `Ignition` needs an ignition point;
+  - a single-cell row has no `b_into`; `Burnable` is allowed as `a` only; bounds must not cross;
+  - duplicate reactants are refused, counting both orders;
+  - a rate that rounds to zero, a row that changes no material (its condition would never clear and the brick would never sleep), a self-pair, and empty space reacting on its own are refused;
+  - a `Burnable` row reports each problem once.
+- **Shipped rows:** lava + water → basalt + steam at 383 K; fire + water → air + steam; a burnable at its ignition point next to air → fire at 1,100 K in the air cell, which holds the fuel at 900 K so it burns until spent; fire → smoke (rate 0.1); smoke → air (rate 0.02). The last gives smoke the lifetime A3 asked for. The 5 rows compile to 18.
+- **Tests:**
+  - synthetic chemistry in `engine_sim` (12, including the once-per-tick rate): tabled points with hysteresis, volume kept, nothing between heat ticks, lava/water, quench, a burn that ends in ash with no fire or smoke left, cold fuel asleep, seed-reproducible;
+  - the real tables in `engine_voxel` (4);
+  - the compiler (7, plus the round trip).
+- The canonical scenario hash did not move: its synthetic table has no thresholds and no rows.
+- **Cost, measured pinned before peers loaded the machine:** `ca_step_262k_cells_all_awake` +2.9% and `…_with_heat` +6.0% against baseline (gate 8%). The bench table has no reactive material, so this is the price of the per-block "can change" test.
+- **Finding, steam does not survive open air.** A gas cell sheds half its temperature difference to empty space per exposed edge on every heat phase (the A3 environment sink, capped at half the cell's capacity). So steam born at 383 K condenses back to water within the same tick, and fire + water effectively just removes the flame. A pinned test (`steam_in_open_air_condenses_within_a_tick`) fails when this changes. Persistent steam needs either latent heat (condensing releases heat) or a gas-to-air exchange that scales with what the gas displaces. That is a heat-model decision for you, alongside the A3 pressure question.
+- **For A6:**
+  - World lava loads at ambient temperature (the old sim forced 1,200 °C), so lava needs a spawn temperature, a table column or the loader.
+  - Reactions are not energy-conserving (combustion and reaction temperatures are set, not derived), so the A7 ledger needs a source term per reaction.
+  - Fuel units moved from 30 Hz steps to heat ticks: a log now burns about 160 × 0.32 s ≈ 51 s at 1 m cells, against about 5 s before. Retune `fuel` in `materials.ron` once it is visible in game.
+  - `thermal.rs` and the spell reactions are still the live path until A6 wires the kernel.
+
 - Per-brick dirty bits written by the kernel, compacted into an active list, with `dispatch_workgroups_indirect` (core wgpu, no feature flag), so an idle brick costs zero dispatch.
 - Equivalence: for 64 seeds of random bricks, run N ticks on CPU and GPU and compare bytes (`just test-gpu ca_equivalence`).
 

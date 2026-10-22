@@ -1,0 +1,72 @@
+// What happens when materials meet: the cellular kernel's reactions (docs/PLAN2.md A4).
+//
+// Melting, boiling, condensing and burning come from each material's `sim:` row in materials.ron
+// and need no row here. A row here is a contact reaction (`a` next to `b`) or something one cell
+// does on its own (no `b`). Every heat tick (4 cellular ticks), when `a`'s temperature is within
+// `a_above`..`a_below`, the row fires with chance `rate`: `a` becomes `a_into` and `b` becomes
+// `b_into`. A missing product keeps the material; a missing temperature (kelvin) keeps the cell's.
+// `Air` is empty space. `Burnable` is every material with an ignition point, and `Ignition` its own
+// ignition point. Errors cite this file and line. After editing, run
+// `cargo test -p engine_content dump_reactions_ron -- --ignored` to restore the canonical layout.
+[
+    (
+        why: "Lava touching water skins over as basalt and flashes the water to steam.",
+        a: Block(Lava),
+        b: Some(Block(Water)),
+        a_above: None,
+        a_below: None,
+        rate: 1.0,
+        a_into: Some(Basalt),
+        b_into: Some(Steam),
+        a_temp: None,
+        b_temp: Some(383.15),
+    ),
+    (
+        why: "Water puts a flame out and boils where it touched.",
+        a: Block(Fire),
+        b: Some(Block(Water)),
+        a_above: None,
+        a_below: None,
+        rate: 1.0,
+        a_into: Some(Air),
+        b_into: Some(Steam),
+        a_temp: None,
+        b_temp: Some(383.15),
+    ),
+    (
+        why: "A fuel at its ignition point sets the air beside it alight; the heat of combustion holds the fuel at 900 K, so it burns until spent.",
+        a: Burnable,
+        b: Some(Block(Air)),
+        a_above: Some(Ignition),
+        a_below: None,
+        rate: 0.25,
+        a_into: None,
+        b_into: Some(Fire),
+        a_temp: Some(900.0),
+        b_temp: Some(1100.0),
+    ),
+    (
+        why: "A flame dies down to smoke after about ten heat ticks.",
+        a: Block(Fire),
+        b: None,
+        a_above: None,
+        a_below: None,
+        rate: 0.1,
+        a_into: Some(Smoke),
+        b_into: None,
+        a_temp: None,
+        b_temp: None,
+    ),
+    (
+        why: "Smoke thins out into the air after about fifty heat ticks, so the smoke of a fire does not rise for ever.",
+        a: Block(Smoke),
+        b: None,
+        a_above: None,
+        a_below: None,
+        rate: 0.02,
+        a_into: Some(Air),
+        b_into: None,
+        a_temp: None,
+        b_temp: None,
+    ),
+]

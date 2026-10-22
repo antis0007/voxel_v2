@@ -8,10 +8,13 @@ mod anchors;
 mod cell;
 mod kernel;
 mod pinned;
+mod react;
 mod rules;
 mod store;
 #[cfg(test)]
 mod heat_tests;
+#[cfg(test)]
+mod react_tests;
 #[cfg(test)]
 mod scenario_tests;
 #[cfg(test)]

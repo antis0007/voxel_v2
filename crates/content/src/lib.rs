@@ -1,8 +1,9 @@
 mod size_class;
+mod reactions;
 mod sim_traits;
 mod validate;
 pub use size_class::SizeClass;
-pub use sim_traits::{COHESION_STABLE, SIM_TABLE, SimTraits, ThermalTraits};
+pub use sim_traits::{COHESION_STABLE, SIM_RULES, SIM_TABLE, SimTraits, ThermalTraits};
 
 use glam::IVec3;
 use std::sync::LazyLock;

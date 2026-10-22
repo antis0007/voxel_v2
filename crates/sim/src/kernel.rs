@@ -10,7 +10,7 @@ use crate::cell::{BRICKS_PER_CHUNK, BrickCoord, Cell, brick_and_cell, split_voxe
 use crate::pinned::{PHASE_OFFSETS, is_heat_tick};
 use crate::rules::block_rule;
 use crate::store::{BrickStore, NO_SLOT};
-use engine_core::material::{SIM_MATERIAL_ROWS, SimMaterial};
+use engine_core::reaction::SimRules;
 use glam::IVec3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,7 +33,7 @@ fn cell_pos(anchor: IVec3, i: usize) -> IVec3 {
 /// the general path. A block in an absent brick is all empty, and empty space never moves.
 fn run_inside_brick(
     store: &mut BrickStore,
-    table: &[SimMaterial],
+    rules: &SimRules,
     seed: u32,
     phase_counter: u32,
     anchor: IVec3,
@@ -49,7 +49,7 @@ fn run_inside_brick(
     let at = |i: usize| base + (i & 1) + 8 * ((i >> 1) & 1) + 64 * (i >> 2);
     let before: [Cell; 8] = std::array::from_fn(|i| cells[at(i)]);
     let mut after = before;
-    let outcome = block_rule(table, &mut after, seed, phase_counter, anchor);
+    let outcome = block_rule(rules, &mut after, seed, phase_counter, anchor);
     if outcome.changed {
         for i in 0..8 {
             cells[at(i)] = after[i];
@@ -106,7 +106,7 @@ impl ChunkCache {
 fn run_straddling(
     store: &mut BrickStore,
     cache: &mut ChunkCache,
-    table: &[SimMaterial],
+    rules: &SimRules,
     seed: u32,
     phase_counter: u32,
     anchor: IVec3,
@@ -126,7 +126,7 @@ fn run_straddling(
         slot => store.cell_in_slot(slot, spots[i].2),
     });
     let mut after = before;
-    let outcome = block_rule(table, &mut after, seed, phase_counter, anchor);
+    let outcome = block_rule(rules, &mut after, seed, phase_counter, anchor);
     stats.blocks += 1;
     let mut written = outcome.changed;
     if written {
@@ -172,7 +172,7 @@ fn run_straddling(
 
 fn run_phase(
     store: &mut BrickStore,
-    table: &[SimMaterial],
+    rules: &SimRules,
     seed: u32,
     phase_counter: u32,
     bricks: &[BrickCoord],
@@ -180,27 +180,27 @@ fn run_phase(
 ) {
     let mut cache = ChunkCache::new();
     for anchor in anchors(bricks, PHASE_OFFSETS[(phase_counter & 1) as usize]) {
-        if !run_inside_brick(store, table, seed, phase_counter, anchor, stats) {
-            run_straddling(store, &mut cache, table, seed, phase_counter, anchor, stats);
+        if !run_inside_brick(store, rules, seed, phase_counter, anchor, stats) {
+            run_straddling(store, &mut cache, rules, seed, phase_counter, anchor, stats);
         }
     }
     cache.flush(store);
 }
 
-/// Advance the stored world one tick. `table` is indexed by material id, one row per possible id.
-pub fn step(store: &mut BrickStore, table: &[SimMaterial; SIM_MATERIAL_ROWS], seed: u32, tick: u32) -> StepStats {
+/// Advance the stored world one tick under `rules`: the material table and the reactions.
+pub fn step(store: &mut BrickStore, rules: &SimRules, seed: u32, tick: u32) -> StepStats {
     let mut stats = StepStats::default();
     let first = store.take_all_dirty();
     stats.active_bricks = first.len() as u32;
     let awake_at_start = first.clone();
-    run_phase(store, table, seed, tick.wrapping_mul(2), &first, &mut stats);
+    run_phase(store, rules, seed, tick.wrapping_mul(2), &first, &mut stats);
     // The second phase also steps whatever the first one woke.
     let woken = store.take_all_dirty();
     let mut both = first;
     both.extend(woken.iter().copied());
     both.sort_unstable_by_key(|b| (b.chunk.z, b.chunk.y, b.chunk.x, b.brick));
     both.dedup();
-    run_phase(store, table, seed, tick.wrapping_mul(2).wrapping_add(1), &both, &mut stats);
+    run_phase(store, rules, seed, tick.wrapping_mul(2).wrapping_add(1), &both, &mut stats);
     // The next tick steps what either phase touched.
     for b in woken {
         store.wake(b.chunk, b.brick);

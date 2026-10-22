@@ -3,8 +3,10 @@
 //! any order or in parallel. Behaviour comes from the material table's class,
 //! density, cohesion (folded into class) and flow, never from which block it is.
 use crate::cell::{Cell, VOLUME_FULL};
+use crate::react::react;
 use crate::pinned::{Dice, HEAT_DEADBAND, HEAT_RATE, HEAT_TICK_INTERVAL, flow_gate, is_heat_phase, mul_div_rem, mulhi};
 use engine_core::material::{MovementClass, SimMaterial};
+use engine_core::reaction::SimRules;
 use glam::IVec3;
 
 /// Cell `(x, y, z)` of a block, each 0 or 1.
@@ -181,7 +183,8 @@ fn conduct(t: &[SimMaterial], cells: &mut [Cell; 8], a: usize, b: usize, salt: u
 }
 
 /// Apply one phase's rule to the block anchored at `anchor`. `phase_counter` is `2 * tick + phase`.
-pub fn block_rule(t: &[SimMaterial], cells: &mut [Cell; 8], seed: u32, phase_counter: u32, anchor: IVec3) -> Outcome {
+pub fn block_rule(rules: &SimRules, cells: &mut [Cell; 8], seed: u32, phase_counter: u32, anchor: IVec3) -> Outcome {
+    let t = rules.materials();
     let before = *cells;
     let mut pending = false;
     let columns = [(0, 0), (1, 0), (0, 1), (1, 1)];
@@ -213,6 +216,10 @@ pub fn block_rule(t: &[SimMaterial], cells: &mut [Cell; 8], seed: u32, phase_cou
                 }
             }
         }
+    }
+    // Then phase changes and reactions, on the temperatures conduction left.
+    if is_heat_phase(phase_counter) {
+        pending |= react(rules, cells, &dice, phase_counter & 1 == 0);
     }
     Outcome { changed: *cells != before, pending }
 }

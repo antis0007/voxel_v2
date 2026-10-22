@@ -81,6 +81,18 @@ pub fn is_heat_phase(phase_counter: u32) -> bool {
 /// go idle instead of jittering by one step for ever.
 pub const HEAT_DEADBAND: u32 = 2;
 
+/// Chance per heat tick that a burning cell is spent, out of 2³²: one in `fuel`, so `fuel` is the
+/// expected burn time in heat ticks. A fuel of 0 or 1 is spent at once.
+pub fn burn_rate(fuel: u16) -> u32 {
+    if fuel <= 1 { u32::MAX } else { u32::MAX / fuel as u32 }
+}
+
+/// Dice salts of the reaction pass, after the twelve conduction edges (16..40): burning per cell, the
+/// single-cell row per cell, then the twelve pair edges.
+pub const SALT_BURN: u32 = 48;
+pub const SALT_UNARY: u32 = 56;
+pub const SALT_PAIR: u32 = 64;
+
 /// `floor(a × b / c)` and the remainder, exact; the quotient must fit `u32`, which the heat rule
 /// guarantees because the energy it moves never exceeds half a cell's. The product needs 64 bits; the GPU port builds it from
 /// 32-bit halves, and everything else in the heat rule stays in `u32`.

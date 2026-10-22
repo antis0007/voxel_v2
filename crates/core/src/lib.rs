@@ -10,6 +10,7 @@ pub mod coords;
 pub mod fast_hash;
 pub mod hash;
 pub mod material;
+pub mod reaction;
 pub mod scale;
 pub mod time;
 
