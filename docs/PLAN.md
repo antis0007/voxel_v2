@@ -93,7 +93,7 @@ Boundary decision taken with the user: `World` owns physics, factory and adventu
 Commit per crate: `refactor(<crate>): -<N> LOC, <why>`.
 
 ### P5 — Docs  · LOC −11,000 docs · risk: low
-`CLAUDE.md` ≤ 60 lines (replaces `AGENTS.md`; keep the flicker/pixel-grid invariants, they are real), `docs/ARCHITECTURE.md` ≤ 1 page, `docs/TESTING.md`, `.claude/skills/{render,physics,automation,adventure,voxel}/SKILL.md` ≤ 40 lines, `docs/adr/NNNN-*.md` for: workspace split, RON content, serde saves, headless scenarios, deleted review harness. Move the other docs to an archive **outside the repo** (done: `C:\devoxel_v2_scratch\docs-archive-2026-10-22`; design references the code still follows stay in `docs/design/`). Every path/command grepped before writing.
+`CLAUDE.md` ≤ 60 lines (replaces `AGENTS.md`; keep the flicker/pixel-grid invariants, they are real), `docs/ARCHITECTURE.md` ≤ 1 page, `docs/TESTING.md`, `.claude/skills/{render,physics,automation,adventure,voxel}/SKILL.md` ≤ 40 lines, `docs/adr/NNNN-*.md` for: workspace split, RON content, serde saves, headless scenarios, deleted review harness. Move the other docs to an archive **outside the repo** (done: `C:\dev\voxel_v2_scratch\docs-archive-2026-10-22`; design references the code still follows stay in `docs/design/`). Every path/command grepped before writing.
 Verify: script that extracts `src/...`/`crates/...` paths and `just ...` commands from docs and checks each exists/runs.
 
 ### Decisions taken (2026-10-22, user-approved)
@@ -146,4 +146,4 @@ Content moved to data: `assets/materials.ron` (83 blocks), `spells.ron` (80), `r
 6. **Criterion benches** need a library target (`crates/app` is a binary). Low effort once `sim` exists; the ignored `terrain_generation_cost_stays_close_to_the_previous_generator` test becomes the first bench.
 7. **Dead code in `egui_ui/wand_xmb.rs` and `adventure/growth.rs`** (14 warnings): in-progress work on this branch; owner decides. `just clippy` keeps `-A dead_code` until then.
 8. **Mixed CRLF/LF in the working tree**: `.gitattributes` normalises on commit; a one-time `git add --renormalize` plus checkout would make the tree uniform.
-9. **`.codex/hooks.json`** points at an absolute `D:\AI\.` virtualenv; either make it relative or drop it.
+9. **`.codex/hooks.json`** points at an absolute `D:\AI\...` virtualenv; either make it relative or drop it.
