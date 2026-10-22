@@ -21,6 +21,8 @@ pub mod habitats_region;
 mod gen_golden;
 #[cfg(test)]
 mod gen_probe;
+#[cfg(test)]
+mod horizon_agreement;
 mod generation_cache;
 pub mod landscape;
 pub mod lore;
