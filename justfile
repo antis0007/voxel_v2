@@ -16,8 +16,9 @@ check crate="":
 clippy crate="":
     {{filter}} cargo clippy -q --all-targets --message-format=short -- -D warnings -A dead_code
 
-test crate="" filter="":
-    cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar {{filter}}
+# Compile warnings are collapsed by the filter; test failures print in full.
+test crate="" name="":
+    {{filter}} cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet {{name}}
 
 # Criterion benches land in Phase 2 (docs/PLAN.md). Until then this is the
 # only honest answer.
@@ -30,7 +31,7 @@ run scenario="":
 
 # Lines of code now, and the net change against main.
 loc:
-    tokei src --sort code -t Rust,WGSL
+    tokei src --sort code
     git diff --shortstat main -- src crates
 
 # The single pre-commit gate: check, clippy, tests, then the LOC report.

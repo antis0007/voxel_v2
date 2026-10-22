@@ -19,7 +19,7 @@ MAX_LINES = 60
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 DIAG = re.compile(r"^(?P<loc>\S+?:\d+:\d+): (?P<kind>error|warning)(\[[^\]]*\])?: (?P<msg>.*)$")
 NOISE = (
-    "= note:", "= help:", "note:", "help:", "warning: unused",
+    "= note:", "= help:", "note:", "help:",
     "warning: `minecraft_style_voxel_prototype` (bin",
     "warning: build failed", "For more information",
     "Some errors have detailed explanations",
@@ -28,14 +28,42 @@ NOISE = (
 SUMMARY = re.compile(r"^(warning|error): .* generated \d+ warnings?")
 
 
+HEADER = re.compile(r"^(?P<kind>error|warning)(\[[^\]]*\])?: (?P<msg>.*)$")
+ARROW = re.compile(r"^\s*--> (?P<loc>\S+?:\d+:\d+)$")
+GUTTER = re.compile(r"^\s*(\d+\s*\|.*|\|.*|\.\.\.|= (note|help):.*|\^+.*)$")
+
+
 def filter_lines(raw: str) -> list[str]:
+    """Collapse rustc diagnostics in either `--message-format=short` (one line)
+    or the default long format (header, `-->` location, gutter block)."""
     errors, others = [], []
     warnings: Counter[str] = Counter()
     seen = set()
+    pending = None  # (kind, msg) of a long-format header awaiting its `-->`
+
+    def flush(loc: str) -> None:
+        nonlocal pending
+        if pending is None:
+            return
+        kind, msg = pending
+        pending = None
+        if kind == "error":
+            errors.append(f"{loc}: {msg}")
+        else:
+            warnings[loc.split(":")[0]] += 1
+
     for line in raw.splitlines():
         line = ANSI.sub("", line).rstrip()
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
             continue
+        m = ARROW.match(line)
+        if m:
+            flush(m["loc"])
+            continue
+        if GUTTER.match(line):
+            continue
+        flush("<no location>")
         if line in seen:
             continue
         seen.add(line)
@@ -46,10 +74,14 @@ def filter_lines(raw: str) -> list[str]:
             else:
                 warnings[m["loc"].split(":")[0]] += 1
             continue
-        stripped = line.strip()
-        if SUMMARY.match(stripped) or stripped.startswith(NOISE) or stripped.startswith("|") or stripped.startswith("-->"):
+        m = HEADER.match(line)
+        if m and not SUMMARY.match(stripped) and not stripped.startswith(NOISE):
+            pending = (m["kind"], m["msg"])
+            continue
+        if SUMMARY.match(stripped) or stripped.startswith(NOISE):
             continue
         others.append(line)
+    flush("<no location>")
     out = []
     if errors:
         out.append(f"{len(errors)} error(s):")
@@ -66,6 +98,8 @@ def filter_lines(raw: str) -> list[str]:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252; nextest prints box-drawing characters.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     argv = sys.argv[1:]
     if argv and argv[0] == "--":
         argv = argv[1:]

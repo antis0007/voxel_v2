@@ -39,6 +39,8 @@ P1 measurements (2026-10-22, warm `target/`, `touch src/fast_hash.rs` before eac
 | `cargo nextest run` (413 tests) | 17.7 s | 5.3 s (after the shared-lock fix; the 25 s timing test is ignored) |
 | `cargo clippy --all-targets` (incremental) | 12.2 s | — |
 
+P1 actuals: Rust 121,941 → 119,864 lines (−2,077: unused fluid stack −2,209, clippy fixes −185 net, scripts +~150 outside `src/`). WGSL unchanged. `just verify` runs in ~20 s warm (check 2 s, clippy 12 s, test 5 s). `just check` prints one line on a clean tree (63 dead-code warnings collapsed; they are the P4 list). `just test` collapses the 48 test-profile warnings the same way.
+
 Not applicable on this machine: `mold` (Linux only), `sccache`/cranelift (not installed; no shared cache to gain from on one workstation). `incremental` is already on for `dev`. Feature-gating `render`/`audio` inside one crate buys nothing (any edit rechecks the whole crate), so that moves to the P3 workspace split instead of adding stub modules now. `cargo machete`: no unused dependencies.
 
 ### P2 — Headless deterministic engine  · LOC −500 net (replaces env-var review hooks) · risk: medium
