@@ -10,7 +10,7 @@ mod residency;
 pub(super) use gpu_budget::configure_gpu_residency;
 pub use gpu_budget::{MAX_GPU_MIB, gpu_residency_limit_mib, gpu_residency_status};
 use mesh_budget::{MeshBudget, MeshLease};
-use residency::{ResidentChunk, VoxelAllocations};
+use residency::{ResidentChunk, VoxelAllocations, arena_budget};
 pub use residency::{set_world_residency_budgets_mib, world_residency_budgets_mib};
 mod columns;
 mod arena;
@@ -72,12 +72,30 @@ const MAX_READY_MESHES: usize = 64;
 const UPLOAD_TIME_BUDGET: Duration = Duration::from_millis(3);
 pub struct ChunkGpuMesh {
     boundary_profile: Option<Arc<collar::Installed>>,
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
+    /// Range in the shared arena; `None` for an empty mesh. Dropping the mesh
+    /// returns the range (see `arena.rs` for when it can be reused).
+    alloc: Option<arena::ArenaLease>,
     pub index_count: u32,
     pub lod: u8,
     lod_invariant: bool,
     bytes: usize,
+}
+
+#[cfg(test)]
+impl ChunkGpuMesh {
+    /// Membership-only fixture: counts and bytes without GPU storage.
+    pub(super) fn test_mesh(index_count: u32, lod: u8, lod_invariant: bool, bytes: usize) -> Self {
+        Self { boundary_profile: None, alloc: None, index_count, lod, lod_invariant, bytes }
+    }
+}
+
+/// What a draw call needs for one resident chunk mesh.
+pub struct DrawSlice<'a> {
+    pub page: u32,
+    pub vertices: &'a wgpu::Buffer,
+    pub indices: &'a wgpu::Buffer,
+    pub index_range: std::ops::Range<u32>,
+    pub base_vertex: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -111,6 +129,8 @@ pub struct ChunkCache {
     quality_proxies: quality_proxies::QualityProxies,
     seeded_sources: HashSet<IVec3>,
     pub gpu_meshes: HashMap<IVec3, ChunkGpuMesh>,
+    /// Storage behind every `ChunkGpuMesh::alloc`.
+    arena: arena::MeshArena,
     /// Draw/list caches track every GPU mesh change. Shadow depth has a
     /// separate revision so water-only replacements need not redraw it.
     pub gpu_mesh_revision: u64,
@@ -376,6 +396,7 @@ impl ChunkCache {
             quality_proxies: quality_proxies::QualityProxies::default(),
             seeded_sources: HashSet::new(),
             gpu_meshes: HashMap::new(),
+            arena: arena::MeshArena::new(arena_budget(residency::limits().1)),
             gpu_mesh_revision: 0,
             shadow_caster_revision: 0,
             shadow_casters: shadow_casters::Cache::default(),
@@ -848,6 +869,21 @@ impl ChunkCache {
     }
 
     /// The publication transaction calls this only after GPU validation succeeds.
+    /// Buffers and ranges for drawing the resident mesh at `coord`, if it has geometry.
+    pub fn draw_slice(&self, coord: IVec3) -> Option<DrawSlice<'_>> {
+        let mesh = self.gpu_meshes.get(&coord)?;
+        let range = *mesh.alloc.as_ref()?.range();
+        let (vertices, indices) = self.arena.buffers(range.page)?;
+        let first = range.first_index();
+        Some(DrawSlice {
+            page: range.page,
+            vertices,
+            indices,
+            index_range: first..first + mesh.index_count,
+            base_vertex: range.base_vertex(),
+        })
+    }
+
     fn install_mesh_with_casters(
         &mut self,
         coord: IVec3,
@@ -1099,8 +1135,6 @@ pub struct ChunkStreamer {
     upload_error: Option<String>,
     worker_retry_after: Instant,
     mesh_budget: Arc<MeshBudget>,
-    empty_vertex: wgpu::Buffer,
-    empty_index: wgpu::Buffer,
     requested: HashSet<ChunkKey>,
     /// Coord-only set for O(1) "is any job in-flight for this coord?" checks.
     /// Kept in sync with `requested` and `meshing`.
@@ -1146,18 +1180,6 @@ impl ChunkStreamer {
             source_observations: local_sources::Observations::default(),
             upload_retry_after: Instant::now(),
             upload_error: None,
-            empty_vertex: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("shared empty chunk vertex buffer"),
-                size: std::mem::size_of::<crate::mesh::Vertex3>() as u64,
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: false,
-            }),
-            empty_index: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("shared empty chunk index buffer"),
-                size: 4,
-                usage: wgpu::BufferUsages::INDEX,
-                mapped_at_creation: false,
-            }),
             requested: HashSet::new(),
             requested_coords: HashSet::new(),
             generating: HashSet::new(),
@@ -1899,6 +1921,9 @@ impl ChunkStreamer {
         self.last_stats.uploaded_vertices+=vertices;
         self.last_stats.uploaded_indices+=indices;
         if !gpu.device_usable() {self.upload_error=Some("GPU device loss reported".into());return;}
+        // Runs between frames (never while an encoder is open), so ranges freed
+        // since the last submit can be reused for this frame's writes.
+        cache.arena.begin_frame();
         let mut staged=0usize;let mut staged_vertices=0usize;let mut staged_indices=0usize;
         self.collect_finished_meshes();self.reprioritize_ready_meshes(cache);
         while gpu.device_usable() && Instant::now()>=self.upload_retry_after && staged<max_uploads
@@ -1935,8 +1960,12 @@ impl ChunkStreamer {
             let Some(reservation)=cache.reserve_pending_gpu(key,bytes) else {
                 self.retire_upload_request(key);continue;
             };
+            // A full arena is a budget reject like the reservation above, not an upload error.
+            let Ok(alloc)=cache.arena.alloc_mesh(&gpu.device,&cpu_mesh.mesh) else {
+                drop(reservation);self.retire_upload_request(key);continue;
+            };
             let(attempt,check)=gpu_upload::start(&gpu.device,&gpu.queue,&cpu_mesh.mesh,key,
-                cpu_mesh.lod_invariant,&self.empty_vertex,&self.empty_index);
+                cpu_mesh.lod_invariant,&cache.arena,alloc);
             self.begin_pending_upload(cpu_mesh,attempt,check,reservation,cache.gpu_world_epoch);
             staged+=1;staged_vertices+=mesh_vertices;staged_indices+=mesh_indices;
         }

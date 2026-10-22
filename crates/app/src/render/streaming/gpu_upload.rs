@@ -1,5 +1,6 @@
 //! Unmapped GPU-local destinations and fallible queue staging. Never map an
 //! invalid destination buffer after an allocation/validation failure.
+use super::arena::{ArenaLease, MeshArena};
 use super::{ChunkGpuMesh, ChunkKey};
 use crate::mesh::ChunkMesh;
 use std::{
@@ -35,8 +36,8 @@ pub(super) fn start(
     mesh: &ChunkMesh,
     key: ChunkKey,
     lod_invariant: bool,
-    empty_vertex: &wgpu::Buffer,
-    empty_index: &wgpu::Buffer,
+    arena: &MeshArena,
+    alloc: Option<ArenaLease>,
 ) -> (Result<ChunkGpuMesh, String>, Check) {
     // Diagnostic only: keep allocation, staging and error-scope wall time
     // distinct. A slow upload is not itself proof of a driver/allocator cause.
@@ -48,28 +49,17 @@ pub(super) fn start(
     device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let push_ms = started.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
     let mut phases = [[0.0f64; 4]; 2];
-    let mut buffer = |slot: usize, label: &str,
-                  bytes: &[u8],
-                  usage: wgpu::BufferUsages,
-                  empty: &wgpu::Buffer|
-     -> Result<wgpu::Buffer, String> {
+    let mut write = |slot: usize, label: &str, buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]|
+     -> Result<(), String> {
         let Some(size) = wgpu::BufferSize::new(bytes.len() as u64) else {
-            return Ok(empty.clone());
+            return Ok(());
         };
         let phase = trace.then(Instant::now);
-        let result = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: size.get(),
-            usage: usage | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        if let Some(t) = phase { phases[slot][0] += t.elapsed().as_secs_f64() * 1000.0; }
-        let phase = trace.then(Instant::now);
-        let staging = queue.write_buffer_with(&result, 0, size);
+        let staging = queue.write_buffer_with(buffer, offset, size);
         if let Some(t) = phase { phases[slot][1] += t.elapsed().as_secs_f64() * 1000.0; }
         let Some(mut staging) = staging else {
             return Err(format!(
-                "Could not allocate or stage {label} ({} bytes)",
+                "Could not stage {label} ({} bytes at {offset})",
                 size.get()
             ));
         };
@@ -79,26 +69,24 @@ pub(super) fn start(
         let phase = trace.then(Instant::now);
         drop(staging);
         if let Some(t) = phase { phases[slot][3] += t.elapsed().as_secs_f64() * 1000.0; }
-        Ok(result)
+        Ok(())
     };
     let result = (|| {
-        let vertex_buffer = buffer(
-            0,
-            "chunk vertex upload",
-            bytemuck::cast_slice(&mesh.vertices),
-            wgpu::BufferUsages::VERTEX,
-            empty_vertex,
-        )?;
-        let index_buffer = buffer(
-            1,
-            "chunk index upload",
-            bytemuck::cast_slice(&mesh.indices),
-            wgpu::BufferUsages::INDEX,
-            empty_index,
-        )?;
+        match &alloc {
+            Some(lease) => {
+                let range = *lease.range();
+                let (vertices, indices) = arena
+                    .buffers(range.page)
+                    .ok_or_else(|| format!("Chunk mesh arena page {} is missing", range.page))?;
+                write(0, "chunk vertex upload", vertices, range.vertex_offset, bytemuck::cast_slice(&mesh.vertices))?;
+                write(1, "chunk index upload", indices, range.index_offset, bytemuck::cast_slice(&mesh.indices))?;
+            }
+            // A published mesh with indices but no storage would draw nothing: a hole.
+            None if !mesh.indices.is_empty() => return Err("Chunk mesh has no arena range".into()),
+            None => {}
+        }
         Ok(ChunkGpuMesh { boundary_profile:None,
-            vertex_buffer,
-            index_buffer,
+            alloc,
             index_count: mesh.indices.len() as u32,
             lod: key.lod,
             lod_invariant,
@@ -126,10 +114,10 @@ pub(super) fn start(
         let total_ms = started.elapsed().as_secs_f64() * 1000.0;
         if total_ms > 25.0 {
             let accounted = push_ms + pop_ms + phases.iter().flatten().sum::<f64>();
-            println!("[resident-upload-gpu] key={key:?} vertex_bytes={} index_bytes={} total_ms={total_ms:.4} scope_push_ms={push_ms:.4} vertex_allocate_ms={:.4} vertex_stage_ms={:.4} vertex_copy_ms={:.4} vertex_stage_drop_ms={:.4} index_allocate_ms={:.4} index_stage_ms={:.4} index_copy_ms={:.4} index_stage_drop_ms={:.4} scope_pop_ms={pop_ms:.4} residual_ms={:.4}",
+            println!("[resident-upload-gpu] key={key:?} vertex_bytes={} index_bytes={} total_ms={total_ms:.4} scope_push_ms={push_ms:.4} vertex_stage_ms={:.4} vertex_copy_ms={:.4} vertex_stage_drop_ms={:.4} index_stage_ms={:.4} index_copy_ms={:.4} index_stage_drop_ms={:.4} scope_pop_ms={pop_ms:.4} residual_ms={:.4}",
                 std::mem::size_of_val(mesh.vertices.as_slice()), std::mem::size_of_val(mesh.indices.as_slice()),
-                phases[0][0], phases[0][1], phases[0][2], phases[0][3],
-                phases[1][0], phases[1][1], phases[1][2], phases[1][3], (total_ms-accounted).max(0.0));
+                phases[0][1], phases[0][2], phases[0][3],
+                phases[1][1], phases[1][2], phases[1][3], (total_ms-accounted).max(0.0));
         }
     }
     (result, check)

@@ -34,7 +34,7 @@ mod priority_tests {
     #[ignore = "native Vulkan buffers for exact proxy LOD activation; run serially"]
     fn gpu_invariant_lod_activation_publishes_ready_edit_column() {
         let adapter = engine_gpu::test_adapter();
-        let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let (_device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let q=IVec3::new(50,0,0);
         let mut cache=ChunkCache::new(IVec3::ZERO);
         cache.visible.clear();
@@ -44,11 +44,7 @@ mod priority_tests {
         });
         cache.edit_proxies.rebuild_coords();
         cache.rebuild_visible_sets();
-        cache.install_mesh(q,super::super::ChunkGpuMesh { boundary_profile:None,
-            vertex_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("invariant proxy vertices"),size:16,usage:wgpu::BufferUsages::VERTEX,mapped_at_creation:false}),
-            index_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("invariant proxy indices"),size:16,usage:wgpu::BufferUsages::INDEX,mapped_at_creation:false}),
-            index_count:0,lod:2,lod_invariant:true,bytes:32,
-        });
+        cache.install_mesh(q,super::super::ChunkGpuMesh::test_mesh(0, 2, true, 32));
         assert!(!cache.published_coords.contains(&q),"exact proxy ownership cannot activate at coarse LOD");
         assert!(!cache.edit_proxies.columns[&(q.x,q.z)].admitted);
         assert!(cache.activate_lod(super::super::ChunkKey {coord:q,lod:0}));

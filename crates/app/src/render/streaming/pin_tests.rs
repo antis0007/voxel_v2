@@ -4,8 +4,8 @@ use super::*;
 #[ignore = "native Vulkan buffers for atomic vertical membership; run serially"]
 fn gpu_published_column_survives_pending_vertical_expansion() {
     let adapter = engine_gpu::test_adapter();
-    let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    let mesh=||ChunkGpuMesh { boundary_profile:None, vertex_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("column member"),size:16,usage:wgpu::BufferUsages::VERTEX,mapped_at_creation:false}),index_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("column member indices"),size:16,usage:wgpu::BufferUsages::INDEX,mapped_at_creation:false}),index_count:3,lod:0,lod_invariant:false,bytes:32 };
+    let (_device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mesh=||ChunkGpuMesh::test_mesh(3, 0, false, 32);
     let a=IVec3::ZERO;let b=IVec3::Y;
     let mut cache=ChunkCache::new(a);cache.visible=vec![ChunkKey {coord:a,lod:0}];cache.rebuild_visible_sets();
     assert!(!cache.resident_coverage(Vec3::ZERO,4,1.0).contains_column(0,0));
@@ -37,12 +37,8 @@ fn gpu_published_column_survives_pending_vertical_expansion() {
 #[ignore = "native Vulkan buffers for retained-column ownership; run serially"]
 fn gpu_retained_columns_keep_draw_mask_dirty_and_budget_ownership() {
     let adapter = engine_gpu::test_adapter();
-    let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    let mesh=|| ChunkGpuMesh { boundary_profile:None,
-        vertex_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("pin fixture vertices"),size:16,usage:wgpu::BufferUsages::VERTEX,mapped_at_creation:false}),
-        index_buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("pin fixture indices"),size:16,usage:wgpu::BufferUsages::INDEX,mapped_at_creation:false}),
-        index_count:3,lod:0,lod_invariant:false,bytes:300*1024*1024,
-    };
+    let (_device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mesh=|| ChunkGpuMesh::test_mesh(3, 0, false, 300*1024*1024);
     // Allocation sizes above are tiny; bytes is synthetic admission metadata,
     // not a claim that the test allocated or measured 1.2 GiB of native memory.
     let a=IVec3::new(50,0,0); let b=IVec3::new(49,0,0);
@@ -82,17 +78,7 @@ fn gpu_edited_source_cannot_resurrect_previous_or_inactive_lods() {
     let adapter = engine_gpu::test_adapter();
     let (device, _) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     // index_count identifies distinct fixture sources; these buffers are not drawn.
-    let mesh = |lod, index_count| ChunkGpuMesh { boundary_profile:None,
-        vertex_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("LOD source fixture vertices"), size: 16,
-            usage: wgpu::BufferUsages::VERTEX, mapped_at_creation: false,
-        }),
-        index_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("LOD source fixture indices"), size: 64,
-            usage: wgpu::BufferUsages::INDEX, mapped_at_creation: false,
-        }),
-        index_count, lod, lod_invariant: false, bytes: 80,
-    };
+    let mesh = |lod, index_count| ChunkGpuMesh::test_mesh(index_count, lod, false, 80);
     let coord = IVec3::ZERO;
     let key = |lod| ChunkKey { coord, lod };
     let mut cache = ChunkCache::new(coord);
@@ -132,22 +118,12 @@ fn gpu_edited_source_cannot_resurrect_previous_or_inactive_lods() {
 #[ignore = "native Vulkan retained pin ownership beyond dense window; run serially"]
 fn gpu_sparse_pin_survives_world_origin_shift_and_matches_actual_child_draws() {
     let adapter = engine_gpu::test_adapter();
-    let (device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let (_device,_)=pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let coord=IVec3::new(-600,0,-620);
     let mut cache=ChunkCache::new(coord);
     cache.visible=vec![ChunkKey {coord,lod:0}];
     cache.rebuild_visible_sets();
-    cache.install_mesh(coord,ChunkGpuMesh { boundary_profile:None,
-        vertex_buffer:device.create_buffer(&wgpu::BufferDescriptor {
-            label:Some("sparse pin vertices"),size:16,
-            usage:wgpu::BufferUsages::VERTEX,mapped_at_creation:false,
-        }),
-        index_buffer:device.create_buffer(&wgpu::BufferDescriptor {
-            label:Some("sparse pin indices"),size:16,
-            usage:wgpu::BufferUsages::INDEX,mapped_at_creation:false,
-        }),
-        index_count:3,lod:0,lod_invariant:false,bytes:32,
-    });
+    cache.install_mesh(coord,ChunkGpuMesh::test_mesh(3, 0, false, 32));
     cache.set_horizon_pins(vec![(coord.x,coord.z)]);
     let vp=glam::Mat4::orthographic_rh(-100_000.0,100_000.0,-100_000.0,100_000.0,0.1,1_000_000.0)
         *glam::Mat4::look_at_rh(Vec3::new(0.0,5000.0,200_000.0),Vec3::ZERO,Vec3::Y);
@@ -173,12 +149,10 @@ fn gpu_sparse_pin_survives_world_origin_shift_and_matches_actual_child_draws() {
     cache.rebuild_visible_sets();
     // Shared tiny buffers exercise membership/admission, not VRAM measurement
     // or rendered geometry. The original valid pin must win over new requests.
-    let vertex=cache.gpu_meshes[&coord].vertex_buffer.clone();
-    let index=cache.gpu_meshes[&coord].index_buffer.clone();
     let mut wanted=vec![(coord.x,coord.z)];
     for x in 100..612 {
         let q=IVec3::new(x,0,100);
-        cache.gpu_meshes.insert(q,ChunkGpuMesh { boundary_profile:None,vertex_buffer:vertex.clone(),index_buffer:index.clone(),index_count:3,lod:0,lod_invariant:false,bytes:32});
+        cache.gpu_meshes.insert(q,ChunkGpuMesh::test_mesh(3, 0, false, 32));
         cache.published_coords.insert(q);
         wanted.push((q.x,q.z));
     }

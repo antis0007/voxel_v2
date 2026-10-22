@@ -4349,16 +4349,18 @@ impl Gpu {
                 pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
+                // Front-to-back order stays; buffers rebind only on a page change.
+                let mut bound_page = None;
                 for key in draw_list {
-                    if let Some(mesh) = chunk_cache.gpu_meshes.get(&key.coord) {
-                        pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                        pass.set_index_buffer(
-                            mesh.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint32,
-                        );
-                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    if let Some(slice) = chunk_cache.draw_slice(key.coord) {
+                        if bound_page != Some(slice.page) {
+                            pass.set_vertex_buffer(0, slice.vertices.slice(..));
+                            pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            bound_page = Some(slice.page);
+                        }
+                        terrain_indices += slice.index_range.len();
+                        pass.draw_indexed(slice.index_range, slice.base_vertex, 0..1);
                         terrain_draw_calls += 1;
-                        terrain_indices += mesh.index_count as usize;
                     }
                 }
                 if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon) {

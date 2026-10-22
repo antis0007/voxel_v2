@@ -20,8 +20,9 @@ fn cpu(streamer:&ChunkStreamer,lod:u8,revision:u64,job_id:u64,vertex_count:usize
     CpuChunkMesh{failed:false,lod_invariant:false,key:ChunkKey{coord:IVec3::ZERO,lod},revision,
         job_id,world_epoch:streamer.upload_epoch,cache_epoch:0,mesh,shadow_casters:Default::default(),boundary_profile:Default::default(),_lease:Some(lease)}
 }
-fn uploaded(device:&wgpu::Device,queue:&wgpu::Queue,s:&ChunkStreamer,c:&CpuChunkMesh)->ChunkGpuMesh {
-    let(mesh,check)=gpu_upload::start(device,queue,&c.mesh,c.key,c.lod_invariant,&s.empty_vertex,&s.empty_index);
+fn uploaded(device:&wgpu::Device,queue:&wgpu::Queue,cache:&mut ChunkCache,c:&CpuChunkMesh)->ChunkGpuMesh {
+    let alloc=cache.arena.alloc_mesh(device,&c.mesh).unwrap();
+    let(mesh,check)=gpu_upload::start(device,queue,&c.mesh,c.key,c.lod_invariant,&cache.arena,alloc);
     let submission=queue.submit([]);
     device.poll(wgpu::PollType::Wait{submission_index:Some(submission),timeout:Some(Duration::from_secs(10))}).unwrap();
     assert!(pollster::block_on(check).is_none());mesh.unwrap()
@@ -33,11 +34,11 @@ fn controlled_check(state:Arc<AtomicU8>)->gpu_upload::Check {
     }))
 }
 fn seed_old(device:&wgpu::Device,queue:&wgpu::Queue,cache:&mut ChunkCache,s:&ChunkStreamer,lod:u8) {
-    let c=cpu(s,lod,1,1,3);let gpu=uploaded(device,queue,s,&c);cache.install_mesh(c.key.coord,gpu);
+    let c=cpu(s,lod,1,1,3);let gpu=uploaded(device,queue,cache,&c);cache.install_mesh(c.key.coord,gpu);
 }
 fn stage(device:&wgpu::Device,queue:&wgpu::Queue,cache:&mut ChunkCache,s:&mut ChunkStreamer,
     c:CpuChunkMesh,state:Arc<AtomicU8>) {
-    let gpu=uploaded(device,queue,s,&c);let lease=cache.reserve_pending_gpu(c.key,gpu.bytes).unwrap();
+    let gpu=uploaded(device,queue,cache,&c);let lease=cache.reserve_pending_gpu(c.key,gpu.bytes).unwrap();
     s.begin_pending_upload(c,Ok(gpu),controlled_check(state),lease,cache.gpu_world_epoch);
 }
 
@@ -130,23 +131,23 @@ fn gpu_pending_world_reset_and_newer_tokens_cannot_publish_or_clear_new_work() {
 }
 
 #[test]
-#[ignore="actual small-limit GPU scoped validation failure, no OOM; Root slot only"]
+#[ignore="actual GPU scoped validation failure (write past an arena page), no OOM; Root slot only"]
 fn gpu_pending_actual_scoped_error_never_installs_invalid_destination() {
     let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
     let old_revision=cache.gpu_mesh_revision;
-    let adapter=engine_gpu::test_adapter();
-    let(small,small_queue)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor{
-        required_limits:wgpu::Limits{max_buffer_size:4096,..Default::default()},..Default::default()})).unwrap();
-    let c=cpu(&s,0,10,9,128); // 7168 vertex bytes: small, but above the requested device limit.
-    assert!(std::mem::size_of_val(c.mesh.vertices.as_slice()) as u64>small.limits().max_buffer_size);
+    let c=cpu(&s,0,10,9,128); // 7168 vertex bytes.
     let bytes=std::mem::size_of_val(c.mesh.vertices.as_slice())+c.mesh.indices.len()*4;
     let lease=cache.reserve_pending_gpu(c.key,bytes).unwrap();
-    // Deliberately bypass supported() ONLY in this fixture to exercise the real
-    // production error scopes; no production failure injection or huge allocation.
-    let(attempt,check)=gpu_upload::start(&small,&small_queue,&c.mesh,c.key,false,&s.empty_vertex,&s.empty_index);
+    // Deliberately forge a range that runs past the end of a real arena page,
+    // ONLY in this fixture, to exercise the real production error scopes.
+    let page=cache.arena.alloc(&device,56,4).unwrap().range().page;
+    let past_end=super::super::arena::ArenaRange{page,
+        vertex_offset:super::super::arena::PAGE_VERTEX_BYTES-56,vertex_bytes:7168,index_offset:0,index_bytes:12};
+    let forged=super::super::arena::ArenaLease::new(past_end,std::sync::mpsc::channel().0);
+    let(attempt,check)=gpu_upload::start(&device,&queue,&c.mesh,c.key,false,&cache.arena,Some(forged));
     s.begin_pending_upload(c,attempt,check,lease,cache.gpu_world_epoch);
-    small.poll(wgpu::PollType::Wait{submission_index:None,timeout:Some(Duration::from_secs(10))}).unwrap();
-    assert_eq!(s.poll_pending_uploads(&small,&AtomicBool::new(false),&mut cache,4,Instant::now()).0,0);
+    device.poll(wgpu::PollType::Wait{submission_index:None,timeout:Some(Duration::from_secs(10))}).unwrap();
+    assert_eq!(s.poll_pending_uploads(&device,&AtomicBool::new(false),&mut cache,4,Instant::now()).0,0);
     assert_eq!(cache.gpu_meshes[&IVec3::ZERO].lod,2);assert_eq!(cache.gpu_mesh_revision,old_revision);
     assert!(s.upload_error.is_some());assert_eq!(s.ready_meshes.len(),1);
     assert!(s.mesh_budget.used()>0);assert_eq!(cache.pending_gpu.bytes(),0);
@@ -158,7 +159,8 @@ fn gpu_pending_real_success_progresses_without_capture_or_profiler() {
     let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,2);
     let c=cpu(&s,0,10,0,3);
     let lease=cache.reserve_pending_gpu(c.key,std::mem::size_of_val(c.mesh.vertices.as_slice())+c.mesh.indices.len()*4).unwrap();
-    let(attempt,check)=gpu_upload::start(&device,&queue,&c.mesh,c.key,false,&s.empty_vertex,&s.empty_index);
+    let alloc=cache.arena.alloc_mesh(&device,&c.mesh).unwrap();
+    let(attempt,check)=gpu_upload::start(&device,&queue,&c.mesh,c.key,false,&cache.arena,alloc);
     s.begin_pending_upload(c,attempt,check,lease,cache.gpu_world_epoch);
     queue.submit([]);
     let deadline=Instant::now()+Duration::from_secs(5);
@@ -311,7 +313,7 @@ fn gpu_local_source_enrollment_precedes_first_quality_column_admission() {
     let members:Vec<_>=(range.0..=range.1).map(|y|IVec3::new(column.0,y,column.1)).collect();
     for &q in &members {
         let mut c=cpu(&s,0,world.revision(),1,3);c.key.coord=q;
-        cache.install_mesh(q,uploaded(&device,&queue,&s,&c));
+        let gpu=uploaded(&device,&queue,&mut cache,&c);cache.install_mesh(q,gpu);
     }
     assert!(!cache.published_columns.contains_key(&column));
     cache.set_quality_columns(&snapshot,&[column],false,&mut s);
@@ -320,7 +322,7 @@ fn gpu_local_source_enrollment_precedes_first_quality_column_admission() {
     assert!(desired.iter().all(|q|cache.dirty_meshes.contains(q)));
     for &q in &desired {
         let mut c=cpu(&s,0,world.revision(),2,3);c.key.coord=q;
-        cache.install_mesh(q,uploaded(&device,&queue,&s,&c));
+        let gpu=uploaded(&device,&queue,&mut cache,&c);cache.install_mesh(q,gpu);
     }
     cache.set_quality_columns(&snapshot,&[column],false,&mut s);
     assert!(cache.published_columns.contains_key(&column),"fresh complete column must make progress");

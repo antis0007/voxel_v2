@@ -27,6 +27,12 @@ pub(super) fn limits() -> (usize, usize) {
     (cpu * MIB, gpu * MIB)
 }
 
+/// Mesh arena pages: the GPU mesh limit plus the LOD cache, with a quarter
+/// extra for fragmentation. Pages are kept once made, so this caps VRAM.
+pub(super) fn arena_budget(gpu_limit: usize) -> usize {
+    (gpu_limit + super::lod_cache::MAX_BYTES) / 4 * 5
+}
+
 #[derive(Default)]
 pub(super) struct VoxelAllocations(pub AtomicUsize);
 
@@ -262,6 +268,7 @@ impl ChunkCache {
             self.budget_center = self.center_chunk;
         }
         self.residency_limits = limits;
+        self.arena.set_budget(arena_budget(limits.1));
         self.trim_lod_budget();
         if self.gpu_bytes.saturating_add(self.pending_gpu.bytes()) > self.mesh_limit() {
             // Requested membership may grow while the old column is still

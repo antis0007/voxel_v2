@@ -636,11 +636,15 @@ impl ShadowRenderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.gen_bind_groups[i], &[]);
+            let mut bound_page = None;
             for coord in &self.draw_lists[i] {
-                if let Some(mesh) = cache.gpu_meshes.get(coord) {
-                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                if let Some(slice) = cache.draw_slice(*coord) {
+                    if bound_page != Some(slice.page) {
+                        pass.set_vertex_buffer(0, slice.vertices.slice(..));
+                        pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        bound_page = Some(slice.page);
+                    }
+                    pass.draw_indexed(slice.index_range, slice.base_vertex, 0..1);
                 }
             }
             if let Some(horizon) = horizon {

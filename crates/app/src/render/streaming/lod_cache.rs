@@ -4,7 +4,7 @@ use super::{ChunkGpuMesh, ChunkKey};
 use glam::IVec3;
 use std::collections::HashMap;
 
-const MAX_BYTES: usize = 64 * 1024 * 1024;
+pub(super) const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ENTRIES: usize = 512;
 
 #[derive(Default)]

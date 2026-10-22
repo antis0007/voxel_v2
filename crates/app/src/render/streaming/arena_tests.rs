@@ -67,3 +67,48 @@ fn base_vertex_and_first_index() {
     assert_eq!(r.base_vertex(), 3);
     assert_eq!(r.first_index(), 5);
 }
+
+fn device() -> wgpu::Device {
+    let adapter = engine_gpu::test_adapter();
+    pollster::block_on(adapter.request_device(&Default::default())).unwrap().0
+}
+
+#[test]
+#[ignore = "needs a GPU adapter; run with just test-gpu"]
+fn gpu_arena_respects_budget() {
+    let device = device();
+    let mut arena = super::MeshArena::new((super::PAGE_VERTEX_BYTES + super::PAGE_INDEX_BYTES) as usize);
+    let first = arena.alloc(&device, super::PAGE_VERTEX_BYTES, 4).expect("one page fits the budget");
+    assert_eq!(first.range().page, 0);
+    assert!(arena.alloc(&device, 56, 4).is_none(), "a second page would exceed the budget");
+    assert!(arena.alloc(&device, super::PAGE_VERTEX_BYTES + 56, 4).is_none(), "larger than a page");
+}
+
+#[test]
+#[ignore = "needs a GPU adapter; run with just test-gpu"]
+fn gpu_freed_range_not_reused_same_frame() {
+    let device = device();
+    let mut arena = super::MeshArena::new(1 << 30);
+    let a = arena.alloc(&device, 56, 4).unwrap();
+    let a_range = *a.range();
+    drop(a);
+    let b = arena.alloc(&device, 56, 4).unwrap();
+    assert_ne!(b.range().vertex_offset, a_range.vertex_offset, "freed range reused before begin_frame");
+    assert_ne!(b.range().index_offset, a_range.index_offset);
+    arena.begin_frame();
+    let c = arena.alloc(&device, 56, 4).unwrap();
+    assert_eq!((c.range().vertex_offset, c.range().index_offset), (a_range.vertex_offset, a_range.index_offset));
+    drop((b, c));
+}
+
+#[test]
+#[ignore = "needs a GPU adapter; run with just test-gpu"]
+fn gpu_arena_frees_everything_after_leases_drop() {
+    let device = device();
+    let mut arena = super::MeshArena::new(1 << 30);
+    let leases: Vec<_> = (0..3).map(|i| arena.alloc(&device, 56 * (i + 1), 12).unwrap()).collect();
+    assert!(arena.used_bytes() > 0);
+    drop(leases);
+    arena.begin_frame();
+    assert_eq!(arena.used_bytes(), 0);
+}
