@@ -795,7 +795,7 @@ mod tests {
         bytes.extend_from_slice(&crc.to_le_bytes());
         std::fs::write(&save_path, &bytes).unwrap();
 
-        let loaded = load_exact(&save_path, &dir).unwrap();
+        let loaded = load_exact(&save_path, &save_path).unwrap();
         assert_eq!(loaded.world.inventory.pack[11].unwrap().count, 512);
         assert_eq!(loaded.world.inventory.dropped.len(), 1);
         assert_eq!(loaded.world.inventory.dropped[0].stack.count, 400);
@@ -855,7 +855,7 @@ mod tests {
         v17_bytes.extend_from_slice(&v17_crc.to_le_bytes());
         let v17_path = dir.join("world_v17.dat");
         std::fs::write(&v17_path, &v17_bytes).unwrap();
-        let loaded_v17 = load_exact(&v17_path, &dir).unwrap();
+        let loaded_v17 = load_exact(&v17_path, &v17_path).unwrap();
         assert_eq!(
             loaded_v17.world.undercrown.get(record),
             crate::world::undercrown::flags::DISCOVERED | crate::world::undercrown::flags::OPEN
@@ -894,7 +894,7 @@ mod tests {
         let v12_path = dir.join("world_v12.dat");
         std::fs::write(&v12_path, &v12_bytes).unwrap();
 
-        let migrated = load_exact(&v12_path, &dir).unwrap();
+        let migrated = load_exact(&v12_path, &v12_path).unwrap();
         assert_eq!(migrated.world.inventory.count_item(Item::Resource(0)), 18);
         assert_eq!(
             migrated
@@ -952,7 +952,7 @@ mod tests {
         assert_ne!(world.adventure.spell_log, SpellLog::all());
 
         let current = synth_save(&world, 19, &dir, "world_v19.dat");
-        let loaded = load_exact(&current, &dir).unwrap();
+        let loaded = load_exact(&current, &current).unwrap();
         assert_eq!(loaded.world.adventure.spell_log, world.adventure.spell_log);
         assert!(loaded.world.adventure.spell_log.has(29));
         assert!(!loaded.world.adventure.spell_log.has(3));
@@ -960,7 +960,7 @@ mod tests {
         // A v18 file has no log block. It must still decode, and the player
         // must keep everything: discovery never takes spells away.
         let legacy = synth_save(&world, 18, &dir, "world_v18.dat");
-        let old = load_exact(&legacy, &dir).unwrap();
+        let old = load_exact(&legacy, &legacy).unwrap();
         assert_eq!(old.world.adventure.spell_log, SpellLog::all());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -979,11 +979,11 @@ mod tests {
         world.reconcile_legacy_to_inventory();
         world.inventory.craft_grid[8] = Some(ItemStack::new(Item::Block(BlockId::Clay), 2));
         let current = synth_save(&world, SAVE_VERSION, &dir, "world_v20.dat");
-        let loaded = load_exact(&current, &dir).unwrap();
+        let loaded = load_exact(&current, &current).unwrap();
         assert_eq!(loaded.world.inventory.count_item(Item::Resource(factory::COKE as u8)), 5);
         assert_eq!(loaded.world.inventory.craft_grid[8].unwrap().count, 2);
         let legacy = synth_save(&world, 19, &dir, "world_v19.dat");
-        assert!(load_exact(&legacy, &dir).is_ok());
+        assert!(load_exact(&legacy, &legacy).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
 
         // Machines through the factory codec, current and legacy formats.
@@ -1025,7 +1025,8 @@ mod tests {
         assert_eq!(save_version(b"VXWSAV22").unwrap(), 22);
         assert_eq!(save_version(b"VXWSAV23").unwrap(), 23);
         assert_eq!(save_version(b"VXWSAV24").unwrap(), 24);
-        assert!(save_version(b"VXWSAV28").is_err());
+        let next = format!("VXWSAV{:02}", SAVE_VERSION + 1);
+        assert!(save_version(next.as_bytes()).is_err(), "a future version must be rejected");
         let magic_version = ((MAGIC[6] - b'0') * 10 + (MAGIC[7] - b'0')) as u8;
         assert_eq!(magic_version, SAVE_VERSION);
     }
@@ -1063,7 +1064,7 @@ mod tests {
         // A real v21-layout file still loads through the production decoder.
         let legacy = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
         let path = synth_save(&legacy, 21, &dir, "legacy21.vxw");
-        assert!(load_exact(&path, &dir).is_ok());
+        assert!(load_exact(&path, &path).is_ok());
         drop(loaded); drop(w); drop(view);
         std::fs::remove_dir_all(&dir).unwrap();
     }

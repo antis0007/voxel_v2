@@ -1778,7 +1778,11 @@ mod causeway_review {
             VoxelScalePreset::HalfMeter,
             VoxelScalePreset::QuarterMeter,
         ] {
-            let world = crate::world::World::with_seed(WorldType::Hills, scale, 3040332434);
+            let mut world = crate::world::World::with_seed(WorldType::Hills, scale, 3040332434);
+            // The causeway chamber is a variant-2 cavern. From generator version
+            // 25 the Prism Sanctum replaces variant-2 caverns, so this layout only
+            // generates for worlds saved before that version. Pin to the last one.
+            world.generator_version = super::super::prism_sanctum::FIRST_VERSION - 1;
             let cfg = world.sample_config();
             let spawn = review_causeway_spawn(&cfg).unwrap() * scale.meters();
             let sample =

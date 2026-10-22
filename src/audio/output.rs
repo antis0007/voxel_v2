@@ -74,9 +74,10 @@ struct Voice {
     cursor: f32,
 }
 
-/// Repeated voices share a gently normalized bus.
+/// Repeated voices share one equal-power bus: n copies of a cue sum to
+/// sqrt(n) loudness, not n, and not a flat 1.
 fn equal_cue_gain(count: u32) -> f32 {
-    1.0 / count.max(1) as f32
+    1.0 / (count.max(1) as f32).sqrt()
 }
 
 /// A tiny ping-pong delay with a damped feedback path. It is not a full

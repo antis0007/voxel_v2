@@ -2139,6 +2139,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "wall-clock ratio; flaky under parallel test load (1.07x-1.98x on the same binary). Tracked in docs/PLAN.md debt; moves to `just bench` in P2."]
     fn terrain_generation_cost_stays_close_to_the_previous_generator() {
         use std::sync::atomic::AtomicBool;
         let never = AtomicBool::new(false);

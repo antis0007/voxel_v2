@@ -12,14 +12,25 @@ mod tests {
     const ROOT_FILES: &[&str] = &[
         ".gitignore",
         "AGENTS.md",
+        "CLAUDE.md",
+        "RTK.md",
         "Cargo.toml",
         "Cargo.lock",
         "build.rs",
+        "justfile",
+        "rust-toolchain.toml",
     ];
-    /// `downloads/` and `saves/` are gitignored user data.
+    /// `downloads/` and `saves/` are gitignored user data; `.code-advisor/`
+    /// and `.superpowers/` are gitignored tool scratch created by hooks.
     const ROOT_DIRS: &[&str] = &[
         ".cargo",
+        ".claude",
+        ".code-advisor",
+        ".codex",
         ".git",
+        ".superpowers",
+        "crates",
+        "scripts",
         "assets",
         "docs",
         "downloads",
