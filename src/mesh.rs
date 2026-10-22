@@ -1155,6 +1155,15 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                 // Keep the emissive silhouette stable across chunk LOD swaps.
                 // Small non-emissive fittings still disappear in the far mesh.
                 let sides = 6;
+                // One colour per ring; each band interpolates between its two
+                // rings, so the flame runs yellow core -> orange -> red tip with
+                // no flat stripes.
+                let ring_colors = [
+                    [1.0, 0.88, 0.47],
+                    flame_color,
+                    [1.0, 0.42, 0.09],
+                    [1.0, 0.29, 0.055],
+                ];
                 for band in 0..3 {
                     let mut flame = surface;
                     flame.detail_strength = -2.0;
@@ -1176,22 +1185,26 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                             point(band + 1, side + 1),
                             point(band, side + 1),
                         ];
-                        let color = if band == 0 {
-                            [1.0, 0.88, 0.47]
-                        } else if band == 1 {
-                            flame_color
-                        } else {
-                            [1.0, 0.29, 0.055]
-                        };
+                        let first_vertex = mesh.vertices.len();
                         push_face(
                             &mut mesh.vertices,
                             &mut mesh.indices,
                             quad,
-                            color,
+                            ring_colors[band],
                             normal_from_quad(quad),
                             flame,
                             [1.0; 4],
                         );
+                        // quad order is [bottom, top, top, bottom] along the band.
+                        let corners = [
+                            ring_colors[band],
+                            ring_colors[band + 1],
+                            ring_colors[band + 1],
+                            ring_colors[band],
+                        ];
+                        for (vertex, color) in mesh.vertices[first_vertex..].iter_mut().zip(corners) {
+                            vertex.color = color;
+                        }
                     }
                 }
                 {
