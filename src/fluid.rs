@@ -1,12 +1,6 @@
 //! Scale presets and the active conservative world simulation.
 
-pub mod catalog;
-pub mod machine;
-pub mod network;
-pub mod containers;
-pub mod processes;
 pub mod ripples;
-pub mod tank_view;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoxelScalePreset {

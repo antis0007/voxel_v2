@@ -75,8 +75,8 @@ Known open issues:
 - Review evidence: `tools/Review-VisualDirection.ps1` writes to `target/visual-direction/<label>/` and records the git HEAD and a hash of the working-tree state. Never overwrite evidence; choose a new label.
 - Every `.wgsl` under `src/` must be included by `src/shader_sources.rs`. The same test enforces this. An unlisted shader is silently unused.
 - Code used only by tests is `#[cfg(test)]`, not dead code in the shipping build. Check `cargo check --all-targets` warnings before and after a change. Warnings for items used by no program, test or not, are real dead code.
-- `src/fluid/{catalog,containers,machine,network,processes,tank_view}.rs` are untracked and not wired into the game (`cargo check` reports them as dead). Their owner decides whether to finish or remove them. Do not delete or wire them on your own.
-- `.cargo/config.toml` is untracked. It pins `target-dir` (see above). Commit it with the rest of the build setup.
+- The unused `src/fluid/{catalog,containers,machine,network,processes,tank_view}.rs` stack was deleted on 2026-10-22 (commit history keeps it). `src/fluid.rs` now holds only the scale presets and `ripples`.
+- `.cargo/config.toml` pins `target-dir` (see above) and the `rust-lld` linker.
 
 @RTK.md
 

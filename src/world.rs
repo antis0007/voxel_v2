@@ -1,5 +1,5 @@
 use glam::{IVec3, Vec3};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::fluid::VoxelScalePreset;

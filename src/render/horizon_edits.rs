@@ -442,7 +442,6 @@ pub(super) fn apply(
             if parent_dirty {
                 let before=super::mesh_bytes(mesh);
                 weld(mesh);
-                parent_dirty=false;
                 println!("[horizon] parent_bitwise_weld before={before} after={}", super::mesh_bytes(mesh));
             }
             weld(&mut clipped);
@@ -806,7 +805,6 @@ thread_local! {
 /// opaque geometry. An opening, transparent cell or unavailable disk record
 /// fails the proof. Simulation and collision continue independently.
 fn occluded_below(snapshot: &WorldSnapshot, q: IVec3, eye: Vec3) -> bool {
-    use std::hash::{Hash, Hasher};
     let low = q.as_vec3() * 32.0 - Vec3::splat(2.0);
     let high = low + Vec3::splat(36.0);
     occluded_bounds(snapshot, low, high, eye)

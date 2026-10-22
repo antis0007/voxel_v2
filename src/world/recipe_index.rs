@@ -130,7 +130,7 @@ fn build() -> Vec<Entry> {
     }
     // Factorio-style: every grid recipe made only of resources can also run
     // in an assembling machine, unattended.
-    for (index, recipe) in all_recipes().iter().enumerate() {
+    for recipe in all_recipes().iter() {
         if !factory::assembler::automatable(recipe) {
             continue;
         }
