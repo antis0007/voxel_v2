@@ -33,11 +33,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
     return out;
 }
 
-// Reconstruct world-space ray direction from NDC.
-fn sky_dir(ndc: vec2<f32>) -> vec3<f32> {
-    return camera_ray(ndc);
-}
-
 // ---- Tonemapping & grading ----
 
 // ACES filmic tonemapping (Narkowicz approximation).
@@ -189,7 +184,7 @@ fn moon_disk(dir: vec3<f32>, moon_dir: vec3<f32>,
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let dir = sky_dir(in.ndc);
+    let dir = camera_ray(in.ndc);
     if uw_active() {
         let jitter = fract(dot(floor(in.pos.xy), vec2<f32>(0.754877666, 0.569840296)));
         return vec4<f32>(uw_backdrop(dir, jitter), 1.0);

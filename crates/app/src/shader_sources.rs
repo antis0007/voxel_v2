@@ -17,7 +17,7 @@ const SHADER_INPUTS: &[(&str,&str)] = shader_inputs![
     "shaders/cloud_shader.wgsl", "shaders/cloud_composite.wgsl", "shaders/sky_shader.wgsl",
     "shaders/cloud_temporal.wgsl", "shaders/cloud_weather_sampling.wgsl", "shaders/outline_shader.wgsl",
     "shaders/shadow_shader.wgsl", "shaders/ui_shader.wgsl", "shaders/postprocess.wgsl",
-    "shaders/present.wgsl", "fluid_compute.wgsl", "shaders/indirect_shared.wgsl",
+    "shaders/present.wgsl", "shaders/color_shared.wgsl", "shaders/weather_clip_shared.wgsl", "fluid_compute.wgsl", "shaders/indirect_shared.wgsl",
     "shaders/indirect_composite.wgsl", "shaders/indirect_gather.wgsl",
 ];
 
@@ -64,10 +64,12 @@ const CLOUD_SHADER_BODY: &str = include_str!("shaders/cloud_shader.wgsl");
 const CLOUD_COMPOSITE_SHADER_BODY: &str = include_str!("shaders/cloud_composite.wgsl");
 const SKY_SHADER_BODY: &str = include_str!("shaders/sky_shader.wgsl");
 const CLOUD_TEMPORAL_SHADER_BODY: &str = include_str!("shaders/cloud_temporal.wgsl");
+const CLOUD_WEATHER_SAMPLING_WGSL: &str = include_str!("shaders/cloud_weather_sampling.wgsl");
+const WEATHER_CLIP_WGSL: &str = include_str!("shaders/weather_clip_shared.wgsl");
 
 pub(crate) fn world_shader_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         CAMERA_LIGHTING_WGSL,
         ATMOSPHERE_RUNTIME_WGSL,
         ATMOSPHERE_WGSL,
@@ -75,6 +77,8 @@ pub(crate) fn world_shader_source() -> String {
         LOCAL_MIST_WGSL,
         UNDERWATER_WGSL,
         MOOD_WGSL,
+        WEATHER_CLIP_WGSL,
+        CLOUD_WEATHER_SAMPLING_WGSL,
         WORLD_SHADER_BODY
     )
 }
@@ -109,16 +113,17 @@ pub(crate) fn cloud_shader_source_for_filtering(hardware_filtering: bool) -> Str
             return textureSampleLevel(tex, cloud_field_sampler, clamped, level, 0.0);
         }"#
     } else {
-        include_str!("shaders/cloud_weather_sampling.wgsl")
+        CLOUD_WEATHER_SAMPLING_WGSL
     };
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         CAMERA_LIGHTING_WGSL,
         ATMOSPHERE_RUNTIME_WGSL,
         ATMOSPHERE_WGSL,
         CLOUD_SHARED_WGSL,
         CLOUD_MORPHOLOGY_WGSL,
         WEATHER_VOLUME_WGSL,
+        WEATHER_CLIP_WGSL,
         sampling,
         CLOUD_SHADER_BODY
     )
@@ -126,8 +131,8 @@ pub(crate) fn cloud_shader_source_for_filtering(hardware_filtering: bool) -> Str
 
 pub(crate) fn cloud_composite_shader_source() -> String {
     format!(
-        "{}\n{}\n{}",
-        LIGHTING_WGSL, ATMOSPHERE_RUNTIME_WGSL, CLOUD_COMPOSITE_SHADER_BODY
+        "{}\n{}\n{}\n{}\n{}",
+        LIGHTING_WGSL, ATMOSPHERE_RUNTIME_WGSL, WEATHER_CLIP_WGSL, CLOUD_WEATHER_SAMPLING_WGSL, CLOUD_COMPOSITE_SHADER_BODY
     )
 }
 
@@ -145,8 +150,8 @@ pub(crate) fn cloud_temporal_shader_source() -> String {
 pub(crate) const LINE_SHADER: &str = include_str!("shaders/outline_shader.wgsl");
 pub(crate) const SHADOW_SHADER: &str = concat!(include_str!("shaders/terrain_detail_shared.wgsl"), "\n", include_str!("shaders/shadow_shader.wgsl"));
 pub(crate) const UI_SHADER: &str = include_str!("shaders/ui_shader.wgsl");
-pub(crate) const POSTPROCESS_SHADER: &str = include_str!("shaders/postprocess.wgsl");
-pub(crate) const PRESENT_SHADER: &str = include_str!("shaders/present.wgsl");
+pub(crate) const POSTPROCESS_SHADER: &str = concat!(include_str!("shaders/color_shared.wgsl"), "\n", include_str!("shaders/postprocess.wgsl"));
+pub(crate) const PRESENT_SHADER: &str = concat!(include_str!("shaders/color_shared.wgsl"), "\n", include_str!("shaders/present.wgsl"));
 // Kept on purpose (docs/superpowers/specs/2026-10-19-expedition-depth-design.md):
 // validated by build.rs, not yet dispatched by the runtime.
 #[allow(dead_code)]

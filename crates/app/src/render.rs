@@ -1158,31 +1158,32 @@ pub struct Gpu {
 // so the main thread does not freeze during GPU initialisation.
 // ---------------------------------------------------------------------------
 
+/// Periodic 3D hash shared by the cloud shape and detail noise generators.
+fn hash3(ix: i32, iy: i32, iz: i32, seed: u32, period: i32) -> [f32; 3] {
+    let wx = ((ix % period) + period) % period;
+    let wy = ((iy % period) + period) % period;
+    let wz = ((iz % period) + period) % period;
+    let mut h = (wx as u32).wrapping_mul(374_761_393)
+        ^ (wy as u32).wrapping_mul(668_265_263)
+        ^ (wz as u32).wrapping_mul(1_274_126_177)
+        ^ seed;
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5bd1e995);
+    h ^= h >> 15;
+    let x = (h & 0xFFFF) as f32 / 65535.0;
+    h = h.wrapping_mul(0x27d4eb2d);
+    h ^= h >> 13;
+    let y = (h & 0xFFFF) as f32 / 65535.0;
+    h = h.wrapping_mul(0x27d4eb2d);
+    h ^= h >> 13;
+    let z = (h & 0xFFFF) as f32 / 65535.0;
+    [x, y, z]
+}
+
 fn gen_shape_noise_data() -> Vec<u8> {
     let size = 64u32;
     let voxels = (size * size * size) as usize;
     let mut data = vec![0u8; voxels * 4];
-
-    fn hash3(ix: i32, iy: i32, iz: i32, seed: u32, period: i32) -> [f32; 3] {
-        let wx = ((ix % period) + period) % period;
-        let wy = ((iy % period) + period) % period;
-        let wz = ((iz % period) + period) % period;
-        let mut h = (wx as u32).wrapping_mul(374_761_393)
-            ^ (wy as u32).wrapping_mul(668_265_263)
-            ^ (wz as u32).wrapping_mul(1_274_126_177)
-            ^ seed;
-        h ^= h >> 13;
-        h = h.wrapping_mul(0x5bd1e995);
-        h ^= h >> 15;
-        let x = (h & 0xFFFF) as f32 / 65535.0;
-        h = h.wrapping_mul(0x27d4eb2d);
-        h ^= h >> 13;
-        let y = (h & 0xFFFF) as f32 / 65535.0;
-        h = h.wrapping_mul(0x27d4eb2d);
-        h ^= h >> 13;
-        let z = (h & 0xFFFF) as f32 / 65535.0;
-        [x, y, z]
-    }
 
     fn worley_tileable(px: f32, py: f32, pz: f32, freq: i32, seed: u32) -> f32 {
         let fx = px * freq as f32;
@@ -1329,27 +1330,6 @@ fn gen_detail_noise_data() -> Vec<u8> {
     let size = 32u32;
     let voxels = (size * size * size) as usize;
     let mut data = vec![0u8; voxels * 4];
-
-    fn hash3(ix: i32, iy: i32, iz: i32, seed: u32, period: i32) -> [f32; 3] {
-        let wx = ((ix % period) + period) % period;
-        let wy = ((iy % period) + period) % period;
-        let wz = ((iz % period) + period) % period;
-        let mut h = (wx as u32).wrapping_mul(374_761_393)
-            ^ (wy as u32).wrapping_mul(668_265_263)
-            ^ (wz as u32).wrapping_mul(1_274_126_177)
-            ^ seed;
-        h ^= h >> 13;
-        h = h.wrapping_mul(0x5bd1e995);
-        h ^= h >> 15;
-        let x = (h & 0xFFFF) as f32 / 65535.0;
-        h = h.wrapping_mul(0x27d4eb2d);
-        h ^= h >> 13;
-        let y = (h & 0xFFFF) as f32 / 65535.0;
-        h = h.wrapping_mul(0x27d4eb2d);
-        h ^= h >> 13;
-        let z = (h & 0xFFFF) as f32 / 65535.0;
-        [x, y, z]
-    }
 
     fn worley_tileable(px: f32, py: f32, pz: f32, freq: i32, seed: u32) -> f32 {
         let fx = px * freq as f32;

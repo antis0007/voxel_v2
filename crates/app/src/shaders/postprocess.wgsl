@@ -42,18 +42,6 @@ fn bayer8(p: vec2<u32>) -> f32 {
     return BAYER8[(p.y & 7u) * 8u + (p.x & 7u)] / 64.0 - 0.5;
 }
 
-fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
-    let low = c * 12.92;
-    let high = 1.055 * pow(max(c, vec3<f32>(0.0031308)), vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, c < vec3<f32>(0.0031308));
-}
-
-fn srgb_decode(c: vec3<f32>) -> vec3<f32> {
-    let low = c / 12.92;
-    let high = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(high, low, c < vec3<f32>(0.04045));
-}
-
 // Palette quantization only. The resolve target is Rgba16Float, so smooth
 // gradients keep their full linear precision here; the present pass performs
 // the final 8-bit write dither at native screen resolution. Quantization is

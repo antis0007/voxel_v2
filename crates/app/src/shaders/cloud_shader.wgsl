@@ -188,10 +188,6 @@ fn cloud_cell_id(world_xz: vec2<f32>, cell_size: f32) -> vec2<i32> {
     return vec2<i32>(i32(q.x), i32(q.y));
 }
 
-fn weather_clip_region(level: i32) -> vec4<f32> {
-    return light.weather_clip_regions[level];
-}
-
 fn weather_uv(world_xz: vec2<f32>, level: i32) -> vec2<f32> {
     let clip = weather_clip_region(level);
 
@@ -468,10 +464,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     out.sky_horizon = sky.horizon;
     out.sky_low = sky.low;
     return out;
-}
-
-fn sky_dir(ndc: vec2<f32>) -> vec3<f32> {
-    return camera_ray(ndc);
 }
 
 fn screen_uv(ndc: vec2<f32>) -> vec2<f32> {
@@ -1619,7 +1611,7 @@ fn cloud_with_aerial_perspective(cloud: CloudSample, dir: vec3<f32>) -> CloudSam
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let dir         = sky_dir(in.ndc);
+    let dir         = camera_ray(in.ndc);
     let cone_spread = ray_cone_spread(dir);
     let debug_mode  = i32(render_debug_view());
 

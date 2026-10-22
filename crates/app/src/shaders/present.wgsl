@@ -16,18 +16,6 @@ struct VsOut {
     @builtin(position) pos : vec4<f32>,
 };
 
-fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
-    let low = c * 12.92;
-    let high = 1.055 * pow(max(c, vec3<f32>(0.0031308)), vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, c < vec3<f32>(0.0031308));
-}
-
-fn srgb_decode(c: vec3<f32>) -> vec3<f32> {
-    let low = c / 12.92;
-    let high = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(high, low, c < vec3<f32>(0.04045));
-}
-
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     let p = array<vec2<f32>, 3>(
