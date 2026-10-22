@@ -2,7 +2,7 @@
 
 pub mod ripples;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 #[allow(clippy::enum_variant_names)] // the unit is the point of the name
 pub enum VoxelScalePreset {
     OneMeter,

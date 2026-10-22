@@ -1,0 +1,5 @@
+---
+source: src/headless.rs
+expression: outcome.json()
+---
+{"scenario":"smoke","ticks":180,"hash":"976b0d34dce94255","failed":0,"failures":[]}

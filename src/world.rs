@@ -168,7 +168,7 @@ impl ChunkData {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
 pub enum WorldType {
     Superflat,
     Hills,

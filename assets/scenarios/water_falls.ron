@@ -1,0 +1,15 @@
+// A full water cell dropped above the player's feet falls and spreads along the ground.
+Scenario(
+    name: "water_falls",
+    world: Superflat,
+    scale: OneMeter,
+    seed: 1,
+    steps: [
+        Advance(ticks: 30),
+        Place(offset: (0, 4, 0), block: "Water"),
+        Expect(Water(offset: (0, 4, 0), min: 8)),
+        Advance(ticks: 60),
+        Expect(Water(offset: (-1, 0, 0), min: 1)),
+        Expect(Finite),
+    ],
+)

@@ -18,6 +18,7 @@ mod creative;
 mod egui_ui;
 mod fast_hash;
 mod fluid;
+mod headless;
 mod material;
 mod material_studio;
 mod mesh;
@@ -1364,6 +1365,9 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
 fn main() -> Result<()> {
     env_logger::init();
 
+    if let Some(path) = std::env::args().find_map(|arg| arg.strip_prefix("--headless=").map(str::to_owned)) {
+        std::process::exit(headless::main(&path));
+    }
     let benchmark_config = parse_benchmark_config();
     if let Some(value)=std::env::args().find_map(|arg|arg.strip_prefix("--benchmark-generator-version=").map(str::to_owned)) {
         let version=value.parse::<u32>()?;
@@ -2549,7 +2553,7 @@ fn main() -> Result<()> {
                                         for (p, v) in partial { w.set_water_volume(p, v); }
                                     }
                                 if let Ok(spec) = std::env::var("VOXEL_REVIEW_STYLE") {
-                                    let n: Vec<u8> = spec.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                                    let n: Vec<u8> = spec.split(',').filter_map(|v| v.trim().parse::<u8>().ok()).collect();
                                     if n.len() == 6 {
                                         wand_style::preview(wand_style::WandStyle { shaft: n[0], head: n[1], trail: n[2], grip: n[3], glow: n[4], runes: n[5] });
                                     }

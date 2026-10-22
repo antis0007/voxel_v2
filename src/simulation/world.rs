@@ -104,6 +104,20 @@ impl WorldSimulation {
         self.next_recovery = Instant::now();
         self.status = None;
     }
+    /// Block until every requested chunk has been generated and queued. Used
+    /// by headless runs so a tick never depends on worker timing.
+    pub fn settle(&mut self, world: &mut World) {
+        loop {
+            self.sources.poll(world);
+            for c in self.sources.completed() {
+                self.queue_ready(world, c);
+            }
+            if self.sources.is_idle() {
+                return;
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
+    }
     pub fn set_enabled(&mut self, v: bool) {
         self.enabled = v;
     }

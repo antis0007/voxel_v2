@@ -1,0 +1,15 @@
+// Sand placed in the air beside the player falls until it rests on the ground.
+Scenario(
+    name: "sand_falls",
+    world: Superflat,
+    scale: OneMeter,
+    seed: 1,
+    steps: [
+        Advance(ticks: 30),
+        Place(offset: (2, 4, 0), block: "Sand"),
+        Advance(ticks: 480),
+        Expect(Block(offset: (2, 4, 0), is: "Air")),
+        Expect(Block(offset: (2, 0, 0), is: "Sand")),
+        Expect(Finite),
+    ],
+)

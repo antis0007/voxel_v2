@@ -158,6 +158,10 @@ impl Residency {
             self.retry = Instant::now() + Duration::from_secs(2);
         }
     }
+    /// No chunk generation is in flight.
+    pub fn is_idle(&self) -> bool {
+        self.pending.is_empty()
+    }
     pub fn poll(&mut self, world: &mut World) {
         self.edited_bytes = world.edited_resident_bytes();
         self.edited_limit = crate::world::regions::edited_budget_mib() * 1024 * 1024;

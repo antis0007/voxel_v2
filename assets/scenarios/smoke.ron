@@ -1,0 +1,15 @@
+// Spawn on hills, let the player settle, place a stone block and read it back.
+Scenario(
+    name: "smoke",
+    world: Hills,
+    scale: OneMeter,
+    seed: 7,
+    steps: [
+        Advance(ticks: 120),
+        Expect(Finite),
+        Place(offset: (2, 0, 0), block: "Stone"),
+        Expect(Block(offset: (2, 0, 0), is: "Stone")),
+        Hold(ticks: 60, forward: true),
+        Expect(Finite),
+    ],
+)

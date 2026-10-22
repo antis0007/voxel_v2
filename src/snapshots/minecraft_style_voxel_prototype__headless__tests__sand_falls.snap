@@ -1,0 +1,5 @@
+---
+source: src/headless.rs
+expression: outcome.json()
+---
+{"scenario":"sand_falls","ticks":510,"hash":"2dfa60c08ed4df2e","failed":0,"failures":[]}
