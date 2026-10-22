@@ -21,6 +21,7 @@ mod terrain;
 mod local_sources;
 mod visibility;
 mod edit_proxies;
+mod view_missing;
 mod quality_proxies;
 #[cfg(test)]
 mod pin_tests;

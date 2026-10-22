@@ -32,6 +32,9 @@ pub struct FrameCounters {
     pub draw_chunks: usize,
     pub terrain_triangles: usize,
     pub nearby_torches: usize,
+    /// Frustum-visible chunks with no resident mesh: all, and within 8 chunks.
+    pub visible_missing: usize,
+    pub near_missing: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

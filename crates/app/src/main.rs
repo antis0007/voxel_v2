@@ -1222,7 +1222,7 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
             use std::io::Write;
             std::fs::create_dir_all(&root)?;
             let mut output = std::io::BufWriter::new(std::fs::File::create(root.join("frames.csv"))?);
-            writeln!(output, "frame,total_ms,gameplay_ms,stream_ms,render_cpu_ms,gpu_supported,gpu_pass_ms,cloud_ms,cloud_composite_ms,terrain_ms,render_frame_id,render_config_id,gpu_sample_count,gpu_frame_id,gpu_config_id,acquire_ms,submit_ms,present_ms,gpu_shadow_ms,terrain_draws,terrain_triangles,shadow_draws,chunk_upload_bytes,worker_pending,cpu_resident_bytes,gpu_resident_bytes,horizon_ms")?;
+            writeln!(output, "frame,total_ms,gameplay_ms,stream_ms,render_cpu_ms,gpu_supported,gpu_pass_ms,cloud_ms,cloud_composite_ms,terrain_ms,render_frame_id,render_config_id,gpu_sample_count,gpu_frame_id,gpu_config_id,acquire_ms,submit_ms,present_ms,gpu_shadow_ms,terrain_draws,terrain_triangles,shadow_draws,chunk_upload_bytes,worker_pending,cpu_resident_bytes,gpu_resident_bytes,horizon_ms,visible_missing,near_missing")?;
             for (index, sample) in snapshot.history.iter().enumerate() {
                 let cpu = sample.cpu;
                 let gpu = sample.render;
@@ -1235,11 +1235,12 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
                 let chunk = sample.chunk;
                 let uploaded_bytes = chunk.uploaded_vertices * std::mem::size_of::<mesh::Vertex3>()
                     + chunk.uploaded_indices * std::mem::size_of::<u32>();
-                writeln!(output, ",{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{:.4}",
+                writeln!(output, ",{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{:.4},{},{}",
                     gpu.surface_acquire_ms, gpu.submit_ms, gpu.present_ms, gpu.gpu_shadow_ms,
                     gpu.terrain_draw_calls, sample.counters.terrain_triangles, gpu.shadow_draw_calls,
                     uploaded_bytes, chunk.generating + chunk.meshing + chunk.pending_schedule,
-                    chunk.cpu_resident_bytes, chunk.gpu_resident_bytes, cpu.horizon_ms)?;
+                    chunk.cpu_resident_bytes, chunk.gpu_resident_bytes, cpu.horizon_ms,
+                    sample.counters.visible_missing, sample.counters.near_missing)?;
             }
             output.flush()
         };
@@ -3008,6 +3009,7 @@ fn main() -> Result<()> {
                             let mut nearby_torch_count = 0usize;
                             let render_world =
                                 !matches!(mode, AppMode::WorldSelect) && world.is_some();
+                            let mut visible_missing = (0, 0);
                             let paused_render = !render_world;
 
                             if matches!(mode, AppMode::Playing)
@@ -3659,6 +3661,7 @@ fn main() -> Result<()> {
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, player.pos, world_scale);
+                                if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 append_fire_lights(world, player.pos, world_scale, &mut nearby_torches);
                                 for blast in world.adventure.blasts.iter().filter(|b| b.age<0.28).take(4) {
                                     if nearby_torches.len()>=MAX_TORCH_LIGHTS {nearby_torches.pop();}
@@ -3875,6 +3878,7 @@ fn main() -> Result<()> {
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, player.pos, world_scale);
+                                if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 append_fire_lights(world, player.pos, world_scale, &mut nearby_torches);
                                 for (pos, radius, color, strength) in world.adventure.spell_lights() {
                                     if nearby_torches.len() >= MAX_TORCH_LIGHTS {
@@ -4141,6 +4145,8 @@ fn main() -> Result<()> {
                                     if let Some(review)=benchmark.as_mut() {
                                         let elapsed=review.motion_started_at.elapsed().as_secs_f64();
                                         // Bound diagnostics so a slow run cannot amplify its own
+                                            visible_missing: visible_missing.0,
+                                            near_missing: visible_missing.1,
                                         // stalls with unbounded logging. Normal play is unaffected.
                                         if sample.cpu.total_ms > 50.0 && benchmark_hitch_reports < 24 {
                                             benchmark_hitch_reports += 1;

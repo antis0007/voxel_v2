@@ -224,10 +224,17 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - Delete `cellular.rs`, `thermal.rs`, the water map, cell-level `activity.rs`, `fluid_compute.wgsl` and the dead sandbox thermal map: one mechanism.
 - Rigid bodies stay CPU on the mirror. **Deviation from the mission:** GPU collider extraction is deferred until bodies exceed today's 64 × 128 cap (ADR). Today's load does not pay for a GPU connected-components pass.
 
-**A7. Scale boundaries** per D2: the boundary pass, depth-aware tick rates, and the conservation ledger.
+**A7. Scale boundaries** per D2: the boundary pass, depth-aware tick rates, and the conservation ledger. The ledger tracks thermal energy as well as mass (ADR 0007 rule 6): merges sum `capacity × volume × temperature`, they never average temperatures.
+
+**A8. Ballistic particles** (added 2026-10-22). This is Noita's splash technique. An impulse (explosion, rigid body or spell) lifts cells out of the grid into flying particles, and they re-enter the grid when they land.
+- `engine_sim::particles`: a CPU SoA table with fixed-point positions and velocities (i32, 1/256 voxel). Floats are kept out so ADR 0008 still holds for anything that carries mass. The table has a hard cap and is ticked within the CA `Budget`.
+- Leaving and landing both go through the edit-command queue (A6). A particle lands in the first cell along its path that has room; if none has room, it stays in flight and tries again the next tick.
+- The A7 ledger counts in-flight particles, so mass is conserved across the whole cycle.
+- Render: instanced quads, drawn from the same mirror the mesher reads.
+- Out of scope: momentum inside the CA, and particles colliding with each other.
 
 Accept:
-- `just run assets/scenarios/<s>.ron` for `sand_pile`, `water_pool`, `fire_spread`, `gas_rise`, `lava_water_steam`, `lod_crossing`. The last asserts mass totals across the boundary through a new `Expect(Mass{material, region, eq})` check.
+- `just run assets/scenarios/<s>.ron` for `sand_pile`, `water_pool`, `fire_spread`, `gas_rise`, `lava_water_steam`, `lod_crossing` and `splash`. `lod_crossing` asserts mass and energy totals across the boundary through new `Expect(Mass{material, region, eq})` and `Expect(Energy{region, eq})` checks. `splash` asserts mass totals before and after an impulse, with particles included.
 - `just test-gpu ca_equivalence`.
 - `just bench ca_1m_active`: 1M active cells, CPU reference and GPU numbers both recorded.
 - `just verify`.
@@ -261,7 +268,7 @@ Token rationale:
 - No per-chunk CPU work in steady state, enforced by a bench counter that asserts zero CPU mesh jobs in a static scene.
 - The horizon backdrop stays as is in this phase.
 
-**B5. Debug overlay** fed from GPU counters: active bricks, dispatches, draws and per-pass timestamps. The existing `GpuProfiler` is the source.
+**B5. Debug overlay** fed from GPU counters: active bricks, dispatches, draws and per-pass timestamps. The existing `GpuProfiler` is the source. It also draws a world-space view of the dirty-brick bitmap, one wire box per set bit, so players and agents can see which regions are being simulated. Today the overlay shows only the number `active_chunks`.
 
 Accept:
 - `just test-gpu golden`: offscreen renders of each Phase A scenario, compared against PNGs per adapter family with a perceptual threshold;
@@ -341,6 +348,7 @@ A JSON schema of `Action` is generated, by a test-checked hand table or `schemar
 Accept: `assets/scenarios/text_walkthrough.txt` mutates the voxel world (dig, pour, cast). It is verified by the same world-hash snapshot as the RON scenarios, and an `Action` round-trips through JSON. `just verify`.
 
 Token rationale: the agent's playtesting interface becomes text in, text out, with no capture session. Every bug report can be a transcript.
+- `inspect(cell)` returns material, state, temperature, pressure and the reaction rows that could fire. The GUI shows it as an inspect tool, through the same `Action`, so a player can see why something burned, melted or flooded instead of guessing.
 
 ### Phase F: make the next thousand changes cheap · +1k to +2k lines · risk: low · 1–2 sessions
 
@@ -366,7 +374,7 @@ Token rationale: the common cases (new material, machine, spell, scenario) becom
 | No per-chunk CPU render work | Bench counter: CPU mesh jobs in a static scene = 0 |
 | Headless = windowed order | One scheduler table, one call site (Phase C) |
 | One binding table | Test compares every program's bindings to the table |
-| Conservation | Debug invariant hook after each scenario tick |
+| Conservation | Debug invariant hook after each scenario tick; the ledger counts mass, thermal energy and in-flight particles |
 | Rules are tier-correct | Load-time validator error |
 | Perf | `bench-check` in `just verify` |
 | Docs name real things | Existing `agent_docs_name_only_existing_paths_and_commands` |
@@ -386,7 +394,7 @@ Token rationale: the common cases (new material, machine, spell, scenario) becom
 
 ## 5. Order and stop points
 
-Phase 0 → A (A1–A7) → B → C → D → E → F, one phase per session group, with `/compact` between sessions. Each phase ends with LOC delta, bench numbers, scenarios added, open questions and `just verify` green, appended here.
+Phase 0 → A (A1–A8) → B → C → D → E → F, one phase per session group, with `/compact` between sessions. Each phase ends with LOC delta, bench numbers, scenarios added, open questions and `just verify` green, appended here.
 
 Stops for the user:
 - D1–D7 before Phase A;

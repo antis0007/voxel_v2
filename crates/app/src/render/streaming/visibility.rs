@@ -158,7 +158,7 @@ fn floor_div_i32(a: i32, b: i32) -> i32 {
     if (a ^ b) < 0 && d * b != a { d - 1 } else { d }
 }
 
-fn chunk_radial_distance_sq(center: IVec3, chunk: IVec3) -> i32 {
+pub(super) fn chunk_radial_distance_sq(center: IVec3, chunk: IVec3) -> i32 {
     let dx = (chunk.x - center.x).abs();
     let dz = (chunk.z - center.z).abs();
     dx * dx + dz * dz

@@ -16,5 +16,6 @@ Scale-boundary rules, the only place they are written down:
 3. Mass is counted in finest-cell units. Volume fields widen with depth: u8 for depths 0–1, u16 for depths 2–4.
 4. A depth-d brick ticks every 2^d fine ticks. This is the existing `0.08·m` interval rule.
 5. Matter crosses a boundary only in a dedicated boundary pass. Fine faces aggregate into the coarse neighbour; coarse outflow is split by a positional hash with a remainder carry, so nothing is created or lost.
+6. Heat is conserved as energy, not averaged as temperature. A cell's thermal energy is `capacity × volume × temperature`, with `capacity` taken from `SimMaterial`. Merging sums energy and derives the coarse temperature as `ΣE / Σ(capacity × volume)`. Splitting gives each child the parent's temperature. The integer-division remainder is carried the same way as mass in rule 5. Averaging temperatures would let a small lava cell beside a large volume of air lose heat that still exists. (Amended 2026-10-22.)
 
-Proptests cover the round-trip, coordinate and transition rules. A scenario checks mass totals across a boundary.
+Proptests cover the round-trip, coordinate and transition rules. A scenario checks mass and energy totals across a boundary.

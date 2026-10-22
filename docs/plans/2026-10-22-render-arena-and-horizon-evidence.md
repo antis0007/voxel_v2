@@ -19,7 +19,7 @@
 | Tasks 3–4 arena | B1 "pooled vertex/index arena replacing per-chunk buffers" (one line in PLAN2; specified here) | not started |
 | Task 5 multi-draw indirect | B2(a) "draw_indexed_indirect args … multi-draw where supported" | not started |
 | Task 6 horizon evidence | B4 "horizon backdrop stays as is": this measures whether that holds | not started |
-| Task 7 predictive streaming | none: added 2026-10-22 from the Noita/architecture brief | not started |
+| Task 7 predictive streaming | none: added 2026-10-22 from the Noita/architecture brief | measured, not kept (look-ahead reverted; the `visible_missing` counter stays) |
 | Appendix A lib-target facts | Phase 0.1 "library target" | in progress by another session |
 
 Tasks 1–2 can run now. Tasks 3–5 are independent of Phase A (bricks), so the user may pull them ahead of PLAN2 order. Ask before doing that. Task 6 is pure worldgen and can run any time.
@@ -219,14 +219,41 @@ A third measurement, the LOD3 `coarsened_mesh` top surface against the horizon f
 - A teleport (a jump of more than 4 chunks in one frame) sets `lead` to zero for that rebuild.
 
 Steps:
-- [ ] **Step 1: Failing unit tests** in `visibility.rs`:
+- [x] **Step 1: Failing unit tests** (written in `render/streaming/stream_lead.rs`, since `visibility.rs` is over 300 lines; plus `lead_urgent_still_first` and `lead_from_velocity_clamps_and_rounds`):
   - `lead_zero_matches_radial_order`: with `lead = 0`, order is identical to today's for a fixed key set (negative coordinates included).
   - `lead_prefers_chunks_ahead`: two keys at equal distance from `center`, one ahead and one behind; the ahead key ranks first.
   - `neighbours_outrank_lead`: a key at `center + (1,0,0)` outranks a key at `center + lead` when lead points the other way.
-- [ ] **Step 2:** `just test lead_`. Expected: FAIL, then implement, then PASS.
-- [ ] **Step 3: Measure.** Use a high-speed flight route across 2 km, `-Case motion -ViewChunks 28`, with `--benchmark-no-stream-lead` for the A side (add the flag, using the Task 5 `ExtraArgs` passthrough). Interleave 4 runs per side. Record frame p95/p99 and the count of frames where a visible chunk had no resident mesh or proxy (`RenderFrameStats`; add a `visible_missing` counter if none exists).
-- [ ] **Step 4: Decision rule, fixed before measuring.** Keep it if `visible_missing` drops by ≥ 25% and p99 does not regress by more than 5%. Otherwise revert and record the numbers here.
-- [ ] **Step 5:** Captures (labels `lead-*`), `just verify`, `just task-verify`, then commit `feat(render): stream ahead of camera velocity`.
+- [x] **Step 2:** `just test lead_`. Expected: FAIL, then implement, then PASS.
+  **Step 1–2 actuals (2026-10-22).**
+  - 5 of 5 lead tests pass; 427 of 427 in the full suite; clippy is clean; headless snapshots are unchanged.
+  - `ChunkStreamer::set_camera_velocity(player.vel)` is called each frame before the centre update. `Player::vel` is in voxels per second.
+  - The lead is also applied in `source_pending_priority`, because `reprioritize_pending_sources` re-keys the heap before each admission scan. That re-keying is what makes the lead take effect, so `set_camera_velocity` does not rebuild the schedule.
+  - `--benchmark-no-stream-lead` turns the lead off.
+  - Teleports carry no velocity, so they produce no lead without special handling.
+  - Known limit: the first priority term is XZ-only, so lead.y only breaks ties.
+- [x] **Step 3: Measure.** Use a high-speed flight route across 2 km, `-Case motion -ViewChunks 28`, with `--benchmark-no-stream-lead` for the A side (add the flag, using the Task 5 `ExtraArgs` passthrough). Interleave 4 runs per side. Record frame p95/p99 and the count of frames where a visible chunk had no resident mesh or proxy. No such counter exists yet: add `visible_missing` to the `[benchmark] latest_scene` line (`main.rs:1325`) and to `frames.csv`. The `motion` case is a camera sweep, not a 2 km flight, so a flight route must be added first.
+- **Measurement setup, fixed 2026-10-22 before any run.**
+  - Benchmark routes set `player.pos` and zero `player.vel`, so the lead is derived from position change per frame (`ChunkStreamer::set_camera_position`). A jump of more than 4 chunks in one frame is treated as a teleport and gives no lead.
+  - Route: `-Case motion` (`--benchmark-horizon-sweep`, CloudReview) with `-ExtraArgs '--benchmark-review-start=68'` and `-Seconds 30`. The measured window is route time 68–98 s: preset shots, the 18 km transit (75–90 s), then far presets.
+  - Counters: `frames.csv` gains `visible_missing` (frustum-visible chunks with no resident mesh, far plane ignored as in `build_draw_list`) and `near_missing` (the same within 8 chunks).
+- [x] **Step 4: Decision rule, fixed before measuring** (metric amended before measuring: during a fast transit nearly every frame has some chunk missing at the edge, so a count of frames with any missing chunk would saturate). Keep it if mean `near_missing` per frame drops by ≥ 25% (best of 4 interleaved runs per side) and p99 does not regress by more than 5%. Mean `visible_missing` is reported but does not decide. Otherwise revert and record the numbers here.
+- [x] **Step 5:** Captures (labels `lead-*`), `just verify`, `just task-verify`, then commit `feat(render): stream ahead of camera velocity`.
+
+**Task 7 results (2026-10-22): not kept.**
+- Runs: release-fast, a single exe (SHA-256 `DFE40B480C…`) for all 8 runs. Interleaved off/on × 4, labels `lead-{off,on}-1504-{1..4}` (two runs were retried as `-r2` after another session's cargo build blocked them). Each run is about 1,100 measured frames at 2560×1440, view 28.
+
+| Side | Mean `near_missing` per run | Best | Mean `visible_missing` (best run) | p99 ms per run | Median p99 |
+|---|---|---|---|---|---|
+| Off | 14.28, 15.40, 13.65, 14.66 | 13.65 | 62.1 | 32.72, 34.27, 32.25, 33.91 | 33.31 |
+| On | 13.27, 12.84, 12.90, 19.79 | 12.84 | 61.6 | 32.03, 33.88, 33.33, 33.45 | 33.39 |
+
+- **Decision:** the best near_missing improved by 5.9%, against a threshold of 25%. p99 is flat. Per the rule the look-ahead is reverted.
+- **The effect is real but small:** three of the four on-runs beat every off-run.
+- **Why it is small:**
+  - The 4-chunk cap is far below the transit speed (about 37 chunks/s, which is 28 chunks per 0.75 s).
+  - `ready_chunk_priority` ranks by missing-cover lane and column age before distance, so the lead only reorders ties inside a lane.
+  - Any retry should lift the cap or act on the lane order, not on distance.
+- **Kept:** `ChunkCache::missing_in_view` (`render/streaming/view_missing.rs`) and the `visible_missing`/`near_missing` columns in `frames.csv`, as coverage evidence for later render work.
 
 ## Not planned, with reasons
 
