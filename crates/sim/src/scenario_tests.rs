@@ -140,10 +140,17 @@ fn scatter(seed: u64) -> BrickStore {
     s
 }
 
-/// Wake every brick of chunk (0, 0, 0), which holds the whole scattered scene.
+/// Wake every stored brick of every chunk the scene can reach in 40 ticks (smoke rises out of the
+/// start chunk, liquids spill across its faces): the 3x3x3 chunks around it.
 fn wake_everything(s: &mut BrickStore) {
-    for brick in 0..BRICKS_PER_CHUNK as u8 {
-        s.wake(IVec3::ZERO, brick);
+    for cz in -1..=1 {
+        for cy in -1..=1 {
+            for cx in -1..=1 {
+                for brick in 0..BRICKS_PER_CHUNK as u8 {
+                    s.wake(IVec3::new(cx, cy, cz), brick);
+                }
+            }
+        }
     }
 }
 
@@ -218,4 +225,38 @@ fn the_pinned_scenario_depends_on_the_seed_and_repeats() {
     };
     assert_eq!(run(0xBEEF), run(0xBEEF));
     assert_ne!(run(0xBEEF), run(0xBEF0));
+}
+
+/// A full pool refuses a move that needs a new brick, and a refused move allocates nothing: with one
+/// free slot and a block that needs two, neither is taken.
+#[test]
+fn a_move_that_needs_more_bricks_than_the_pool_has_allocates_none() {
+    let t = table();
+    // Two water cells at the top of bricks (0,1,0) and (1,1,0), walled in by stone inside those same
+    // bricks so they cannot spill, sit over empty space in the bricks below. They fall in one block of
+    // the second phase: it needs two new bricks.
+    let setup = |capacity| {
+        let mut s = BrickStore::new(capacity);
+        for p in [(7, 3), (8, 3)] {
+            put(&mut s, IVec3::new(p.0, 8, p.1), water(8));
+            put(&mut s, IVec3::new(p.0, 8, p.1 - 1), Cell::filled(STONE));
+            put(&mut s, IVec3::new(p.0, 8, p.1 + 1), Cell::filled(STONE));
+        }
+        put(&mut s, IVec3::new(6, 8, 3), Cell::filled(STONE));
+        put(&mut s, IVec3::new(9, 8, 3), Cell::filled(STONE));
+        s
+    };
+    let mut tight = setup(3);
+    assert_eq!((tight.bricks_in_use(), tight.free_bricks()), (2, 1));
+    let before = total(&tight, -BIG, BIG, WATER);
+    let stats = step(&mut tight, &t, 1, 0);
+    assert!(stats.stalled_blocks > 0, "the block that needed two bricks stalled: {stats:?}");
+    assert_eq!(tight.bricks_in_use(), 2, "and took none of the one free slot");
+    assert_eq!(total(&tight, -BIG, BIG, WATER), before, "nothing was lost");
+    assert_eq!(at(&tight, IVec3::new(7, 8, 3)), water(8), "the water is where it was");
+    // With room the same world falls.
+    let mut roomy = setup(8);
+    let stats = step(&mut roomy, &t, 1, 0);
+    assert_eq!(stats.stalled_blocks, 0);
+    assert!(roomy.bricks_in_use() > 2, "the cells fell into new bricks");
 }

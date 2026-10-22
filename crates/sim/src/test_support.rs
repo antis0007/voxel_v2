@@ -80,7 +80,7 @@ pub(crate) fn total(s: &BrickStore, lo: IVec3, hi: IVec3, material: u8) -> u32 {
 }
 
 /// Step until no brick is awake. Returns the ticks it took; panics past `limit`.
-pub(crate) fn settle(s: &mut BrickStore, t: &[SimMaterial], seed: u32, limit: u32) -> u32 {
+pub(crate) fn settle(s: &mut BrickStore, t: &[SimMaterial; SIM_MATERIAL_ROWS], seed: u32, limit: u32) -> u32 {
     for tick in 0..limit {
         step(s, t, seed, tick);
         if s.active_bricks() == 0 {

@@ -206,6 +206,8 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - **Known limitation, measured:** water moves only when neighbours differ by two eighths, so a settled tank keeps a surface slope of up to one eighth per column plus a one-eighth film that cannot spill (about one cell of tilt across ten columns). Flattening it needs the pressure pass.
 - **Known limitation:** merging temperatures rounds down in integer arithmetic, so a merge can lose up to a few tenths of a kelvin of energy. Exact energy conservation is the heat pass's ledger (ADR 0007, rule 6), not this rule.
 - **For A6:** gas rises for ever in an unbounded store (a lid in the test), so the live domain needs a ceiling or smoke needs a lifetime (A4 reactions).
+- **For A6:** `step` takes no `Budget` and always runs every dirty brick (CLAUDE.md: bounded passes take one). Fine for tests and headless; the windowed caller needs a budgeted wrapper that stops between whole ticks, not inside a phase.
+- **Independent review of the kernel** (read-only, 7 categories): no defect at confidence 80 or above. Taken from its lower-confidence items: the equivalence test now wakes every brick of the 3×3×3 chunks around the scene (it woke one chunk, so a missed cross-chunk wake would have hit both arms alike); a block that needs more new bricks than the pool has now allocates none (it used to take the free ones and leak them empty), with a test and a mutation check; `step` takes `&[SimMaterial; 256]`; the fall uses a saturating subtraction; the slide shift cannot overflow a 32-bit `usize`. The pinned hash did not move.
 
 **A4. Reactions.**
 - `assets/reactions.ron` rows: `A + B [+ temp/pressure/field condition] -> products + energy`.

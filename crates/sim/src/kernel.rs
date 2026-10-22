@@ -10,7 +10,7 @@ use crate::cell::{BRICKS_PER_CHUNK, BrickCoord, Cell, brick_and_cell, split_voxe
 use crate::pinned::PHASE_OFFSETS;
 use crate::rules::block_rule;
 use crate::store::{BrickStore, NO_SLOT};
-use engine_core::material::SimMaterial;
+use engine_core::material::{SIM_MATERIAL_ROWS, SimMaterial};
 use glam::IVec3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,14 +131,21 @@ fn run_straddling(
     let mut written = outcome.changed;
     if written {
         // Give every brick a changed cell lands in a slot first, so a full pool never leaves half a move.
+        // The absent ones are counted against the free slots before any is taken, so a stall allocates nothing.
+        let mut needed: Vec<(IVec3, u8)> = Vec::new();
         for i in (0..8).filter(|&i| after[i] != before[i]) {
-            if slot_of(store, cache, spots[i]) == NO_SLOT {
-                let (chunk, brick, _) = spots[i];
-                if store.reserve(chunk, brick).is_err() {
-                    written = false;
-                    stats.stalled_blocks += 1;
-                    break;
-                }
+            let (chunk, brick, _) = spots[i];
+            if slot_of(store, cache, spots[i]) == NO_SLOT && !needed.contains(&(chunk, brick)) {
+                needed.push((chunk, brick));
+            }
+        }
+        if needed.len() > store.free_bricks() {
+            written = false;
+            stats.stalled_blocks += 1;
+        } else {
+            for (chunk, brick) in needed {
+                // Counted above, so this cannot fail.
+                let _ = store.reserve(chunk, brick);
                 let e = cache.entry(store, chunk);
                 cache.entries[e].1 = store.slots_of(chunk);
             }
@@ -180,8 +187,8 @@ fn run_phase(
     cache.flush(store);
 }
 
-/// Advance the stored world one tick. `table` is indexed by material id.
-pub fn step(store: &mut BrickStore, table: &[SimMaterial], seed: u32, tick: u32) -> StepStats {
+/// Advance the stored world one tick. `table` is indexed by material id, one row per possible id.
+pub fn step(store: &mut BrickStore, table: &[SimMaterial; SIM_MATERIAL_ROWS], seed: u32, tick: u32) -> StepStats {
     let mut stats = StepStats::default();
     let first = store.take_all_dirty();
     stats.active_bricks = first.len() as u32;

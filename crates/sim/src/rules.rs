@@ -63,7 +63,7 @@ fn fall(t: &[SimMaterial], cells: &mut [Cell; 8], lo: usize, up: usize) {
     }
     if u.material == l.material {
         if class(t, &u) == MovementClass::Liquid {
-            let amount = u.volume.min(VOLUME_FULL - l.volume);
+            let amount = u.volume.min(VOLUME_FULL.saturating_sub(l.volume));
             if amount > 0 {
                 transfer(cells, up, lo, amount);
             }
@@ -82,7 +82,7 @@ fn slide(t: &[SimMaterial], cells: &mut [Cell; 8], x: usize, z: usize, dice: &Di
     let sideways = [(x ^ 1, z), (x, z ^ 1)];
     let random = dice.roll(1);
     for k in 0..2 {
-        let (nx, nz) = sideways[(k + (random >> (2 * (x + 2 * z))) as usize) % 2];
+        let (nx, nz) = sideways[(k + ((random >> (2 * (x + 2 * z))) & 1) as usize) % 2];
         let (n_lo, n_up) = (idx(nx, 0, nz), idx(nx, 1, nz));
         if cells[n_lo].volume == 0 && cells[n_up].volume == 0 {
             cells.swap(up, n_lo);

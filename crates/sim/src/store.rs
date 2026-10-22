@@ -51,6 +51,11 @@ impl BrickStore {
         self.capacity
     }
 
+    /// Bricks the pool can still hand out.
+    pub fn free_bricks(&self) -> usize {
+        self.capacity as usize - self.bricks_in_use()
+    }
+
     pub fn bricks_in_use(&self) -> usize {
         self.pool.len() / BRICK_CELLS - self.free.len()
     }
