@@ -36,13 +36,13 @@ mod tests {
         "docs",
         "downloads",
         "saves",
-        "src",
         "target",
         "tools",
     ];
 
+    /// Two levels above this crate (`crates/app`).
     fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("repo root")
     }
 
     #[test]
@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn every_wgsl_file_is_included_by_shader_sources() {
-        let src = repo_root().join("src");
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
         let registry =
             fs::read_to_string(src.join("shader_sources.rs")).expect("read shader_sources.rs");
         let mut unregistered = Vec::new();

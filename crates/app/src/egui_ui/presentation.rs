@@ -35,13 +35,13 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     fonts.font_data.insert(
         "tiny5".into(),
         std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/Tiny5.ttf"
+            "../../../../assets/fonts/Tiny5.ttf"
         ))),
     );
     fonts.font_data.insert(
         "pixel-code".into(),
         std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/PixelCode.ttf"
+            "../../../../assets/fonts/PixelCode.ttf"
         ))),
     );
     fonts

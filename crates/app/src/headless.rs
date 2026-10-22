@@ -324,7 +324,7 @@ mod tests {
     use super::*;
 
     fn scenarios() -> Vec<std::path::PathBuf> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/scenarios");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenarios");
         let mut files: Vec<_> = std::fs::read_dir(dir)
             .expect("assets/scenarios")
             .map(|e| e.unwrap().path())

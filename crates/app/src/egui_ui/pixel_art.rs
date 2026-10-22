@@ -69,7 +69,7 @@ mod tests {
     use super::*;
 
     fn canonical(key: &str) -> Option<&'static str> {
-        include_str!("../../assets/pixel_palette.txt")
+        include_str!("../../../../assets/pixel_palette.txt")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .filter_map(|line| line.split_once('='))
