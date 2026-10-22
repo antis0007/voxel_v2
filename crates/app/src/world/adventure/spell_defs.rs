@@ -256,7 +256,7 @@ mod table_file {
     #[test]
     fn spells_ron_round_trips() {
         // ron emits the platform newline; compare without carriage returns.
-        let text = ron::ser::to_string_pretty(&*super::SPELLS, ron::ser::PrettyConfig::new()).unwrap().replace('', "");
+        let text = ron::ser::to_string_pretty(&*super::SPELLS, ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
         // Skip the comment header: the table starts at the first line that is `[`.
         let file = super::SPELLS_RON.replace('\r', "");
         let body = match file.find("\n[\n") {
