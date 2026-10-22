@@ -743,7 +743,7 @@ mod tests {
     /// column grid. Both sides must agree, or the steps land mid-column.
     #[test]
     fn shader_column_contract_matches_bands() {
-        let shader = include_str!("../shaders/world_shader.wgsl");
+        let shader = include_str!("../../shaders/world_shader.wgsl");
         assert!(shader.contains("const HORIZON_COLUMN_M: f32 = 64.0;"));
         assert!(shader.contains("return ao < -1.125 && ao > -1.375;"));
         #[allow(clippy::assertions_on_constants)] // the test exists to pin these constants

@@ -1,34 +1,19 @@
 //! Asynchronous backdrop with stitched rings and authoritative edited surfaces.
 #[cfg(test)]
-#[path = "horizon_collar_contract.rs"]
 mod collar_contract;
-#[path = "horizon_quality.rs"]
 mod quality;
-#[path = "horizon_collar.rs"]
 pub(crate) mod collar;
-#[path = "horizon_batches.rs"]
 mod batches;
-#[path = "horizon_edits.rs"]
 mod edits;
-#[path = "horizon_pages.rs"]
 mod pages;
-#[path = "horizon_reference.rs"]
 mod reference;
-#[path = "horizon_upload.rs"]
 mod upload;
-#[path = "horizon_vegetation.rs"]
 mod vegetation;
-#[path = "horizon_refinement.rs"]
 mod refinement;
-#[path = "horizon_water.rs"]
 mod water;
-#[path = "horizon_fine.rs"]
 mod fine;
-#[path = "horizon_columns.rs"]
 mod columns;
-#[path = "horizon_parallel.rs"]
 mod parallel;
-#[path = "horizon_detail.rs"]
 pub(crate) mod detail;
 use crate::mesh::{ChunkMesh, Vertex3};
 use crate::world::{WorldSampleConfig, distant_surface};

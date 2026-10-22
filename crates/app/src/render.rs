@@ -2042,7 +2042,7 @@ impl GpuPendingInit {
                                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                                 count: None,
                             },
-                            // Distant-terrain detail map (render/horizon_detail.rs).
+                            // Distant-terrain detail map (render/horizon/detail.rs).
                             wgpu::BindGroupLayoutEntry {
                                 binding: 5,
                                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT

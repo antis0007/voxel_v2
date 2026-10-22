@@ -61,6 +61,19 @@ Order forced by cycles: (1) `core` (fast_hash, coords/`floor_div`/chunk math, ti
 Each step: `git mv`, fix paths, `just verify`, commit `refactor(<crate>): move …`. Split files > 300 lines in the same crate pass only when the split is a pure move. Per-crate `thiserror` enum; `anyhow` only in `app`.
 Verify: `cargo tree -e normal` shows a DAG; `just loc` per crate; `just verify`.
 
+P3 actuals (2026-10-22): workspace with six crates, all pure moves, `just verify` green at every step, 374 tests, scenario hashes unchanged.
+
+| Crate | Rust LOC | Depends on |
+|---|---|---|
+| `engine_core` | 230 | glam, serde |
+| `engine_content` | 1,755 | core |
+| `engine_audio` | 871 | – |
+| `engine_voxel` | 120 | core, content |
+| `engine_worldgen` | 15,307 | core, content, voxel |
+| app (`crates/app`, binary) | 102,182 | all of the above |
+
+Boundary decision taken with the user: `World` owns physics, factory and adventure state and those systems take `&mut World` (18, 1 and 88 functions), so `physics`, `automation` and `adventure` are not peeled as moves; `worldgen` (zero `World` coupling) was peeled instead and `voxel` holds the chunk/config types. Still inside the app and scheduled after P4: `sim` (World + simulation + factory + adventure + mesh + player), `render`, `ui`, thin `app`. Blockers for that peel are P4 items: render→`terrain_review`/`material_studio` and ui→`torch_review` references, and the single render→egui_ui reference.
+
 ### P4 — Reduction (crate by crate, smallest risk first)  · LOC −23,000 · risk: medium
 | Crate / item | Target −LOC | Verification |
 |---|---|---|
