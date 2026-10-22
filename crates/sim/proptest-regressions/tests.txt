@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 11fa2cd39a92090ba5d6475588b567a0a781b4f25b13f32f07e3f89146d0b495 # shrinks to ops = [(IVec3(0, 0, 0), IVec3(0, 0, 0), Cell { material: 0, volume: 0, temperature: 3000, pressure: 0, charge: 0 })]
