@@ -2196,10 +2196,19 @@ fn fs_main(in: VsOut) -> WorldOutput {
         emissive += albedo * rim_boost * max(in.surface.w, 0.0) * mix(1.0, fire_exposure, 0.35);
     }
     if is_torch_material {
-        let flame_wave = torch_flicker(floor(in.voxel_pos), light.torch_meta.y);
         let flame = in.surface.w < -1.5;
-        // Model colours are authored in sRGB like the rest of the mesh. Feeding
-        // them directly into HDR washed orange flames into pale pink/white.
+        let flame_time = light.torch_meta.y;
+        // Flame emission rides a continuous field over the flame. The old
+        // floor() seed held each voxel at one brightness, so the flame stepped
+        // in cube-sized chunks and barely moved. Placed torches are world-fixed,
+        // so a world-anchored field does not swim.
+        let lick_phase = dot(in.voxel_pos, vec3<f32>(3.1, 2.2, 2.7));
+        let lick = 0.6 * sin(flame_time * 7.3 + lick_phase)
+            + 0.4 * sin(flame_time * 12.9 - 1.7 * lick_phase);
+        // 0.96 is torch_flicker's mean, so the flame keeps its average brightness;
+        // a higher mean pushes the saturated orange toward pale peach after tonemap.
+        let flame_wave = select(torch_flicker(floor(in.voxel_pos), flame_time), 0.96 + 0.14 * lick, flame);
+        // base_color is already linear (decoded in the vertex stage).
         emissive += max(in.base_color, vec3<f32>(0.0)) * select(0.65, 3.2, flame) * flame_wave * fire_exposure;
         albedo *= select(0.5, 0.03, flame);
     }
