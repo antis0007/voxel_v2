@@ -78,6 +78,20 @@ Tasks 1–2 can run now. Tasks 3–5 are independent of Phase A (bricks), so the
 
 These numbers are the acceptance baseline for Tasks 4 and 5.
 
+**Baseline (2026-10-22, run order a1, m1, a2, m2).** RTX 4090, Vulkan, 2560×1440, view 28, LOD start 10, 4 levels. Evidence is under `target/visual-direction/base-*`.
+
+| Run | Frame p50 ms | p95 | p99 | GPU terrain ms | render CPU p50 ms | terrain draws | shadow draws | peak GPU MiB |
+|---|---|---|---|---|---|---|---|---|
+| base-a1 daylight | 26.08 | 36.52 | 43.28 | 2.80 | 18.48 | 1267 | 9352 | 1892 |
+| base-a2 daylight | 28.16 | 104.74 | 186.35 | 5.87 | 21.53 | 1133 | 4142 | 1765 |
+| base-m1 motion | 29.62 | 115.08 | 184.05 | 15.16 | 23.30 | 809 | 4680 | 1140 |
+| base-m2 motion | 28.99 | 36.76 | 53.04 | 12.33 | 22.52 | 1010 | 2655 | 1222 |
+
+How to read it:
+- **Render CPU dominates.** Render CPU p50 is 18–23 ms of a 26–30 ms frame, while terrain GPU time is 3–15 ms. Thousands of shadow draws plus about 1,000 terrain draws per frame make per-draw encode the bottleneck, which is what Tasks 4–5 target.
+- **The runs are not clean.** Other sessions were building and editing the tree the whole time. The capture tool blocked up to 12 attempts per run, and the four exes come from four different tree states (`working_tree_sha256` in each `manifest.json`). So p95/p99 are noisy (37 ms against 105–115 ms within the same case), and the draw counts are `latest_scene`, the last frame only.
+- **Use as reference, not as the gate.** Task 4 Step 5 re-runs interleaved baselines from the same tree as the arena build, and those are its gate.
+
 ### Task 3: `RangeAllocator` and `ArenaLease` (pure CPU, fully unit-tested)
 
 **Files:** Create `crates/app/src/render/streaming/arena.rs` (≤ 300 lines; put tests in `arena_tests.rs` through `#[path]`, as `pending_gpu.rs:207` does). Modify `render/streaming.rs` to add `mod arena;`.
