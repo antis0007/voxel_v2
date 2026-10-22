@@ -2157,15 +2157,16 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let fire_exposure = 0.9 / exposure;
     var emissive = animated_emission;
     if kind == 42 {
-        // Black-body ramp: deep orange edges, yellow tongues and a white-hot
-        // core. Keeping the ramp in HDR prevents the old flat orange sticker
-        // look and preserves dark contrast between flame cells.
+        // Black-body ramp: deep orange edges, orange body and a small warm
+        // core. Keeping the ramp in HDR preserves dark contrast between flame
+        // cells. The body keeps little green: at 0.31 with a full white core,
+        // the hottest voxels summed to near-white and read as pale salmon.
         let edge = vec3<f32>(0.75, 0.055, 0.006);
-        let body = vec3<f32>(1.0, 0.31, 0.025);
-        let core = vec3<f32>(1.0, 0.82, 0.46);
+        let body = vec3<f32>(1.0, 0.18, 0.015);
+        let core = vec3<f32>(1.0, 0.60, 0.25);
         let heat2 = fire_heat * fire_heat;
         let heat3 = heat2 * fire_heat;
-        emissive += (mix(edge, body, fire_heat) * 3.1 + core * heat3 * 2.8) * fire_exposure;
+        emissive += (mix(edge, body, fire_heat) * 3.1 + core * heat3 * 0.5) * fire_exposure;
         albedo = mix(vec3<f32>(0.16, 0.028, 0.004), vec3<f32>(0.95, 0.36, 0.05), heat2);
     }
     if kind == 43 { emissive += albedo * 0.10 * fire_exposure; }
