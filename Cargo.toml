@@ -27,12 +27,14 @@ lto = false
 codegen-units = 16
 incremental = true
 
-# `cargo bench` (`just bench`): release optimisation with the fast-compile
-# settings of release-fast, so the perf gate does not pay for thin LTO.
+# `cargo bench` (`just bench`): release optimisation without LTO. One codegen unit and no
+# incremental compilation, because 16 units stop small cross-crate functions (the hash, the
+# cell accessors) inlining: the 262k-cell CA tick measured 22 ms at 16 units and 14 ms at 1.
+# Numbers from a profile that shifts with unrelated edits would also make the gate noisy.
 [profile.bench]
 lto = false
-codegen-units = 16
-incremental = true
+codegen-units = 1
+incremental = false
 
 # Lints that only generate noise in this codebase. Each is allowed on purpose:
 # too_many_arguments / type_complexity flag the renderer plumbing that the P3

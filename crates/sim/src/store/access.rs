@@ -1,0 +1,85 @@
+//! What the kernel and the scenario snapshots need from the store: direct brick access, waking,
+//! reserving and the canonical state hash. A child module so it sees the store's private fields.
+use super::{BrickStore, NO_SLOT, PoolFull};
+use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, BrickCoord, Cell};
+use glam::IVec3;
+
+impl BrickStore {
+    /// The cells of a stored brick, for a kernel that works inside one brick. `None` when absent (all empty).
+    pub(crate) fn brick_cells_mut(&mut self, chunk: IVec3, brick: u8) -> Option<&mut [Cell]> {
+        let slot = self.chunks.get(&chunk)?.slots[brick as usize];
+        (slot != NO_SLOT).then(|| &mut self.pool[slot as usize * BRICK_CELLS..][..BRICK_CELLS])
+    }
+
+    /// A copy of the chunk's pointer table (all `NO_SLOT` when the chunk is absent).
+    pub(crate) fn slots_of(&self, chunk: IVec3) -> [u32; BRICKS_PER_CHUNK] {
+        self.chunks.get(&chunk).map_or([NO_SLOT; BRICKS_PER_CHUNK], |e| e.slots)
+    }
+
+    pub(crate) fn cell_in_slot(&self, slot: u32, cell: usize) -> Cell {
+        self.pool[slot as usize * BRICK_CELLS + cell]
+    }
+
+    pub(crate) fn set_cell_in_slot(&mut self, slot: u32, cell: usize, value: Cell) {
+        self.pool[slot as usize * BRICK_CELLS + cell] = value;
+    }
+
+    /// Mark the bricks in `mask` dirty; bits of absent bricks are ignored.
+    pub(crate) fn or_dirty(&mut self, chunk: IVec3, mask: u64) {
+        if let Some(e) = self.chunks.get_mut(&chunk) {
+            let present = (0..BRICKS_PER_CHUNK).filter(|&b| e.slots[b] != NO_SLOT).fold(0u64, |m, b| m | 1 << b);
+            e.dirty |= mask & present;
+        }
+    }
+
+    /// Mark a stored brick dirty because a neighbour across a face changed. An absent brick is all
+    /// empty and needs no stepping, so waking it does nothing.
+    pub fn wake(&mut self, chunk: IVec3, brick: u8) {
+        if let Some(e) = self.chunks.get_mut(&chunk)
+            && e.slots[brick as usize] != NO_SLOT
+        {
+            e.dirty |= 1 << brick;
+        }
+    }
+
+    /// Make sure the brick exists, so a later write into it cannot run out of pool.
+    pub fn reserve(&mut self, chunk: IVec3, brick: u8) -> Result<(), PoolFull> {
+        self.ensure_brick(chunk, brick).map(|_| ())
+    }
+
+    /// Every dirty brick in a fixed order, with all dirty masks cleared: the work list of one pass.
+    pub fn take_all_dirty(&mut self) -> Vec<BrickCoord> {
+        let bricks = self.dirty_bricks();
+        for e in self.chunks.values_mut() {
+            e.dirty = 0;
+        }
+        bricks
+    }
+
+    /// FNV-1a over every stored brick in (chunk z, y, x, brick) order: the same cells hash the same
+    /// whatever pool slots they landed in. This is what scenario snapshots pin.
+    pub fn state_hash(&self) -> u64 {
+        let mut chunks: Vec<IVec3> = self.chunks.keys().copied().collect();
+        chunks.sort_by_key(|c| (c.z, c.y, c.x));
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut feed = |bytes: &[u8]| {
+            for &b in bytes {
+                hash = (hash ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for chunk in chunks {
+            let entry = &self.chunks[&chunk];
+            for brick in 0..BRICKS_PER_CHUNK {
+                // A stored brick that has emptied out is the same world as an absent one.
+                if entry.slots[brick] != NO_SLOT && self.brick(entry.slots[brick]).iter().any(|c| *c != Cell::EMPTY) {
+                    for axis in [chunk.x, chunk.y, chunk.z] {
+                        feed(&axis.to_le_bytes());
+                    }
+                    feed(&[brick as u8]);
+                    feed(bytemuck::cast_slice(self.brick(entry.slots[brick])));
+                }
+            }
+        }
+        hash
+    }
+}

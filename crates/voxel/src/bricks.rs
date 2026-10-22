@@ -156,6 +156,46 @@ mod tests {
         assert_eq!(store.bricks_in_use(), 0);
     }
 
+    /// The kernel on the real material table: what each block does comes from its row in
+    /// `assets/materials.ron`, so the data and the rules are checked together.
+    #[test]
+    fn the_real_table_makes_sand_fall_dirt_stay_and_smoke_rise() {
+        let put = |s: &mut BrickStore, p: IVec3, b: BlockId| {
+            let (chunk, local) = engine_sim::split_voxel(p);
+            s.set(chunk, local, cell_of(b, None)).unwrap();
+        };
+        let at = |s: &BrickStore, p: IVec3| {
+            let (chunk, local) = engine_sim::split_voxel(p);
+            s.get(chunk, local)
+        };
+        let mut s = BrickStore::new(500);
+        for x in -4..4 {
+            for z in -4..4 {
+                put(&mut s, IVec3::new(x, 0, z), BlockId::Stone);
+            }
+        }
+        // Sand and dirt hang in the air side by side; smoke sits on the floor under a lid.
+        let (sand, dirt, smoke) = (IVec3::new(-2, 8, 0), IVec3::new(2, 8, 0), IVec3::new(0, 1, 3));
+        put(&mut s, sand, BlockId::Sand);
+        put(&mut s, dirt, BlockId::Dirt);
+        put(&mut s, smoke, BlockId::Smoke);
+        for x in -4..4 {
+            put(&mut s, IVec3::new(x, 6, 3), BlockId::Stone);
+        }
+        let table = &*engine_content::SIM_TABLE;
+        for tick in 0..60 {
+            engine_sim::step(&mut s, table, 1, tick);
+        }
+        assert_eq!(at(&s, sand).volume, 0, "sand left its cell");
+        assert_eq!(at(&s, IVec3::new(-2, 1, 0)).material, BlockId::Sand as u8, "and landed on the floor");
+        assert_eq!(at(&s, dirt), cell_of(BlockId::Dirt, None), "dirt is cohesive and stays in the air");
+        assert!(
+            (2..6).any(|y| at(&s, IVec3::new(0, y, 3)).material == BlockId::Smoke as u8),
+            "smoke rose from the floor towards the lid"
+        );
+        assert!(BlockId::Lava.sim().flow < BlockId::Water.sim().flow, "lava is the more viscous");
+    }
+
     #[test]
     fn a_pool_too_small_leaves_the_store_as_it_was() {
         let (chunk, _) = random_chunk(7, 255);

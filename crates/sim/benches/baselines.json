@@ -1,4 +1,5 @@
 {
-  "brick_fill_chunk": 71173,
-  "brick_set_32k_cells": 743801
+  "brick_fill_chunk": 61326,
+  "brick_set_32k_cells": 403101,
+  "ca_step_262k_cells_all_awake": 15000000
 }

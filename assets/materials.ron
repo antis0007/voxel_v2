@@ -27,7 +27,7 @@
         physics: (
             matter_state: Vacuum,
             collision: Passable,
-            density: 0.0,
+            density: 1.2,
             hardness: 0.0,
             friction: 0.0,
             restitution: 0.0,

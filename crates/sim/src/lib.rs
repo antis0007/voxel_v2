@@ -1,10 +1,19 @@
-//! The GPU-resident cellular world's storage: 8³ bricks inside 32³ chunks.
+//! The GPU-resident cellular world: 8³ bricks inside 32³ chunks, and the CPU reference kernel.
 //!
-//! Chunks stay the unit of streaming, saves and authority; a brick is the unit
-//! the GPU allocates, flags dirty and dispatches. See
-//! docs/adr/0007-bricks-and-scale.md for the layout and scale rules.
+//! Chunks stay the unit of streaming, saves and authority; a brick is the unit the GPU allocates,
+//! flags dirty and dispatches. `step` advances the stored world one tick with 2×2×2 Margolus
+//! blocks, driven only by the packed material table. `pinned` holds every definition that fixes
+//! the result. See docs/adr/0007-bricks-and-scale.md and docs/adr/0008-ca-determinism.md.
+mod anchors;
 mod cell;
+mod kernel;
+mod pinned;
+mod rules;
 mod store;
+#[cfg(test)]
+mod scenario_tests;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -13,3 +22,6 @@ pub use cell::{
     Scale, VOLUME_FULL, brick_and_cell, local_of, split_voxel,
 };
 pub use store::{BrickStore, NO_SLOT, PoolFull};
+pub use kernel::{StepStats, step};
+pub use pinned::{Dice, PHASE_OFFSETS, block_hash, flow_gate};
+pub use rules::{Outcome, block_rule, idx};

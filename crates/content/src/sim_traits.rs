@@ -126,7 +126,7 @@ pub(crate) fn pack(def: &MaterialDef) -> SimMaterial {
     SimMaterial {
         class,
         cohesion: (def.sim.cohesion * 255.0).round() as u8,
-        density: def.physics.density.round() as u16,
+        density: (def.physics.density * 100.0).round() as u32,
         flow: if fluid { (255.0 / def.physics.fluid.viscosity.max(1.0)) as u8 } else { 0 },
         pressure: (def.physics.fluid.pressure_response * 100.0).round() as u8,
         electric: electric_decades(def.sim.electric_conductivity),

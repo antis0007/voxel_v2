@@ -12,6 +12,9 @@ Date: 2026-10-22. Status: accepted.
 - It takes 3 whole passes over every bench, interleaved rather than batched, and uses the median per bench.
 - It fails above +8% or on a bench with no baseline.
 - A failing pass is measured once more and only a second failure fails the gate: `brick_set_32k_cells` read +16% to +118% while peer sessions compiled and +0.9% on a quiet machine. A real regression fails both passes. Tradeoff: with a few percent of noise a true +9% to +12% regression can pass on the second pass, so the effective threshold sits somewhat above +8%.
+- `[profile.bench]` uses one codegen unit and no incremental compilation. With 16 units small cross-crate functions (the hash, cell accessors) stopped inlining and the 262k-cell CA tick measured 22 ms instead of 14 ms.
+- A baseline is a typical value on a quiet machine, not the median of a run that may have overlapped a peer's build and not the single best run: the 262k-cell CA tick reads 14 to 15 ms quiet and 23 ms while a peer compiles, and the untouched terrain bench swings about 5% on its own. `bench-save` records the median of 3 passes; if the machine was busy, set the value by hand from quiet runs and say so in the commit. The CA baseline is 15.0 ms, which keeps the gate's +8% (16.2 ms) inside the 16.7 ms tick budget.
+- Benches under about a microsecond are not gated (an 8% threshold is tens of nanoseconds); assert the property in a test instead.
 - The gate asks cargo where criterion writes (`cargo metadata`, or `CRITERION_HOME`), and a baseline that produced no measurement fails it, so a renamed bench or a moved target directory cannot make it pass blind.
 - These settings hold until a quiet baseline machine exists. On this workstation, warm runs of `terrain_generate_8_chunks` agreed within ≈1.5% (88.5, 89.2, 89.7 ms), and a 15% injected regression failed the gate.
 - The ignored wall-clock ratio test it replaces read anywhere from 1.07× to 1.98× on the same binary.

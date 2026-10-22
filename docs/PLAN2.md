@@ -198,6 +198,15 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - Pressure as a relaxed scalar field.
 - The engine crate never names `BlockId`: it depends on `MaterialId(u8)` and the table only, so the compiler enforces that the CA is property-driven.
 
+**A3 actuals, movement slice (2026-10-22).** Heat diffusion and the pressure field are not done; they are the rest of A3.
+- `engine_sim::step` is the CPU reference tick: two Margolus phases over 2×2×2 blocks, driven only by the packed material table (`rules.rs`: density order, same-liquid fill-down and levelling, loose-powder slides; `pinned.rs`: the hash and phase order). Cohesive powders are `Solid`, so dirt never moves.
+- Tests, on a synthetic table and on the real one: mass conserved per material, sand piles and the world then costs nothing, sand sinks through water, smoke rises, dirt stays, matter crosses negative chunk faces, dirty-driven stepping equals waking every brick every tick (random scenes), every block is listed once (oracle), and a pinned canonical hash that fails when the hash or phase order changes (both mutations checked).
+- `SimMaterial` grew to 32 bytes: density is a `u32` in 0.01 kg/m³ so smoke (0.6) and steam (0.4) order against air. Air's density in `materials.ron` is now its real 1.2 kg/m³ (was 0; nothing else reads it for air).
+- **Exit criterion, measured:** one tick over 262,144 awake cells takes 14 ms on a quiet machine (about 70 ticks/s; target 16.7 ms) and 23 ms while a peer compiles. Getting there took an in-brick fast path, a per-chunk pointer cache for blocks that straddle faces, lazy dice, a duplicate-free block list, and `codegen-units = 1` in the bench profile. The CPU reference is single-threaded.
+- **Known limitation, measured:** water moves only when neighbours differ by two eighths, so a settled tank keeps a surface slope of up to one eighth per column plus a one-eighth film that cannot spill (about one cell of tilt across ten columns). Flattening it needs the pressure pass.
+- **Known limitation:** merging temperatures rounds down in integer arithmetic, so a merge can lose up to a few tenths of a kelvin of energy. Exact energy conservation is the heat pass's ledger (ADR 0007, rule 6), not this rule.
+- **For A6:** gas rises for ever in an unbounded store (a lid in the test), so the live domain needs a ceiling or smoke needs a lifetime (A4 reactions).
+
 **A4. Reactions.**
 - `assets/reactions.ron` rows: `A + B [+ temp/pressure/field condition] -> products + energy`.
 - The rows compile to a 256×256 pair-index table plus a condition list, evaluated in the same Margolus pass. This replaces the 6 thermal reactions; the spell reactions move in Phase D.

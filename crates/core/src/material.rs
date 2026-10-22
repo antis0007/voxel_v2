@@ -31,25 +31,15 @@ pub enum MovementClass {
     Plasma = 5,
 }
 
-/// One material row, 28 bytes (seven little-endian `u32` words on the GPU).
+/// One material row, 32 bytes (eight little-endian `u32` words on the GPU).
 ///
 /// Temperatures are 0.1 K steps and 0 means "none". Product fields hold a
 /// `MaterialId` and `MaterialId::NONE` means "none".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct SimMaterial {
-    pub class: MovementClass,
-    /// 0 flows freely, 255 never slides. Read only for powders.
-    pub cohesion: u8,
-    /// kg/m³.
-    pub density: u16,
-    /// Sideways moves per 255 ticks for liquids and gases, from viscosity.
-    pub flow: u8,
-    /// Pressure response in 0.01 steps.
-    pub pressure: u8,
-    /// Decades of electrical conductivity above 1e-6 S/m: 0 insulates, 14 is copper.
-    pub electric: u8,
-    pub melts_into: MaterialId,
+    /// 0.01 kg/m³ steps, so a gas lighter than 1 kg/m³ still orders against air.
+    pub density: u32,
     /// Thermal conductivity in 0.01 W/(m·K).
     pub conductivity: u16,
     /// Specific heat in J/(kg·K).
@@ -60,13 +50,23 @@ pub struct SimMaterial {
     /// Cools into `cools_into` below this temperature.
     pub cool: u16,
     pub fuel: u16,
+    pub class: MovementClass,
+    /// 0 flows freely, 255 never slides. Read only for powders.
+    pub cohesion: u8,
+    /// Sideways moves per 255 ticks for liquids and gases, from viscosity.
+    pub flow: u8,
+    /// Pressure response in 0.01 steps.
+    pub pressure: u8,
+    /// Decades of electrical conductivity above 1e-6 S/m: 0 insulates, 14 is copper.
+    pub electric: u8,
+    pub melts_into: MaterialId,
     pub boils_into: MaterialId,
     pub burns_into: MaterialId,
     pub cools_into: MaterialId,
-    pub reserved: [u8; 3],
+    pub reserved: [u8; 5],
 }
 
-const _: () = assert!(size_of::<SimMaterial>() == 28 && align_of::<SimMaterial>() == 2);
+const _: () = assert!(size_of::<SimMaterial>() == 32 && align_of::<SimMaterial>() == 4);
 
 /// Rows in the table; `MaterialId` is one byte.
 pub const SIM_MATERIAL_ROWS: usize = 256;
@@ -74,13 +74,7 @@ pub const SIM_MATERIAL_ROWS: usize = 256;
 impl SimMaterial {
     /// Unused rows: empty, inert, never changes.
     pub const INERT: Self = Self {
-        class: MovementClass::Void,
-        cohesion: 0,
         density: 0,
-        flow: 0,
-        pressure: 0,
-        electric: 0,
-        melts_into: MaterialId::NONE,
         conductivity: 0,
         capacity: 0,
         melt: 0,
@@ -88,9 +82,15 @@ impl SimMaterial {
         ignite: 0,
         cool: 0,
         fuel: 0,
+        class: MovementClass::Void,
+        cohesion: 0,
+        flow: 0,
+        pressure: 0,
+        electric: 0,
+        melts_into: MaterialId::NONE,
         boils_into: MaterialId::NONE,
         burns_into: MaterialId::NONE,
         cools_into: MaterialId::NONE,
-        reserved: [0; 3],
+        reserved: [0; 5],
     };
 }

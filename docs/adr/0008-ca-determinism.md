@@ -13,6 +13,10 @@ Every random choice is a positional hash of (world seed, tick, cell); there is n
 
 The hash function and the Margolus phase order are defined in one `const` block, the only definition. A test runs a canonical CA scenario and fails if its hash changes, so editing either one shows up as a test failure.
 
+The tick is two Margolus phases, anchors offset by (0,0,0) then (1,1,1). A 2×2×2 block rule reads and writes only its own eight cells, so the blocks of a phase are disjoint and can run in any order or in parallel; this is what makes the GPU port race-free. The hash is `engine_core::hash::hash_u32` folded over the world seed, the phase counter `2·tick + phase`, the block anchor and a per-decision salt. A decision is rolled only when it is needed (water always moves, so it never rolls), and that is a CPU optimisation that cannot change a result. The rules are in `crates/sim/src/rules.rs`, the pinned definitions in `crates/sim/src/pinned.rs`, and `scenario_tests::the_canonical_scenario_hash_is_pinned` fails if either changes.
+
+A brick sleeps only after a whole tick in which nothing in it changed and no move was suppressed by a random gate, because a state that is static in one phase may move in the other. A block that changes wakes every brick it spans.
+
 Not covered by this guarantee:
 - rendering, which uses floats;
 - rigid bodies, which use floats and stay CPU-authoritative (ADR 0011).

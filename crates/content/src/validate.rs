@@ -50,8 +50,8 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
                 fail(field, format!("{field} must be a finite number >= 0, got {value}"));
             }
         }
-        if p.density > 65535.0 {
-            fail("density", format!("density {} kg/m3 does not fit 16 bits", p.density));
+        if p.density > 40_000_000.0 {
+            fail("density", format!("density {} kg/m3 does not fit 32 bits in 0.01 steps", p.density));
         }
         if s.cohesion > 1.0 {
             fail("cohesion", format!("cohesion {} must be in 0..1", s.cohesion));
@@ -236,6 +236,9 @@ mod tests {
     fn packed_values_match_the_authored_units() {
         use BlockId as B;
         assert_eq!(B::Water.sim().flow, 255, "water flows freely");
+        assert_eq!(B::Water.sim().density, 100_000, "1000 kg/m3 in 0.01 steps");
+        assert!(B::Smoke.sim().density < B::Air.sim().density, "smoke rises through air");
+        assert!(B::Steam.sim().density < B::Smoke.sim().density);
         assert_eq!(B::Lava.sim().flow, 21, "lava is 12x as viscous: 255 / 12");
         // 373.15 K is 3731.5 tenths, exactly half a step; round() goes away from zero.
         assert_eq!(B::Water.sim().boil, 3732);

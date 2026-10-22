@@ -6,6 +6,8 @@ use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, BrickCoord, Cell, Scale, brick_
 use engine_core::fast_hash::FastMap;
 use glam::IVec3;
 
+mod access;
+
 /// No brick in this slot of a chunk's pointer table.
 pub const NO_SLOT: u32 = u32::MAX;
 
