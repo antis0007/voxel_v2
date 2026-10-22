@@ -37,7 +37,7 @@ pub fn status() -> &'static str {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(usize)]
 pub enum Cue {
     Swing,
