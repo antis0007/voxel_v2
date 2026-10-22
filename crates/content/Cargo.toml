@@ -8,6 +8,7 @@ edition.workspace = true
 [dependencies]
 glam = "0.32.0"
 serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12.2"
 
 [lints]
 workspace = true

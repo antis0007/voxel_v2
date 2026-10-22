@@ -4,7 +4,7 @@ pub use size_class::SizeClass;
 use glam::IVec3;
 use std::sync::LazyLock;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MatterState {
     Vacuum,
     Solid,
@@ -14,13 +14,13 @@ pub enum MatterState {
     Plasma,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CollisionKind {
     Passable,
     Solid,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RenderKind {
     Invisible,
     Opaque,
@@ -28,7 +28,7 @@ pub enum RenderKind {
     Liquid,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FluidTraits {
     pub viscosity: f32,
     pub compressibility: f32,
@@ -43,7 +43,7 @@ impl FluidTraits {
     };
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MaterialPhysicsTraits {
     pub matter_state: MatterState,
     pub collision: CollisionKind,
@@ -54,7 +54,7 @@ pub struct MaterialPhysicsTraits {
     pub fluid: FluidTraits,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TintPattern {
     None,
     SumXZParity,
@@ -63,7 +63,7 @@ pub enum TintPattern {
     SumXZParityPlusYParity,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ColorModel {
     pub base: [f32; 3],
     pub base_tint: f32,
@@ -111,7 +111,7 @@ impl ColorModel {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MaterialRenderTraits {
     pub kind: RenderKind,
     pub occludes_light: bool,
@@ -119,7 +119,7 @@ pub struct MaterialRenderTraits {
     pub surface: SurfaceDetail,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SurfaceDetail {
     pub material_id: u32,
     /// Procedural surface family; shared with world_shader.wgsl.
@@ -151,7 +151,7 @@ impl SurfaceDetail {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MaterialTags {
     pub selectable: bool,
     pub hotbar_order: Option<u8>,
@@ -159,38 +159,20 @@ pub struct MaterialTags {
     pub render_in_lod_decor: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MaterialDef {
     pub id: BlockId,
+    #[serde(deserialize_with = "leak")]
     pub display_name: &'static str,
     pub render: MaterialRenderTraits,
     pub physics: MaterialPhysicsTraits,
     pub tags: MaterialTags,
 }
 
-macro_rules! define_materials {
-    (
-        $(
-            $id:ident {
-                display: $display:literal,
-                render_kind: $render_kind:expr,
-                occludes: $occludes:expr,
-                color: $color:expr,
-                surface: $surface:expr,
-                matter: $matter:expr,
-                collision: $collision:expr,
-                density: $density:expr,
-                hardness: $hardness:expr,
-                friction: $friction:expr,
-                restitution: $restitution:expr,
-                fluid: $fluid:expr,
-                selectable: $selectable:expr,
-                hotbar: $hotbar:expr,
-                heightmap: $heightmap:expr,
-                lod_decor: $lod_decor:expr
-            }
-        ),+ $(,)?
-    ) => {
+/// Declares `BlockId` and `ALL_BLOCK_IDS` in table order. The per-block
+/// properties live in `assets/materials.ron`, one row per id in this order.
+macro_rules! block_ids {
+    ( $( $id:ident ),+ $(,)? ) => {
         #[repr(u8)]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
         pub enum BlockId {
@@ -198,1247 +180,111 @@ macro_rules! define_materials {
         }
 
         pub const ALL_BLOCK_IDS: &[BlockId] = &[ $(BlockId::$id),+ ];
-
-        pub const MATERIAL_TABLE: [MaterialDef; define_materials!(@count $($id),+)] = [
-            $(
-                MaterialDef {
-                    id: BlockId::$id,
-                    display_name: $display,
-                    render: MaterialRenderTraits {
-                        kind: $render_kind,
-                        occludes_light: $occludes,
-                        color: $color,
-                        surface: $surface,
-                    },
-                    physics: MaterialPhysicsTraits {
-                        matter_state: $matter,
-                        collision: $collision,
-                        density: $density,
-                        hardness: $hardness,
-                        friction: $friction,
-                        restitution: $restitution,
-                        fluid: $fluid,
-                    },
-                    tags: MaterialTags {
-                        selectable: $selectable,
-                        hotbar_order: $hotbar,
-                        contributes_to_heightmap: $heightmap,
-                        render_in_lod_decor: $lod_decor,
-                    },
-                },
-            )+
-        ];
-    };
-    (@count $($x:ident),+) => {
-        <[()]>::len(&[$(define_materials!(@replace $x ())),+])
-    };
-    (@replace $_t:tt $sub:expr) => {
-        $sub
     };
 }
 
-define_materials! {
-    Air {
-        display: "Air",
-        render_kind: RenderKind::Invisible,
-        occludes: false,
-        color: ColorModel::flat([0.0, 0.0, 0.0]),
-        surface: SurfaceDetail::new(1.0, 0.0, 0.0, 0.0),
-        matter: MatterState::Vacuum,
-        collision: CollisionKind::Passable,
-        density: 0.0,
-        hardness: 0.0,
-        friction: 0.0,
-        restitution: 0.0,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    Grass {
-        display: "Grass",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.36, 0.49, 0.30]),
-        surface: SurfaceDetail::new(0.88, 0.05, 0.22, 0.42),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1500.0,
-        hardness: 0.50,
-        friction: 0.82,
-        restitution: 0.05,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(1),
-        heightmap: true,
-        lod_decor: false
-    },
-    Dirt {
-        display: "Dirt",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.38, 0.28, 0.21]),
-        surface: SurfaceDetail::new(0.95, 0.03, 0.18, 0.48),
-        matter: MatterState::Powder,
-        collision: CollisionKind::Solid,
-        density: 1650.0,
-        hardness: 0.58,
-        friction: 0.86,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(2),
-        heightmap: true,
-        lod_decor: false
-    },
-    Stone {
-        display: "Stone",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.44, 0.46, 0.47]),
-        surface: SurfaceDetail::new(0.62, 0.18, 0.42, 0.58),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2700.0,
-        hardness: 0.95,
-        friction: 0.78,
-        restitution: 0.07,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(3),
-        heightmap: true,
-        lod_decor: false
-    },
-    Sand {
-        display: "Sand",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.70, 0.62, 0.46]),
-        surface: SurfaceDetail::new(0.84, 0.07, 0.16, 0.38),
-        matter: MatterState::Powder,
-        collision: CollisionKind::Solid,
-        density: 1700.0,
-        hardness: 0.35,
-        friction: 0.74,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(4),
-        heightmap: true,
-        lod_decor: false
-    },
-    Sandstone {
-        display: "Sandstone",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.61, 0.50, 0.36]),
-        surface: SurfaceDetail::new(0.72, 0.10, 0.24, 0.44),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2200.0,
-        hardness: 0.74,
-        friction: 0.76,
-        restitution: 0.04,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    SnowGrass {
-        display: "Snow Grass",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.78, 0.82, 0.85]),
-        surface: SurfaceDetail::new(0.54, 0.12, 0.16, 0.36),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1400.0,
-        hardness: 0.52,
-        friction: 0.60,
-        restitution: 0.05,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Water {
-        display: "Water",
-        render_kind: RenderKind::Liquid,
-        occludes: false,
-        color: ColorModel::flat([0.16, 0.36, 0.43]),
-        surface: SurfaceDetail::new(0.10, 0.42, 0.10, 0.10),
-        matter: MatterState::Liquid,
-        collision: CollisionKind::Passable,
-        density: 1000.0,
-        hardness: 0.0,
-        friction: 0.02,
-        restitution: 0.0,
-        fluid: FluidTraits {
-            viscosity: 1.0,
-            compressibility: 0.03,
-            pressure_response: 1.0,
-        },
-        selectable: false,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    Log {
-        display: "Log",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.38, 0.29, 0.22]),
-        surface: SurfaceDetail::new(0.74, 0.06, 0.26, 0.42),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 680.0,
-        hardness: 0.42,
-        friction: 0.70,
-        restitution: 0.06,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: true
-    },
-    Torch {
-        display: "Torch",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.40, 0.25, 0.08]),
-        surface: SurfaceDetail::new(0.82, 0.06, -0.22, 0.18),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
-        density: 420.0,
-        hardness: 0.12,
-        friction: 0.62,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(0),
-        heightmap: false,
-        lod_decor: false
-    },
-    TorchWallNorth {
-        display: "Torch",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.40, 0.25, 0.08]),
-        surface: SurfaceDetail::new(0.82, 0.06, -0.22, 0.18),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
-        density: 420.0,
-        hardness: 0.12,
-        friction: 0.62,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    TorchWallSouth {
-        display: "Torch",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.40, 0.25, 0.08]),
-        surface: SurfaceDetail::new(0.82, 0.06, -0.22, 0.18),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
-        density: 420.0,
-        hardness: 0.12,
-        friction: 0.62,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    TorchWallWest {
-        display: "Torch",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.40, 0.25, 0.08]),
-        surface: SurfaceDetail::new(0.82, 0.06, -0.22, 0.18),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
-        density: 420.0,
-        hardness: 0.12,
-        friction: 0.62,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    TorchWallEast {
-        display: "Torch",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.40, 0.25, 0.08]),
-        surface: SurfaceDetail::new(0.82, 0.06, -0.22, 0.18),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Passable,
-        density: 420.0,
-        hardness: 0.12,
-        friction: 0.62,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    Leaves {
-        display: "Leaves",
-        render_kind: RenderKind::Cutout,
-        occludes: true,
-        color: ColorModel::flat([0.30, 0.43, 0.25]),
-        surface: SurfaceDetail::new(0.92, 0.04, 0.24, 0.30),
-        matter: MatterState::Solid,
-        // Broadleaf canopies are solid. A passable leaf volume let the camera
-        // enter a cube whose back faces are culled, producing a see-through
-        // "X-ray" view of the world behind the tree.
-        collision: CollisionKind::Solid,
-        density: 120.0,
-        hardness: 0.10,
-        friction: 0.30,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: true
-    },
-    Bush {
-        display: "Bush",
-        render_kind: RenderKind::Cutout,
-        occludes: true,
-        color: ColorModel::tinted(
-            [0.24, 0.46, 0.18],
-            0.82,
-            0.10,
-            0.08,
-            TintPattern::SumXZParityPlusYParity,
-        ),
-        surface: SurfaceDetail::new(0.90, 0.05, 0.30, 0.34),
-        matter: MatterState::Solid,
-        // Same occluder rule as broadleaf leaves: a passable cutout block
-        // becomes an accidental camera-inside-the-cube X-ray.
-        collision: CollisionKind::Solid,
-        density: 180.0,
-        hardness: 0.08,
-        friction: 0.34,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: true
-    },
-    Gravel {
-        display: "Gravel",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.52, 0.52, 0.50]),
-        surface: SurfaceDetail::new(0.78, 0.08, 0.28, 0.46),
-        matter: MatterState::Powder,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.48,
-        friction: 0.80,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Clay {
-        display: "Clay",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::tinted([0.62, 0.56, 0.52], 0.92, 0.08, 0.0, TintPattern::DiffXZParity),
-        surface: SurfaceDetail::new(0.82, 0.06, 0.20, 0.50),
-        matter: MatterState::Powder,
-        collision: CollisionKind::Solid,
-        density: 1900.0,
-        hardness: 0.64,
-        friction: 0.84,
-        restitution: 0.03,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(5),
-        heightmap: true,
-        lod_decor: false
-    },
-    Mud {
-        display: "Mud",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::tinted(
-            [0.36, 0.29, 0.20],
-            0.90,
-            0.10,
-            0.0,
-            TintPattern::AbsSumXZParity,
-        ),
-        surface: SurfaceDetail::new(0.96, 0.03, 0.18, 0.56),
-        matter: MatterState::Powder,
-        collision: CollisionKind::Solid,
-        density: 1850.0,
-        hardness: 0.50,
-        friction: 0.93,
-        restitution: 0.01,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(6),
-        heightmap: true,
-        lod_decor: false
-    },
-    Basalt {
-        display: "Basalt",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::tinted(
-            [0.20, 0.21, 0.24],
-            0.88,
-            0.12,
-            0.0,
-            TintPattern::AbsSumXZParity,
-        ),
-        surface: SurfaceDetail::new(0.46, 0.22, 0.48, 0.60),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 3000.0,
-        hardness: 1.10,
-        friction: 0.82,
-        restitution: 0.05,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(7),
-        heightmap: true,
-        lod_decor: false
-    },
-    Ice {
-        display: "Ice",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::tinted([0.62, 0.78, 0.94], 0.93, 0.07, 0.0, TintPattern::SumXZParity),
-        surface: SurfaceDetail::new(0.18, 0.28, 0.18, 0.24),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 917.0,
-        hardness: 0.30,
-        friction: 0.04,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: Some(8),
-        heightmap: true,
-        lod_decor: false
-    },
-    Lava {
-        display: "Lava",
-        render_kind: RenderKind::Liquid,
-        occludes: false,
-        color: ColorModel::tinted([0.92, 0.32, 0.08], 0.88, 0.12, 0.0, TintPattern::DiffXZParity),
-        surface: SurfaceDetail::new(0.20, 0.48, 0.14, 0.08),
-        matter: MatterState::Liquid,
-        collision: CollisionKind::Passable,
-        density: 3100.0,
-        hardness: 0.0,
-        friction: 0.01,
-        restitution: 0.0,
-        fluid: FluidTraits {
-            viscosity: 12.0,
-            compressibility: 0.004,
-            pressure_response: 0.55,
-        },
-        selectable: true,
-        hotbar: None,
-        heightmap: false,
-        lod_decor: false
-    },
-    Planks {
-        display: "Oak planks",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.62, 0.47, 0.32]),
-        surface: SurfaceDetail::new(0.86, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 700.0,
-        hardness: 0.55,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    StoneBricks {
-        display: "Stone bricks",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.56, 0.54, 0.50]),
-        surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 0.85,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Cobblestone {
-        display: "Cobblestone",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.43, 0.46, 0.44]),
-        surface: SurfaceDetail::new(0.94, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2500.0,
-        hardness: 0.85,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    CoalOre {
-        display: "Coal ore",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.43, 0.44, 0.45]),
-        surface: SurfaceDetail::new(0.92, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2300.0,
-        hardness: 0.85,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    IronOre {
-        display: "Iron ore",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.47, 0.46, 0.44]),
-        surface: SurfaceDetail::new(0.70, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2900.0,
-        hardness: 0.90,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    PineLeaves {
-        display: "Pine needles",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.20, 0.34, 0.29]),
-        surface: SurfaceDetail::new(0.93, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 300.0,
-        hardness: 0.22,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    FungalSoil {
-        display: "Mycelium",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.23, 0.24, 0.32]),
-        surface: SurfaceDetail::new(0.9, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.35,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    MushroomStem {
-        display: "Fungal stem",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.69, 0.64, 0.49]),
-        surface: SurfaceDetail::new(0.86, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.25,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    GlowCap {
-        display: "Luminous mushroom",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.22, 0.83, 0.72]),
-        surface: SurfaceDetail::new(0.5, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.15,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    RedCap {
-        display: "Ember mushroom",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.77, 0.24, 0.24]),
-        surface: SurfaceDetail::new(0.68, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.15,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Limestone {
-        display: "Limestone",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.68, 0.65, 0.53]),
-        surface: SurfaceDetail::new(0.93, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.7,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    CopperOre {
-        display: "Copper ore",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.42, 0.49, 0.43]),
-        surface: SurfaceDetail::new(0.76, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.8,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    TinOre {
-        display: "Tin ore",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.46, 0.51, 0.55]),
-        surface: SurfaceDetail::new(0.64, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.8,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Crystal {
-        display: "Resonant crystal",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.52, 0.32, 0.83]),
-        surface: SurfaceDetail::new(0.22, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.85,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    WeatheredBricks {
-        display: "Weathered masonry",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.36, 0.42, 0.35]),
-        surface: SurfaceDetail::new(0.95, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.8,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    SalvageCrate {
-        display: "Sealed salvage cache",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.52, 0.35, 0.17]),
-        surface: SurfaceDetail::new(0.8, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.5,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Workbench {
-        display: "Artificer workbench",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.50, 0.33, 0.19]),
-        surface: SurfaceDetail::new(0.8, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.6,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Smelter {
-        display: "Ore processor",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.31, 0.35, 0.39]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 1800.0,
-        hardness: 0.9,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: true,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    CoalGenerator {
-        display: "Coal generator",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.28, 0.32, 0.36]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Crusher {
-        display: "Ore crusher",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.55, 0.39, 0.17]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    ElectricFurnace {
-        display: "Electric furnace",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.32, 0.42, 0.48]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    FeedHopper {
-        display: "Feed hopper",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.34, 0.38, 0.41]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    StorageCrate {
-        display: "Output crate",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.43, 0.30, 0.18]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    ItemPipe {
-        display: "Item pipe",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.54, 0.37, 0.17]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    PowerCable {
-        display: "Power cable",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.15, 0.28, 0.31]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Bioreactor {
-        display: "Fungal bioreactor",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.20, 0.43, 0.32]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    SurveyCache {
-        display: "Sealed engineer cache",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.29, 0.46, 0.57]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    CultivatorCache {
-        display: "Sealed mycologist cache",
-        render_kind: RenderKind::Opaque,
-        occludes: true,
-        color: ColorModel::flat([0.34, 0.38, 0.29]),
-        surface: SurfaceDetail::new(0.6, 0.18, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    AlloyKiln {
-        display: "Alloy kiln",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.43,0.25,0.16]),
-        surface: SurfaceDetail::new(0.55, 0.25, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Fabricator {
-        display: "Component fabricator",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.24,0.4,0.48]),
-        surface: SurfaceDetail::new(0.55, 0.25, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    Cultivator {
-        display: "Mycelial cultivator",
-        render_kind: RenderKind::Opaque,
-        occludes: false,
-        color: ColorModel::flat([0.24,0.4,0.26]),
-        surface: SurfaceDetail::new(0.55, 0.25, 0.32, 0.5),
-        matter: MatterState::Solid,
-        collision: CollisionKind::Solid,
-        density: 2400.0,
-        hardness: 1.0,
-        friction: 0.65,
-        restitution: 0.02,
-        fluid: FluidTraits::NONE,
-        selectable: false,
-        hotbar: None,
-        heightmap: true,
-        lod_decor: false
-    },
-    MiningDrill {
-        display: "Mining drill", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.50,0.35,0.17]), surface: SurfaceDetail::new(0.45,0.4,0.3,0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    WaterPump {
-        display: "Water pump", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.17,0.40,0.47]), surface: SurfaceDetail::new(0.45,0.4,0.3,0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    FluidPipe {
-        display: "Fluid pipe", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.18,0.55,0.66]), surface: SurfaceDetail::new(0.45,0.4,0.3,0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    WaterTank {
-        display: "Water tank", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.22,0.42,0.51]), surface: SurfaceDetail::new(0.45,0.4,0.3,0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    OreWasher {
-        display: "Ore washer", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.32,0.42,0.47]), surface: SurfaceDetail::new(0.45,0.4,0.3,0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    }    ,
-    Fire {
-        display: "Fire", render_kind: RenderKind::Cutout, occludes: false,
-        color: ColorModel::flat([1.0,0.32,0.025]), surface: SurfaceDetail::new(0.8,0.0,0.0,0.0),
-        matter: MatterState::Plasma, collision: CollisionKind::Passable, density: 0.1,
-        hardness: 0.0, friction: 0.0, restitution: 0.0, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: false, lod_decor: false
-    },
-    Smoke {
-        display: "Smoke", render_kind: RenderKind::Cutout, occludes: false,
-        color: ColorModel::flat([0.25,0.26,0.28]), surface: SurfaceDetail::new(1.0,0.0,0.0,0.0),
-        matter: MatterState::Gas, collision: CollisionKind::Passable, density: 0.6,
-        hardness: 0.0, friction: 0.0, restitution: 0.0, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: false, lod_decor: false
-    },
-    Steam {
-        display: "Steam", render_kind: RenderKind::Cutout, occludes: false,
-        color: ColorModel::flat([0.80,0.85,0.89]), surface: SurfaceDetail::new(1.0,0.0,0.0,0.0),
-        matter: MatterState::Gas, collision: CollisionKind::Passable, density: 0.4,
-        hardness: 0.0, friction: 0.0, restitution: 0.0, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: false, lod_decor: false
-    },
-    Ash {
-        display: "Ash", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.19,0.18,0.17]), surface: SurfaceDetail::new(1.0,0.0,0.2,0.5),
-        matter: MatterState::Powder, collision: CollisionKind::Solid, density: 500.0,
-        hardness: 0.05, friction: 0.7, restitution: 0.0, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    RigidCore {
-        display: "Rigid assembly core", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.38,0.52,0.58]), surface: SurfaceDetail::new(0.4,0.6,0.2,0.7),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 0.8, friction: 0.6, restitution: 0.15, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    CopperBlock {
-        display: "Copper", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.72, 0.38, 0.20]), surface: SurfaceDetail::new(0.32, 0.82, 0.4, 0.35),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 8900.0,
-        hardness: 0.55, friction: 0.45, restitution: 0.08, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    SilverBlock {
-        display: "Silver", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.78, 0.80, 0.83]), surface: SurfaceDetail::new(0.14, 0.94, 0.35, 0.3),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 10500.0,
-        hardness: 0.5, friction: 0.4, restitution: 0.1, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    GoldBlock {
-        display: "Gold", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.86, 0.66, 0.22]), surface: SurfaceDetail::new(0.18, 0.92, 0.4, 0.3),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 19300.0,
-        hardness: 0.4, friction: 0.4, restitution: 0.08, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    PlatinumBlock {
-        display: "Platinum", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.86, 0.88, 0.90]), surface: SurfaceDetail::new(0.16, 0.90, 0.3, 0.3),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 21400.0,
-        hardness: 0.75, friction: 0.42, restitution: 0.06, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    MithrilBlock {
-        display: "Mithril", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.62, 0.78, 0.92]), surface: SurfaceDetail::new(0.10, 0.86, 0.5, 0.25),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 4500.0,
-        hardness: 0.9, friction: 0.35, restitution: 0.12, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    // Appended after Mithril so saved block ids keep their meaning.
-    // An illusion: renders exactly like cut masonry but has no collision.
-    MirageBrick {
-        display: "Mirage brick", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.56, 0.54, 0.50]), surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Passable, density: 2400.0,
-        hardness: 0.2, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: false, lod_decor: false
-    },
-    // Cosmos chambers: near-black stone that holds the starfield fog.
-    VoidStone {
-        display: "Void stone", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.035, 0.032, 0.062]), surface: SurfaceDetail::new(0.34, 0.5, 0.35, 0.4),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 3100.0,
-        hardness: 0.9, friction: 0.5, restitution: 0.05, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    StarGlass {
-        display: "Star glass", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.10, 0.12, 0.30]), surface: SurfaceDetail::new(0.10, 0.9, 0.5, 0.2),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2600.0,
-        hardness: 0.6, friction: 0.2, restitution: 0.1, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: true, lod_decor: false
-    },
-    // Void stone that is not there: the false wall of a cosmos chamber.
-    MirageVoid {
-        display: "Mirage void", render_kind: RenderKind::Opaque, occludes: true,
-        color: ColorModel::flat([0.035, 0.032, 0.062]), surface: SurfaceDetail::new(0.34, 0.5, 0.35, 0.4),
-        matter: MatterState::Solid, collision: CollisionKind::Passable, density: 3100.0,
-        hardness: 0.2, friction: 0.5, restitution: 0.05, fluid: FluidTraits::NONE,
-        selectable: true, hotbar: None, heightmap: false, lod_decor: false
-    },
-    // Factory assemblies added with save version 20. Appended so earlier ids
-    // keep their meaning.
-    BatteryBank {
-        display: "Battery bank", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.20, 0.30, 0.34]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    CokeOven {
-        display: "Coke oven door", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.42, 0.24, 0.16]), surface: SurfaceDetail::new(0.8, 0.1, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2200.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    BlastFurnace {
-        display: "Blast furnace tuyere", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.30, 0.26, 0.24]), surface: SurfaceDetail::new(0.8, 0.1, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    CokeOvenBrick {
-        display: "Coke oven brick", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.46, 0.27, 0.18]), surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2000.0,
-        hardness: 0.9, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    BlastBrick {
-        display: "Blast brick", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.36, 0.30, 0.27]), surface: SurfaceDetail::new(0.82, 0.08, 0.32, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2300.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    InductionCasing {
-        display: "Induction casing", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.30, 0.33, 0.36]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    InductionPort {
-        display: "Induction port", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.22, 0.36, 0.44]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    InductionCell {
-        display: "Induction cell", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.20, 0.42, 0.52]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    InductionProvider {
-        display: "Induction provider", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.46, 0.38, 0.20]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    Transformer {
-        display: "Transformer", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.28, 0.30, 0.26]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
-    },
-    Assembler {
-        display: "Assembling machine", render_kind: RenderKind::Opaque, occludes: false,
-        color: ColorModel::flat([0.42, 0.40, 0.30]), surface: SurfaceDetail::new(0.45, 0.4, 0.3, 0.5),
-        matter: MatterState::Solid, collision: CollisionKind::Solid, density: 2400.0,
-        hardness: 1.0, friction: 0.65, restitution: 0.02, fluid: FluidTraits::NONE,
-        selectable: false, hotbar: None, heightmap: true, lod_decor: false
+const MATERIALS_RON: &str = include_str!("../../../assets/materials.ron");
+/// One `MaterialDef` per `BlockId`, indexed by `id as usize`.
+pub static MATERIAL_TABLE: std::sync::LazyLock<Vec<MaterialDef>> = std::sync::LazyLock::new(|| {
+    let rows: Vec<MaterialDef> =
+        ron::from_str(MATERIALS_RON).unwrap_or_else(|error| panic!("assets/materials.ron: {error}"));
+    assert_eq!(rows.len(), ALL_BLOCK_IDS.len(), "assets/materials.ron must have one row per BlockId");
+    for (i, row) in rows.iter().enumerate() {
+        assert_eq!(row.id as usize, i, "assets/materials.ron row {i} is {:?}; rows follow BlockId order", row.id);
     }
+    rows
+});
+
+/// Display names live for the whole run; leaking them once keeps
+/// `MaterialDef` a plain `Copy` row with a `&'static str` name.
+fn leak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    <String as serde::Deserialize>::deserialize(d).map(|s| &*Box::leak(s.into_boxed_str()))
+}
+
+block_ids! {
+    Air,
+    Grass,
+    Dirt,
+    Stone,
+    Sand,
+    Sandstone,
+    SnowGrass,
+    Water,
+    Log,
+    Torch,
+    TorchWallNorth,
+    TorchWallSouth,
+    TorchWallWest,
+    TorchWallEast,
+    Leaves,
+    Bush,
+    Gravel,
+    Clay,
+    Mud,
+    Basalt,
+    Ice,
+    Lava,
+    Planks,
+    StoneBricks,
+    Cobblestone,
+    CoalOre,
+    IronOre,
+    PineLeaves,
+    FungalSoil,
+    MushroomStem,
+    GlowCap,
+    RedCap,
+    Limestone,
+    CopperOre,
+    TinOre,
+    Crystal,
+    WeatheredBricks,
+    SalvageCrate,
+    Workbench,
+    Smelter,
+    CoalGenerator,
+    Crusher,
+    ElectricFurnace,
+    FeedHopper,
+    StorageCrate,
+    ItemPipe,
+    PowerCable,
+    Bioreactor,
+    SurveyCache,
+    CultivatorCache,
+    AlloyKiln,
+    Fabricator,
+    Cultivator,
+    MiningDrill,
+    WaterPump,
+    FluidPipe,
+    WaterTank,
+    OreWasher,
+    Fire,
+    Smoke,
+    Steam,
+    Ash,
+    RigidCore,
+    CopperBlock,
+    SilverBlock,
+    GoldBlock,
+    PlatinumBlock,
+    MithrilBlock,
+    MirageBrick,
+    VoidStone,
+    StarGlass,
+    MirageVoid,
+    BatteryBank,
+    CokeOven,
+    BlastFurnace,
+    CokeOvenBrick,
+    BlastBrick,
+    InductionCasing,
+    InductionPort,
+    InductionCell,
+    InductionProvider,
+    Transformer,
+    Assembler,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -1511,7 +357,7 @@ impl BlockId {
                 | Self::Assembler
         )
     }
-    pub const COUNT: usize = MATERIAL_TABLE.len();
+    pub const COUNT: usize = ALL_BLOCK_IDS.len();
 
     pub fn from_u32(raw: u32) -> Self {
         ALL_BLOCK_IDS
@@ -1692,3 +538,39 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod material_table {
+    use super::*;
+
+    /// Serialising the loaded table reproduces the file (minus its comment
+    /// header), so the file is the single source of truth.
+    #[test]
+    fn materials_ron_round_trips() {
+        let text = ron::ser::to_string_pretty(&MATERIAL_TABLE[..], ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
+        let file = MATERIALS_RON.replace('\r', "");
+        let body = match file.find("\n[\n") {
+            Some(i) => &file[i + 1..],
+            None => file.as_str(),
+        };
+        let (a, b) = (text.trim_end(), body.trim_end());
+        if a != b {
+            let i = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            let lo = i.saturating_sub(60);
+            panic!(
+                "assets/materials.ron differs from the loaded table at byte {i}; run `cargo test dump_materials_ron -- --ignored`.\n table: {:?}\n  file: {:?}",
+                &a[lo..(i + 60).min(a.len())],
+                &b[lo..(i + 60).min(b.len())]
+            );
+        }
+    }
+
+    /// Rewrites assets/materials.ron from the loaded table (keeps the header).
+    #[test]
+    #[ignore = "writes assets/materials.ron"]
+    fn dump_materials_ron() {
+        let header = MATERIALS_RON.split("[").next().unwrap_or("");
+        let text = ron::ser::to_string_pretty(&MATERIAL_TABLE[..], ron::ser::PrettyConfig::new()).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/materials.ron");
+        std::fs::write(path, format!("{header}{text}")).unwrap();
+    }
+}
