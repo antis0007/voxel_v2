@@ -13,6 +13,8 @@ Invariants:
 - A cell only steps when its chunk is awake (`activity`) and resident in `Residency`; edits wake neighbours (`World::wake_acting`). The scheduler takes a snapshot of pending bits per tick so a front cannot starve.
 - Mass is conserved per transfer (`water_tests.rs` asserts it on ledges and drains).
 
+Material properties for the cellular rules: a block's `sim:` row in `assets/materials.ron` (cohesion, thermal conductivity and capacity, melt/boil/ignite/cool points and what they turn into, fuel, electrical conductivity), in real units. Rows equal to the generic inert solid omit it. `engine_content` packs every row into the 28-byte integer `engine_core::material::SimMaterial` (`BlockId::sim()`, `SIM_TABLE`); movement class comes from `matter_state` plus cohesion, never from the block. To add a reactive material: a `BlockId`, its row with a `sim:` block, then `cargo test -p engine_content dump_materials_ron -- --ignored`. Errors cite `assets/materials.ron:LINE`. Nothing reads these columns until Phase A3 (`docs/PLAN2.md`); the current sim still uses `thermal.rs` constants.
+
 Test: `just test water` and `just test simulation` for the harness tests (they call `cellular::step` directly with an empty `Residency`); scenarios `assets/scenarios/water_falls.ron` and `sand_falls.ron` run the full tick order headlessly (`just run ...`). A changed snapshot hash in `just test headless` means behaviour changed.
 
 Pitfalls: placing water through `World::set(Water)` clears the volume map; use `set_water_volume(p, 8)`. The wall-clock timing test for terrain generation is ignored on purpose (see `docs/PLAN.md` debt).

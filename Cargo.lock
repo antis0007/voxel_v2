@@ -768,6 +768,7 @@ dependencies = [
 name = "engine_content"
 version = "0.1.0"
 dependencies = [
+ "engine_core",
  "glam",
  "ron",
  "serde",

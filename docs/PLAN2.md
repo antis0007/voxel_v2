@@ -169,6 +169,15 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - The loader builds a packed 256-row `GpuMaterial` table: one struct, uploaded once, shared by the CPU and GPU kernels.
 - The validator reports file:line for parse errors (ron positions) and for cross-reference errors (it finds the row by `id:`).
 
+**A1 actuals (2026-10-22).**
+- Rows in `assets/materials.ron` gain an optional `sim:` block (24 of 83 rows carry one; +408 lines, since generic rows omit it).
+- `engine_core::material` holds `MaterialId`, `MovementClass` and the packed 28-byte `SimMaterial`. This is a deviation from the plan: the types live in core, not a new `engine_sim` crate, so the future sim crate depends only on core and cannot name `BlockId`. `engine_sim` is created in A2 with the brick store.
+- `engine_content` builds the 256-row `SIM_TABLE` and validates the file at startup and in tests, citing `assets/materials.ron:LINE`.
+- **Finding:** Dirt, Clay and Mud are `Powder` in the table, and today's sim never moves them. Deriving movement from `matter_state` alone would make terrain collapse, so cohesion is a real property (cohesive powders resolve to Solid).
+- **Ambient problem:** values are game-tuned to `thermal.rs` (ice melts at 308.15 K), because the ambient is 293.15 K. The science profile replaces them in Phase D.
+- Packing uses only IEEE basic operations, and 373.15 K is exactly half a step (3731.5 tenths), so it rounds to 3732 on every machine.
+- Nothing reads the new columns yet; scenario hashes are unchanged, 389 tests pass.
+
 **A2. Brick store** in `engine_sim::bricks`.
 - Cell record: `material u8 | volume u8 | temp u16 | aux u16` (8 B/cell, 4 KiB per 8³ brick).
 - Sparse brick pointer table, a pool allocator, and conversion to and from `ChunkData` plus the water map.

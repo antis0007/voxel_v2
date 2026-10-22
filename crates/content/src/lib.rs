@@ -1,5 +1,8 @@
 mod size_class;
+mod sim_traits;
+mod validate;
 pub use size_class::SizeClass;
+pub use sim_traits::{COHESION_STABLE, SIM_TABLE, SimTraits, ThermalTraits};
 
 use glam::IVec3;
 use std::sync::LazyLock;
@@ -166,6 +169,9 @@ pub struct MaterialDef {
     pub display_name: &'static str,
     pub render: MaterialRenderTraits,
     pub physics: MaterialPhysicsTraits,
+    /// Cellular-simulation properties; omitted rows are a generic inert solid.
+    #[serde(default, skip_serializing_if = "SimTraits::is_generic")]
+    pub sim: SimTraits,
     pub tags: MaterialTags,
 }
 
@@ -192,6 +198,10 @@ pub static MATERIAL_TABLE: std::sync::LazyLock<Vec<MaterialDef>> = std::sync::La
     for (i, row) in rows.iter().enumerate() {
         assert_eq!(row.id as usize, i, "assets/materials.ron row {i} is {:?}; rows follow BlockId order", row.id);
     }
+    let errors = validate::validate(&rows, MATERIALS_RON);
+    assert!(errors.is_empty(), "invalid material table:
+{}", errors.join("
+"));
     rows
 });
 

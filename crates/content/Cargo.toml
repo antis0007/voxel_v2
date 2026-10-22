@@ -1,11 +1,12 @@
-# Leaf crate: the block/material table (BlockId and its properties). Phase 4
-# moves the table itself to assets/materials.ron and keeps the loader here.
+# The block/material table: BlockId, its properties loaded from
+# assets/materials.ron, and the packed integer rows the cellular simulation reads.
 [package]
 name = "engine_content"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+engine_core = { path = "../core" }
 glam = "0.32.0"
 serde = { version = "1.0.229", features = ["derive"] }
 ron = "0.12.2"
