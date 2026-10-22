@@ -645,6 +645,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
+name = "engine_audio"
+version = "0.1.0"
+dependencies = [
+ "glam",
+]
+
+[[package]]
+name = "engine_content"
+version = "0.1.0"
+dependencies = [
+ "glam",
+]
+
+[[package]]
 name = "engine_core"
 version = "0.1.0"
 dependencies = [
@@ -1395,6 +1409,8 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "engine_audio",
+ "engine_content",
  "engine_core",
  "env_logger",
  "glam",

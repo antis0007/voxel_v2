@@ -1,0 +1,12 @@
+# Leaf crate: the block/material table (BlockId and its properties). Phase 4
+# moves the table itself to assets/materials.ron and keeps the loader here.
+[package]
+name = "engine_content"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = "0.32.0"
+
+[lints]
+workspace = true

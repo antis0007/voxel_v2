@@ -13,13 +13,13 @@ use winit::{
     window::{CursorGrabMode, Window, WindowAttributes},
 };
 
-mod audio;
+use engine_audio as audio;
 mod creative;
 mod egui_ui;
 use engine_core::fast_hash;
 mod fluid;
 mod headless;
-mod material;
+use engine_content as material;
 mod material_studio;
 mod mesh;
 mod perf;

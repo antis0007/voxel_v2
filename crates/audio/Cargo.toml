@@ -1,0 +1,11 @@
+# Leaf crate: procedural synth, mixer and the waveOut output thread (links winmm directly).
+[package]
+name = "engine_audio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = "0.32.0"
+
+[lints]
+workspace = true

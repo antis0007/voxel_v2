@@ -77,7 +77,7 @@ pub struct Event {
     /// use this to avoid every projectile sharing one identical chirp.
     pub pitch: f32,
 }
-pub(super) struct Play {
+pub(crate) struct Play {
     cue: Cue,
     left: f32,
     right: f32,
@@ -90,7 +90,7 @@ pub(super) struct Play {
 
 /// Reverb sends are deliberately cue-specific: impacts and rifts get space,
 /// sparks stay tight so rapid fire does not smear into a wash.
-pub(super) fn reverb_send(cue: Cue) -> f32 {
+pub(crate) fn reverb_send(cue: Cue) -> f32 {
     match cue {
         Cue::Rift | Cue::Echo | Cue::Shatter => 0.32,
         Cue::Burst | Cue::Splash => 0.22,
@@ -130,6 +130,12 @@ pub struct Audio {
     last_cue_ms: [u64; Cue::COUNT],
     spell_last_ms: [u64; 3],
 }
+impl Default for Audio {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Audio {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::sync_channel(64);
