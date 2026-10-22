@@ -13,6 +13,7 @@ use mesh_budget::{MeshBudget, MeshLease};
 use residency::{ResidentChunk, VoxelAllocations};
 pub use residency::{set_world_residency_budgets_mib, world_residency_budgets_mib};
 mod columns;
+mod arena;
 mod gpu_upload;
 mod pending_gpu;
 use pending_gpu::{PendingGpuLedger, PendingGpuUpload, PendingGpuLease};
