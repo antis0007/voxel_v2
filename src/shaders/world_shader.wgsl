@@ -192,9 +192,22 @@ fn vs_main(in: VsIn) -> VsOut {
     let geometry_kind=f32(u32(round(max(in.surface.z,0.0)))%64u);
     var model_pos = in.pos;
     if in.surface.w < -1.5 {
-        let phase = dot(floor(in.pos), vec3<f32>(0.73, 1.17, 0.41));
-        model_pos.x += sin(light.torch_meta.y * 7.1 + phase + in.pos.y * 5.0) * (0.018 / scale);
-        model_pos.z += sin(light.torch_meta.y * 5.3 + phase + in.pos.y * 7.0) * (0.012 / scale);
+        // The base stays on its mount and the tip moves most. The wave travels
+        // up the flame (the tip lags the base) so it licks rather than wobbling
+        // as one block. The phase is continuous in position: the old floor()
+        // seed moved each voxel as a cube.
+        let lift = flame_lift(in.surface.w);
+        let sway = lift * lift;
+        let phase = dot(in.pos, vec3<f32>(0.73, 1.17, 0.41));
+        let flame_time = light.torch_meta.y;
+        let wave = sin(flame_time * 6.7 - lift * 2.6 + phase);
+        let flutter = sin(flame_time * 10.9 - lift * 3.4 + phase * 1.7);
+        // Tip travel is about 3 cm on a 35 cm flame: visible at 1280 px width.
+        model_pos.x += (0.034 * wave + 0.012 * flutter) * sway / scale;
+        model_pos.z += (0.022 * sin(flame_time * 5.3 - lift * 2.0 + phase * 0.8)
+            + 0.008 * flutter) * sway / scale;
+        // The flame shortens a little on each flick.
+        model_pos.y -= 0.012 * sway * (0.5 + 0.5 * wave) / scale;
     }
     out.water_optics = vec2<f32>(10.0, 1.0);
     if geometry_kind == 8.0 && in.surface.w >= 8.0 && in.ao_strength >= 0.0 {
@@ -694,6 +707,12 @@ fn torch_flicker(seed: vec3<f32>, time: f32) -> f32 {
     let slow = sin(time * 2.2 + phase);
     let breath = sin(time * 4.6 + phase * 1.3);
     return clamp(0.96 + slow * 0.035 + breath * 0.015, 0.92, 1.04);
+}
+
+// Flame height above its base, 0..1. The mesher packs it into surface.w as
+// -2 - lift, so every existing `surface.w < -1.5` flame test still matches.
+fn flame_lift(surface_w: f32) -> f32 {
+    return clamp(-surface_w - 2.0, 0.0, 1.0);
 }
 
 fn eval_torch_light(
@@ -2203,9 +2222,11 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // floor() seed held each voxel at one brightness, so the flame stepped
         // in cube-sized chunks and barely moved. Placed torches are world-fixed,
         // so a world-anchored field does not swim.
+        // Same wave as the vertex sway, so the brightness climbs with the motion.
+        let lift = flame_lift(in.surface.w);
         let lick_phase = dot(in.voxel_pos, vec3<f32>(3.1, 2.2, 2.7));
-        let lick = 0.6 * sin(flame_time * 7.3 + lick_phase)
-            + 0.4 * sin(flame_time * 12.9 - 1.7 * lick_phase);
+        let lick = 0.6 * sin(flame_time * 6.7 - lift * 2.6 + lick_phase)
+            + 0.4 * sin(flame_time * 10.9 - lift * 3.4 - 1.7 * lick_phase);
         // 0.96 is torch_flicker's mean, so the flame keeps its average brightness;
         // a higher mean pushes the saturated orange toward pale peach after tonemap.
         let flame_wave = select(torch_flicker(floor(in.voxel_pos), flame_time), 0.96 + 0.14 * lick, flame);

@@ -466,6 +466,22 @@ fn face_corner_ao(
     }
 }
 
+/// Sets colour and flame lift on the corners of a flame quad. Flame vertices
+/// carry their height above the flame base as `surface[3] = -2 - lift` (lift
+/// 0 at the base, 1 at the tip). The shader reads it back to sway the tip and
+/// time the licks, and every `< -1.5` flame test still matches.
+fn shade_flame_corners(
+    mesh: &mut ChunkMesh,
+    first: usize,
+    colors: [[f32; 3]; 4],
+    lifts: [f32; 4],
+) {
+    for ((vertex, color), lift) in mesh.vertices[first..].iter_mut().zip(colors).zip(lifts) {
+        vertex.color = color;
+        vertex.surface[3] = -2.0 - lift.clamp(0.0, 1.0);
+    }
+}
+
 fn push_face(
     vertices: &mut Vec<Vertex3>,
     indices: &mut Vec<u32>,
@@ -1070,6 +1086,7 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                 if compact {
                     let mut flame = surface;
                     flame.detail_strength = -2.0;
+                    let box_first = mesh.vertices.len();
                     emit_oriented_box(
                         mesh,
                         flame_center - Vec3::Y * 0.05,
@@ -1078,6 +1095,11 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                         flame_color,
                         flame,
                     );
+                    // Lift the box by height so its top sways and its base stays put.
+                    let box_bottom = flame_center.y - 0.05;
+                    for vertex in &mut mesh.vertices[box_first..] {
+                        vertex.surface[3] = -2.0 - ((vertex.pos[1] - box_bottom) / 0.25).clamp(0.0, 1.0);
+                    }
                     scale_torch_vertices(mesh, first_vertex, base, block, chunk_data.voxel_meters);
                     continue;
                 }
@@ -1164,6 +1186,8 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                     [1.0, 0.42, 0.09],
                     [1.0, 0.29, 0.055],
                 ];
+                // Height of each ring as a 0..1 lift, measured from the base ring.
+                let ring_lift = rings.map(|ring| (ring.0 - rings[0].0) / (rings[3].0 - rings[0].0));
                 for band in 0..3 {
                     let mut flame = surface;
                     flame.detail_strength = -2.0;
@@ -1196,15 +1220,22 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                             [1.0; 4],
                         );
                         // quad order is [bottom, top, top, bottom] along the band.
-                        let corners = [
-                            ring_colors[band],
-                            ring_colors[band + 1],
-                            ring_colors[band + 1],
-                            ring_colors[band],
-                        ];
-                        for (vertex, color) in mesh.vertices[first_vertex..].iter_mut().zip(corners) {
-                            vertex.color = color;
-                        }
+                        shade_flame_corners(
+                            mesh,
+                            first_vertex,
+                            [
+                                ring_colors[band],
+                                ring_colors[band + 1],
+                                ring_colors[band + 1],
+                                ring_colors[band],
+                            ],
+                            [
+                                ring_lift[band],
+                                ring_lift[band + 1],
+                                ring_lift[band + 1],
+                                ring_lift[band],
+                            ],
+                        );
                     }
                 }
                 {
@@ -1214,12 +1245,15 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                     let foot = flame_center + Vec3::new(-0.065, 0.025, 0.0);
                     let belly = flame_center + Vec3::new(-0.105, 0.12, 0.0);
                     let tip = flame_center + Vec3::new(-0.08, 0.225, 0.015);
+                    let lift_at = |height: f32| (height - rings[0].0) / (rings[3].0 - rings[0].0);
+                    let (foot_lift, belly_lift, tip_lift) =
+                        (lift_at(0.025), lift_at(0.12), lift_at(0.225));
                     for side in 0..4 {
                         let a = side as f32 * std::f32::consts::FRAC_PI_2;
                         let b = a + std::f32::consts::FRAC_PI_2;
                         let va = Vec3::new(a.cos(), 0.0, a.sin());
                         let vb = Vec3::new(b.cos(), 0.0, b.sin());
-                        for quad in [
+                        for (index, quad) in [
                             [
                                 foot + va * 0.025,
                                 belly + va * 0.035,
@@ -1232,8 +1266,12 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                                 tip + vb * 0.002,
                                 belly + vb * 0.035,
                             ],
-                        ] {
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
                             let quad = quad.map(|v| v.to_array());
+                            let quad_first = mesh.vertices.len();
                             push_face(
                                 &mut mesh.vertices,
                                 &mut mesh.indices,
@@ -1243,6 +1281,12 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                                 flame,
                                 [1.0; 4],
                             );
+                            let lifts = if index == 0 {
+                                [foot_lift, belly_lift, belly_lift, foot_lift]
+                            } else {
+                                [belly_lift, tip_lift, tip_lift, belly_lift]
+                            };
+                            shade_flame_corners(mesh, quad_first, [[1.0, 0.42, 0.09]; 4], lifts);
                         }
                     }
                 }
