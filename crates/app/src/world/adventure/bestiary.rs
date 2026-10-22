@@ -9,7 +9,7 @@ use super::Enemy;
 use crate::mesh::models::Model;
 use glam::{Quat, Vec3};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     Skirmisher,
     Defender,
@@ -17,8 +17,9 @@ pub enum Role {
     Rooted,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Species {
+    #[serde(deserialize_with = "leak")]
     pub name: &'static str,
     pub role: Role,
     pub health: f32,
@@ -38,144 +39,18 @@ pub struct Species {
 /// The first proven families. Kinds 2, 3, 6–9 keep their existing definitions
 /// and presentation until they receive the same authored treatment.
 pub fn species(kind: u32) -> Option<&'static Species> {
-    const SKITTERER: Species = Species {
-        name: "Ruin Skitterer",
-        role: Role::Skirmisher,
-        health: 35.0,
-        body_height: 0.58,
-        body_width: 0.72,
-        center_height: 0.38,
-        tall: false,
-        flying: false,
-        brawler: true,
-        speed: 2.8,
-        attack_range: 1.9,
-        windup: 0.45,
-        cooldown: 1.6,
-    };
-    const SENTINEL: Species = Species {
-        name: "Spore Sentinel",
-        role: Role::Rooted,
-        health: 65.0,
-        body_height: 1.75,
-        body_width: 0.56,
-        center_height: 0.95,
-        tall: true,
-        flying: false,
-        brawler: false,
-        speed: 0.75,
-        attack_range: 18.0,
-        windup: 0.85,
-        cooldown: 2.8,
-    };
-    const MOTH: Species = Species {
-        name: "Aether Moth",
-        role: Role::Flyer,
-        health: 42.0,
-        body_height: 0.55,
-        body_width: 0.44,
-        center_height: 0.52,
-        tall: false,
-        flying: true,
-        brawler: false,
-        speed: 1.55,
-        attack_range: 16.0,
-        windup: 0.60,
-        cooldown: 2.4,
-    };
-    const WARDEN: Species = Species {
-        name: "Sanctum Warden",
-        role: Role::Defender,
-        health: 110.0,
-        body_height: 1.75,
-        body_width: 0.56,
-        center_height: 1.00,
-        tall: true,
-        flying: false,
-        brawler: false,
-        speed: 1.65,
-        attack_range: 5.0,
-        windup: 0.75,
-        cooldown: 2.6,
-    };
-    const MIMIC: Species = Species {
-        name: "Threshold Mimic",
-        role: Role::Skirmisher,
-        health: 72.0,
-        body_height: 0.92,
-        body_width: 0.74,
-        center_height: 0.44,
-        tall: false,
-        flying: false,
-        brawler: true,
-        speed: 1.20,
-        attack_range: 2.4,
-        windup: 0.55,
-        cooldown: 2.2,
-    };
-    const LAMPREY: Species = Species {
-        name: "Cistern Lamprey",
-        role: Role::Skirmisher,
-        health: 58.0,
-        body_height: 0.42,
-        body_width: 0.36,
-        center_height: 0.34,
-        tall: false,
-        flying: false,
-        brawler: true,
-        speed: 1.45,
-        attack_range: 2.8,
-        windup: 0.50,
-        cooldown: 2.0,
-    };
-    const KILN: Species = Species {
-        name: "Kiln Crawler",
-        role: Role::Defender,
-        health: 90.0,
-        body_height: 1.02,
-        body_width: 0.82,
-        center_height: 0.58,
-        tall: false,
-        flying: false,
-        brawler: true,
-        speed: 1.00,
-        attack_range: 3.0,
-        windup: 0.90,
-        cooldown: 2.8,
-    };
-    const PORTER: Species = Species {
-        name: "Vault Porter",
-        role: Role::Defender,
-        health: 86.0,
-        body_height: 1.60,
-        body_width: 0.72,
-        center_height: 0.88,
-        tall: true,
-        flying: false,
-        brawler: false,
-        speed: 0.95,
-        attack_range: 2.6,
-        windup: 0.85,
-        cooldown: 3.0,
-    };
-    const MATRON: Species = Species {
-        name: "Orchard Matron", role: Role::Rooted, health: 240.0,
-        body_height: 2.5, body_width: 1.8, center_height: 1.25,
-        tall: true, flying: false, brawler: false, speed: 0.7,
-        attack_range: 14.0, windup: 1.1, cooldown: 3.0,
-    };
-    match kind {
-        0 => Some(&SKITTERER),
-        1 => Some(&SENTINEL),
-        4 => Some(&MOTH),
-        5 => Some(&WARDEN),
-        10 => Some(&MIMIC),
-        11 => Some(&LAMPREY),
-        12 => Some(&KILN),
-        13 => Some(&PORTER),
-        15 => Some(&MATRON),
-        _ => None,
-    }
+    SPECIES.iter().find(|(k, _)| *k == kind).map(|(_, s)| s)
+}
+
+const SPECIES_RON: &str = include_str!("../../../../../assets/bestiary.ron");
+/// `(enemy kind, species)` rows from `assets/bestiary.ron`. Kinds without a
+/// row keep their older hard-coded presentation.
+pub static SPECIES: std::sync::LazyLock<Vec<(u32, Species)>> = std::sync::LazyLock::new(|| {
+    ron::from_str(SPECIES_RON).unwrap_or_else(|error| panic!("assets/bestiary.ron: {error}"))
+});
+
+fn leak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    <String as serde::Deserialize>::deserialize(d).map(|s| &*Box::leak(s.into_boxed_str()))
 }
 
 pub fn name(kind: u32) -> Option<&'static str> {
@@ -833,5 +708,46 @@ mod tests {
         assert!(enemy.check_guard_break());
         assert!(!enemy.guard);
         assert!(!enemy.check_guard_break());
+    }
+}
+
+#[cfg(test)]
+mod species_table {
+    use super::*;
+
+    /// Serialising the loaded table reproduces the file (minus its comment
+    /// header), so the file is the single source of truth.
+    fn assert_round_trip<T: serde::Serialize>(rows: &T, file: &str) {
+        let text = ron::ser::to_string_pretty(rows, ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
+        let file = file.replace('\r', "");
+        let body = match file.find("\n[\n") {
+            Some(i) => &file[i + 1..],
+            None => file.as_str(),
+        };
+        let (a, b) = (text.trim_end(), body.trim_end());
+        if a != b {
+            let i = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            let lo = i.saturating_sub(60);
+            panic!(
+                "table file differs from the loaded rows at byte {i}; rerun the ignored dump test to rewrite it.\n table: {:?}\n  file: {:?}",
+                &a[lo..(i + 60).min(a.len())],
+                &b[lo..(i + 60).min(b.len())]
+            );
+        }
+    }
+
+    #[test]
+    fn bestiary_ron_round_trips() {
+        assert_round_trip(&*SPECIES, SPECIES_RON);
+    }
+
+    /// Rewrites assets/bestiary.ron from the loaded table (keeps the header).
+    #[test]
+    #[ignore = "writes assets/bestiary.ron"]
+    fn dump_bestiary_ron() {
+        let header = SPECIES_RON.split("[").next().unwrap_or("");
+        let text = ron::ser::to_string_pretty(&*SPECIES, ron::ser::PrettyConfig::new()).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/bestiary.ron");
+        std::fs::write(path, format!("{header}{text}")).unwrap();
     }
 }

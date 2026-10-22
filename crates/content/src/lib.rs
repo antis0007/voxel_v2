@@ -192,7 +192,7 @@ macro_rules! define_materials {
         ),+ $(,)?
     ) => {
         #[repr(u8)]
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
         pub enum BlockId {
             $( $id, )+
         }

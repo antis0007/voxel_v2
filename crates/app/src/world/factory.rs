@@ -37,7 +37,7 @@ const DIRS: [IVec3; 6] = [
     IVec3::NEG_Z,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum Kind {
     Generator,
@@ -111,179 +111,95 @@ impl Kind {
         Self::Transformer,
         Self::Assembler,
     ];
+    fn def(self) -> &'static MachineDef {
+        &MACHINES[self as usize]
+    }
     pub fn block(self) -> B {
-        match self {
-            Self::Generator => B::CoalGenerator,
-            Self::Crusher => B::Crusher,
-            Self::Furnace => B::ElectricFurnace,
-            Self::Feeder => B::FeedHopper,
-            Self::Storage => B::StorageCrate,
-            Self::Pipe => B::ItemPipe,
-            Self::Cable => B::PowerCable,
-            Self::Bioreactor => B::Bioreactor,
-            Self::AlloyKiln => B::AlloyKiln,
-            Self::Fabricator => B::Fabricator,
-            Self::Cultivator => B::Cultivator,
-            Self::MiningDrill => B::MiningDrill,
-            Self::Pump => B::WaterPump,
-            Self::FluidPipe => B::FluidPipe,
-            Self::Tank => B::WaterTank,
-            Self::Washer => B::OreWasher,
-            Self::Battery => B::BatteryBank,
-            Self::CokeOven => B::CokeOven,
-            Self::BlastFurnace => B::BlastFurnace,
-            Self::CokeBrick => B::CokeOvenBrick,
-            Self::BlastBrick => B::BlastBrick,
-            Self::InductionCasing => B::InductionCasing,
-            Self::InductionPort => B::InductionPort,
-            Self::InductionCell => B::InductionCell,
-            Self::InductionProvider => B::InductionProvider,
-            Self::Transformer => B::Transformer,
-            Self::Assembler => B::Assembler,
-        }
+        self.def().block
     }
     pub fn from_block(b: B) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.block() == b)
     }
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Generator => "Coal generator",
-            Self::Crusher => "Ore crusher",
-            Self::Furnace => "Electric furnace",
-            Self::Feeder => "Feed hopper",
-            Self::Storage => "Output crate",
-            Self::Pipe => "Item pipe",
-            Self::Cable => "Power cable",
-            Self::Bioreactor => "Fungal bioreactor",
-            Self::AlloyKiln => "Alloy kiln",
-            Self::Fabricator => "Component fabricator",
-            Self::Cultivator => "Mycelial cultivator",
-            Self::MiningDrill => "Mining drill",
-            Self::Pump => "Water pump",
-            Self::FluidPipe => "Fluid pipe",
-            Self::Tank => "Water tank",
-            Self::Washer => "Ore washer",
-            Self::Battery => "Battery bank",
-            Self::CokeOven => "Coke oven door",
-            Self::BlastFurnace => "Blast furnace tuyere",
-            Self::CokeBrick => "Coke oven brick",
-            Self::BlastBrick => "Blast brick",
-            Self::InductionCasing => "Induction casing",
-            Self::InductionPort => "Induction port",
-            Self::InductionCell => "Induction cell",
-            Self::InductionProvider => "Induction provider",
-            Self::Transformer => "Transformer",
-            Self::Assembler => "Assembling machine",
-        }
+        self.def().name
     }
+    /// Workbench cost in resource units (index, count).
     pub fn recipe(self) -> &'static [(usize, u32)] {
-        match self {
-            Self::Generator => &[(6, 128), (8, 128)],
-            Self::Crusher => &[(6, 128), (7, 64), (8, 128)],
-            Self::Furnace => &[(6, 128), (8, 128), (4, 64)],
-            Self::Feeder => &[(7, 64)],
-            Self::Storage => &[(8, 64)],
-            Self::Pipe => &[(7, 64)],
-            Self::Cable => &[(6, 64)],
-            Self::Bioreactor => &[(15, 256), (16, 128), (17, 64), (13, 256)],
-            Self::AlloyKiln => &[(8, 256), (6, 128)],
-            Self::Fabricator => &[(14, 128), (8, 128), (12, 64)],
-            Self::Cultivator => &[(14, 128), (16, 64), (13, 128)],
-            Self::MiningDrill => &[(15, 256), (16, 128), (17, 64)],
-            Self::Pump => &[(14, 128), (16, 64)],
-            Self::FluidPipe => &[(6, 64), (7, 64)],
-            Self::Tank => &[(8, 128), (7, 64)],
-            Self::Washer => &[(15, 128), (16, 128), (14, 128)],
-            Self::Battery => &[(6, 128), (7, 128), (8, 64)],
-            Self::CokeOven => &[(8, 128), (3, 64)],
-            Self::BlastFurnace => &[(8, 256), (COKE, 128)],
-            // Bricks come from the crafting grid (clay, sand, stone); this is
-            // the workbench fallback for players who have ingots but no clay.
-            Self::CokeBrick => &[(3, 16)],
-            Self::BlastBrick => &[(COKE, 16)],
-            Self::InductionCasing => &[(15, 64), (8, 64)],
-            Self::InductionPort => &[(15, 128), (16, 128), (17, 64)],
-            Self::InductionCell => &[(16, 256), (15, 128), (17, 64)],
-            Self::InductionProvider => &[(16, 128), (14, 128), (17, 64)],
-            Self::Transformer => &[(16, 128), (6, 128), (8, 64)],
-            Self::Assembler => &[(8, 192), (16, 64), (12, 64)],
-        }
+        &self.def().recipe
     }
     pub fn yield_count(self) -> u32 {
-        if matches!(self, Self::Pipe | Self::Cable | Self::FluidPipe) {
-            8
-        } else if self == Self::InductionCasing {
-            2
-        } else {
-            1
-        }
+        self.def().yield_count
     }
     pub fn accepts(self, i: usize) -> bool {
-        match self {
-            Self::Generator => matches!(i, 3 | 13 | COKE | CREOSOTE | ETHANOL) || i == pile::FUEL,
-            Self::Bioreactor => i == 13,
-            Self::Crusher | Self::Washer => i < 3,
-            Self::Furnace => (9..12).contains(&i) || i < 3,
-            Self::CokeOven => i == 3,
-            Self::BlastFurnace => matches!(i, 2 | 8 | COKE),
-            Self::Feeder => i < RESOURCE_COUNT,
-            Self::Storage => i < RESOURCE_COUNT,
-            Self::Assembler => i < RESOURCE_COUNT,
-            Self::AlloyKiln => matches!(i, 3 | 6 | 7 | 8),
-            Self::Fabricator => matches!(i, 4 | 5 | 6 | 7 | 12 | 13 | 18),
-            Self::Cultivator => matches!(i, 4 | 13),
-            _ => false,
-        }
+        self.def().accepts.contains(&i)
     }
     /// Multiblock casing. Not a port, not a machine: it only gives shape to a
     /// coke oven or blast furnace.
     pub fn structural(self) -> bool {
-        matches!(
-            self,
-            Self::CokeBrick
-                | Self::BlastBrick
-                | Self::InductionCasing
-                | Self::InductionCell
-                | Self::InductionProvider
-        )
+        self.def().structural
     }
     /// Holds grid energy in a pool: batteries, transformers, matrix ports.
     pub fn stores_power(self) -> bool {
-        matches!(self, Self::Battery | Self::Transformer | Self::InductionPort)
+        self.def().stores_power
     }
     pub fn conduit(self) -> bool {
-        matches!(self, Self::Pipe | Self::Cable | Self::FluidPipe)
+        self.def().conduit
     }
     pub fn powered(self) -> bool {
-        self.processor() || matches!(self, Self::MiningDrill | Self::Pump | Self::Assembler)
+        self.def().powered
     }
     /// Machines that take the three-step upgrade: drives for consumers,
     /// cell chemistry for batteries.
     pub fn upgradable(self) -> bool {
-        self.powered() || matches!(self, Self::Battery | Self::Transformer | Self::Cable)
+        self.def().upgradable
     }
+    /// Cost of the first upgrade, then of every later one.
     pub fn upgrade_cost(self, level: u32) -> &'static [(usize, u32)] {
-        match (self, level) {
-            // Per cable piece: steel-armoured HV, then a resonant superconductor.
-            (Self::Cable, 0) => &[(15, 16), (7, 8)],
-            (Self::Cable, _) => &[(17, 8), (16, 16)],
-            (Self::Transformer, 0) => &[(16, 128), (15, 64)],
-            (Self::Transformer, _) => &[(16, 256), (17, 64)],
-            (Self::Battery, 0) => &[(14, 128), (16, 64), (8, 64)],
-            (Self::Battery, _) => &[(15, 128), (16, 128), (17, 64)],
-            (_, 0) => &[(14, 128), (16, 64)],
-            _ => &[(15, 128), (16, 128), (17, 64)],
-        }
+        &self.def().upgrade_cost[usize::from(level != 0)]
     }
     pub fn water_port(self) -> bool {
-        matches!(
-            self,
-            Self::Pump | Self::Tank | Self::Washer | Self::Generator
-        )
+        self.def().water_port
     }
     pub(crate) fn generator(self) -> bool {
-        matches!(self, Self::Generator | Self::Bioreactor)
+        self.def().generator
     }
+}
+
+/// One machine kind's data row, from `assets/machines.ron`; indexed by `Kind as usize`.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MachineDef {
+    pub kind: Kind,
+    pub block: B,
+    #[serde(deserialize_with = "leak")]
+    pub name: &'static str,
+    pub recipe: Vec<(usize, u32)>,
+    pub yield_count: u32,
+    /// Resource indices the machine takes as input.
+    pub accepts: Vec<usize>,
+    pub structural: bool,
+    pub stores_power: bool,
+    pub conduit: bool,
+    pub powered: bool,
+    pub upgradable: bool,
+    /// Cost of upgrade level 0, then of every later level.
+    pub upgrade_cost: [Vec<(usize, u32)>; 2],
+    pub water_port: bool,
+    pub generator: bool,
+}
+
+const MACHINES_RON: &str = include_str!("../../../../assets/machines.ron");
+pub static MACHINES: std::sync::LazyLock<Vec<MachineDef>> = std::sync::LazyLock::new(|| {
+    let rows: Vec<MachineDef> =
+        ron::from_str(MACHINES_RON).unwrap_or_else(|error| panic!("assets/machines.ron: {error}"));
+    assert_eq!(rows.len(), Kind::COUNT, "assets/machines.ron must list every Kind once, in enum order");
+    for (i, row) in rows.iter().enumerate() {
+        assert_eq!(row.kind as usize, i, "assets/machines.ron row {i} is {:?}, expected enum order", row.kind);
+    }
+    rows
+});
+
+fn leak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    <String as serde::Deserialize>::deserialize(d).map(|s| &*Box::leak(s.into_boxed_str()))
 }
 
 #[derive(Clone)]
@@ -2139,5 +2055,46 @@ impl Factory {
             pipe_node.activity = 1.0;
             pipe_node.status = "Balancing";
         }
+    }
+}
+
+#[cfg(test)]
+mod machine_table {
+    use super::*;
+
+    /// Serialising the loaded table reproduces the file (minus its comment
+    /// header), so the file is the single source of truth.
+    fn assert_round_trip<T: serde::Serialize>(rows: &T, file: &str) {
+        let text = ron::ser::to_string_pretty(rows, ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
+        let file = file.replace('\r', "");
+        let body = match file.find("\n[\n") {
+            Some(i) => &file[i + 1..],
+            None => file.as_str(),
+        };
+        let (a, b) = (text.trim_end(), body.trim_end());
+        if a != b {
+            let i = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            let lo = i.saturating_sub(60);
+            panic!(
+                "table file differs from the loaded rows at byte {i}; rerun the ignored dump test to rewrite it.\n table: {:?}\n  file: {:?}",
+                &a[lo..(i + 60).min(a.len())],
+                &b[lo..(i + 60).min(b.len())]
+            );
+        }
+    }
+
+    #[test]
+    fn machines_ron_round_trips() {
+        assert_round_trip(&*MACHINES, MACHINES_RON);
+    }
+
+    /// Rewrites assets/machines.ron from the loaded table (keeps the header).
+    #[test]
+    #[ignore = "writes assets/machines.ron"]
+    fn dump_machines_ron() {
+        let header = MACHINES_RON.split("[").next().unwrap_or("");
+        let text = ron::ser::to_string_pretty(&*MACHINES, ron::ser::PrettyConfig::new()).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/machines.ron");
+        std::fs::write(path, format!("{header}{text}")).unwrap();
     }
 }
