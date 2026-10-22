@@ -70,9 +70,12 @@ pub fn contacts(seed:u32,day:&DayNightCycle,viewer:Vec3)->Vec<Contact> {
     // direction into inertial space for the planet's cylindrical eclipse test.
     let spin=planet_spin(time);
     let sun=spin*day.lighting().sun_dir.as_dvec3().normalize();
-    let mut result=Vec::with_capacity(6);
+    let mut result=Vec::with_capacity(2);
     for (kind,salt) in [(Kind::Foundry,0x10a1_u32),(Kind::TwinHabitat,0x10a2)] {
-        for member in 0..3_u32 {
+        // One of each, as the lore has it ("the Loom", "the Continuum"). Three
+        // members spaced member/3 day apart were a whole lap apart at
+        // ORBITS_PER_DAY = 3, so they all hung in the same patch of sky.
+        for member in 0..1_u32 {
             let key=hash_u32(seed^salt^member.wrapping_mul(0x9e3779b9));
             let epoch=(1.45+unit(key)*0.02+member as f64/3.0)*DAY_SECONDS;
             let radius=PLANET_RADIUS_M+kind.altitude_m();
