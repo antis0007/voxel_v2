@@ -56,12 +56,23 @@ def scenarios_at(base):
     return len(git("ls-tree", "--name-only", f"{base}:assets/scenarios", check=False).split())
 
 
+def criterion_dir():
+    """The same directory bench.py reads: CRITERION_HOME, else cargo's target directory."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("bench", ROOT / "scripts" / "bench.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.criterion_dir()
+
+
 def bench_lines():
     lines = []
+    results = criterion_dir()
     for baselines in sorted(ROOT.glob("crates/*/benches/baselines.json")):
         base = json.loads(baselines.read_text(encoding="utf-8"))
         for bench, ns in sorted(base.items()):
-            est = ROOT / "target" / "criterion" / bench / "new" / "estimates.json"
+            est = results / bench / "new" / "estimates.json"
             if not est.is_file():
                 lines.append(f"  {bench}: not run this session (baseline {ns / 1e6:.3f} ms)")
                 continue

@@ -93,10 +93,6 @@ mod tests {
         );
     }
 
-    /// Every repo path and `just` command named in the agent-facing docs
-    /// exists. Paths are tokens starting with `crates/`, `assets/`, `docs/`,
-    /// `scripts/`, `tools/` or `.claude/`; a token containing `*`, `<` or `{`
-    /// is a pattern and is skipped.
     /// GPU tests get their adapter from `engine_gpu::test_adapter()`, so
     /// `just test-gpu` controls backend selection and fails without a GPU.
     /// Only that helper and the windowed renderer may request an adapter.
@@ -135,6 +131,10 @@ mod tests {
         assert!(deps.is_empty(), "engine_sim may depend only on engine_core, found {deps:?}");
     }
 
+    /// Every repo path and `just` command named in the agent-facing docs
+    /// exists. Paths are tokens starting with `crates/`, `assets/`, `docs/`,
+    /// `scripts/`, `tools/` or `.claude/`; a token containing `*`, `<` or `{`
+    /// is a pattern and is skipped.
     #[test]
     fn agent_docs_name_only_existing_paths_and_commands() {
         let root = repo_root();

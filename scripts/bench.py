@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 RUNS = 3
+BENCH_TIMEOUT_S = 1800
 THRESHOLD = 0.08
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -98,6 +99,8 @@ def bench_crates():
                 if line.startswith("name = "):
                     out.append((line.split('"')[1], manifest.parent))
                     break
+    if not out:
+        sys.exit("no crate has a benches/ directory: the gate would measure nothing")
     return out
 
 
@@ -107,7 +110,7 @@ def run_once(package, flt):
     cmd = ["cargo", "bench", "-q", "-p", package, "--benches", "--"]
     if flt:
         cmd.append(flt)
-    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=BENCH_TIMEOUT_S)
     if proc.returncode != 0:
         sys.stdout.write(proc.stdout[-3000:] + proc.stderr[-3000:])
         sys.exit(proc.returncode)
@@ -150,6 +153,12 @@ def report(samples, whole=False):
     for pkg, (path, benches) in samples.items():
         base = load_baseline(path)
         if whole:
+            if not base:
+                failures += 1
+                print(f"FAIL {pkg}: benches/ has no baselines.json (just bench-save)")
+            if not benches:
+                failures += 1
+                print(f"FAIL {pkg}: no bench produced a result")
             for missing in sorted(set(base) - set(benches)):
                 failures += 1
                 print(f"FAIL {pkg}/{missing}: in baselines.json but not measured (renamed, deleted or wrong target dir)")
@@ -168,7 +177,9 @@ def report(samples, whole=False):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "run"
-    pin_to_performance_cores()
+    mask = pin_to_performance_cores()
+    print(f"benches pinned to logical processors {mask:#x}" if mask else
+          "benches NOT pinned (no hybrid-core information): numbers may mix core types and fail spuriously")
     flt = sys.argv[2] if len(sys.argv) > 2 else ""
     if mode == "run":
         report(measure(1, flt))
@@ -183,6 +194,15 @@ def main():
     elif mode == "save":
         for pkg, (path, benches) in measure(RUNS, flt).items():
             base = load_baseline(path)
+            for bench, runs in sorted(benches.items()):
+                new = round(statistics.median(runs))
+                old = base.get(bench)
+                if old is None:
+                    print(f"new  {pkg}/{bench}: {fmt(new)}")
+                else:
+                    delta = new / old - 1.0
+                    flag = "  <-- WORSE than the old baseline: is the machine busy?" if delta > THRESHOLD else ""
+                    print(f"{'save' if abs(delta) < 1e-9 else 'MOVE'} {pkg}/{bench}: {fmt(old)} -> {fmt(new)} ({delta:+.1%}){flag}")
             base.update({bench: round(statistics.median(runs)) for bench, runs in benches.items()})
             file = path / "benches" / "baselines.json"
             file.write_text(json.dumps(base, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")

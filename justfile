@@ -7,7 +7,7 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-NonInteractive", "-Command"
 
 filter := "python -I scripts/filter.py --"
 
-# `crate` is accepted for forward compatibility; the repo is one crate until Phase 3.
+# `crate` is accepted for forward compatibility and ignored: every recipe runs workspace-wide.
 check crate="":
     {{filter}} cargo check -q --all-targets --message-format=short
 

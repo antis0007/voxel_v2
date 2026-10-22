@@ -1,6 +1,6 @@
 # Testing
 
-One command gates everything: `just verify` (check, clippy, tests, LOC report).
+One command gates everything: `just verify` (check, clippy, tests, the perf gate, LOC report).
 
 ## Unit tests
 
@@ -63,7 +63,7 @@ and wait for chunk generation after each tick (`WorldSimulation::settle`), so
 the same file always does the same work and ends with the same `hash` (resident
 chunk blocks, player pose, factory nodes, inventory). Terrain and loot use
 positional hashes seeded from the world seed; there is no global RNG and no
-`rand` crate.
+`rand` in game code (proptest, a dev-dependency, pulls it into test builds only).
 
 Known gap: nothing is meshed headlessly, so water that only the mesher would
 have seeded in generated terrain stays asleep until an edit wakes it.
