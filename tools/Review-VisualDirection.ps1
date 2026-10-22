@@ -11,7 +11,11 @@ param(
     [switch]$Resize,
     [switch]$HideHud,
     [switch]$LiveClock,
-    [string]$Executable = 'target/release-fast/minecraft_style_voxel_prototype.exe'
+    [string]$Executable = 'target/release-fast/minecraft_style_voxel_prototype.exe',
+    # 6 keeps old evidence comparable; draw-cost measurements use the game default, 28.
+    [ValidateRange(4,64)] [int]$ViewChunks = 6,
+    # Extra renderer flags for A/B runs, e.g. -ExtraArgs '--benchmark-no-multidraw'.
+    [string[]]$ExtraArgs = @()
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -20,8 +24,14 @@ $exe = (Resolve-Path -LiteralPath $Executable).Path
 # A capture taken while cargo/rustc run is a timing baseline polluted by the build.
 $busy = Get-Process -Name cargo, rustc -ErrorAction SilentlyContinue
 if ($busy) { throw "Build activity running ($($busy.Name -join ', ')); wait for it to finish, then capture." }
-# A stale exe silently measures old code. Compare against the newest Rust/WGSL source.
-$newestSource = Get-ChildItem -LiteralPath (Join-Path $repo 'src') -Recurse -Include *.rs,*.wgsl |
+# A stale exe silently measures old code. Cargo's dep-info lists exactly the files the exe
+# was built from (cfg(test) modules and unused crates excluded, include_bytes assets included).
+$depInfo = [IO.Path]::ChangeExtension($exe, '.d')
+if (-not (Test-Path -LiteralPath $depInfo)) { throw "No dep-info at $depInfo; rebuild with: cargo build --profile release-fast" }
+$depText = (Get-Content -Raw -LiteralPath $depInfo) -replace '\\ ', [char]0
+$depList = $depText.Substring($depText.IndexOf(': ') + 2) -split '\s+' |
+    Where-Object { $_ } | ForEach-Object { $_ -replace [char]0, ' ' }
+$newestSource = $depList | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Get-Item |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ((Get-Item -LiteralPath $exe).LastWriteTime -lt $newestSource.LastWriteTime) {
     throw "Executable is older than $($newestSource.FullName); rebuild with: cargo build --profile release-fast"
@@ -31,20 +41,25 @@ if ($DebugView) { $root += "-$DebugView" }
 if (Test-Path -LiteralPath $root) { throw "Preserve existing evidence: choose a new Label ($root)." }
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 # Record which code produced the evidence. The tree is usually dirty, so hash the diff too.
-$gitHead = (git rev-parse HEAD).Trim()
-$gitStatus = (git status --porcelain) -join "`n"
-$gitDiff = (git diff HEAD) -join "`n"
+# Windows PowerShell 5 turns native stderr (git's CRLF warnings) into terminating errors
+# under 'Stop' when the caller redirects stderr, so git runs under 'Continue'.
+$ErrorActionPreference = 'Continue'
+$gitHead = (git rev-parse HEAD 2>$null).Trim()
+$gitStatus = (git status --porcelain 2>$null) -join "`n"
+$gitDiff = (git -c core.safecrlf=false diff HEAD 2>$null) -join "`n"
+$ErrorActionPreference = 'Stop'
 $stateBytes = [Text.Encoding]::UTF8.GetBytes("$gitStatus`n---`n$gitDiff")
 $stateHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($stateBytes)).Replace('-', '')
 $argsList = @("--benchmark-world=$World",'--benchmark-seed=2738958700',
     '--benchmark-weather=partly','--benchmark-review-time=0.5',
-    '--benchmark-view-chunks=6','--benchmark-cloud-divisor=3',"--benchmark-width=$Width","--benchmark-height=$Height",
+    "--benchmark-view-chunks=$ViewChunks",'--benchmark-cloud-divisor=3',"--benchmark-width=$Width","--benchmark-height=$Height",
     '--benchmark-warmup=8',"--benchmark-duration=$Seconds",'--benchmark-capture-frames')
 if (-not $HideHud) { $argsList += '--benchmark-capture-hud' }
 if (-not $LiveClock) { $argsList += '--benchmark-sky-time=12' }
 $interval = (1.0 / $CaptureHz).ToString('0.####', [Globalization.CultureInfo]::InvariantCulture)
 $argsList += "--benchmark-capture-interval=$interval"
 if ($Resize) { $argsList += '--benchmark-resize-review' }
+$argsList += $ExtraArgs
 $camera = '0,0,5,0,0.16'
 switch ($Case) {
     'clouds' { $camera = '0,0,8,0,0.28' }
@@ -91,7 +106,10 @@ try {
         throw "Renderer did not complete its measurement; inspect $root"
     }
     Write-Output "Evidence: $root"
-    Select-String -LiteralPath (Join-Path $root 'stdout.log') -Pattern '\[benchmark\]' | ForEach-Object { $_.Line }
+    # Summarize-RendererReview.ps1 reads these lines from summary.txt.
+    $summary = @(Select-String -LiteralPath (Join-Path $root 'stdout.log') -Pattern '\[benchmark\]' | ForEach-Object { $_.Line })
+    $summary | Set-Content -LiteralPath (Join-Path $root 'summary.txt') -Encoding utf8
+    $summary
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name]) }
 }
