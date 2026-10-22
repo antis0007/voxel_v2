@@ -16,7 +16,7 @@ use winit::{
 mod audio;
 mod creative;
 mod egui_ui;
-mod fast_hash;
+use engine_core::fast_hash;
 mod fluid;
 mod headless;
 mod material;

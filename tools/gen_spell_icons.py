@@ -1,4 +1,4 @@
-"""Generates src/egui_ui/icons_spells.rs and a preview sheet for the spell icons.
+"""Generates crates/app/src/egui_ui/icons_spells.rs and a preview sheet for the spell icons.
 Half-art entries are mirrored left-to-right. '.' is empty. Glyphs use the shared
 six-role palette from assets/pixel_palette.txt: 1 shade, 2 body, 3 outline,
 4 highlight, 5 gold, 6 orange/brown. Runtime painting and this preview apply the
@@ -158,5 +158,5 @@ def sheet(path):
 
 if __name__ == "__main__":
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    open(os.path.join(root, "src/egui_ui/icons_spells.rs"), "w", newline="\n").write(rust())
+    open(os.path.join(root, "crates/app/src/egui_ui/icons_spells.rs"), "w", newline="\n").write(rust())
     if len(sys.argv) > 1: sheet(sys.argv[1])

@@ -33,7 +33,7 @@ run scenario="assets/scenarios/smoke.ron":
 
 # Lines of code now, and the net change against main.
 loc:
-    tokei src --sort code
+    tokei crates --sort code
     git diff --shortstat main ./crates
 
 # The single pre-commit gate: check, clippy, tests, then the LOC report.

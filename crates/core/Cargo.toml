@@ -1,0 +1,13 @@
+# Leaf crate: hashing, voxel scale, coordinate math and simulation time
+# budgets. Depends on nothing in the workspace.
+[package]
+name = "engine_core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = "0.32.0"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -59,7 +59,7 @@ pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
     dungeon::cosmos_at(cfg, p)
 }
 
-pub const CHUNK_SIZE: i32 = 32;
+pub use engine_core::{CHUNK_SIZE, chunk_coord_from_world_block, floor_div};
 /// New-world generator and maximum readable version. Keep historical version
 /// gates literal: bumping this must never change how an older save generates.
 pub const CURRENT_GENERATOR_VERSION: u32 = 30;
@@ -3211,23 +3211,6 @@ pub fn propagate_light(world: &mut World, start_pos: IVec3, light_level: u8) {
     }
 }
 
-
-pub fn floor_div(a: i32, b: i32) -> i32 {
-    let mut q = a / b;
-    let r = a % b;
-    if r != 0 && ((r > 0) != (b > 0)) {
-        q -= 1;
-    }
-    q
-}
-
-pub fn chunk_coord_from_world_block(p: IVec3) -> IVec3 {
-    IVec3::new(
-        floor_div(p.x, CHUNK_SIZE),
-        floor_div(p.y, CHUNK_SIZE),
-        floor_div(p.z, CHUNK_SIZE),
-    )
-}
 
 pub fn mark_chunk_and_neighbors_dirty(dirty: &mut HashSet<IVec3>, block: IVec3) {
     let center = chunk_coord_from_world_block(block);
