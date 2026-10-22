@@ -69,7 +69,7 @@ impl SolidPlan {
             }
         }
         let compact_torches = torches > 1024;
-        let torch_vertices = if compact_torches { 48 } else { 320 };
+        let torch_vertices = if compact_torches { 48 } else { 344 };
         let mut plan = Self {
             patches: Vec::new(),
             vertices: torches * torch_vertices + water_faces * 4,

@@ -1,7 +1,7 @@
 # Torch lighting and distance detail
 
 - Torches use a wooden shaft, two metal collars, wrapped grips, wall plates and brackets, an emissive ember head, and an animated split flame. Ember/flame emission is explicit rather than inferred from block coordinates, including wall mounts.
-- LOD preserves the six-sided split flame silhouette at every level and omits small fittings at levels 2–3. The full-detail allocation bound remains 320 vertices / 480 indices per torch.
+- LOD preserves the six-sided split flame silhouette at every level and omits small fittings at levels 2–3. The full-detail allocation bound is 344 vertices / 516 indices per torch, which includes three crossed-quad embers that rise from the flame.
 - Up to 64 indexed torch sources illuminate terrain. Selection covers 64–192 metres according to terrain range; smooth fades at the range and light-budget boundaries prevent hard source swaps. The physical influence radius remains 13.5 metres.
 - Light attenuation uses a softened inverse-square response with a smooth finite cutoff. Reduced back-facing fill improves directional contrast; these lights still do not cast occlusion shadows.
 - Moonlight intensity is doubled. Clear-night fog starts at 75 metres and ends at 320 metres, with the existing weather attenuation; daytime endpoints are preserved. Night ground bounce is cool and dim instead of brown.

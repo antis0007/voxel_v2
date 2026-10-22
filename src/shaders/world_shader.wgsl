@@ -191,7 +191,9 @@ fn vs_main(in: VsIn) -> VsOut {
     let scale     = max(cam.world_params.x, 1e-6);
     let geometry_kind=f32(u32(round(max(in.surface.z,0.0)))%64u);
     var model_pos = in.pos;
-    if in.surface.w < -1.5 {
+    // Embers carry surface.w = -4; flame sway must not move them.
+    let is_spark = in.surface.w < -3.5 && in.surface.w > -4.5;
+    if in.surface.w < -1.5 && !is_spark {
         // The base stays on its mount and the tip moves most. The wave travels
         // up the flame (the tip lags the base) so it licks rather than wobbling
         // as one block. The phase is continuous in position: the old floor()
@@ -208,6 +210,32 @@ fn vs_main(in: VsIn) -> VsOut {
             + 0.008 * flutter) * sway / scale;
         // The flame shortens a little on each flick.
         model_pos.y -= 0.012 * sway * (0.5 + 0.5 * wave) / scale;
+    }
+    if is_spark {
+        // An ember is a crossed pair of quads. Its corner comes from ao_strength
+        // ((quad * 4 + corner + 1) / 8) and its seed from surface.x. It rises
+        // over its life, drifts, and grows then shrinks to nothing at both ends,
+        // so each spark fades by shrinking its own geometry, never by a grid test.
+        let corner_id = round(in.ao_strength * 8.0) - 1.0;
+        let quad_kind = select(0.0, 1.0, corner_id >= 4.0);
+        let corner = corner_id - quad_kind * 4.0;
+        let cx = select(-1.0, 1.0, corner == 1.0 || corner == 2.0);
+        let cy = select(-1.0, 1.0, corner >= 2.0);
+        let half = 0.008 / scale;
+        let rest = select(
+            vec3<f32>(cx * half, cy * half, 0.0),
+            vec3<f32>(0.0, cy * half, cx * half),
+            quad_kind > 0.5,
+        );
+        let seed = in.surface.x;
+        let flame_time = light.torch_meta.y;
+        let life = fract(flame_time * (0.35 + 0.25 * seed) + seed * 3.0);
+        let grow = smoothstep(0.0, 0.2, life) * (1.0 - smoothstep(0.55, 1.0, life));
+        let drift = vec3<f32>(sin(flame_time * 1.7 + seed * 17.0), 0.0, cos(flame_time * 1.3 + seed * 11.0))
+            * (0.02 * life);
+        // Spawned near the tip, so the rise carries the ember out of the flame.
+        let rise = vec3<f32>(0.0, 0.24 * life, 0.0);
+        model_pos = in.pos + (drift + rise) / scale + rest * (grow - 1.0);
     }
     out.water_optics = vec2<f32>(10.0, 1.0);
     if geometry_kind == 8.0 && in.surface.w >= 8.0 && in.ao_strength >= 0.0 {

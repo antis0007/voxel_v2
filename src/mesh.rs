@@ -1290,6 +1290,54 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                         }
                     }
                 }
+                // Two embers lift off the flame tip. Each is a pair of crossed
+                // quads that the shader animates. ao_strength carries the corner
+                // id ((quad * 4 + corner + 1) / 8) and surface[0] the spark seed;
+                // surface[3] = -4 marks a spark, so it is not swayed as flame.
+                let spark_hash = |spark: usize, k: f32| {
+                    ((spark as f32 * 19.19 + k * 7.31 + base.x * 12.9898 + base.z * 78.233).sin()
+                        * 43758.5453)
+                        .fract()
+                        .abs()
+                };
+                let mut spark_surface = surface;
+                spark_surface.detail_strength = -4.0;
+                for spark in 0..3 {
+                    let center = flame_center
+                        + Vec3::new(
+                            (spark_hash(spark, 1.0) - 0.5) * 0.05,
+                            // Spawn near the tip (flame top is about 0.27 m) and rise out.
+                            0.20 + spark_hash(spark, 4.0) * 0.04,
+                            (spark_hash(spark, 2.0) - 0.5) * 0.05,
+                        );
+                    let seed = spark_hash(spark, 3.0);
+                    let half = 0.008;
+                    let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+                    for quad_kind in 0..2usize {
+                        let quad = corners.map(|(cx, cy)| {
+                            let offset = if quad_kind == 0 {
+                                Vec3::new(cx * half, cy * half, 0.0)
+                            } else {
+                                Vec3::new(0.0, cy * half, cx * half)
+                            };
+                            (center + offset).to_array()
+                        });
+                        let quad_first = mesh.vertices.len();
+                        push_face(
+                            &mut mesh.vertices,
+                            &mut mesh.indices,
+                            quad,
+                            [1.0, 0.85, 0.45],
+                            normal_from_quad(quad),
+                            spark_surface,
+                            [1.0; 4],
+                        );
+                        for (corner, vertex) in mesh.vertices[quad_first..].iter_mut().enumerate() {
+                            vertex.ao_strength = (quad_kind * 4 + corner + 1) as f32 / 8.0;
+                            vertex.surface[0] = seed;
+                        }
+                    }
+                }
                 scale_torch_vertices(mesh, first_vertex, base, block, chunk_data.voxel_meters);
             }
         }
