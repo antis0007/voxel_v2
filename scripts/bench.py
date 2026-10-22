@@ -15,6 +15,7 @@ passes over every bench, so A/B noise is interleaved rather than batched
 (docs/adr/0006-benches-and-perf-gate.md).
 """
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -24,7 +25,22 @@ from pathlib import Path
 RUNS = 3
 THRESHOLD = 0.08
 ROOT = Path(__file__).resolve().parent.parent
-CRITERION = ROOT / "target" / "criterion"
+
+
+def criterion_dir():
+    """Where criterion writes: CRITERION_HOME, else <cargo target directory>/criterion.
+
+    Asked of cargo (not assumed to be ./target) because CARGO_TARGET_DIR and
+    .cargo/config.toml both move it, and a gate that reads the wrong directory
+    sees no benches and passes.
+    """
+    if os.environ.get("CRITERION_HOME"):
+        return Path(os.environ["CRITERION_HOME"])
+    meta = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if meta.returncode != 0:
+        sys.exit("cargo metadata failed: " + meta.stderr[-2000:])
+    return Path(json.loads(meta.stdout)["target_directory"]) / "criterion"
 
 
 def bench_crates():
@@ -50,7 +66,7 @@ def run_once(package, flt):
         sys.stdout.write(proc.stdout[-3000:] + proc.stderr[-3000:])
         sys.exit(proc.returncode)
     results = {}
-    for meta in CRITERION.glob("**/new/benchmark.json"):
+    for meta in criterion_dir().glob("**/new/benchmark.json"):
         if meta.stat().st_mtime < started:
             continue
         estimates = json.loads((meta.parent / "estimates.json").read_text(encoding="utf-8"))
@@ -77,11 +93,20 @@ def fmt(ns):
     return f"{ns / 1e6:9.3f} ms" if ns >= 1e5 else f"{ns / 1e3:9.3f} us"
 
 
-def report(samples):
-    """Print one line per bench; return the number of gate failures."""
+def report(samples, whole=False):
+    """Print one line per bench; return the number of gate failures.
+
+    With `whole` (the gate, not a filtered run) a baseline that produced no
+    measurement fails too, so a renamed, deleted or unmeasured bench cannot
+    drop out of the gate silently.
+    """
     failures = 0
     for pkg, (path, benches) in samples.items():
         base = load_baseline(path)
+        if whole:
+            for missing in sorted(set(base) - set(benches)):
+                failures += 1
+                print(f"FAIL {pkg}/{missing}: in baselines.json but not measured (renamed, deleted or wrong target dir)")
         for bench, runs in sorted(benches.items()):
             now = statistics.median(runs)
             if bench not in base:
@@ -101,11 +126,11 @@ def main():
     if mode == "run":
         report(measure(1, flt))
     elif mode == "check":
-        failures = report(measure(RUNS, ""))
+        failures = report(measure(RUNS, ""), whole=True)
         if failures:
             # Peer builds on a shared workstation skew whole passes; a real regression fails twice.
             print("over threshold; measuring once more before failing")
-            failures = report(measure(RUNS, ""))
+            failures = report(measure(RUNS, ""), whole=True)
         print(f"bench gate: {failures} failure(s), median of {RUNS} runs, threshold +{THRESHOLD:.0%}")
         sys.exit(1 if failures else 0)
     elif mode == "save":

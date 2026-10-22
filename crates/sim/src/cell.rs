@@ -72,7 +72,9 @@ pub fn split_voxel(voxel: IVec3) -> (IVec3, IVec3) {
 
 /// Brick index (x + 4(z + 4y)) and cell index (x + 8(z + 8y)) of a chunk-local cell.
 pub fn brick_and_cell(local: IVec3) -> (u8, usize) {
-    debug_assert!(local.cmpge(IVec3::ZERO).all() && local.cmplt(IVec3::splat(CHUNK_SIZE)).all());
+    // A real assert: out of range would otherwise alias another cell silently in release.
+    // One compare: a negative axis sets the top bit, and any axis >= 32 sets a bit above bit 4.
+    assert!(((local.x | local.y | local.z) as u32) < CHUNK_SIZE as u32, "local cell {local} outside the chunk");
     let b = local / BRICK_SIZE;
     let c = local % BRICK_SIZE;
     (

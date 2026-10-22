@@ -95,14 +95,15 @@ fn deci_kelvin(kelvin: Option<f32>) -> u16 {
     kelvin.map_or(0, |k| (k * 10.0).round() as u16)
 }
 
-/// Whole decades of conductivity above 1e-6 S/m, by repeated multiplication.
-fn electric_decades(siemens_per_metre: f32) -> u8 {
-    let (mut level, mut threshold) = (0u8, 1e-6_f32);
-    while siemens_per_metre >= threshold && level < 15 {
-        level += 1;
-        threshold *= 10.0;
-    }
-    level
+/// Conductivity in S/m at which each electrical level starts: level n is
+/// reached at `DECADES[n - 1]`. Literals, not repeated multiplication, so an
+/// authored 1e-3 or 1e6 lands exactly on its decade.
+const DECADES: [f32; 15] =
+    [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8];
+
+/// Whole decades of conductivity above 1e-6 S/m: 0 below it, 15 at 1e8 and above.
+pub(crate) fn electric_decades(siemens_per_metre: f32) -> u8 {
+    DECADES.iter().take_while(|&&t| siemens_per_metre >= t).count() as u8
 }
 
 fn movement_class(def: &MaterialDef) -> MovementClass {

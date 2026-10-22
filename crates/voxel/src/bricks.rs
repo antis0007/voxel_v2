@@ -13,7 +13,10 @@ use glam::IVec3;
 fn cell_of(block: BlockId, water_volume: Option<u8>) -> Cell {
     match block {
         BlockId::Air => Cell::EMPTY,
-        BlockId::Water => Cell { volume: water_volume.unwrap_or(VOLUME_FULL), ..Cell::filled(MaterialId::from(block).0) },
+        BlockId::Water => match water_volume.unwrap_or(VOLUME_FULL).min(VOLUME_FULL) {
+            0 => Cell::EMPTY,
+            volume => Cell { volume, ..Cell::filled(MaterialId::from(block).0) },
+        },
         _ => Cell::filled(MaterialId::from(block).0),
     }
 }
@@ -126,6 +129,31 @@ mod tests {
         load_chunk(&mut store, IVec3::ZERO, &chunk, |_| None).unwrap();
         assert_eq!(store.bricks_in_use(), 1);
         assert_eq!(store.active_bricks(), 1);
+    }
+
+    /// A water-map volume outside 1..=8 is normalised: 0 is air (the water map's own rule) and
+    /// anything above full is full. Neither may leave a stored brick that reads back differently.
+    #[test]
+    fn out_of_range_water_volumes_are_normalised() {
+        let mut chunk = empty_chunk();
+        let (zero, over, ok) = (IVec3::new(1, 1, 1), IVec3::new(2, 1, 1), IVec3::new(3, 1, 1));
+        for p in [zero, over, ok] {
+            chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)] = BlockId::Water;
+        }
+        let volume = |p: IVec3| Some(if p == zero { 0 } else if p == over { 200 } else { 5 });
+        let mut store = BrickStore::new(64);
+        load_chunk(&mut store, IVec3::ZERO, &chunk, volume).unwrap();
+        let mut back = empty_chunk();
+        let partial = read_chunk(&store, IVec3::ZERO, &mut back);
+        assert_eq!(back.blocks[ChunkData::local_index(1, 1, 1)], BlockId::Air, "volume 0 is air");
+        assert_eq!(back.blocks[ChunkData::local_index(2, 1, 1)], BlockId::Water, "over-full is full water");
+        assert_eq!(partial, [(ok, 5)], "only the genuinely partial cell is reported");
+        // A chunk whose only water has volume 0 stores nothing at all.
+        let mut only_zero = empty_chunk();
+        only_zero.blocks[ChunkData::local_index(1, 1, 1)] = BlockId::Water;
+        let mut store = BrickStore::new(64);
+        load_chunk(&mut store, IVec3::ZERO, &only_zero, |_| Some(0)).unwrap();
+        assert_eq!(store.bricks_in_use(), 0);
     }
 
     #[test]

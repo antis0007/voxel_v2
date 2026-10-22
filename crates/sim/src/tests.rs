@@ -165,3 +165,15 @@ fn dirty_bricks_come_out_in_a_fixed_order() {
     assert_eq!(order.len(), 6);
     assert!(store.dirty_bricks().iter().all(|b| b.scale == Scale::FINEST));
 }
+
+#[test]
+#[should_panic(expected = "outside the chunk")]
+fn a_local_cell_past_the_chunk_edge_panics_instead_of_aliasing() {
+    let _ = BrickStore::new(1).get(IVec3::ZERO, IVec3::new(32, 0, 0));
+}
+
+#[test]
+#[should_panic(expected = "outside the chunk")]
+fn a_negative_local_cell_panics_instead_of_aliasing() {
+    let _ = BrickStore::new(1).get(IVec3::ZERO, IVec3::new(-1, 0, 1));
+}

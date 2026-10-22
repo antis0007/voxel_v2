@@ -11,7 +11,8 @@ Date: 2026-10-22. Status: accepted.
 **Gate.** `just bench-check` runs in `just verify`:
 - It takes 3 whole passes over every bench, interleaved rather than batched, and uses the median per bench.
 - It fails above +8% or on a bench with no baseline.
-- A failing pass is measured once more and only a second failure fails the gate: `brick_set_32k_cells` read +16% to +118% while peer sessions compiled and +0.9% on a quiet machine. A real regression fails both passes.
+- A failing pass is measured once more and only a second failure fails the gate: `brick_set_32k_cells` read +16% to +118% while peer sessions compiled and +0.9% on a quiet machine. A real regression fails both passes. Tradeoff: with a few percent of noise a true +9% to +12% regression can pass on the second pass, so the effective threshold sits somewhat above +8%.
+- The gate asks cargo where criterion writes (`cargo metadata`, or `CRITERION_HOME`), and a baseline that produced no measurement fails it, so a renamed bench or a moved target directory cannot make it pass blind.
 - These settings hold until a quiet baseline machine exists. On this workstation, warm runs of `terrain_generate_8_chunks` agreed within ≈1.5% (88.5, 89.2, 89.7 ms), and a 15% injected regression failed the gate.
 - The ignored wall-clock ratio test it replaces read anywhere from 1.07× to 1.98× on the same binary.
 
@@ -28,4 +29,8 @@ Date: 2026-10-22. Status: accepted.
 - wall time;
 - the last bench results against their baselines.
 
-Dependencies added: `criterion` (dev, `engine_worldgen`; default features off, so no plotters or rayon). The new crate `engine_gpu` depends on `wgpu` and `pollster`, which were already in the tree.
+Dependencies added (CLAUDE.md: each needs a line here):
+- `criterion` (dev; `engine_worldgen` and `engine_sim`; default features off, so no plotters or rayon). Removes the hand-rolled timing of the deleted ratio test.
+- `proptest` (dev; `engine_sim`, `engine_voxel`; default features off). It replaces hand-picked cases for the brick, coordinate and chunk round-trip tests. It pulls `rand` and its helpers into `Cargo.lock` for test builds only; no game code uses `rand`, and the simulation keeps positional hashing (ADR 0008).
+- `bytemuck` (`engine_sim`; already used by the app). One safe `cast_slice` over the brick pool for the GPU upload.
+- Workspace edges, no new crates: `engine_content` -> `engine_core` (packed material rows), `engine_voxel` -> `engine_sim` (chunk conversion), the new `engine_gpu` -> `wgpu` and `pollster`.

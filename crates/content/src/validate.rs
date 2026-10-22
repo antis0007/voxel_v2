@@ -6,6 +6,8 @@
 use super::{BlockId, MaterialDef, MatterState};
 
 const FILE: &str = "assets/materials.ron";
+/// Smallest threshold that still packs to a non-zero tenth of a kelvin (0 means "none").
+const KELVIN_MIN: f32 = 0.05;
 const KELVIN_MAX: f32 = 6553.5;
 
 /// 1-based line of `field:` inside the row whose `id:` is `block`; the row's
@@ -37,6 +39,7 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
         for (field, value) in [
             ("density", p.density),
             ("pressure_response", p.fluid.pressure_response),
+            ("viscosity", p.fluid.viscosity),
             ("cohesion", s.cohesion),
             ("conductivity", t.conductivity),
             ("capacity", t.capacity),
@@ -56,14 +59,21 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
         if t.conductivity > 655.35 {
             fail("conductivity", format!("conductivity {} W/(m K) does not fit 0.01 steps in 16 bits", t.conductivity));
         }
-        if t.capacity > 65535.0 || t.fuel > 65535.0 {
-            fail("capacity", "capacity and fuel must fit 16 bits".to_string());
+        if t.capacity > 65535.0 {
+            fail("capacity", format!("capacity {} J/(kg K) does not fit 16 bits", t.capacity));
+        }
+        if t.fuel > 65535.0 {
+            fail("fuel", format!("fuel {} does not fit 16 bits", t.fuel));
+        }
+        if t.fuel > 0.0 && t.fuel < 0.5 {
+            fail("fuel", format!("fuel {} rounds to 0, which means \"does not burn\"", t.fuel));
         }
         if p.fluid.pressure_response > 2.55 {
             fail("pressure_response", format!("pressure_response {} does not fit 0.01 steps in 8 bits", p.fluid.pressure_response));
         }
-        if p.matter_state == MatterState::Liquid && p.fluid.viscosity <= 0.0 {
-            fail("viscosity", "a liquid needs viscosity > 0".to_string());
+        // flow = 255 / viscosity, so above 255 a liquid would never spread.
+        if p.matter_state == MatterState::Liquid && !(p.fluid.viscosity > 0.0 && p.fluid.viscosity <= 255.0) {
+            fail("viscosity", "a liquid needs viscosity in (0, 255]".to_string());
         }
         // (threshold field, its value, the product it needs)
         let pairs = [
@@ -73,9 +83,9 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
         ];
         for (field, kelvin, into, into_field) in pairs {
             if let Some(k) = kelvin
-                && !(k > 0.0 && k <= KELVIN_MAX)
+                && !(KELVIN_MIN..=KELVIN_MAX).contains(&k)
             {
-                fail(field, format!("{field} {k} K must be in (0, {KELVIN_MAX}]"));
+                fail(field, format!("{field} {k} K must be in [{KELVIN_MIN}, {KELVIN_MAX}]"));
             }
             match (kelvin.is_some(), into.is_some()) {
                 (true, false) => fail(field, format!("{field} is set but {into_field} is not")),
@@ -94,9 +104,9 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
             (false, _, _) => fail("ignite", "ignite and burns_into are only valid with fuel > 0".to_string()),
         }
         if let Some(k) = t.ignite
-            && !(k > 0.0 && k <= KELVIN_MAX)
+            && !(KELVIN_MIN..=KELVIN_MAX).contains(&k)
         {
-            fail("ignite", format!("ignite {k} K must be in (0, {KELVIN_MAX}]"));
+            fail("ignite", format!("ignite {k} K must be in [{KELVIN_MIN}, {KELVIN_MAX}]"));
         }
     }
     errors
@@ -139,7 +149,7 @@ mod tests {
         let (rows, text) = broken("Water", "viscosity", "0.0");
         let errors = validate(&rows, text);
         let line = line_number(text, "Water", "viscosity");
-        assert_eq!(errors, [format!("assets/materials.ron:{line}: Water: a liquid needs viscosity > 0")]);
+        assert_eq!(errors, [format!("assets/materials.ron:{line}: Water: a liquid needs viscosity in (0, 255]")]);
     }
 
     #[test]
@@ -165,6 +175,34 @@ mod tests {
         let errors = validate(&rows, text);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("Log: a fuel needs both ignite and burns_into"), "{errors:?}");
+    }
+
+    /// Values that parse and are in range but would pack to something that means
+    /// the opposite: flow 0, "no threshold", "does not burn".
+    #[test]
+    fn values_that_would_pack_to_nonsense_are_rejected() {
+        let cases = [
+            ("Water", "viscosity", "300.0", "a liquid needs viscosity in (0, 255]"),
+            ("Water", "boil", "Some(0.01)", "boil 0.01 K must be in [0.05, 6553.5]"),
+            ("Log", "fuel", "0.2", "fuel 0.2 rounds to 0"),
+            ("Log", "fuel", "70000.0", "fuel 70000 does not fit 16 bits"),
+            ("Steam", "viscosity", "-1.0", "viscosity must be a finite number >= 0"),
+        ];
+        for (block, field, value, expect) in cases {
+            let (rows, text) = broken(block, field, value);
+            let errors = validate(&rows, text);
+            let line = line_number(text, block, field);
+            assert!(
+                errors.iter().any(|e| e.contains(expect) && e.contains(&format!("materials.ron:{line}:"))),
+                "{block}.{field} = {value}: want '{expect}' at line {line}, got {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn electrical_decades_land_exactly_on_authored_powers_of_ten() {
+        use crate::sim_traits::electric_decades as decades;
+        assert_eq!([decades(0.0), decades(9.9e-7), decades(1e-6), decades(1e-3), decades(1e6), decades(5.96e7), decades(1e8)], [0, 0, 1, 4, 13, 14, 15]);
     }
 
     #[test]

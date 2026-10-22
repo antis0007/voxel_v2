@@ -64,6 +64,10 @@ impl BrickStore {
 
     pub fn get(&self, chunk: IVec3, local: IVec3) -> Cell {
         let (brick, cell) = brick_and_cell(local);
+        self.read(chunk, brick, cell)
+    }
+
+    fn read(&self, chunk: IVec3, brick: u8, cell: usize) -> Cell {
         match self.chunks.get(&chunk).map(|e| e.slots[brick as usize]) {
             Some(slot) if slot != NO_SLOT => self.pool[slot as usize * BRICK_CELLS + cell],
             _ => Cell::EMPTY,
@@ -73,10 +77,10 @@ impl BrickStore {
     /// Write one cell. A value equal to the current one changes nothing and
     /// wakes nothing; writing `EMPTY` into an absent brick allocates nothing.
     pub fn set(&mut self, chunk: IVec3, local: IVec3, value: Cell) -> Result<(), PoolFull> {
-        if self.get(chunk, local) == value {
+        let (brick, cell) = brick_and_cell(local);
+        if self.read(chunk, brick, cell) == value {
             return Ok(());
         }
-        let (brick, cell) = brick_and_cell(local);
         let slot = self.ensure_brick(chunk, brick)?;
         self.pool[slot as usize * BRICK_CELLS + cell] = value;
         self.entry_mut(chunk).dirty |= 1 << brick;

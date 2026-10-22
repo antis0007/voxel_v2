@@ -191,7 +191,7 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - Not done: neighbour wake across brick faces (A3, with the kernel that needs it); `Scale` is stored but only `FINEST` is produced; the mirror lag (A6).
 - 403 tests pass; scenario hashes unchanged (nothing in the game reads bricks yet).
 
-**A3. CPU reference kernels.** These are what agents debug against.
+**A3. CPU reference kernels.** (Requirement carried from the A2 review: a cell change on a brick face must wake the neighbouring brick or chunk that reads across it, because a clear dirty bit means "not dispatched at all". A3 tests a boundary change next to an idle brick.) These are what agents debug against.
 - Margolus 2×2×2 block update with an offset alternating per tick, so each block is updated by one thread and mass conservation is a per-block invariant.
 - Movement rules derived from properties: density orders swaps; viscosity becomes a hash-threshold flow chance; state picks the class (powder, liquid, gas).
 - Integer heat diffusion on a ping-pong temperature field.
