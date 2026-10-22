@@ -3,13 +3,13 @@
 //! comes from the tether's projected length sweeping across the sky, drawn as
 //! a coverage line so it stays continuous instead of dotted.
 use super::{Model, Quat, Vec3, architecture::{part, strut}, megastructures::long_range_since, tether};
-use crate::world::{World, DayNightCycle, orbital::{megastructures::PLANET_RADIUS_M, skyhook::{self, Size}}};
+use crate::world::{World, DayNightCycle, orbital::{megastructures::{PENUMBRA_M, PLANET_RADIUS_M}, skyhook::{self, Size}}};
 
 const BRAID: [f32; 3] = [0.58, 0.55, 0.47];
 const METAL: [f32; 3] = [0.22, 0.29, 0.32];
 const SHELL: [f32; 3] = [0.67, 0.69, 0.65];
-/// Half-width of the dwell window around a port cusp, seconds on the orbital clock.
-const DWELL_S: f32 = 45.0;
+/// Half-width of the dwell window around a port cusp, as a fraction of a tether turn.
+const DWELL_TURNS: f32 = 0.08;
 
 fn braid_width(size: Size) -> f32 {
     match size { Size::Courier => 2.0, Size::Talon => 8.0, Size::Ark => 30.0 }
@@ -25,7 +25,7 @@ fn sunlight(p: Vec3, centre: Vec3, sun: Vec3) -> f32 {
     let r = p - centre;
     let behind = r.dot(sun);
     if behind >= 0.0 { return 1.0; }
-    (((r - sun * behind).length() - PLANET_RADIUS_M as f32) / 12_000.0 + 0.5).clamp(0.0, 1.0)
+    (((r - sun * behind).length() - PLANET_RADIUS_M as f32) / PENUMBRA_M as f32 + 0.5).clamp(0.0, 1.0)
 }
 
 pub(super) fn build(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer: Vec3, pixel: f32) {
@@ -56,8 +56,9 @@ pub(super) fn build(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer
             let to_next = c.next_port_cusp_s;
             let since = h.pass_period() as f32 - to_next;
             let dt = if to_next < since { -to_next } else { since };
-            if dt.abs() < DWELL_S {
-                let reach = (std::f32::consts::FRAC_PI_2 * (1.0 - dt.abs() / DWELL_S)).sin();
+            let dwell = h.turn_period() as f32 * DWELL_TURNS;
+            if dt.abs() < dwell {
+                let reach = (std::f32::consts::FRAC_PI_2 * (1.0 - dt.abs() / dwell)).sin();
                 let drop = c.tip + axis * h.size.drop_line_m() as f32 * reach;
                 tether(mesh, c.tip, drop, viewer, pixel, BRAID, braid_width(h.size) * 0.5);
                 part(mesh, drop, Vec3::splat(grapple * 0.6), Quat::IDENTITY, METAL, 0.5);

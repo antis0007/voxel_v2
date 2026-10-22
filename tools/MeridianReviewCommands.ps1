@@ -4,7 +4,10 @@ function Write-MeridianCommand([string]$Root,[string]$Value) {
     $pending=Join-Path $Root 'command.next'
     [IO.File]::WriteAllText($pending,$Value)
     for($attempt=0;$attempt -lt 50;$attempt++) {
-        try {[IO.File]::Move($pending,(Join-Path $Root 'command.txt'),$true);return}
+        # File.Move's overwrite overload is .NET Core only; Windows PowerShell 5.1
+        # gets the same atomic swap from File.Replace once the target exists.
+        $target=Join-Path $Root 'command.txt'
+        try {if(Test-Path -LiteralPath $target){[IO.File]::Replace($pending,$target,[NullString]::Value)}else{[IO.File]::Move($pending,$target)};return}
         catch [IO.IOException] {if($attempt -eq 49){throw};Start-Sleep -Milliseconds 10}
     }
 }

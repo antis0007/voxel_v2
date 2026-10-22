@@ -1,11 +1,27 @@
-//! Deterministic two-body circular orbits above an Earth-size spherical datum.
+//! Deterministic two-body circular orbits above a compressed spherical datum.
 //! The voxel world is a local surface chart; f64 observer frames project celestial
 //! positions into its tangent sky. No aircraft-style translation or camera cards.
 use glam::{DQuat,DVec3,Mat3,Quat,Vec3};
 use crate::world::{hash_u32,DayNightCycle};
-pub const PLANET_RADIUS_M:f64=6_371_000.0;
-pub const MU:f64=3.986004418e14;
+/// The celestial layer models a planet SKY_SCALE times smaller than Earth.
+/// Orbits, tethers and altitudes shrink with it while hardware keeps its
+/// authored size, so it reads SKY_SCALE times larger at the same sky angles.
+pub const SKY_SCALE:f64=4.0;
+pub const PLANET_RADIUS_M:f64=6_371_000.0/SKY_SCALE;
+/// One world day on the orbital clock. The planet turns once per world day, so
+/// the sun, planet spin and eclipses share one frame.
 pub const DAY_SECONDS:f64=86400.0;
+/// Laps per world day of the reference shell (the foundry's). Real low orbit is
+/// about 15, which on the accelerated day gives three-second passes; 3 keeps a
+/// pass watchable while staying clear of ground-synchronous creep.
+pub const ORBITS_PER_DAY:f64=3.0;
+const REFERENCE_RADIUS_M:f64=PLANET_RADIUS_M+420_000.0/SKY_SCALE;
+const REFERENCE_RATE:f64=std::f64::consts::TAU*ORBITS_PER_DAY/DAY_SECONDS;
+/// Gravitational parameter tuned so the reference shell meets ORBITS_PER_DAY;
+/// other altitudes follow Kepler from it.
+pub const MU:f64=REFERENCE_RATE*REFERENCE_RATE*REFERENCE_RADIUS_M*REFERENCE_RADIUS_M*REFERENCE_RADIUS_M;
+/// Width of the soft eclipse edge, metres.
+pub const PENUMBRA_M:f64=12_000.0/SKY_SCALE;
 /// Coverage for supported atmospheric crowns only, not celestial objects.
 pub const RANGE_M:f32=20_000.0;
 
@@ -17,7 +33,7 @@ impl Kind {
         Self::Foundry=>"64 km orbital fabrication truss · sealed industrial districts",
         Self::TwinHabitat=>"Paired 36 km pressure cylinders · 4.8 km diameter · counter-rotating living drums",
     }}
-    pub fn altitude_m(self)->f64 {match self {Self::Foundry=>420_000.0,Self::TwinHabitat=>700_000.0}}
+    pub fn altitude_m(self)->f64 {(match self {Self::Foundry=>420_000.0,Self::TwinHabitat=>700_000.0})/SKY_SCALE}
     pub fn scale(self)->f32 {10.0}
     pub fn bound_m(self)->f64 {match self {Self::Foundry=>40_000.0,Self::TwinHabitat=>24_000.0}}
 }
@@ -26,9 +42,8 @@ pub struct Site {pub key:u32,pub kind:Kind,pub position:Vec3,pub orientation:Qua
 #[derive(Clone,Copy)]
 pub struct Contact {pub site:Site,pub distance_m:f32,pub bearing:u32,pub elevation_deg:f32,pub period_seconds:f64}
 
-/// The shared orbital clock in real seconds. Skyhooks use the same clock and
-/// planet spin, so every orbital object agrees on where the ground is; the sun
-/// keeps running on the accelerated day.
+/// The shared orbital clock in world seconds. Skyhooks use the same clock and
+/// planet spin, so every orbital object agrees on where the ground and the sun are.
 pub fn seconds(day:&DayNightCycle)->f64 {super::skyhook::clock(day)}
 fn planet_spin(time:f64)->DQuat {DQuat::from_rotation_z(-(super::skyhook::EARTH_RATE*time).rem_euclid(std::f64::consts::TAU))}
 fn unit(key:u32)->f64 {(hash_u32(key)>>8) as f64/16777216.0}
@@ -79,7 +94,7 @@ pub fn contacts(seed:u32,day:&DayNightCycle,viewer:Vec3)->Vec<Contact> {
             if (elevation as f64) < -dip-(kind.bound_m()/distance as f64).asin() {continue;}
             let behind=position.dot(sun);
             let shadow_distance=(position-sun*behind).length();
-            let sunlight=if behind<0.0 {((shadow_distance-PLANET_RADIUS_M)/12_000.0+0.5).clamp(0.0,1.0)} else {1.0};
+            let sunlight=if behind<0.0 {((shadow_distance-PLANET_RADIUS_M)/PENUMBRA_M+0.5).clamp(0.0,1.0)} else {1.0};
             let x=observer.local(tangent);let y=observer.local(radial);let z=x.cross(y).normalize();
             result.push(Contact {site:Site {key,kind,position:viewer+relative,
                 orientation:Quat::from_mat3(&Mat3::from_cols(x,y,z)),sunlight:sunlight as f32},

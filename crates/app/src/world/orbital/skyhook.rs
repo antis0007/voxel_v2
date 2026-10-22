@@ -5,15 +5,15 @@
 //! Tether length is tuned so a whole number of turns fit in one synodic pass,
 //! which puts a cusp over the same ground port on every pass.
 //!
-//! Time runs on the orbital clock: real seconds, not the accelerated day. At
-//! 180x the day speed a LEO pass would last about three seconds on screen.
-use super::megastructures::{MU, PLANET_RADIUS_M};
+//! Time runs on the orbital clock in world seconds, and distances on the
+//! compressed sky planet (see `megastructures::SKY_SCALE`).
+use super::megastructures::{DAY_SECONDS, MU, PLANET_RADIUS_M, SKY_SCALE};
 use crate::world::{DayNightCycle, hash_u32};
 use glam::{DVec3, Vec3};
 use std::f64::consts::{PI, TAU};
 
-/// Sidereal spin rate on the orbital clock (real seconds).
-pub const EARTH_RATE: f64 = TAU / 86_164.0;
+/// Planet spin on the orbital clock: one turn per world day.
+pub const EARTH_RATE: f64 = TAU / DAY_SECONDS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Size {
@@ -37,25 +37,25 @@ impl Size {
     }
     /// Nominal tether length; the resonant solve adjusts it by a few percent.
     pub fn nominal_tether_m(self) -> f64 {
-        match self {
+        (match self {
             Self::Courier => 160_000.0,
             Self::Talon => 420_000.0,
             Self::Ark => 1_150_000.0,
-        }
+        }) / SKY_SCALE
     }
     /// Tip altitude at the cusp: just above the denser air.
     pub fn cusp_altitude_m(self) -> f64 {
-        match self {
+        (match self {
             Self::Courier => 90_000.0,
             Self::Talon => 80_000.0,
             Self::Ark => 70_000.0,
-        }
+        }) / SKY_SCALE
     }
     /// Second-stage drop line paid out from the tip during the dwell; 0 for
     /// single-stage hooks, whose pods climb to the tip on their own.
     pub fn drop_line_m(self) -> f64 {
         match self {
-            Self::Ark => 70_000.0,
+            Self::Ark => 70_000.0 / SKY_SCALE,
             _ => 0.0,
         }
     }
@@ -153,10 +153,10 @@ impl Hook {
     }
 }
 
-/// The orbital clock in real seconds. Planet spin and orbits share it, so the
-/// sky geometry stays physical even though the sun runs on the fast day.
+/// The orbital clock in world seconds (DAY_SECONDS per world day). Planet spin,
+/// orbits and the sun all advance on it, so their frames stay in step.
 pub fn clock(day: &DayNightCycle) -> f64 {
-    (day.day_index as f64 + day.time_of_day() as f64) * day.day_length_seconds() as f64
+    (day.day_index as f64 + day.time_of_day() as f64) * DAY_SECONDS
 }
 
 pub fn hooks(seed: u32) -> [Hook; 3] {
@@ -245,14 +245,15 @@ mod tests {
     }
 
     #[test]
-    fn rotation_and_passes_are_watchable_in_real_time() {
+    fn rotation_and_passes_are_watchable_on_the_default_day() {
+        let real = crate::world::DEFAULT_DAY_LENGTH_SECONDS as f64 / DAY_SECONDS;
         for size in Size::ALL {
             let hook = Hook::new(size, 0.0, 0.0);
             let turn = hook.turn_period();
-            assert!((120.0..2_400.0).contains(&turn), "{size:?} turn {turn}s");
-            assert!(hook.pass_period() > 4_000.0, "{size:?} pass {}", hook.pass_period());
+            assert!((3.0..120.0).contains(&(turn * real)), "{size:?} turn {}s real", turn * real);
+            let pass = hook.pass_period() * real;
+            assert!((120.0..600.0).contains(&pass), "{size:?} pass {pass}s real");
             assert!((hook.tether_m / size.nominal_tether_m() - 1.0).abs() < 0.3);
-            // Needle pods are cargo-only (~34 g); the Ark's ~4 g carries people.
             assert!(hook.tip_load_g() < 40.0, "{size:?} {} g", hook.tip_load_g());
             assert!(hook.next_port_cusp(1.0) > hook.pass_period() - 2.0);
             assert!(hook.next_cusp(0.0) < 1e-6 || hook.next_cusp(0.0) > turn - 1e-3);
