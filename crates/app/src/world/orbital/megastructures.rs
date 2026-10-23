@@ -33,10 +33,11 @@ impl Kind {
         Self::Foundry=>"64 km orbital fabrication truss · sealed industrial districts",
         Self::TwinHabitat=>"Paired 36 km pressure cylinders · 4.8 km diameter · counter-rotating living drums",
     }}
-    /// Raised from 420/700 km: at 105 km overhead the foundry swept the sky at
-    /// ~36 deg/s and filled 30 deg of it. At 250 km it crosses at ~15 deg/s and
-    /// the habitat at ~9 deg/s, so the heavier structure also moves slower.
-    pub fn altitude_m(self)->f64 {(match self {Self::Foundry=>1_000_000.0,Self::TwinHabitat=>1_600_000.0})/SKY_SCALE}
+    /// Overhead sweep on the default day (480 s, orbital clock x180): the foundry
+    /// at 110 km crosses the sky at ~34 deg/s, the habitat at 130 km at ~28.
+    /// Shells above ~200 km read as static from the ground; the smooth clock in
+    /// main.rs (`lead_seconds`) is what keeps this speed from looking like jumps.
+    pub fn altitude_m(self)->f64 {(match self {Self::Foundry=>440_000.0,Self::TwinHabitat=>520_000.0})/SKY_SCALE}
     pub fn scale(self)->f32 {10.0}
     pub fn bound_m(self)->f64 {match self {Self::Foundry=>40_000.0,Self::TwinHabitat=>24_000.0}}
 }
