@@ -39,6 +39,32 @@ impl SimulationClock {
         self.accumulated -= steps as f64 * step;
         steps
     }
+
+    /// Time banked towards the next step. Presentation-only motion (the orbital
+    /// sky) adds it to the day clock so it advances every frame, not in 1/120 s hops.
+    pub fn lead_seconds(&self) -> f32 {
+        self.accumulated as f32
+    }
 }
 
 pub use engine_core::Budget;
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    #[test]
+    fn steps_plus_lead_track_elapsed_time_every_frame() {
+        // 144 Hz frames against a 120 Hz step: raw steps alternate 0 and 1, but
+        // steps * STEP + lead (what the orbital sky draws) grows evenly.
+        let mut clock = SimulationClock::default();
+        let (frame, mut steps_total, mut previous) = (1.0_f32 / 144.0, 0_u32, 0.0_f32);
+        for i in 1..=288 {
+            steps_total += clock.advance(frame, true);
+            let drawn = steps_total as f32 * STEP_SECONDS + clock.lead_seconds();
+            assert!((drawn - i as f32 * frame).abs() < 1e-4, "frame {i}: {drawn}");
+            assert!(drawn - previous > frame * 0.99, "frame {i} stalled");
+            previous = drawn;
+        }
+    }
+}

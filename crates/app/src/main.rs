@@ -4028,7 +4028,14 @@ fn main() -> Result<()> {
                             let render_start = Instant::now();
                             let orbital_pixel_angle = 2.0 * (egui_ui.fov_degrees.to_radians() * 0.5).tan()
                                 / window.inner_size().height.max(1) as f32;
-                            let scene=world.as_ref().map(|w|mesh::models::build(w,&player,&day_night,orbital_pixel_angle)).unwrap_or_default();
+                            // The day clock moves in whole simulation steps; stations cross the sky at tens of
+                            // degrees per second, so those hops read as jumps. Orbits are drawn at the clock
+                            // plus the banked remainder.
+                            let mut sky_day = day_night;
+                            if !freeze_time && matches!(mode, AppMode::Playing) {
+                                sky_day.advance(simulation_clock.lead_seconds());
+                            }
+                            let scene=world.as_ref().map(|w|mesh::models::build(w,&player,&sky_day,orbital_pixel_angle)).unwrap_or_default();
                             gpu.upload_scene(&scene);
                             mesh::models::recycle(scene);
                             let zone = world.as_ref().and_then(|w| {
