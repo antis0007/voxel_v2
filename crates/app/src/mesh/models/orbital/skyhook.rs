@@ -8,7 +8,7 @@ use crate::world::{World, DayNightCycle, terrain_height, orbital::{megastructure
 const BRAID: [f32; 3] = [0.58, 0.55, 0.47];
 const METAL: [f32; 3] = [0.22, 0.29, 0.32];
 const SHELL: [f32; 3] = [0.67, 0.69, 0.65];
-const POD: [f32; 3] = [1.0, 0.92, 0.55];
+const POD: [f32; 3] = [0.95, 0.62, 0.25];
 /// Half-width of the dwell window around a port cusp, as a fraction of a tether turn.
 const DWELL_TURNS: f32 = 0.08;
 
@@ -76,8 +76,8 @@ pub(super) fn build(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer
         // Cargo pod: climbs from the guarded ground port to meet the tip, rides the
         // grapple, then is hauled in. Orbital-clock driven; nothing is saved.
         if let Some(at) = c.pod(port_on_ground(world, h.port_lon)) {
-            // Never less than ~14 px across, so the catch can be watched from the ground.
-            let pod_size = (grapple * 0.6).max((at - viewer).length() * pixel * 14.0);
+            // Never less than ~20 px across, so the catch can be watched from the ground.
+            let pod_size = (grapple * 0.6).max((at - viewer).length() * pixel * 20.0);
             part(mesh, at, Vec3::splat(pod_size), Quat::IDENTITY, POD, 0.9);
         }
         long_range_since(mesh, mark);
