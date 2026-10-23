@@ -39,8 +39,18 @@ fn broad_cloud_mass(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             let jitter = hash_cell2(id, 901);
             let center = (vec2<f32>(id) + jitter) * cell_size;
             let local = xz - center;
-            let reach = cell_size * mix(0.28, 0.82, hash_cell1(id, 77));
-            if dot(local, local) > reach * reach { continue; }
+            let stretch = mix(0.28, 1.25, hash_cell1(id, 15));
+            // The longest ellipse axis is kept to 0.68 cell. Cloud density
+            // starts near dome -0.74 (lobes reach +0.59), which is 1.32 axis
+            // lengths out, so every visible contour lies inside one cell width
+            // and the 3x3 lookup never truncates it. Truncating a still-dense
+            // dome with a steep taper drew a straight vertical wall.
+            var reach = cell_size * mix(0.28, 0.82, hash_cell1(id, 77));
+            let support = min(reach * max(stretch, 1.0), cell_size * 0.68);
+            reach = support / max(stretch, 1.0);
+            // Beyond 1.45 axis lengths the dome is below -1.1: nothing visible.
+            let cutoff = support * 1.45;
+            if dot(local, local) > cutoff * cutoff { continue; }
             // Coverage raises the odds. It does not turn every cell on, so a
             // deck still has corridors and one-sided storms stay one-sided.
             // Weather varies at every sample, even within one lobe. A binary
@@ -50,7 +60,6 @@ fn broad_cloud_mass(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // toward zero (which would manufacture density outside the lobe).
             let presence = smoothstep(seed - 0.08, seed + 0.08, odds);
             if presence <= 0.001 { continue; }
-            let stretch = mix(0.28, 1.25, hash_cell1(id, 15));
             // A mass is never much taller than it is wide: narrow cells with a
             // tall draw stood up as kilometre-high pillars.
             let height = min(mix(0.18, 0.72, hash_cell1(id, 44)) + storm * 0.22,
@@ -59,14 +68,17 @@ fn broad_cloud_mass(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // Rotation preserves length. Dividing by the largest ellipse axis
             // bounds its horizontal quadratic below, hence the field above.
             // A smooth-max input at least its radius below field adds nothing.
-            let largest_axis = reach * max(stretch, 1.0);
+            let largest_axis = support;
             let upper = 1.0 - dot(local, local) / (largest_axis * largest_axis)
                 - hh * hh - (1.0 - presence) * 4.0;
             if upper + 0.001 <= field - 0.30 { continue; }
             let axis = safe_normalize2(jitter - vec2<f32>(0.5), vec2<f32>(1.0, 0.0));
             let side = vec2<f32>(-axis.y, axis.x);
             let d = vec2<f32>(dot(local, axis), dot(local, side)) / vec2<f32>(reach, reach * stretch);
-            let dome = 1.0 - dot(d, d) - hh * hh;
+            // Smooth compact support inside one cell width: the 3x3 lookup
+            // can never omit a contributing mass, and no edge is a hard cut.
+            let taper = smoothstep(0.95, 1.0, length(local) / (cell_size * 0.98)) * 4.0;
+            let dome = 1.0 - dot(d, d) - hh * hh - taper;
             field = cloud_smooth_max(field, dome - (1.0 - presence) * 4.0, 0.30);
         }
     }
@@ -174,9 +186,12 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // Squared class biases the field toward scraps and puffs, with a
             // few cells growing into a distinctly larger neighbour.
             let scale_class = hash_cell1(id, 2811);
-            let radius = size * mix(0.07, 0.58, scale_class * scale_class)
+            let radius_raw = size * mix(0.07, 0.58, scale_class * scale_class)
                 * mix(0.88, 1.10, cluster) * mix(0.80, 1.08, presence)
                 * (1.0 + storm * 0.16);
+            // A thermal wider than half a cell is truncated by the cell window
+            // in a vertical wall. Bigger bodies come from broad_cloud_mass.
+            let radius = min(radius_raw, size * 0.50);
             let profile = thermal_profile(id, jitter, h, radius, cluster, storm, thick_m);
             if thermal_upper_bound(profile, id, jitter, radius, size, local, h, storm)
                 - (1.0 - presence) * 3.0 + 0.001 <= envelope { continue; }
@@ -294,7 +309,10 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // the 3x3 neighborhood, so changing cells cannot drop a lobe.
             // Keep the support compact at the actual cell edge, but let the
             // broad base bridge across most of the Voronoi spacing first.
-            dome -= smoothstep(0.84, 0.99, length(local) / size) * 4.0;
+            // The window must be wide: a thermal's arms and shoulders still
+            // have positive dome at the cell edge, and a narrow ramp there is a
+            // straight vertical wall. Spread it so the cloud thins instead.
+            dome -= smoothstep(0.50, 0.99, length(local) / size) * 4.0;
             envelope = max(envelope, dome - (1.0 - presence) * 3.0);
         }
     }
@@ -401,9 +419,25 @@ fn photographic_low_density(
         detail = sample_detail_global(xz + warp, evolving_y, detail_freq, detail_freq, detail_lod);
         // Weight the coarse detail channels; the finest Worley channel made grainy,
         // cauliflower-like fringes that do not belong to the scene's soft lighting.
-        let erosion = (1.0 - dot(detail.rgb, vec3<f32>(0.62, 0.30, 0.08)))
-            * light.weather_globals[1].w * light.weather_globals[2].y * 0.46;
+        // Far clouds cannot resolve the fine Worley channels, so they read as
+        // smooth puffs. As the footprint grows, move the erosion onto the
+        // coarse billow channel and strengthen it: same texture fetch, larger
+        // scale lumps where a pixel is several metres wide.
+        let far = smoothstep(1.0, 6.0, footprint);
+        let erosion_w = mix(vec3<f32>(0.62, 0.30, 0.08), vec3<f32>(0.90, 0.10, 0.0), far);
+        let erosion = (1.0 - dot(detail.rgb, erosion_w))
+            * light.weather_globals[1].w * light.weather_globals[2].y * 0.46
+            * (1.0 + 1.5 * far);
         field -= erosion * detail_keep;
+    }
+    // At range the mip-filtered textures above average to a constant, so a
+    // far puff is a smooth ellipsoid. Hashed value noise does not depend on
+    // the mip level: two scales of billow keep far silhouettes lumpy.
+    // One noise serves both the far billow and the condensation floor below.
+    let floor_noise = weather_bank_noise(xz / 150.0 + vec2<f32>(3.3, 8.1));
+    if !shadow_lod && footprint > 1.0 {
+        let far_w = smoothstep(1.0, 6.0, footprint);
+        field -= (0.55 - floor_noise) * 0.60 * far_w;
     }
     let softness = 0.15 + smoothstep(8.0, 90.0, footprint) * 0.22;
     // Sheets thin out over hundreds of metres; a narrow ramp cut stratus into
@@ -414,7 +448,12 @@ fn photographic_low_density(
     // Driving it from the fine Worley channel flattened the whole underside
     // as its mip level increased, leaving a visible plane across distant decks.
     let density_h = mix(h, shaped_h, convective);
-    var base = smoothstep(0.0, 0.045, shaped_h);
+    // A ragged condensation floor: the lifting level wanders by a few percent
+    // of the slab, so undersides seen edge-on are not one razor-flat plane.
+    // Hashed, not texture-driven: the shape sample is mip-blurred to a
+    // constant at range, which is exactly where flat bottoms show.
+    let floor_lift = (floor_noise * 0.7 + shape.r * 0.3) * 0.12 * convective;
+    var base = smoothstep(floor_lift, floor_lift + 0.07, shaped_h);
     var water_content = 1.0;
     if convective < 1.0 {
         let base_freq = 0.0006;

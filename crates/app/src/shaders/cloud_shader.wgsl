@@ -1241,6 +1241,10 @@ fn march_layer_core(
     var debug_density_max = 0.0;
     var debug_any_aabb    = 0.0;
     var debug_shadow_max  = 0.0;
+    var shadow_cache      = 0.0;
+    var shadow_cache_ok   = false;
+    var shadow_cache_step = -2;
+    var shadow_cache_reused = false;
 
     // ---- Step budget: sufficient for the shorter march distances.
     let global_step_budget = select(select(192, 72, mid_layer), 32, cirrus_layer);
@@ -1254,10 +1258,17 @@ fn march_layer_core(
 
     var march_t = env_enter;
     for (var i: i32 = 0; i < global_step_budget; i = i + 1) {
-        if trans <= 0.005 || march_t >= env_exit { break; }
+        if trans <= 0.02 || march_t >= env_exit { break; }
         let steps_left = max(global_step_budget - i, 1);
         let need = (env_exit - march_t) / f32(steps_left);
-        let dt = max(fine_dt, need);
+        // A pixel spans several metres at range and the density LOD already
+        // filters below that, so fine spacing far out buys no detail. Grow it
+        // with distance from the camera (rotation invariant), up to 2.2x.
+        // Low layer only: the mid and cirrus layers have short step budgets
+        // and were not re-captured.
+        let far_dt = 1.0 + select(1.2, 0.0, mid_layer || cirrus_layer)
+            * smoothstep(150.0, 1000.0, cam_dist_offset + march_t);
+        let dt = max(fine_dt * far_dt, need);
 
         let segment_start = march_t;
         let segment_length = min(dt, env_exit - segment_start);
@@ -1381,9 +1392,26 @@ fn march_layer_core(
             // At the fully coarse LOD this term has zero contribution. Preserve
             // continuous blending while avoiding four discarded density taps.
             if macro_blend < 1.0 {
-                local_shadow_od = sample_local_self_shadow(
-                    p, shadow_dir, layer_id, sample_footprint_m, layer_thickness_m,
-                );
+                // The light integral spans hundreds of metres, so it varies
+                // slowly along the view ray. Evaluate it on every other lit
+                // step and reuse it between: the three light taps dominate the
+                // cost of a lit step.
+                // Only the low layer, and only directly after an evaluated
+                // step: a cache carried across a gap in the cloud would light
+                // the next cloud with the previous one's shadow.
+                let reuse = layer_id == LAYER_LOW && shadow_cache_ok
+                    && shadow_cache_step == i - 1 && !shadow_cache_reused;
+                if reuse {
+                    shadow_cache_reused = true;
+                } else {
+                    shadow_cache = sample_local_self_shadow(
+                        p, shadow_dir, layer_id, sample_footprint_m, layer_thickness_m,
+                    );
+                    shadow_cache_ok = true;
+                    shadow_cache_reused = false;
+                }
+                shadow_cache_step = i;
+                local_shadow_od = shadow_cache;
             }
             let local_scale = select(select(1.08, 0.90, mid_layer), 0.58, cirrus_layer);
             let macro_scale = select(select(0.28, 0.20, mid_layer), 0.12, cirrus_layer);
