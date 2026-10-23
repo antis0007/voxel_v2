@@ -111,3 +111,26 @@ pub fn contacts(seed:u32,day:&DayNightCycle,viewer:Vec3)->Vec<Contact> {
     }
     result.sort_by(|a,b|a.distance_m.total_cmp(&b.distance_m));result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Overhead apparent sweep in degrees per real second on the default day.
+    /// The object's orbital speed over its distance, converted from orbital seconds.
+    fn overhead_sweep_deg_per_real_s(kind: Kind) -> f64 {
+        let h = kind.altitude_m();
+        let r = PLANET_RADIUS_M + h;
+        let w = (MU / r.powi(3)).sqrt();
+        let real_per_orbital = DAY_SECONDS / crate::world::DEFAULT_DAY_LENGTH_SECONDS as f64;
+        (r * w / h).to_degrees() * real_per_orbital
+    }
+
+    #[test]
+    fn orbital_sweeps_cross_the_sky_quickly() {
+        for kind in [Kind::Foundry, Kind::TwinHabitat] {
+            let sweep = overhead_sweep_deg_per_real_s(kind);
+            assert!((20.0..40.0).contains(&sweep), "{kind:?} sweeps {sweep:.1} deg/s");
+        }
+    }
+}

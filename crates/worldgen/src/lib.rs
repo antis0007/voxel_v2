@@ -1231,6 +1231,8 @@ pub fn generate(cfg: &WorldSampleConfig, chunk_coord: IVec3) -> ChunkData {
     let mut blocks = Box::new([BlockId::Air; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]);
     let chunk_origin = chunk_coord * CHUNK_SIZE;
     let profiles = RegionProfiles::new(cfg, chunk_origin.x, chunk_origin.z, CHUNK_SIZE);
+    // Torch index feeds the light list; it must match the torch blocks written here.
+    let mut torches = HashSet::new();
 
     for z in 0..CHUNK_SIZE {
         for x in 0..CHUNK_SIZE {
@@ -1238,7 +1240,11 @@ pub fn generate(cfg: &WorldSampleConfig, chunk_coord: IVec3) -> ChunkData {
             for y in 0..CHUNK_SIZE {
                 let world_pos = chunk_origin + IVec3::new(x, y, z);
                 let index = ChunkData::local_index(x, y, z);
-                blocks[index] = sample_block_with(cfg, world_pos, column, &profiles);
+                let block = sample_block_with(cfg, world_pos, column, &profiles);
+                if block.is_torch() {
+                    torches.insert(world_pos);
+                }
+                blocks[index] = block;
             }
         }
     }
@@ -1248,7 +1254,45 @@ pub fn generate(cfg: &WorldSampleConfig, chunk_coord: IVec3) -> ChunkData {
         modified_bounds: None,
         structural_bounds: None,
         light: Box::new([0; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]),
-        torches: HashSet::new(),
+        torches,
+    }
+}
+
+#[cfg(test)]
+mod generated_torches {
+    use super::*;
+
+    /// Generated torch blocks must be indexed, or they mesh but never light the scene.
+    #[test]
+    fn generated_torch_index_matches_torch_blocks() {
+        let cfg = crate::test_world::World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7).sample_config();
+        let mut found = 0usize;
+        for z in -2..3 {
+            for x in -2..3 {
+                for y in 0..4 {
+                    let coord = IVec3::new(x, y, z);
+                    let data = generate(&cfg, coord);
+                    let origin = coord * CHUNK_SIZE;
+                    let mut expected = HashSet::new();
+                    for (i, block) in data.blocks.iter().enumerate() {
+                        if block.is_torch() {
+                            let i = i as i32;
+                            expected.insert(
+                                origin
+                                    + IVec3::new(
+                                        i % CHUNK_SIZE,
+                                        i / (CHUNK_SIZE * CHUNK_SIZE),
+                                        (i / CHUNK_SIZE) % CHUNK_SIZE,
+                                    ),
+                            );
+                        }
+                    }
+                    found += expected.len();
+                    assert_eq!(data.torches, expected, "torch index for chunk {coord:?}");
+                }
+            }
+        }
+        assert!(found > 0, "scan window held no generated torches; widen it");
     }
 }
 
