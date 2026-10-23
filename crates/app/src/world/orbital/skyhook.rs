@@ -179,6 +179,36 @@ pub struct Contact {
     pub next_port_cusp_s: f32,
 }
 
+impl Contact {
+    /// Where the cargo pod is, if one is in flight. It rises from the ground port
+    /// up a column over the port during `POD_LIFT_TURNS` of a tether turn before the cusp,
+    /// rides the grapple for half a turn, then is hauled in to the hub. Pure
+    /// function of the orbital clock, so nothing is saved and reloads agree.
+    pub fn pod(&self, port: Vec3) -> Option<Vec3> {
+        let turn = self.hook.turn_period() as f32;
+        let to_next = self.next_port_cusp_s;
+        let since = self.hook.pass_period() as f32 - to_next;
+        let ease = |t: f32| t * t * (3.0 - 2.0 * t);
+        let (lift, ride, haul) = (turn * POD_LIFT_TURNS, turn * 0.5, turn * 0.25);
+        if to_next < lift {
+            // The tip is far off to the side until the cusp, so the pod climbs a
+            // column over the port to the cusp point, where the tip stops to meet it.
+            let cusp = Vec3::new(port.x, self.hook.size.cusp_altitude_m() as f32, port.z);
+            return Some(port.lerp(cusp, ease(1.0 - to_next / lift)));
+        }
+        if since < ride {
+            return Some(self.tip);
+        }
+        if since < ride + haul {
+            return Some(self.tip.lerp(self.hub, ease((since - ride) / haul)));
+        }
+        None
+    }
+}
+
+/// Lead time of the pod's climb, as a fraction of one tether turn.
+const POD_LIFT_TURNS: f32 = 0.3;
+
 /// Rotate an inertial point into the planet-fixed frame at clock `t`.
 fn fixed(p: DVec3, t: f64) -> DVec3 {
     let a = EARTH_RATE * t;
@@ -242,6 +272,37 @@ mod tests {
                 assert!((ground - dir(0.0004)).length() < 1e-5, "{size:?} cusp drifted off port");
             }
         }
+    }
+
+    fn contact_at(to_next: f32) -> Contact {
+        let hook = Hook::new(Size::Talon, 0.0, 0.0);
+        Contact {
+            hook,
+            hub: Vec3::new(0.0, 60_000.0, 0.0),
+            tip: Vec3::new(0.0, 20_000.0, 0.0),
+            tip_altitude_m: 20_000.0,
+            hub_elevation_deg: 90.0,
+            next_port_cusp_s: to_next,
+        }
+    }
+
+    #[test]
+    fn pod_rises_to_the_tip_rides_and_is_hauled_to_the_hub() {
+        let port = Vec3::new(0.0, 100.0, 0.0);
+        let turn = Hook::new(Size::Talon, 0.0, 0.0).turn_period() as f32;
+        let pass = Hook::new(Size::Talon, 0.0, 0.0).pass_period() as f32;
+        let at = |to_next: f32| contact_at(to_next).pod(port);
+        // Meets the tip at the cusp, with no jump across it.
+        let before = at(1e-3).unwrap();
+        let after = at(pass - 1e-3).unwrap();
+        assert!((before - contact_at(0.0).tip).length() < 5.0, "{before}");
+        assert!((after - before).length() < 5.0);
+        // Starts at the port when the lift begins, and nothing flies between laps.
+        assert!((at(turn * POD_LIFT_TURNS - 1e-3).unwrap() - port).length() < 50.0);
+        assert!(at(pass * 0.5).is_none());
+        // Hauled all the way in to the hub by the end of the ride and haul.
+        let end = at(pass - turn * 0.75 + 1e-3).unwrap();
+        assert!((end - contact_at(0.0).hub).length() < 50.0, "{end}");
     }
 
     #[test]

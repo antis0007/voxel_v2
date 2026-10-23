@@ -1,5 +1,5 @@
 param([string]$Root, [string]$Executable, [uint32]$Seed = 74, [switch]$AnchorageOnly,
-    [switch]$MegastructuresOnly, [switch]$NormalRenderer, [switch]$Night, [ValidateSet('clear','storm')][string]$Weather='clear')
+    [switch]$MegastructuresOnly, [switch]$SkyOnly, [switch]$NormalRenderer, [switch]$Night, [ValidateSet('clear','storm')][string]$Weather='clear')
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\MeridianReviewCommands.ps1"
 $descentRepo = Split-Path $PSScriptRoot -Parent
@@ -38,7 +38,7 @@ try {
         -RedirectStandardOutput "$Root\native.log" -RedirectStandardError "$Root\native.err.log"
     Wait-Descent '00 report stage=0'
     Wait-Descent '\[stream-profile\].*missing=0 .*horizon=true'
-    if ($MegastructuresOnly) {
+    if ($MegastructuresOnly -or $SkyOnly) {
         $clock = if ($Night) {'megastructure-night'} else {'megastructure-day'}
         Write-MeridianCommand $Root "clock $clock"
         Wait-Descent "clock $clock stage=0"
@@ -46,7 +46,7 @@ try {
         Write-MeridianCommand $Root 'night orbital-night'
         Wait-Descent 'night orbital-night stage=0'
     }
-    if (!$AnchorageOnly -and !$MegastructuresOnly) {
+    if (!$AnchorageOnly -and !$MegastructuresOnly -and !$SkyOnly) {
       Write-MeridianCommand $Root '01 orbital-flight'
       Wait-Descent '01 orbital-flight stage=0'
       foreach ($frame in 0..5) {
@@ -56,11 +56,11 @@ try {
         Wait-Descent ([regex]::Escape("$name.png"))
       }
     }
-    $shots = if ($MegastructuresOnly) { @('megastructure-foundry','megastructure-habitat','megastructure-crown') } elseif ($AnchorageOnly) { @('orbital-anchorage','orbital-anchorage-sweep') } else { @('orbital-ground','orbital-detail','orbital-anchorage','orbital-anchorage-sweep') }
+    $shots = if ($SkyOnly) { @('skyhook-pod','corridor-far') } elseif ($MegastructuresOnly) { @('megastructure-foundry','megastructure-habitat','megastructure-crown') } elseif ($AnchorageOnly) { @('orbital-anchorage','orbital-anchorage-sweep') } else { @('orbital-ground','orbital-detail','orbital-anchorage','orbital-anchorage-sweep') }
     foreach ($shot in $shots) {
         Write-MeridianCommand $Root "$shot $shot"
         Wait-Descent "$shot $shot stage=0"
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds $(if ($SkyOnly) { 20 } else { 2 })
         Write-MeridianCommand $Root "$shot-image capture"
         Wait-Descent ([regex]::Escape("$shot-image.png"))
         if ($shot.StartsWith('orbital-anchorage')) {

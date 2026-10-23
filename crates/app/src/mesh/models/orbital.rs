@@ -50,6 +50,19 @@ pub(super) fn build(
             [0.91, 0.60, 0.26]
         };
         let p = service.carriage_position(foot, top);
+        // Beyond sight range a corridor is its braid and carriage only: a thin
+        // line from the ground to the crown, with the carriage as a lit block that
+        // slides along it. Crowns keep their full upper structure below.
+        if contact.distance_m > orbital::SIGHT_RANGE_M && !matches!(site.class, Class::Conservatory) {
+            // Keep the braid about 1.5 px wide and the carriage about 5 px across, or
+            // a 3 m cable at kilometres is a sub-pixel streak the eye never finds.
+            let reach = contact.distance_m.max(1.0);
+            let width = (if matches!(site.class, Class::Freight) { 6.0_f32 } else { 3.0 }).max(reach * pixel_angle * 1.5);
+            tether(mesh, foot, top, viewer, pixel_angle, [0.58, 0.55, 0.47], width);
+            part(mesh, p, Vec3::splat((site.class.width() * 1.5).max(reach * pixel_angle * 5.0)), Quat::IDENTITY, signal, 0.8);
+            megastructures::long_range_since(mesh, mark);
+            continue;
+        }
         let joint = p + Vec3::Y * site.class.width() * 0.71;
         let suspension_axis = (top - joint).normalize();
         architecture::anchorage(mesh, top, suspension_axis, site.class, site.key, day);

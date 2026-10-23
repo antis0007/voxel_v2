@@ -330,14 +330,14 @@ pub fn contacts(seed: u32, day: &DayNightCycle, state: &State, viewer: Vec3) -> 
     result
 }
 
-/// Large crowns remain visible beyond radio/service range. Only their sealed
-/// upper structures are drawn there; this does not extend request permissions.
+/// Corridors remain visible beyond radio/service range: large crowns with their
+/// sealed upper structures, the rest as a braid and carriage. This does not
+/// extend request permissions.
 pub fn visual_contacts(seed: u32, day: &DayNightCycle, state: &State, viewer: Vec3) -> Vec<Contact> {
     let mut result=contacts(seed,day,state,viewer);
     let centre=IVec2::new((viewer.x/CELL_M).floor() as i32,(viewer.z/CELL_M).floor() as i32);
     for z in -6..=6 {for x in -6..=6 {
         let Some(site)=site(seed,centre+IVec2::new(x,z)) else {continue;};
-        if !matches!(site.class,Class::Conservatory) {continue;}
         let d=Vec3::new(site.x-viewer.x,0.0,site.z-viewer.z).length();
         if d>SIGHT_RANGE_M && d<=megastructures::RANGE_M+4000.0 {
             result.push(Contact {service:service(site,day,state),distance_m:d,bearing:0,can_request:false});

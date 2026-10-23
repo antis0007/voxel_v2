@@ -191,6 +191,51 @@ impl Review {
                 }
                 self.report(w,text);
             }
+            "skyhook-pod" => {
+                // Talon rotovator caught mid-lift: park the clock halfway up the pod's climb.
+                use world::orbital::skyhook;
+                let hook=skyhook::hooks(w.seed)[1];
+                let now=skyhook::clock(day);
+                let lift=hook.turn_period()*0.3;
+                let mut wait=hook.next_port_cusp(now)-lift*0.5;
+                if wait<0.0 {wait+=hook.pass_period();}
+                // Walk forward whole passes until the cusp falls in daylight.
+                let mut at=(now+wait)/world::orbital::megastructures::DAY_SECONDS;
+                for _ in 0..60 {
+                    let mut probe=*day;probe.set_day_index(at.floor() as u32);probe.set_time_of_day(at.fract() as f32);
+                    if probe.lighting().sun_dir.y>0.5 {break;}
+                    at+=hook.pass_period()/world::orbital::megastructures::DAY_SECONDS;
+                }
+                day.set_day_index(at.floor() as u32);day.set_time_of_day(at.fract() as f32);
+                let cfg=w.sample_config();
+                let x=(hook.port_lon*world::orbital::megastructures::PLANET_RADIUS_M) as f32;
+                let ground=cfg.world_y(world::terrain_height(&cfg,(x*cfg.inv_voxel_meters()).floor() as i32,0)).max(cfg.world_y(cfg.water_level()));
+                let port=Vec3::new(x,ground,0.0);
+                p.pos=Vec3::new(x+250.0,ground+3.0,250.0);
+                let tip=skyhook::contacts(w.seed,day,p.pos)[1].tip;
+                let target=port.lerp(Vec3::new(port.x,hook.size.cusp_altitude_m() as f32,0.0),0.5);
+                p.precise_pos=p.pos.as_dvec3();p.vel=Vec3::ZERO;
+                let d=target-p.pos;
+                p.yaw=d.x.atan2(-d.z);p.pitch=d.y.atan2(Vec3::new(d.x,0.0,d.z).length());
+                creative.show_palette=false;
+                let pod=skyhook::contacts(w.seed,day,p.pos)[1].pod(port);
+                println!("[skyhook-review] port={port:?} tip={tip:?} wait_s={wait:.1} to_next={:.1} lift={lift:.1} pod={pod:?}",hook.next_port_cusp(skyhook::clock(day)));
+                self.report(w,text);
+            }
+            "corridor-far" => {
+                // Ground-level view of the origin corridor from beyond sight range.
+                day.set_day_index(1);day.set_time_of_day(0.45);
+                let cfg=w.sample_config();
+                let site=world::orbital::site(w.seed,glam::IVec2::ZERO).unwrap();
+                let (x,z)=(site.x+9000.0,site.z);
+                let ground=cfg.world_y(world::terrain_height(&cfg,(x*cfg.inv_voxel_meters()).floor() as i32,(z*cfg.inv_voxel_meters()).floor() as i32)).max(cfg.world_y(cfg.water_level()));
+                p.pos=Vec3::new(x,ground+3.0,z);p.precise_pos=p.pos.as_dvec3();p.vel=Vec3::ZERO;
+                let target=Vec3::new(site.x,world::orbital::hold_height(&cfg,&w.orbital,site)+9000.0,site.z);
+                let d=target-p.pos;
+                p.yaw=d.x.atan2(-d.z);p.pitch=d.y.atan2(Vec3::new(d.x,0.0,d.z).length());
+                creative.show_palette=false;
+                self.report(w,text);
+            }
             "megastructure-foundry" | "megastructure-habitat" | "megastructure-crown" => {
                 let cfg=w.sample_config();
                 let (x,z)=if command=="megastructure-habitat" {(-2500.0_f32,-1400.0_f32)} else {(1400.0_f32,-1200.0_f32)};

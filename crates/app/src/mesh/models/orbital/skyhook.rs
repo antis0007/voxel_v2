@@ -3,11 +3,12 @@
 //! comes from the tether's projected length sweeping across the sky, drawn as
 //! a coverage line so it stays continuous instead of dotted.
 use super::{Model, Quat, Vec3, architecture::{part, strut}, megastructures::long_range_since, tether};
-use crate::world::{World, DayNightCycle, orbital::{megastructures::{PENUMBRA_M, PLANET_RADIUS_M}, skyhook::{self, Size}}};
+use crate::world::{World, DayNightCycle, terrain_height, orbital::{megastructures::{PENUMBRA_M, PLANET_RADIUS_M}, skyhook::{self, Size}}};
 
 const BRAID: [f32; 3] = [0.58, 0.55, 0.47];
 const METAL: [f32; 3] = [0.22, 0.29, 0.32];
 const SHELL: [f32; 3] = [0.67, 0.69, 0.65];
+const POD: [f32; 3] = [1.0, 0.92, 0.55];
 /// Half-width of the dwell window around a port cusp, as a fraction of a tether turn.
 const DWELL_TURNS: f32 = 0.08;
 
@@ -18,6 +19,14 @@ fn braid_width(size: Size) -> f32 {
 /// Station scale: hub truss length and grapple size, metres.
 fn hardware(size: Size) -> (f32, f32) {
     match size { Size::Courier => (300.0, 40.0), Size::Talon => (1_200.0, 120.0), Size::Ark => (6_000.0, 400.0) }
+}
+
+/// The hook's guarded ground port: on the equator chart, at the terrain surface.
+fn port_on_ground(world: &World, port_lon: f64) -> Vec3 {
+    let cfg = world.sample_config();
+    let x = (port_lon * PLANET_RADIUS_M) as f32;
+    let ground = cfg.world_y(terrain_height(&cfg, (x * cfg.inv_voxel_meters()).floor() as i32, 0));
+    Vec3::new(x, ground.max(cfg.world_y(cfg.water_level())), 0.0)
 }
 
 /// Soft cylindrical eclipse in the chart frame, as in the megastructure path.
@@ -63,6 +72,13 @@ pub(super) fn build(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer
                 tether(mesh, c.tip, drop, viewer, pixel, BRAID, braid_width(h.size) * 0.5);
                 part(mesh, drop, Vec3::splat(grapple * 0.6), Quat::IDENTITY, METAL, 0.5);
             }
+        }
+        // Cargo pod: climbs from the guarded ground port to meet the tip, rides the
+        // grapple, then is hauled in. Orbital-clock driven; nothing is saved.
+        if let Some(at) = c.pod(port_on_ground(world, h.port_lon)) {
+            // Never less than ~14 px across, so the catch can be watched from the ground.
+            let pod_size = (grapple * 0.6).max((at - viewer).length() * pixel * 14.0);
+            part(mesh, at, Vec3::splat(pod_size), Quat::IDENTITY, POD, 0.9);
         }
         long_range_since(mesh, mark);
         for v in &mut mesh.vertices[mark..] {
