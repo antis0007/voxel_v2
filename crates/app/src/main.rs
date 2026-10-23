@@ -1452,6 +1452,7 @@ fn main() -> Result<()> {
     let mut day_night = DayNightCycle::new(DEFAULT_START_TIME_OF_DAY, DEFAULT_DAY_LENGTH_SECONDS);
     let mut cloud_weather = WeatherRuntimeState::new(selected_seed);
     let mut freeze_time = false;
+    let mut sky_clock: Option<f64> = None;
     let mut input = Input::default();
     let mut creative = CreativeState::default();
     player.selected_block = creative.selected_block();
@@ -4032,8 +4033,25 @@ fn main() -> Result<()> {
                             // degrees per second, so those hops read as jumps. Orbits are drawn at the clock
                             // plus the banked remainder.
                             let mut sky_day = day_night;
-                            if !freeze_time && matches!(mode, AppMode::Playing) {
-                                sky_day.advance(simulation_clock.lead_seconds());
+                            // Orbits run at a fixed pace of their own whenever the day is not
+                            // running at its default speed (long day, frozen time); otherwise a
+                            // slow or stopped day parks every station and skyhook in the sky.
+                            let default_pace = !freeze_time
+                                && (day_night.day_length_seconds() - DEFAULT_DAY_LENGTH_SECONDS).abs() < 0.5;
+                            if default_pace {
+                                sky_clock = None;
+                                if matches!(mode, AppMode::Playing) {
+                                    sky_day.advance(simulation_clock.lead_seconds());
+                                }
+                            } else {
+                                let seconds = sky_clock.get_or_insert_with(|| world::orbital::skyhook::clock(&day_night));
+                                if matches!(mode, AppMode::Playing) {
+                                    *seconds += display_frame_dt as f64
+                                        * (world::orbital::megastructures::DAY_SECONDS / DEFAULT_DAY_LENGTH_SECONDS as f64);
+                                }
+                                let days = *seconds / world::orbital::megastructures::DAY_SECONDS;
+                                sky_day.set_day_index(days.floor() as u32);
+                                sky_day.set_time_of_day(days.fract() as f32);
                             }
                             let scene=world.as_ref().map(|w|mesh::models::build(w,&player,&sky_day,orbital_pixel_angle)).unwrap_or_default();
                             gpu.upload_scene(&scene);

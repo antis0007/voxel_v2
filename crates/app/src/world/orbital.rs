@@ -336,15 +336,23 @@ pub fn contacts(seed: u32, day: &DayNightCycle, state: &State, viewer: Vec3) -> 
 pub fn visual_contacts(seed: u32, day: &DayNightCycle, state: &State, viewer: Vec3) -> Vec<Contact> {
     let mut result=contacts(seed,day,state,viewer);
     let centre=IVec2::new((viewer.x/CELL_M).floor() as i32,(viewer.z/CELL_M).floor() as i32);
+    let mut far=Vec::new();
     for z in -6..=6 {for x in -6..=6 {
         let Some(site)=site(seed,centre+IVec2::new(x,z)) else {continue;};
         let d=Vec3::new(site.x-viewer.x,0.0,site.z-viewer.z).length();
         if d>SIGHT_RANGE_M && d<=megastructures::RANGE_M+4000.0 {
-            result.push(Contact {service:service(site,day,state),distance_m:d,bearing:0,can_request:false});
+            far.push(Contact {service:service(site,day,state),distance_m:d,bearing:0,can_request:false});
         }
     }}
+    // Dozens of braids converging on the horizon looked wrong; keep the nearest few.
+    far.sort_by(|a,b|a.distance_m.total_cmp(&b.distance_m));
+    far.truncate(MAX_FAR_CORRIDORS);
+    result.extend(far);
     result
 }
+
+/// Corridors drawn beyond sight range.
+const MAX_FAR_CORRIDORS: usize = 3;
 
 impl State {
     pub fn request(
@@ -463,4 +471,24 @@ pub fn hold_height(cfg: &WorldSampleConfig, state: &State, site: Site) -> f32 {
     }
     cache.push((site.cell, height));
     height
+}
+
+#[cfg(test)]
+mod far_corridor_tests {
+    use super::*;
+
+    #[test]
+    fn distant_corridors_are_capped() {
+        let day = DayNightCycle::default();
+        let state = State::default();
+        for seed in [1_u32, 74, 9001, 0xdead_beef] {
+            for viewer in [Vec3::ZERO, Vec3::new(9000.0, 100.0, -4000.0), Vec3::new(-30000.0, 100.0, 22000.0)] {
+                let far = visual_contacts(seed, &day, &state, viewer)
+                    .iter()
+                    .filter(|c| c.distance_m > SIGHT_RANGE_M)
+                    .count();
+                assert!(far <= MAX_FAR_CORRIDORS, "seed {seed} viewer {viewer}: {far} far corridors");
+            }
+        }
+    }
 }
