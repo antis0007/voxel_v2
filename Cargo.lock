@@ -828,6 +828,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_sim_gpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "engine_content",
+ "engine_core",
+ "engine_gpu",
+ "engine_sim",
+ "glam",
+ "naga",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "engine_voxel"
 version = "0.1.0"
 dependencies = [

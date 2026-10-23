@@ -149,6 +149,16 @@ impl ReactionTable {
     pub fn rows(&self) -> &[Reaction] {
         &self.rows
     }
+
+    /// The pair index as stored, `[a][b]` = row number + 1 or 0: what a GPU kernel uploads.
+    pub fn pair_index(&self) -> &[[u8; SIM_MATERIAL_ROWS]; SIM_MATERIAL_ROWS] {
+        &self.pair
+    }
+
+    /// The single-cell index as stored, row number + 1 or 0.
+    pub fn unary_index(&self) -> &[u8; SIM_MATERIAL_ROWS] {
+        &self.unary
+    }
 }
 
 /// Everything the cellular kernels read: the material table and the reactions, plus which materials can

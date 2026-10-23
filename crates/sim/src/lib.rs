@@ -7,6 +7,7 @@
 mod anchors;
 mod cell;
 mod kernel;
+mod offload;
 mod pinned;
 mod react;
 mod rules;
@@ -27,7 +28,8 @@ pub use cell::{
     Scale, VOLUME_FULL, brick_and_cell, local_of, split_voxel,
 };
 pub use store::{BrickStore, NO_SLOT, PoolFull};
-pub use kernel::{StepStats, step};
+pub use kernel::{StepStats, step, step_with};
+pub use offload::{PhaseBlocks, gather, scatter};
 pub use pinned::{
     Dice, HEAT_DEADBAND, HEAT_RATE, HEAT_TICK_INTERVAL, PHASE_OFFSETS, block_base, block_hash, flow_gate, is_heat_phase,
     is_heat_tick, mul_div_rem, mulhi,

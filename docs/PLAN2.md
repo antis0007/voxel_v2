@@ -214,8 +214,6 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - `assets/reactions.ron` rows: `A + B [+ temp/pressure/field condition] -> products + energy`.
 - The rows compile to a 256×256 pair-index table plus a condition list, evaluated in the same Margolus pass. This replaces the 6 thermal reactions; the spell reactions move in Phase D.
 
-**A5. GPU kernels.**
-- A WGSL port of A3/A4.
 **A4 actuals (2026-10-22).** Phase changes, burning and contact reactions run in the CPU reference kernel. Nothing new is in Rust per material.
 - **Two sources, one pass** (`engine_sim` `react.rs`), on heat ticks after conduction:
   - The material table drives melting, boiling, condensing (deterministic at the tabled point) and burning (at or above `ignite`, spent into `burns_into` with chance 1/`fuel` per heat tick, so `fuel` is the expected burn time in heat ticks).
@@ -243,8 +241,51 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
   - Fuel units moved from 30 Hz steps to heat ticks: a log now burns about 160 × 0.32 s ≈ 51 s at 1 m cells, against about 5 s before. Retune `fuel` in `materials.ron` once it is visible in game.
   - `thermal.rs` and the spell reactions are still the live path until A6 wires the kernel.
 
+**A5. GPU kernels.**
+- A WGSL port of A3/A4.
 - Per-brick dirty bits written by the kernel, compacted into an active list, with `dispatch_workgroups_indirect` (core wgpu, no feature flag), so an idle brick costs zero dispatch.
 - Equivalence: for 64 seeds of random bricks, run N ticks on CPU and GPU and compare bytes (`just test-gpu ca_equivalence`).
+
+**A5 actuals (2026-10-22).** The kernel runs GPU-resident and matches the CPU reference byte for byte.
+- **New crate `engine_sim_gpu`** (`crates/sim_gpu`). It depends on `engine_core`, `engine_sim`, wgpu, bytemuck and glam; the dev-dependencies are naga and pollster, already in the workspace, so no new dependency.
+- **The WGSL port** is `pinned.wgsl`, `rules.wgsl` and `react.wgsl`, matching the Rust modules one for one:
+  - u32 arithmetic only;
+  - the 64-bit product in the heat rule is built from 16-bit limbs, with a 64/32 long division;
+  - the material table and reactions are packed into one `u32` buffer by `pack_rules`, field by field;
+  - a test checks the shader's offset constants against the packer.
+- **Shared scheduler:** `engine_sim::step_with` is the tick driver both backends share. `step` passes the CPU phase, and `gather`/`scatter` (`engine_sim` `offload.rs`) split a phase for an accelerator. A CPU-only test proves gather → rule → scatter equals `step` over 12 seeds × 24 ticks.
+- **Two backends:**
+  - `GpuBlockRule`, the offload path: the CPU gathers each phase's blocks and scatters the results. It is kept for the per-block test.
+  - `GpuWorld`, the resident path: the pool, a directory over a window of chunks, and five awake bitmaps (dirty, A, S, W0, W1) live on the GPU. A tick is one submission of nine dispatches with no readback:
+    - `bits` START;
+    - `compact` (active list), `finalize` (2-D indirect arguments) and `blocks` (indirect, one workgroup per active brick; a block that overlaps several active bricks is stepped by the lowest-indexed one) for phase 0;
+    - `bits` MID;
+    - `compact`, `finalize` and `blocks` for phase 1;
+    - `bits` END.
+- **How the resident path reproduces `step_with`:** the bitmap passes apply the same set algebra, with "present" read from the directory. A brick a block writes into for the first time takes a slot from a free stack (compare-and-swap); the loser of a race for one brick returns its slot, recycled between phases, so no invocation ever waits on another. Waking only present bricks at the end of a phase equals the CPU's wake-at-the-time, because a brick only becomes present when a changed block writes it, and that block wakes it anyway.
+- **Equivalence, run on an RTX 4090 (Vulkan):**
+  - `gpu_block_rule_matches_the_cpu_per_block`: 200k random blocks × 7 phase counters, hot and cold, on the real tables;
+  - `gpu_ca_equivalence` (offload) and `gpu_resident_equivalence`: 64 seeds × 40 ticks of random worlds across negative chunks, comparing awake bricks every tick and every cell at the end. All pass.
+  - Mutation checks: a changed dice salt fails the per-block test at block 29; dropping the no-heat re-wake fails the resident test at seed 0, tick 17.
+- **Limits, flagged rather than diverging:**
+  - `Snapshot::overflow` is a bitmask: bit 0 when matter tried to leave the window, bit 1 when the pool ran out. The CPU's stall-on-full order cannot be reproduced in parallel, and a slot that lost an allocation race returns only between phases, so equivalence needs a little pool headroom. `gpu_resident_overflow_is_reported` drives both cases.
+  - the window and pool must fit `max_storage_buffer_binding_size` (`UploadError::TooLargeForDevice`).
+- **Independent review** (allocator CAS and ABA, scheduling algebra, owner rule, index codec, indirect arguments, port fidelity line by line): no blocking issue. Fixed from it:
+  - a false pool overflow when a block lost the last free slot to another block claiming the same brick (it now re-reads the directory);
+  - `overflow` as a bitmask, so neither cause hides the other;
+  - empty store entries outside the window no longer refuse the upload;
+  - size checks cover every buffer and reject an empty or overflowing window.
+- **Speed (`gpu_resident_timing`, every brick awake, mixed materials on the real tables):**
+
+  | Cells | CPU reference | GPU resident | Speed-up |
+  |---|---|---|---|
+  | 262,144 | 15.5 ms | 0.41 ms | about 38× |
+  | 1,048,576 | 51.5 ms | 0.98 ms | about 52× |
+
+  - Both pairs were measured on a quiet machine; under peer builds it was 27–40 ms against 0.5 ms, and 88–124 ms against 1.7 ms.
+  - The 1M-active-cells target is met: about 17× headroom inside a 60 Hz tick.
+  - The offload path is slower than the CPU (46 ms against 17 ms at 262k), because its gather, scatter and bus round trips dominate. It is a test vehicle, not a backend.
+- **For A6:** `GpuWorld` is the `CaBackend` candidate. It still needs edits as commands (writes into the GPU pool), the 2-tick-lagged CPU mirror (an async `read_back` of dirty bricks only, not the whole pool), and the window following the player (re-centring moves directory entries, not cells).
 
 **A6. Integration.**
 - `WorldSimulation` drives the `CaBackend`; edits become commands; the L = 2 mirror feeds gameplay and the mesher.

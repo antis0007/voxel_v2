@@ -189,18 +189,29 @@ fn run_phase(
 
 /// Advance the stored world one tick under `rules`: the material table and the reactions.
 pub fn step(store: &mut BrickStore, rules: &SimRules, seed: u32, tick: u32) -> StepStats {
+    step_with(store, tick, |store, phase_counter, bricks, stats| run_phase(store, rules, seed, phase_counter, bricks, stats))
+}
+
+/// The tick driver every backend shares: which bricks each phase steps, and which stay awake after.
+/// `run_phase(store, phase_counter, bricks, stats)` steps every block of one Margolus phase that touches
+/// `bricks`; the CPU kernel and an accelerator (`offload`) differ only there.
+pub fn step_with(
+    store: &mut BrickStore,
+    tick: u32,
+    mut run_phase: impl FnMut(&mut BrickStore, u32, &[BrickCoord], &mut StepStats),
+) -> StepStats {
     let mut stats = StepStats::default();
     let first = store.take_all_dirty();
     stats.active_bricks = first.len() as u32;
     let awake_at_start = first.clone();
-    run_phase(store, rules, seed, tick.wrapping_mul(2), &first, &mut stats);
+    run_phase(store, tick.wrapping_mul(2), &first, &mut stats);
     // The second phase also steps whatever the first one woke.
     let woken = store.take_all_dirty();
     let mut both = first;
     both.extend(woken.iter().copied());
     both.sort_unstable_by_key(|b| (b.chunk.z, b.chunk.y, b.chunk.x, b.brick));
     both.dedup();
-    run_phase(store, rules, seed, tick.wrapping_mul(2).wrapping_add(1), &both, &mut stats);
+    run_phase(store, tick.wrapping_mul(2).wrapping_add(1), &both, &mut stats);
     // The next tick steps what either phase touched.
     for b in woken {
         store.wake(b.chunk, b.brick);

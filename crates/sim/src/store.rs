@@ -178,6 +178,11 @@ impl BrickStore {
         out
     }
 
+    /// Every chunk with an entry, in no particular order.
+    pub fn chunks(&self) -> impl Iterator<Item = IVec3> + '_ {
+        self.chunks.keys().copied()
+    }
+
     /// The chunk's pointer table, `NO_SLOT` where no brick is stored.
     pub fn chunk_slots(&self, chunk: IVec3) -> Option<&[u32; BRICKS_PER_CHUNK]> {
         self.chunks.get(&chunk).map(|e| &e.slots)
