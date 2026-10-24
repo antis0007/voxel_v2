@@ -11,7 +11,7 @@ $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $repo
 $exe=(Resolve-Path -LiteralPath $Executable).Path
-$root=Join-Path $repo "reviews/terrain-pass2-20261021/$Label"
+$root=Join-Path $repo "target/reviews/terrain-pass2-20261021/$Label"
 if(Test-Path -LiteralPath $root){throw "Evidence already exists: $root"}
 New-Item -ItemType Directory -Path $root | Out-Null
 $argsList=@('--benchmark-world=hills','--benchmark-seed=2738958700','--benchmark-weather=partly',

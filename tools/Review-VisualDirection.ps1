@@ -89,6 +89,7 @@ try {
         arguments = $argsList; camera = $camera; budget_p95_ms = 16.67
         note = 'Actual renderer; generated review scenes, not the missing reference photographs. See logs for adapter/backend and timing support.'
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $root 'manifest.json')
+    $wall = [Diagnostics.Stopwatch]::StartNew()
     $process = Start-Process -FilePath $exe -ArgumentList $argsList -WorkingDirectory $repo -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $root 'stdout.log') -RedirectStandardError (Join-Path $root 'stderr.log')
     # Retain the native handle before polling/Refresh (Windows PowerShell 5).
@@ -99,11 +100,23 @@ try {
         $peakWorking = [Math]::Max($peakWorking, $process.WorkingSet64)
         $peakPrivate = [Math]::Max($peakPrivate, $process.PrivateMemorySize64)
     }
-    [ordered]@{exit_code=$process.ExitCode; peak_working_bytes=$peakWorking; peak_private_bytes=$peakPrivate} |
+    $wallSeconds = [Math]::Round($wall.Elapsed.TotalSeconds, 1)
+    [ordered]@{exit_code=$process.ExitCode; peak_working_bytes=$peakWorking; peak_private_bytes=$peakPrivate; wall_seconds=$wallSeconds} |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'process.json')
     if ($null -ne $process.ExitCode -and $process.ExitCode -ne 0) { throw "Renderer exited $($process.ExitCode); inspect $root" }
     if (-not (Select-String -LiteralPath (Join-Path $root 'stdout.log') -SimpleMatch '[benchmark] avg_fps=' -Quiet)) {
         throw "Renderer did not complete its measurement; inspect $root"
+    }
+    # A starved run (GPU/CPU contention, hidden-window present stalls) still exits 0 with a few frames.
+    # Healthy runs finish within ~4x warmup+duration (world generation precedes warmup); use the app's
+    # own line, which includes per-case duration overrides.
+    $planned = Select-String -LiteralPath (Join-Path $root 'stdout.log') -Pattern 'warmup_s=([\d.]+) duration_s=([\d.]+)' |
+        Select-Object -First 1
+    if ($planned) {
+        $need = [double]$planned.Matches[0].Groups[1].Value + [double]$planned.Matches[0].Groups[2].Value
+        if ($wallSeconds -gt 10 * $need) {
+            throw "Renderer stalled: $wallSeconds s wall for $need s planned; frames and timings are not comparable. Rerun when the machine is idle ($root)"
+        }
     }
     Write-Output "Evidence: $root"
     # Summarize-RendererReview.ps1 reads these lines from summary.txt.

@@ -19,7 +19,7 @@ $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $repo
 $exe=(Resolve-Path -LiteralPath $Executable).Path
-$root=Join-Path $repo "reviews/forest-repair-20261021/$Label"
+$root=Join-Path $repo "target/reviews/forest-repair-20261021/$Label"
 if(Test-Path -LiteralPath $root){throw "Evidence already exists: $root"}
 New-Item -ItemType Directory -Path $root | Out-Null
 [ordered]@{accepted_for_performance=$false;reason='Run awaits scope, process and timing review'} |

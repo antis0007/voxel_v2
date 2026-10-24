@@ -27,7 +27,7 @@ if($Width -lt 320 -or $Height -lt 240 -or $ViewChunks -lt 1 -or $Seconds -lt 1){
 if($Video -and $Case -in @('probe','perf')){throw 'Video readback or source probing must be separate from performance measurements'}
 if($VoxelReference -and -not $ExactPatch){throw 'VoxelReference requires ExactPatch bounds'}
 if($Case -in @('edits','stress','handoff')){$EditInFlight=$true}
-$evidenceBase=if($EvidenceRoot){[IO.Path]::GetFullPath($EvidenceRoot)}else{Join-Path $repo 'reviews/horizon-continuity'}
+$evidenceBase=if($EvidenceRoot){[IO.Path]::GetFullPath($EvidenceRoot)}else{Join-Path $repo 'target/reviews/horizon-continuity'}
 $root=Join-Path $evidenceBase $Label
 if(Test-Path -LiteralPath $root){throw "Evidence already exists: $root"}
 New-Item -ItemType Directory -Path $root -Force | Out-Null
