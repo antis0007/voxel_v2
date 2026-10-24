@@ -2758,8 +2758,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // --- Spectral sun/moon tinting from atmosphere transmittance ---
     // Matches the cloud illumination so sky, clouds, and terrain are tonally
     // consistent at all times of day, especially at sunset.
-    let sun_spectral  = sky_transmittance_to_sun(sun_dir.y);
-    let moon_spectral = sky_transmittance_to_sun(moon_dir.y);
+    let sun_spectral  = sky_probe_term(SKY_PROBE_SUN_TRANSMITTANCE);
+    let moon_spectral = sky_probe_term(SKY_PROBE_MOON_TRANSMITTANCE);
 
     // --- World-space cloud transmittance above this surface point ---
     // This makes terrain lighting react to the actual cloud field overhead,
@@ -2825,7 +2825,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Normal-weighted sky sampling: upward-facing surfaces get top sky,
     // side-facing get horizon, downward-facing get ground bounce.
     let hemi        = saturate1(n.y * 0.5 + 0.5);
-    let sky_up      = atmosphere_color(vec3<f32>(0.0, 1.0, 0.0));
+    let sky_up      = sky_probe_term(SKY_PROBE_ZENITH);
     // Diffuse illumination belongs to the world, not the camera. Key the
     // horizon sample to the sun azimuth so a pan cannot relight a hillside.
     // Sky irradiance approximation: radiance of the horizon band the face
@@ -2834,8 +2834,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // every shaded face the same warm fill and erased the light direction.
     let sun_az = safe_normalize2(sun_dir.xz, vec2<f32>(1.0, 0.0));
     let face_toward_sun = saturate1(dot(n.xz, sun_az) * 0.5 + 0.5);
-    let solar_horizon = atmosphere_color(normalize(vec3<f32>(sun_az.x, 0.16, sun_az.y)));
-    let antisolar_horizon = atmosphere_color(normalize(vec3<f32>(-sun_az.x, 0.16, -sun_az.y)));
+    let solar_horizon = sky_probe_term(SKY_PROBE_SOLAR_HORIZON);
+    let antisolar_horizon = sky_probe_term(SKY_PROBE_ANTISOLAR_HORIZON);
     let sky_horizon = mix(antisolar_horizon, solar_horizon, face_toward_sun);
     let clear_sky_ambient = mix(sky_horizon * 0.78, sky_up, pow(hemi, 0.72));
     let overcast_sky_ambient = mix(
@@ -2845,7 +2845,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     );
     let sky_ambient = mix(clear_sky_ambient, overcast_sky_ambient, cloudiness * 0.65);
     let twilight_fill = 1.0 - smoothstep(-0.10, 0.22, sun_dir.y);
-    let low_solar_sky = atmosphere_color(normalize(vec3<f32>(sun_az.x, 0.035, sun_az.y)));
+    let low_solar_sky = sky_probe_term(SKY_PROBE_LOW_SOLAR);
     let low_horizon_sky = mix(antisolar_horizon, low_solar_sky, face_toward_sun);
     let terrain_sky_ambient = mix(sky_ambient, mix(sky_ambient, low_horizon_sky, 0.38), twilight_fill);
     // Dense clouds remove the direct sun, but should replace it with a broad
@@ -2861,7 +2861,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
         * (1.0 - smoothstep(0.10, 0.28, sun_dir.y));
     var dusk_sky_fill = vec3<f32>(0.0);
     if dusk_window > 0.001 {
-        let opposite_sky = atmosphere_color(normalize(vec3<f32>(-sun_dir.x, 0.55, -sun_dir.z)));
+        let opposite_sky = sky_probe_term(SKY_PROBE_OPPOSITE_SUN);
         let cool_environment = mix(opposite_sky, sky_up, 0.50);
         // The authored sky irradiance is a bounded fallback for an extremely
         // dim LUT at blue hour; it is not emissive material light.
@@ -2871,7 +2871,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     }
 
     // Ground bounce contribution for downward-facing surfaces
-    let ground_irr  = light.sun_color_daylight.rgb * sky_transmittance_to_sun(sun_dir.y)
+    let ground_irr  = light.sun_color_daylight.rgb * sun_spectral
                     * saturate1(sun_dir.y) * light.sun_dir_intensity.w * 0.05 * sun_trans;
     let ground_col  = mix(vec3<f32>(0.018, 0.025, 0.042), ground_irr, daylight);
     let ground_amt  = saturate1(1.0 - hemi) * 0.56;

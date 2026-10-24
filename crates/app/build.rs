@@ -43,6 +43,7 @@ fn validate() {
         ("diffuse gather", indirect_shader_source(false)),
         ("diffuse resolve", indirect_shader_source(true)),
         ("sky", sky_shader_source()),
+        ("sky probe", sky_probe_shader_source()),
         ("cloud", cloud_shader_source()),
         (
             "cloud hardware filtering",

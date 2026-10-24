@@ -15,6 +15,26 @@ struct AtmosphereRuntime {
 @group(2) @binding(4) var atmosphere_aerial_perspective : texture_3d<f32>;
 @group(2) @binding(5) var atmosphere_sampler : sampler;
 
+// Sky and sun terms whose inputs are the same for every pixel, evaluated once
+// per frame by sky_probe.wgsl (each was 1-3 LUT reads per terrain pixel).
+struct SkyProbe {
+    // 0 sun transmittance, 1 moon transmittance, 2 zenith sky,
+    // 3 solar horizon, 4 antisolar horizon, 5 low solar sky, 6 anti-sun sky.
+    terms : array<vec4<f32>, 8>,
+};
+const SKY_PROBE_SUN_TRANSMITTANCE  : u32 = 0u;
+const SKY_PROBE_MOON_TRANSMITTANCE : u32 = 1u;
+const SKY_PROBE_ZENITH             : u32 = 2u;
+const SKY_PROBE_SOLAR_HORIZON      : u32 = 3u;
+const SKY_PROBE_ANTISOLAR_HORIZON  : u32 = 4u;
+const SKY_PROBE_LOW_SOLAR          : u32 = 5u;
+const SKY_PROBE_OPPOSITE_SUN       : u32 = 6u;
+@group(2) @binding(6) var<uniform> sky_probe : SkyProbe;
+
+fn sky_probe_term(index: u32) -> vec3<f32> {
+    return sky_probe.terms[index].xyz;
+}
+
 const ATMOSPHERE_MODE_ANALYTIC_FALLBACK : u32 = 0u;
 const ATMOSPHERE_MODE_TRANSMITTANCE_LUT : u32 = 1u;
 const ATMOSPHERE_MODE_SKY_VIEW_LUT      : u32 = 2u;

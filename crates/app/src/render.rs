@@ -19,6 +19,7 @@ pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
 pub use streaming::indirect_draws::set_enabled as set_multidraw_enabled;
 
 mod atmosphere;
+mod sky_probe;
 pub mod atmosphere_config;
 pub mod atmosphere_params;
 pub mod cloud_governor;
@@ -2481,6 +2482,7 @@ impl GpuPendingInit {
                     queue,
                     self.atmosphere_layout.as_ref().unwrap().clone(),
                     self.camera_layout.as_ref().unwrap(),
+                    self.lighting_layout.as_ref().unwrap(),
                     self.camera_bind_group.as_ref().unwrap(),
                     scene_dims(config.width, config.height).0,
                     scene_dims(config.width, config.height).1,
@@ -4392,6 +4394,7 @@ impl Gpu {
         frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0;
 
         let terrain_start = Instant::now();
+        self.atmosphere.record_sky_probe(&mut encoder, &self.camera_bind_group, &self.lighting_bind_group);
         // Indirect arguments are written before the pass (writes land before submit).
         let multidraw = !paused && streaming::indirect_draws::active();
         let multidraw_counts = if multidraw {

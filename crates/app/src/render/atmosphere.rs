@@ -26,6 +26,7 @@ use crate::world::{CloudControls, LightingState};
 use super::atmosphere_config::{AtmosphereConfig, AtmospherePreset};
 use super::atmosphere_params::{AtmosphereMode, AtmosphereParameters, SkyArt};
 use super::debug::RenderDebugView;
+use super::sky_probe::{SKY_PROBE_BYTES, SkyProbe};
 
 pub const TRANSMITTANCE_LUT_WIDTH: u32 = 256;
 pub const TRANSMITTANCE_LUT_HEIGHT: u32 = 64;
@@ -230,6 +231,8 @@ struct AtmosphereLuts {
 pub struct AtmosphereRuntime {
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+    sky_probe: SkyProbe,
+    sky_probe_uniform: wgpu::Buffer,
     _luts: AtmosphereLuts,
     generation: AtmosphereLutGenerationResources,
     state: AtmosphereRuntimeState,
@@ -300,6 +303,16 @@ impl AtmosphereRuntime {
                     binding: 5,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(SKY_PROBE_BYTES),
+                    },
                     count: None,
                 },
             ],
@@ -571,6 +584,7 @@ impl AtmosphereRuntime {
         queue: &wgpu::Queue,
         bind_group_layout: wgpu::BindGroupLayout,
         camera_bind_group_layout: &wgpu::BindGroupLayout,
+        lighting_bind_group_layout: &wgpu::BindGroupLayout,
         camera_bind_group: &wgpu::BindGroup,
         surface_width: u32,
         surface_height: u32,
@@ -653,6 +667,7 @@ impl AtmosphereRuntime {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let sky_probe_uniform = SkyProbe::create_uniform(device);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("atmosphere bind group"),
             layout: &bind_group_layout,
@@ -681,12 +696,24 @@ impl AtmosphereRuntime {
                     binding: 5,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: sky_probe_uniform.as_entire_binding(),
+                },
             ],
         });
+        let sky_probe = SkyProbe::new(
+            device,
+            camera_bind_group_layout,
+            lighting_bind_group_layout,
+            &bind_group_layout,
+        );
 
         let mut runtime = Self {
             bind_group,
             uniform_buffer,
+            sky_probe,
+            sky_probe_uniform,
             _luts: luts,
             generation,
             state,
@@ -743,6 +770,23 @@ impl AtmosphereRuntime {
 
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
+    }
+
+    /// Refresh `sky_probe` for this frame. Record after the camera, lighting
+    /// and atmosphere writes and before the first pass that shades terrain.
+    pub fn record_sky_probe(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        camera_bind_group: &wgpu::BindGroup,
+        lighting_bind_group: &wgpu::BindGroup,
+    ) {
+        self.sky_probe.record(
+            encoder,
+            camera_bind_group,
+            lighting_bind_group,
+            &self.bind_group,
+            &self.sky_probe_uniform,
+        );
     }
 
     pub fn needs_aerial_perspective(&self) -> bool {

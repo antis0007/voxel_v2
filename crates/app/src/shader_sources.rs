@@ -10,7 +10,7 @@ macro_rules! shader_inputs {
 }
 const SHADER_INPUTS: &[(&str,&str)] = shader_inputs![
     "shaders/ui_magic.wgsl", "shaders/camera_lighting_shared.wgsl", "shaders/lighting_shared.wgsl",
-    "shaders/atmosphere_runtime_shared.wgsl", "shaders/atmosphere_shared.wgsl", "shaders/atmosphere_lut_generation.wgsl",
+    "shaders/atmosphere_runtime_shared.wgsl", "shaders/atmosphere_shared.wgsl", "shaders/atmosphere_lut_generation.wgsl", "shaders/sky_probe.wgsl",
     "shaders/cloud_shared.wgsl", "shaders/cloud_morphology.wgsl", "shaders/weather_volume.wgsl",
     "shaders/underwater_shared.wgsl", "shaders/mood_shared.wgsl", "shaders/terrain_detail_shared.wgsl",
     "shaders/enchantment_shared.wgsl", "shaders/world_shader.wgsl", "shaders/local_mist_shared.wgsl",
@@ -63,6 +63,7 @@ const LOCAL_MIST_WGSL: &str = include_str!("shaders/local_mist_shared.wgsl");
 const CLOUD_SHADER_BODY: &str = include_str!("shaders/cloud_shader.wgsl");
 const CLOUD_COMPOSITE_SHADER_BODY: &str = include_str!("shaders/cloud_composite.wgsl");
 const SKY_SHADER_BODY: &str = include_str!("shaders/sky_shader.wgsl");
+const SKY_PROBE_BODY: &str = include_str!("shaders/sky_probe.wgsl");
 const CLOUD_TEMPORAL_SHADER_BODY: &str = include_str!("shaders/cloud_temporal.wgsl");
 const CLOUD_WEATHER_SAMPLING_WGSL: &str = include_str!("shaders/cloud_weather_sampling.wgsl");
 const WEATHER_CLIP_WGSL: &str = include_str!("shaders/weather_clip_shared.wgsl");
@@ -80,6 +81,17 @@ pub(crate) fn world_shader_source() -> String {
         WEATHER_CLIP_WGSL,
         CLOUD_WEATHER_SAMPLING_WGSL,
         WORLD_SHADER_BODY
+    )
+}
+
+/// Per-frame sky and sun terms shared by every terrain pixel (`SkyProbe`).
+pub(crate) fn sky_probe_shader_source() -> String {
+    format!(
+        "{}\n{}\n{}\n{}",
+        CAMERA_LIGHTING_WGSL,
+        ATMOSPHERE_RUNTIME_WGSL,
+        ATMOSPHERE_WGSL,
+        SKY_PROBE_BODY
     )
 }
 
