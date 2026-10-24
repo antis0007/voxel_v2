@@ -159,30 +159,48 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
     // This breaks the one-puff-per-cell rhythm without another texture read.
     let cluster = smoothstep(0.24, 0.78, bank);
     let cell_coverage = saturate1(coverage * mix(0.82, 1.16, cluster) + storm * 0.05);
+    let odds = saturate1(cell_coverage * mix(0.55, 1.20, cluster) + storm * 0.22);
     let cell = vec2<i32>(floor(xz / size));
     var envelope = max(-2.0, density_floor);
-    for (var z = -1; z <= 1; z += 1) {
-        for (var x = -1; x <= 1; x += 1) {
-            let id = cell + vec2<i32>(x, z);
-            let seed = hash_cell1(id, 137);
+    // Luck cannot exceed 1, so this bounds every cell's presence before any
+    // cell hashes or shape evaluation. Sparse weather often rejects the
+    // entire neighborhood, including its nine otherwise empty candidates.
+    let max_presence = smoothstep(0.34, 0.72, odds * 1.20);
+    if max_presence <= 0.001 || 1.102 - (1.0 - max_presence) * 3.0 + 0.001 <= envelope {
+        return envelope;
+    }
+    // Visit the containing cell, then the closest neighboring side. A strong
+    // candidate raises the rejection bound for the remaining cells. This
+    // reduction is max(), so order cannot change the cloud field (unlike the
+    // smooth-max accumulation in broad_cloud_mass).
+    let order = array<i32, 3>(0, -1, 1);
+    let side_order = select(vec2<i32>(1), vec2<i32>(-1), fract(xz / size) > vec2<f32>(0.5));
+    for (var z = 0; z < 3; z += 1) {
+        for (var x = 0; x < 3; x += 1) {
+            let id = cell + vec2<i32>(order[x], order[z]) * side_order;
             let jitter = hash_cell2(id, 731);
             // Full-cell placement avoids a regularly spaced empty gutter
             // around every cell. Compact support below is exactly one cell,
             // so an omitted cell outside this 3x3 cannot contribute.
             let center = (vec2<f32>(id) + jitter) * size;
+            let local = xz - center;
+            if dot(local, local) >= size * size { continue; }
             // A per-cell lottery. High coverage makes clouds likely, and unlucky
             // cells stay empty so the spacing is not a filled grid.
             let luck = hash_cell1(id, 4099);
-            let odds = saturate1(cell_coverage * mix(0.55, 1.20, cluster) + storm * 0.22);
             let presence = smoothstep(0.34, 0.72, odds * mix(0.40, 1.20, luck));
             // No possible contribution: avoid axes, turrets and divisions for
             // absent cells and cells beyond their compact support.
-            let local = xz - center;
-            if presence <= 0.001 || dot(local, local) >= size * size { continue; }
+            if presence <= 0.001 { continue; }
+            // This fade is subtracted from every lobe after their smooth max.
+            // Include it in both upper bounds too: most neighboring cells sit
+            // in this wide fade, and cannot beat the current envelope.
+            let support_fade = smoothstep(0.50, 0.99, length(local) / size) * 4.0;
+            let cell_penalty = (1.0 - presence) * 3.0 + support_fade;
             // Monotone blends of lobe maxima (1,1,1,.65,1,1) peak below
             // 1.102, even with the optional companion. Reject weak cells
             // before hashing their shape/profile when they cannot win.
-            if 1.102 - (1.0 - presence) * 3.0 + 0.001 <= envelope { continue; }
+            if 1.102 - cell_penalty + 0.001 <= envelope { continue; }
             // Squared class biases the field toward scraps and puffs, with a
             // few cells growing into a distinctly larger neighbour.
             let scale_class = hash_cell1(id, 2811);
@@ -194,7 +212,8 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             let radius = min(radius_raw, size * 0.50);
             let profile = thermal_profile(id, jitter, h, radius, cluster, storm, thick_m);
             if thermal_upper_bound(profile, id, jitter, radius, size, local, h, storm)
-                - (1.0 - presence) * 3.0 + 0.001 <= envelope { continue; }
+                - cell_penalty + 0.001 <= envelope { continue; }
+            let seed = hash_cell1(id, 137);
             let random_axis = safe_normalize2(jitter - vec2<f32>(0.5), vec2<f32>(1.0, 0.0));
             // Use a wind-aligned long axis with per-cell angular variation.
             // The wider flow-aligned lobes make neighboring thermals join into
@@ -312,7 +331,7 @@ fn cumulus_envelope(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // The window must be wide: a thermal's arms and shoulders still
             // have positive dome at the cell edge, and a narrow ramp there is a
             // straight vertical wall. Spread it so the cloud thins instead.
-            dome -= smoothstep(0.50, 0.99, length(local) / size) * 4.0;
+            dome -= support_fade;
             envelope = max(envelope, dome - (1.0 - presence) * 3.0);
         }
     }
@@ -367,9 +386,19 @@ fn photographic_low_density(
     // The warp fades in above the base and keeps full strength in the tops.
     let warp_weight = smoothstep(0.02, 0.40, h);
     let shaped_h = clamp(h + height_warp * convective * warp_weight, 0.0, 1.0);
+    // Pure cumulus has no density below its condensation floor or above its
+    // cap. Resolve that mask before evaluating the expensive thermal field.
+    let floor_noise = weather_bank_noise(xz / 150.0 + vec2<f32>(3.3, 8.1));
+    let floor_lift = (floor_noise * 0.7 + shape.r * 0.3) * 0.12 * convective;
+    if convective == 1.0 && (shaped_h <= floor_lift || shaped_h >= 1.0) { return 0.0; }
     let lobes = (shape.r - 0.5) * 1.18 + (shape.g - 0.5) * 0.48;
     var field = 0.0;
     if convective > 0.0 {
+        // Evaluate the broad mass first: a thermal below mass - .24 cannot
+        // influence their smooth maximum. This raises the exact rejection
+        // floor where a broad bank already supplies the density.
+        let mass = broad_cloud_mass(rotate2(xz, 0.17) + organization * size * 0.80,
+            shaped_h, coverage, bank, storm, size, top_y - base_y);
         var envelope = -1.0;
         if convective > 0.001 {
             // For pure cumulus, fields below -.45 are discarded below. The
@@ -377,13 +406,12 @@ fn photographic_low_density(
             // Clamping it to F cannot affect a mass >= F+.24; otherwise their
             // blend stays below F+.24 and still produces zero density. This
             // lets the cell bounds reject empty space before expensive lobes.
-            let floor = select(-2.0, -0.45 - lobes - 0.24 - 0.002, convective == 1.0);
+            let floor = max(mass - 0.24 - 0.002,
+                select(-2.0, -0.45 - lobes - 0.24 - 0.002, convective == 1.0));
             envelope = cumulus_envelope(rotate2(xz, 0.43) + organization * size * 1.35 + warp,
                 shaped_h, coverage, bank, storm, size, top_y - base_y, floor);
         }
         // Pure sheets have no contribution from either convective field.
-        let mass = broad_cloud_mass(rotate2(xz, 0.17) + organization * size * 0.80,
-            shaped_h, coverage, bank, storm, size, top_y - base_y);
         envelope = cloud_smooth_max(envelope, mass, 0.24);
         field = envelope + lobes;
     }
@@ -439,7 +467,6 @@ fn photographic_low_density(
     // far puff is a smooth ellipsoid. Hashed value noise does not depend on
     // the mip level: two scales of billow keep far silhouettes lumpy.
     // One noise serves both the far billow and the condensation floor below.
-    let floor_noise = weather_bank_noise(xz / 150.0 + vec2<f32>(3.3, 8.1));
     if !shadow_lod && footprint > 1.0 {
         let far_w = smoothstep(1.0, 6.0, footprint);
         field -= (0.55 - floor_noise) * 0.60 * far_w;
@@ -457,7 +484,6 @@ fn photographic_low_density(
     // of the slab, so undersides seen edge-on are not one razor-flat plane.
     // Hashed, not texture-driven: the shape sample is mip-blurred to a
     // constant at range, which is exactly where flat bottoms show.
-    let floor_lift = (floor_noise * 0.7 + shape.r * 0.3) * 0.12 * convective;
     var base = smoothstep(floor_lift, floor_lift + 0.07, shaped_h);
     var water_content = 1.0;
     if convective < 1.0 {

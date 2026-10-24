@@ -1002,75 +1002,6 @@ fn sample_shadow_tap_context(world_pos: vec3<f32>, layer_id: i32) -> ShadowTapCo
     return ctx;
 }
 
-fn sample_local_self_shadow(
-    p: vec3<f32>,
-    light_dir: vec3<f32>,
-    layer_id: i32,
-    sample_footprint_m: f32,
-    layer_thickness_m: f32,
-) -> f32 {
-    // Integrate density * distance (meters), not average density. A thick
-    // storm must block more light than a small puff with the same density.
-    // Quadratic spacing resolves nearby lobes while reaching the far cloud edge.
-    let bounds = cloud_layer_bounds();
-    let y0 = select(select(bounds.low_base, bounds.mid_base, layer_id == 1), bounds.high_base, layer_id == 2);
-    let y1 = select(select(bounds.low_top, bounds.mid_top, layer_id == 1), bounds.high_top, layer_id == 2);
-    let exit_distance = max(slab_intersection(p, light_dir, y0, y1).y, 0.0);
-    let reach = min(exit_distance, clamp(layer_thickness_m * 3.0, 60.0, 900.0));
-    // Changing quadrature at a camera-distance threshold creates a visible
-    // lighting seam across an otherwise continuous storm deck.
-    let tap_count = select(3, 2, layer_id == LAYER_HIGH);
-    let sigma = select(select(0.022, 0.016, layer_id == 1), 0.010, layer_id == 2);
-    // A shared midpoint locks shadow quadrature to the condensation plane,
-    // producing horizontal lighting contours even when opacity is smooth.
-    // Vary the phase continuously in world space so moving the camera cannot
-    // make the shadow pattern crawl, and retain the full interval weights.
-    let shadow_phase = mix(0.22, 0.78, weather_bank_noise(p.xz / 137.0 + vec2<f32>(8.3, -2.1)));
-    var optical_depth = 0.0;
-    for (var i: i32 = 0; i < tap_count; i = i + 1) {
-        let u0 = f32(i) / f32(tap_count);
-        let u1 = f32(i + 1) / f32(tap_count);
-        let segment_start = u0 * u0 * reach;
-        let segment_end = u1 * u1 * reach;
-        let midpoint = (segment_start + segment_end) * 0.5;
-        let tap = sample_shadow_tap_context(p + light_dir * midpoint, layer_id);
-        if !cell_aabb_valid(tap.aabb) { continue; }
-        // Integrate the local slab overlap instead of switching an entire
-        // light tap on/off at a layer boundary (visible as a hard shadow plane).
-        let hit = slab_intersection(p, light_dir, tap.aabb.y_min, tap.aabb.y_max);
-        let start = max(segment_start, hit.x);
-        let end = min(segment_end, hit.y);
-        let segment = max(end - start, 0.0);
-        if segment <= 0.0 { continue; }
-        let t = mix(start, end, shadow_phase);
-        let q = p + light_dir * t;
-        // Match filtering to the light segment without increasing tap count.
-        let shadow_footprint = max(sample_footprint_m, segment * 0.5);
-
-        // Branch explicitly: select() evaluates all three density functions.
-        var d: f32;
-        if layer_id == LAYER_HIGH {
-            d = sample_cirrus_density(q, tap.aabb.y_min, tap.aabb.y_max, q.y,
-                max(shadow_footprint, 24.0), tap.weather);
-        } else if layer_id == LAYER_MID {
-            d = sample_mid_density(q, tap.aabb.y_min, tap.aabb.y_max, q.y,
-                max(shadow_footprint, 24.0), tap.weather);
-        } else {
-            // Reuse the continuous macro field at the actual light sample; a
-            // fixed coverage bias casts shadows from clouds that do not exist.
-            let offset = layer_wind_advection_offset(LAYER_LOW);
-            let bias = macro_coverage_bias(q.xz + offset, vec2<f32>(0.0), 0.0, 0.0);
-            d = sample_low_density(q, tap.aabb.y_min, tap.aabb.y_max, q.y,
-                1.0, 0.0, 0.0, true, shadow_footprint, tap.weather, bias);
-        }
-        optical_depth += d * segment * sigma;
-        // All segments are needed: higher scattering orders still carry
-        // exp(-0.18 * depth) energy at depth=8. Early termination there made
-        // entire planes of a storm jump between two illumination values.
-    }
-    return optical_depth;
-}
-
 // ============================================================
 // MAIN RAY MARCH — FLAT SLAB MARCH WITH ADAPTIVE AABB CULLING
 //
@@ -1100,26 +1031,94 @@ fn cell_aabb_for_layer(w: CellWeather, layer_id: i32) -> CellAABB {
     return cell_low_aabb(w);
 }
 
-// Density-only quadrature taps. Shading still runs once per segment; resolving
-// the volume along a long grazing segment is cheaper than adding shadow rays.
-fn segment_density(p: vec3<f32>, layer_id: i32, footprint: f32,
-    wind_offset: vec2<f32>, weather: CellWeather) -> f32 {
-    let bounds = cell_aabb_for_layer(weather, layer_id);
-    if !cell_aabb_valid(bounds) || p.y < bounds.y_min || p.y > bounds.y_max {
-        return 0.0;
+// View quadrature and its light integral query the same procedural medium.
+// Keep that large evaluator at ONE call site, rather than expanding the cell
+// loops separately into the view and shadow paths. Query locations, footprints
+// and integration weights are the same as the separate integrals.
+fn sample_segment_medium(
+    p: vec3<f32>, ray_dir: vec3<f32>, layer_id: i32, footprint: f32,
+    wind_offset: vec2<f32>, step_weather: CellWeather,
+    segment_length: f32, jitter: f32, phase: f32, step_index: i32,
+    quadrature: f32, light_dir: vec3<f32>, layer_thickness: f32,
+    trace_shadow: bool, dist_fade: f32, extinction: f32,
+) -> vec2<f32> {
+    let view_taps = select(1, 2, quadrature > 0.0);
+    let light_taps = select(3, 2, layer_id == LAYER_HIGH);
+    let query_count = view_taps + select(0, light_taps, trace_shadow);
+    let sigma = select(select(0.022, 0.016, layer_id == LAYER_MID), 0.010, layer_id == LAYER_HIGH);
+    var density_first = 0.0;
+    var density_second = 0.0;
+    var optical_depth = 0.0;
+    var reach = 0.0;
+    var shadow_phase = 0.0;
+    for (var query = 0; query < query_count; query += 1) {
+        let shadow_query = query >= view_taps;
+        var q = p;
+        var weather = step_weather;
+        var local_bounds: CellAABB;
+        var sample_footprint = footprint;
+        var shadow_segment = 0.0;
+        if !shadow_query {
+            if quadrature > 0.0 {
+                let start_p = p - ray_dir * segment_length * jitter;
+                let stratum = fract(phase + f32(step_index) * 0.754877666);
+                let offset = select(mix(jitter, stratum * 0.5, quadrature),
+                    0.5 + fract(stratum + 0.5) * 0.5, query == 1);
+                q = start_p + ray_dir * segment_length * offset;
+                weather = weather_at_world(q.xz + wind_offset);
+            }
+            local_bounds = cell_aabb_for_layer(weather, layer_id);
+            if !cell_aabb_valid(local_bounds) || q.y < local_bounds.y_min || q.y > local_bounds.y_max {
+                continue;
+            }
+        } else {
+            if query == view_taps {
+                let density = mix(density_first, density_second, quadrature * 0.5) * dist_fade;
+                let alpha = 1.0 - exp(-density * extinction * segment_length);
+                if density <= 0.0005 || alpha <= 0.0002 { break; }
+                let bounds = cloud_layer_bounds();
+                let y0 = select(select(bounds.low_base, bounds.mid_base, layer_id == LAYER_MID), bounds.high_base, layer_id == LAYER_HIGH);
+                let y1 = select(select(bounds.low_top, bounds.mid_top, layer_id == LAYER_MID), bounds.high_top, layer_id == LAYER_HIGH);
+                let exit_distance = max(slab_intersection(p, light_dir, y0, y1).y, 0.0);
+                reach = min(exit_distance, clamp(layer_thickness * 3.0, 60.0, 900.0));
+                shadow_phase = mix(0.22, 0.78, weather_bank_noise(p.xz / 137.0 + vec2<f32>(8.3, -2.1)));
+            }
+            let tap_index = query - view_taps;
+            let u0 = f32(tap_index) / f32(light_taps);
+            let u1 = f32(tap_index + 1) / f32(light_taps);
+            let start_t = u0 * u0 * reach;
+            let end_t = u1 * u1 * reach;
+            let tap = sample_shadow_tap_context(p + light_dir * ((start_t + end_t) * 0.5), layer_id);
+            if !cell_aabb_valid(tap.aabb) { continue; }
+            let hit = slab_intersection(p, light_dir, tap.aabb.y_min, tap.aabb.y_max);
+            let start = max(start_t, hit.x);
+            let end = min(end_t, hit.y);
+            shadow_segment = max(end - start, 0.0);
+            if shadow_segment <= 0.0 { continue; }
+            q = p + light_dir * mix(start, end, shadow_phase);
+            weather = tap.weather;
+            local_bounds = tap.aabb;
+            sample_footprint = max(footprint, shadow_segment * 0.5);
+            if layer_id != LAYER_LOW { sample_footprint = max(sample_footprint, 24.0); }
+        }
+        var density: f32;
+        if layer_id == LAYER_HIGH {
+            density = sample_cirrus_density(q, local_bounds.y_min, local_bounds.y_max, q.y, sample_footprint, weather);
+        } else if layer_id == LAYER_MID {
+            density = sample_mid_density(q, local_bounds.y_min, local_bounds.y_max, q.y, sample_footprint, weather);
+        } else {
+            var bias = 1.0;
+            if shadow_query || weather.coverage > 0.02 || weather.storm > 0.04 {
+                bias = macro_coverage_bias(q.xz + wind_offset, vec2<f32>(0.0), 0.0, 0.0);
+            }
+            density = sample_low_density(q, local_bounds.y_min, local_bounds.y_max, q.y,
+                1.0, 0.0, 0.0, shadow_query, sample_footprint, weather, bias);
+        }
+        if shadow_query { optical_depth += density * shadow_segment * sigma; }
+        else if query == 0 { density_first = density; }
+        else { density_second = density; }
     }
-    if layer_id == LAYER_HIGH {
-        return sample_cirrus_density(p, bounds.y_min, bounds.y_max, p.y, footprint, weather);
-    }
-    if layer_id == LAYER_MID {
-        return sample_mid_density(p, bounds.y_min, bounds.y_max, p.y, footprint, weather);
-    }
-    var bias = 1.0;
-    if weather.coverage > 0.02 || weather.storm > 0.04 {
-        bias = macro_coverage_bias(p.xz + wind_offset, vec2<f32>(0.0), 0.0, 0.0);
-    }
-    return sample_low_density(p, bounds.y_min, bounds.y_max, p.y,
-        1.0, 0.0, 0.0, false, footprint, weather, bias);
+    return vec2<f32>(mix(density_first, density_second, quadrature * 0.5), optical_depth);
 }
 
 fn march_layer_core(
@@ -1353,24 +1352,14 @@ fn march_layer_core(
         // taps together. The latter leaves correlated gaps which show up as
         // horizontal shelves through thin, distant storm condensation floors.
         let quadrature = smoothstep(8.0, 22.0, integration_length);
-        var raw_density: f32;
-        if quadrature > 0.0 {
-            let start_p=p-ray_dir*integration_length*jitter;
-            let stratum=fract(phase + f32(i)*0.754877666);
-            // Nest the one-tap rule in the two-tap rule. Move its first tap
-            // continuously into the lower stratum while the upper tap gains
-            // weight. The endpoints retain the original rules, without a
-            // third complete density evaluation throughout the transition.
-            let q0=start_p+ray_dir*integration_length*mix(jitter,stratum*0.5,quadrature);
-            let q1=start_p+ray_dir*integration_length*(0.5+fract(stratum+0.5)*0.5);
-            let d0=segment_density(q0,layer_id,sample_footprint_m,wx_offset_march,
-                    weather_at_world(q0.xz+wx_offset_march));
-            let d1=segment_density(q1,layer_id,sample_footprint_m,wx_offset_march,
-                    weather_at_world(q1.xz+wx_offset_march));
-            raw_density=mix(d0,d1,quadrature*0.5);
-        } else {
-            raw_density=segment_density(p,layer_id,sample_footprint_m,wx_offset_march,step_weather);
-        }
+        let layer_thickness_m = max(step_top_y - step_base_y, 1.0);
+        let macro_blend = max(smoothstep(26.0, 120.0, sample_footprint_m), smoothstep(0.25, 0.80, dist_t));
+        let reuse_shadow = layer_id == LAYER_LOW && shadow_cache_ok
+            && shadow_cache_step == i - 1 && !shadow_cache_reused;
+        let medium = sample_segment_medium(p, ray_dir, layer_id, sample_footprint_m,
+            wx_offset_march, step_weather, integration_length, jitter, phase, i, quadrature,
+            shadow_dir, layer_thickness_m, macro_blend < 1.0 && !reuse_shadow, dist_fade, extinction);
+        let raw_density = medium.x;
         let sample_density = raw_density * dist_fade;
         debug_density_max = max(debug_density_max, sample_density);
 
@@ -1385,14 +1374,9 @@ fn march_layer_core(
         total_steps += 1;
 
         if sample_density > 0.0005 && step_alpha_cheap > 0.0002 {
-            let layer_thickness_m = max(step_top_y - step_base_y, 1.0);
             let layer_mid_y = (step_base_y + step_top_y) * 0.5;
             let project_t = max((layer_mid_y - p.y) / max(shadow_dir.y, 0.08), 0.0);
             let macro_sample_xz = p.xz + shadow_dir.xz * min(project_t, 2000.0);
-            let macro_blend = max(
-                smoothstep(26.0, 120.0, sample_footprint_m),
-                smoothstep(0.25, 0.80, dist_t),
-            );
             var macro_shadow_od = 0.0;
             if macro_blend > 0.0 {
                 macro_shadow_od = macro_shadow_optical_depth(macro_sample_xz, layer_id);
@@ -1408,14 +1392,10 @@ fn march_layer_core(
                 // Only the low layer, and only directly after an evaluated
                 // step: a cache carried across a gap in the cloud would light
                 // the next cloud with the previous one's shadow.
-                let reuse = layer_id == LAYER_LOW && shadow_cache_ok
-                    && shadow_cache_step == i - 1 && !shadow_cache_reused;
-                if reuse {
+                if reuse_shadow {
                     shadow_cache_reused = true;
                 } else {
-                    shadow_cache = sample_local_self_shadow(
-                        p, shadow_dir, layer_id, sample_footprint_m, layer_thickness_m,
-                    );
+                    shadow_cache = medium.y;
                     shadow_cache_ok = true;
                     shadow_cache_reused = false;
                 }
@@ -1568,74 +1548,6 @@ fn march_layer_core(
     );
 }
 
-// ---- Per-layer march wrappers ----
-
-fn march_low_layer(
-    ray_origin: vec3<f32>,
-    ray_dir   : vec3<f32>,
-    cam_dist_offset: f32,
-    sun_dir   : vec3<f32>,
-    moon_dir  : vec3<f32>,
-    frag_coord: vec2<f32>,
-    base_y    : f32,
-    top_y     : f32,
-    max_dist  : f32,
-    cirrus_transmittance_atten: f32,
-    cone_spread: f32,
-    frame_sky: CloudHemisphere,
-) -> CloudSample {
-    // extinction=0.022: calibrated for ~12-22m step sizes. density=0.5, dt=15m →
-    // per-step alpha=0.154. Over 15 steps (225m cloud) → ~90% opaque. Realistic.
-    return march_layer_core(
-        ray_origin, ray_dir, cam_dist_offset, sun_dir, moon_dir, frag_coord,
-        base_y, top_y, max_dist, 0.022, 0.72, 0.74,
-        false, false, cirrus_transmittance_atten, cone_spread, frame_sky
-    );
-}
-
-fn march_mid_layer(
-    ray_origin: vec3<f32>,
-    ray_dir   : vec3<f32>,
-    cam_dist_offset: f32,
-    sun_dir   : vec3<f32>,
-    moon_dir  : vec3<f32>,
-    frag_coord: vec2<f32>,
-    base_y    : f32,
-    top_y     : f32,
-    max_dist  : f32,
-    cirrus_transmittance_atten: f32,
-    cone_spread: f32,
-    frame_sky: CloudHemisphere,
-) -> CloudSample {
-    // extinction=0.016: mid clouds are thinner/less dense than low cumulus.
-    return march_layer_core(
-        ray_origin, ray_dir, cam_dist_offset, sun_dir, moon_dir, frag_coord,
-        base_y, top_y, max_dist, 0.016, 0.75, 0.70,
-        false, true, cirrus_transmittance_atten, cone_spread, frame_sky
-    );
-}
-
-fn march_high_layer(
-    ray_origin: vec3<f32>,
-    ray_dir   : vec3<f32>,
-    cam_dist_offset: f32,
-    sun_dir   : vec3<f32>,
-    moon_dir  : vec3<f32>,
-    frag_coord: vec2<f32>,
-    base_y    : f32,
-    top_y     : f32,
-    max_dist  : f32,
-    cone_spread: f32,
-    frame_sky: CloudHemisphere,
-) -> CloudSample {
-    // extinction=0.010: cirrus ice crystals have lower volumetric density than water droplets.
-    return march_layer_core(
-        ray_origin, ray_dir, cam_dist_offset, sun_dir, moon_dir, frag_coord,
-        base_y, top_y, max_dist, 0.010, 0.75, 0.86,
-        true, false, 1.0, cone_spread, frame_sky
-    );
-}
-
 // Approximate attenuation through the cirrus layer for rays heading upward.
 fn approx_cirrus_transmittance(dir: vec3<f32>) -> f32 {
     if authored_cirrus() <= 0.010 { return 1.0; }
@@ -1734,41 +1646,31 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // ---- March each layer via DDA ----
     // max_dist is a budget from the camera. Subtract the camera-to-slab-entry
     // offset so the march doesn't extend beyond the visibility horizon.
-    var low: CloudSample;
-    if low_ro.valid {
-        let low_max_dist = max(max_dist - low_offset, 0.0);
-        low = march_low_layer(
-            low_ro.origin, dir, low_offset, sun_dir, moon_dir, pixel_jitter,
-            bounds.low_base, bounds.low_top, low_max_dist,
-            cirrus_trans, cone_spread, frame_sky,
-        );
-    } else {
-        low = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);
-    }
-
-    var mid: CloudSample;
-    if mid_ro.valid {
-        let mid_max_dist = max(max_dist - mid_offset, 0.0);
-        mid = march_mid_layer(
-            mid_ro.origin, dir, mid_offset, sun_dir, moon_dir, pixel_jitter,
-            bounds.mid_base, bounds.mid_top, mid_max_dist,
-            cirrus_trans, cone_spread, frame_sky,
-        );
-    } else {
-        mid = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);
-    }
-
-    var high: CloudSample;
-    if high_ro.valid {
-        let high_max_dist = max(max_dist - high_offset, 0.0);
-        high = march_high_layer(
-            high_ro.origin, dir, high_offset, sun_dir, moon_dir, pixel_jitter,
-            bounds.high_base, bounds.high_top, high_max_dist,
+    // Keep the march at one call site, sharing its large density evaluator
+    // across layers as well as across view/light taps. Layer parameters retain
+    // their calibrated values and each layer still runs its full step budget.
+    let origins = array<LayerRayOrigin, 3>(low_ro, mid_ro, high_ro);
+    let offsets = vec3<f32>(low_offset, mid_offset, high_offset);
+    let bases = vec3<f32>(bounds.low_base, bounds.mid_base, bounds.high_base);
+    let tops = vec3<f32>(bounds.low_top, bounds.mid_top, bounds.high_top);
+    let extinctions = vec3<f32>(0.022, 0.016, 0.010);
+    let ambient_gains = vec3<f32>(0.72, 0.75, 0.75);
+    let phases = vec3<f32>(0.74, 0.70, 0.86);
+    var cloud_layers: array<CloudSample, 3>;
+    for (var layer = 0; layer < 3; layer += 1) {
+        cloud_layers[layer] = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);
+        if !origins[layer].valid { continue; }
+        cloud_layers[layer] = march_layer_core(
+            origins[layer].origin, dir, offsets[layer], sun_dir, moon_dir, pixel_jitter,
+            bases[layer], tops[layer], max(max_dist - offsets[layer], 0.0),
+            extinctions[layer], ambient_gains[layer], phases[layer],
+            layer == LAYER_HIGH, layer == LAYER_MID, select(cirrus_trans, 1.0, layer == LAYER_HIGH),
             cone_spread, frame_sky,
         );
-    } else {
-        high = CloudSample(vec3<f32>(0.0), 1.0, vec4<f32>(0.0), 0.0);
     }
+    let low = cloud_layers[LAYER_LOW];
+    let mid = cloud_layers[LAYER_MID];
+    let high = cloud_layers[LAYER_HIGH];
 
     // ---- Depth Sort & Composite ----
     let rain = march_rain_volume(dir, max_dist, cone_spread, in.pos.xy);
