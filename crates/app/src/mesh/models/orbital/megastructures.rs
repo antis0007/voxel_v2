@@ -20,6 +20,8 @@ pub(super) fn build(mesh:&mut Model,world:&World,day:&DayNightCycle,viewer:Vec3)
         match c.site.kind {
             Kind::Foundry=>foundry(mesh,c.site.position,day,c.site.key),
             Kind::TwinHabitat=>habitat(mesh,c.site.position,day,c.site.key),
+            Kind::MirrorArray=>mirror_array(mesh,c.site.position,day,c.site.key),
+            Kind::DeadRelay=>dead_relay(mesh,c.site.position,day,c.site.key),
         }
         mesh.scale_since(mark,c.site.position,Vec3::splat(c.site.kind.scale()));
         mesh.rotate_since(mark,c.site.position,c.site.orientation);
@@ -143,4 +145,104 @@ fn habitat(mesh:&mut Model,p:Vec3,day:&DayNightCycle,key:u32) {
                 Quat::from_rotation_z(x*0.22),DARK,1.0);
         }
     }}
+}
+
+fn unit(key:u32,i:u32)->f32 {(crate::world::hash_u32(key^i.wrapping_mul(0x9e3779b9))>>8) as f32/16777216.0}
+/// A ring of sun mirrors on spokes. Most petals still hold their cant; a few are
+/// stuck at the wrong angle and a few are gone, leaving bare spoke stubs.
+fn mirror_array(mesh:&mut Model,p:Vec3,day:&DayNightCycle,key:u32) {
+    const PETALS:u32=18;
+    let ring=mesh.mark();
+    part(mesh,p,Vec3::new(260.0,120.0,260.0),Quat::IDENTITY,METAL,0.5);
+    let step=std::f32::consts::TAU/PETALS as f32;
+    let dir=|i:u32|{let a=i as f32*step;Vec3::new(a.cos(),0.0,a.sin())};
+    for i in 0..PETALS {
+        let a=i as f32*step;
+        let radial=dir(i);
+        strut(mesh,p+radial*60.0,p+radial*1200.0,24.0,METAL);
+        strut(mesh,p+radial*700.0,p+dir(i+1)*700.0,16.0,METAL);
+        let roll=(i+key)%7;
+        if roll==0 {
+            // Snapped petal: only a bent stub of its frame remains.
+            strut(mesh,p+radial*1200.0,p+radial*1300.0+Vec3::Y*70.0,18.0,COPPER);
+            continue;
+        }
+        let cant=if (i+key).is_multiple_of(5) {0.9+unit(key,i)*0.5} else {0.16};
+        let q=Quat::from_rotation_y(-a)*Quat::from_rotation_z(cant);
+        part(mesh,p+radial*1260.0,Vec3::new(780.0,12.0,420.0),q,[0.38,0.47,0.56],1.0);
+    }
+    // One slow turn per few minutes; the whole ring wheels, the hub stays fixed.
+    let spin=(catalog::seconds(day)*std::f64::consts::TAU/60_000.0).rem_euclid(std::f64::consts::TAU) as f32;
+    mesh.rotate_since(ring,p,Quat::from_rotation_y(spin));
+}
+/// A dead relay tumbling end over end: one solar wing intact, the other snapped
+/// with its panels drifting off, the dish cracked and canted. No lamps.
+fn dead_relay(mesh:&mut Model,p:Vec3,day:&DayNightCycle,key:u32) {
+    const WEATHERED:[f32;3]=[0.30,0.27,0.24];
+    const RUST:[f32;3]=[0.38,0.22,0.12];
+    let body=mesh.mark();
+    strut(mesh,p-Vec3::X*350.0,p+Vec3::X*350.0,30.0,WEATHERED);
+    part(mesh,p,Vec3::new(200.0,150.0,150.0),Quat::IDENTITY,WEATHERED,0.0);
+    // Intact wing: arm and five panels.
+    strut(mesh,p+Vec3::new(90.0,0.0,0.0),p+Vec3::new(90.0,0.0,420.0),16.0,METAL);
+    for j in 0..5 {
+        part(mesh,p+Vec3::new(90.0,0.0,70.0+j as f32*75.0),Vec3::new(130.0,10.0,66.0),Quat::IDENTITY,DARK,1.0);
+    }
+    // Snapped wing: a short stump, then panels adrift at odd angles.
+    strut(mesh,p+Vec3::new(-90.0,0.0,0.0),p+Vec3::new(-90.0,10.0,-130.0),18.0,RUST);
+    for j in 0..4 {
+        let at=p+Vec3::new(-90.0+(unit(key,10+j)-0.5)*220.0,(unit(key,20+j)-0.5)*180.0,-200.0-j as f32*110.0);
+        let q=Quat::from_euler(glam::EulerRot::XYZ,unit(key,30+j)*3.0,unit(key,40+j)*3.0,unit(key,50+j)*3.0);
+        part(mesh,at,Vec3::new(130.0,10.0,66.0),q,DARK,1.0);
+    }
+    // Cracked dish, off its mount.
+    part(mesh,p+Vec3::new(350.0,18.0,0.0),Vec3::new(170.0,24.0,170.0),Quat::from_rotation_z(0.55),WEATHERED,0.0);
+    strut(mesh,p+Vec3::new(350.0,0.0,0.0),p+Vec3::new(430.0,60.0,10.0),4.0,RUST);
+    // A few loose fragments.
+    for j in 0..6 {
+        let at=p+Vec3::new((unit(key,60+j)-0.5)*900.0,(unit(key,70+j)-0.5)*300.0,(unit(key,80+j)-0.5)*500.0);
+        part(mesh,at,Vec3::splat(12.0+unit(key,90+j)*26.0),Quat::from_rotation_y(unit(key,100+j)*3.0),WEATHERED,0.0);
+    }
+    // Slow tumble about an axis fixed by the site key.
+    let axis=Vec3::new(0.35+unit(key,1),0.2+unit(key,2),0.6+unit(key,3)).normalize();
+    let angle=(catalog::seconds(day)*std::f64::consts::TAU/40_000.0).rem_euclid(std::f64::consts::TAU) as f32;
+    mesh.rotate_since(body,p,Quat::from_axis_angle(axis,angle));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extent(mesh:&Model,centre:Vec3)->f32 {
+        mesh.vertices.iter().map(|v|(Vec3::from_array(v.pos)-centre).length()).fold(0.0,f32::max)
+    }
+
+    #[test]
+    fn mirror_array_and_dead_relay_emit_bounded_geometry() {
+        let day=DayNightCycle::default();
+        let c=Vec3::new(10.0,20.0,30.0);
+        let mut mirror=Model::new(1.0);
+        mirror_array(&mut mirror,c,&day,7);
+        assert!(mirror.vertices.len()>1_000,"{} vertices",mirror.vertices.len());
+        // Authored ring: 1.2 km spokes plus petals out to ~1.7 km.
+        assert!(extent(&mirror,c)<1_800.0,"{}",extent(&mirror,c));
+        let mut relay=Model::new(1.0);
+        dead_relay(&mut relay,c,&day,7);
+        assert!(relay.vertices.len()>500,"{} vertices",relay.vertices.len());
+        // Truss, wings, dish and drifting fragments stay within a kilometre.
+        assert!(extent(&relay,c)<1_000.0,"{}",extent(&relay,c));
+    }
+
+    #[test]
+    fn mirror_array_turns_with_the_orbital_clock() {
+        let c=Vec3::ZERO;
+        let mut a=Model::new(1.0);
+        mirror_array(&mut a,c,&DayNightCycle::default(),7);
+        let mut later=DayNightCycle::default();
+        later.advance(20.0);
+        let mut b=Model::new(1.0);
+        mirror_array(&mut b,c,&later,7);
+        assert_eq!(a.vertices.len(),b.vertices.len());
+        assert!(a.vertices.iter().zip(&b.vertices).any(|(p,q)|p.pos!=q.pos),"ring did not move");
+    }
 }

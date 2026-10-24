@@ -12,9 +12,11 @@ pub const PLANET_RADIUS_M:f64=6_371_000.0/SKY_SCALE;
 /// the sun, planet spin and eclipses share one frame.
 pub const DAY_SECONDS:f64=86400.0;
 /// Laps per world day of the reference shell (the foundry's). Real low orbit is
-/// about 15, which on the accelerated day gives three-second passes; 3 keeps a
-/// pass watchable while staying clear of ground-synchronous creep.
-pub const ORBITS_PER_DAY:f64=3.0;
+/// about 15, which on the accelerated day gives three-second passes. 2.25 keeps
+/// a pass watchable and slows the skyhook tethers to 9 s (Courier), 26 s (Talon)
+/// and 88 s (Ark) per real turn, while staying clear of ground-synchronous creep
+/// (the pass period diverges as laps per day approach 1).
+pub const ORBITS_PER_DAY:f64=2.25;
 const REFERENCE_RADIUS_M:f64=PLANET_RADIUS_M+420_000.0/SKY_SCALE;
 const REFERENCE_RATE:f64=std::f64::consts::TAU*ORBITS_PER_DAY/DAY_SECONDS;
 /// Gravitational parameter tuned so the reference shell meets ORBITS_PER_DAY;
@@ -26,20 +28,32 @@ pub const PENUMBRA_M:f64=12_000.0/SKY_SCALE;
 pub const RANGE_M:f32=20_000.0;
 
 #[derive(Clone,Copy,Debug)]
-pub enum Kind { Foundry,TwinHabitat }
+pub enum Kind { Foundry,TwinHabitat,MirrorArray,DeadRelay }
 impl Kind {
-    pub fn name(self)->&'static str {match self {Self::Foundry=>"Loom orbital foundry",Self::TwinHabitat=>"Continuum twin habitat"}}
+    pub fn name(self)->&'static str {match self {
+        Self::Foundry=>"Loom orbital foundry",
+        Self::TwinHabitat=>"Continuum twin habitat",
+        Self::MirrorArray=>"Dawn mirror array",
+        Self::DeadRelay=>"Derelict relay station",
+    }}
     pub fn description(self)->&'static str {match self {
         Self::Foundry=>"64 km orbital fabrication truss · sealed industrial districts",
         Self::TwinHabitat=>"Paired 36 km pressure cylinders · 4.8 km diameter · counter-rotating living drums",
+        Self::MirrorArray=>"34 km solar mirror ring · a few petals still turn to the sun",
+        Self::DeadRelay=>"14 km relay truss · tumbling, one wing snapped, unpowered",
     }}
     /// Overhead sweep on the default day (480 s, orbital clock x180): the foundry
     /// at 110 km crosses the sky at ~34 deg/s, the habitat at 130 km at ~28.
     /// Shells above ~200 km read as static from the ground; the smooth clock in
     /// main.rs (`lead_seconds`) is what keeps this speed from looking like jumps.
-    pub fn altitude_m(self)->f64 {(match self {Self::Foundry=>440_000.0,Self::TwinHabitat=>520_000.0})/SKY_SCALE}
-    pub fn scale(self)->f32 {10.0}
-    pub fn bound_m(self)->f64 {match self {Self::Foundry=>40_000.0,Self::TwinHabitat=>24_000.0}}
+    pub fn altitude_m(self)->f64 {(match self {
+        Self::Foundry=>440_000.0,Self::TwinHabitat=>520_000.0,
+        Self::MirrorArray=>800_000.0,Self::DeadRelay=>600_000.0,
+    })/SKY_SCALE}
+    /// Authored-to-sky scale. The ring and the wreck are drawn larger than the
+    /// working stations so they read as shapes, not specks, at their distance.
+    pub fn scale(self)->f32 {match self {Self::MirrorArray=>14.0,Self::DeadRelay=>20.0,_=>10.0}}
+    pub fn bound_m(self)->f64 {match self {Self::Foundry=>40_000.0,Self::TwinHabitat=>24_000.0,Self::MirrorArray=>20_000.0,Self::DeadRelay=>14_000.0}}
 }
 #[derive(Clone,Copy,Debug)]
 pub struct Site {pub key:u32,pub kind:Kind,pub position:Vec3,pub orientation:Quat,pub sunlight:f32}
@@ -74,8 +88,8 @@ pub fn contacts(seed:u32,day:&DayNightCycle,viewer:Vec3)->Vec<Contact> {
     // direction into inertial space for the planet's cylindrical eclipse test.
     let spin=planet_spin(time);
     let sun=spin*day.lighting().sun_dir.as_dvec3().normalize();
-    let mut result=Vec::with_capacity(2);
-    for (kind,salt) in [(Kind::Foundry,0x10a1_u32),(Kind::TwinHabitat,0x10a2)] {
+    let mut result=Vec::with_capacity(4);
+    for (kind,salt) in [(Kind::Foundry,0x10a1_u32),(Kind::TwinHabitat,0x10a2),(Kind::MirrorArray,0x10a3),(Kind::DeadRelay,0x10a4)] {
         // One of each, as the lore has it ("the Loom", "the Continuum"). Three
         // members spaced member/3 day apart were a whole lap apart at
         // ORBITS_PER_DAY = 3, so they all hung in the same patch of sky.
@@ -132,5 +146,31 @@ mod tests {
             let sweep = overhead_sweep_deg_per_real_s(kind);
             assert!((20.0..40.0).contains(&sweep), "{kind:?} sweeps {sweep:.1} deg/s");
         }
+    }
+
+    #[test]
+    fn derelicts_and_mirrors_drift_slower_than_the_working_stations() {
+        for kind in [Kind::MirrorArray, Kind::DeadRelay] {
+            let sweep = overhead_sweep_deg_per_real_s(kind);
+            assert!((8.0..20.0).contains(&sweep), "{kind:?} sweeps {sweep:.1} deg/s");
+        }
+    }
+
+    #[test]
+    fn every_kind_can_be_seen_from_the_ground() {
+        let mut seen = std::collections::BTreeSet::new();
+        // Four days across a few worlds: each kind clears the horizon at some point.
+        for seed in [7_u32, 74, 123, 9001] {
+            for step in 0..480 {
+                let mut d = DayNightCycle::default();
+                d.advance(step as f32 * 4.0);
+                for c in contacts(seed, &d, Vec3::new(0.0, 50.0, 0.0)) {
+                    if c.elevation_deg > 5.0 {
+                        seen.insert(c.site.kind.name());
+                    }
+                }
+            }
+        }
+        assert_eq!(seen.len(), 4, "{seen:?}");
     }
 }

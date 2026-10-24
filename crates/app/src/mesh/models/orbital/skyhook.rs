@@ -45,10 +45,15 @@ pub(super) fn build(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer
         let mark = mesh.mark();
         let axis = (c.tip - c.hub).normalize();
         let (truss, grapple) = hardware(h.size);
+        // At 20-100 km the real hardware is a few pixels. Hold the drawn size to a
+        // pixel floor so the hub, grapple and tether can be seen and followed.
+        let seen = |at: Vec3, px: f32| (at - viewer).length().max(1.0) * pixel * px;
+        let braid = braid_width(h.size).max(seen((c.hub + c.tip) * 0.5, 2.0));
+        let (truss, grapple) = (truss.max(seen(c.hub, 40.0)), grapple.max(seen(c.tip, 14.0)));
         // Counter-arm: a short stub past the hub carries the ballast mass.
         let ballast = c.hub - axis * (h.tether_m as f32 * 0.12);
-        tether(mesh, c.hub, c.tip, viewer, pixel, BRAID, braid_width(h.size));
-        tether(mesh, ballast, c.hub, viewer, pixel, BRAID, braid_width(h.size));
+        tether(mesh, c.hub, c.tip, viewer, pixel, BRAID, braid);
+        tether(mesh, ballast, c.hub, viewer, pixel, BRAID, braid);
         // A round braid always shows its sunward side. The flat ribbon's own
         // normal can face away and turn a sunlit cable black at twilight.
         let lit = (sun - axis * sun.dot(axis)).normalize_or_zero();
@@ -69,7 +74,7 @@ pub(super) fn build(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer
             if dt.abs() < dwell {
                 let reach = (std::f32::consts::FRAC_PI_2 * (1.0 - dt.abs() / dwell)).sin();
                 let drop = c.tip + axis * h.size.drop_line_m() as f32 * reach;
-                tether(mesh, c.tip, drop, viewer, pixel, BRAID, braid_width(h.size) * 0.5);
+                tether(mesh, c.tip, drop, viewer, pixel, BRAID, braid * 0.5);
                 part(mesh, drop, Vec3::splat(grapple * 0.6), Quat::IDENTITY, METAL, 0.5);
             }
         }

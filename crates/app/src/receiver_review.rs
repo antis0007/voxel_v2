@@ -191,13 +191,14 @@ impl Review {
                 }
                 self.report(w,text);
             }
-            "skyhook-pod" => {
+            "skyhook-pod" | "skyhook-cusp" => {
                 // Talon rotovator caught mid-lift: park the clock halfway up the pod's climb.
                 use world::orbital::skyhook;
                 let hook=skyhook::hooks(w.seed)[1];
                 let now=skyhook::clock(day);
                 let lift=hook.turn_period()*0.3;
-                let mut wait=hook.next_port_cusp(now)-lift*0.5;
+                let frac=if command=="skyhook-cusp" {0.04} else {0.5};
+                let mut wait=hook.next_port_cusp(now)-lift*frac;
                 if wait<0.0 {wait+=hook.pass_period();}
                 // Walk forward whole passes until the cusp falls in daylight.
                 let mut at=(now+wait)/world::orbital::megastructures::DAY_SECONDS;
@@ -213,7 +214,7 @@ impl Review {
                 let port=Vec3::new(x,ground,0.0);
                 p.pos=Vec3::new(x+250.0,ground+3.0,250.0);
                 let tip=skyhook::contacts(w.seed,day,p.pos)[1].tip;
-                let target=port.lerp(Vec3::new(port.x,hook.size.cusp_altitude_m() as f32,0.0),0.5);
+                let target=port.lerp(Vec3::new(port.x,hook.size.cusp_altitude_m() as f32,0.0),if command=="skyhook-cusp" {0.9} else {0.5});
                 p.precise_pos=p.pos.as_dvec3();p.vel=Vec3::ZERO;
                 let d=target-p.pos;
                 p.yaw=d.x.atan2(-d.z);p.pitch=d.y.atan2(Vec3::new(d.x,0.0,d.z).length());
@@ -236,7 +237,7 @@ impl Review {
                 creative.show_palette=false;
                 self.report(w,text);
             }
-            "megastructure-foundry" | "megastructure-habitat" | "megastructure-crown" => {
+            "megastructure-foundry" | "megastructure-habitat" | "megastructure-mirror" | "megastructure-relay" | "megastructure-crown" => {
                 let cfg=w.sample_config();
                 let (x,z)=if command=="megastructure-habitat" {(-2500.0_f32,-1400.0_f32)} else {(1400.0_f32,-1200.0_f32)};
                 let height=cfg.world_y(world::terrain_height(&cfg,(x*cfg.inv_voxel_meters()).floor() as i32,(z*cfg.inv_voxel_meters()).floor() as i32));
@@ -245,7 +246,8 @@ impl Review {
                     let site=world::orbital::site(w.seed,glam::IVec2::ZERO).unwrap();
                     Vec3::new(site.x+650.0,world::orbital::hold_height(&cfg,&w.orbital,site)+world::orbital::UPPER_ANCHORAGE_OFFSET_M,site.z+260.0)
                 } else {
-                    let foundry=command=="megastructure-foundry";
+                    use world::orbital::megastructures::Kind;
+                    let want=match command {"megastructure-habitat"=>Kind::TwinHabitat,"megastructure-mirror"=>Kind::MirrorArray,"megastructure-relay"=>Kind::DeadRelay,_=>Kind::Foundry};
                     let night=day.lighting().sun_dir.y<0.0;
                     let mut best:Option<(f64,world::orbital::megastructures::Contact,f32)>=None;
                     let start=(world::orbital::megastructures::seconds(day)/day.day_length_seconds() as f64).floor();
@@ -254,7 +256,7 @@ impl Review {
                         let mut clock=*day;clock.set_day_index(at.floor() as u32);clock.set_time_of_day(at.fract() as f32);
                         if (clock.lighting().sun_dir.y<0.0)!=night {continue;}
                         for c in world::orbital::megastructures::contacts(w.seed,&clock,p.pos) {
-                            if matches!(c.site.kind,world::orbital::megastructures::Kind::Foundry)!=foundry {continue;}
+                            if std::mem::discriminant(&c.site.kind)!=std::mem::discriminant(&want) {continue;}
                             let score=c.elevation_deg+c.site.sunlight*35.0;
                             if best.as_ref().is_none_or(|(_,_,s)|score>*s) {best=Some((at,c,score));}
                         }

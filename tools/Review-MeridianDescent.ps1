@@ -56,7 +56,7 @@ try {
         Wait-Descent ([regex]::Escape("$name.png"))
       }
     }
-    $shots = if ($SkyOnly) { @('skyhook-pod','corridor-far') } elseif ($MegastructuresOnly) { @('megastructure-foundry','megastructure-habitat','megastructure-crown') } elseif ($AnchorageOnly) { @('orbital-anchorage','orbital-anchorage-sweep') } else { @('orbital-ground','orbital-detail','orbital-anchorage','orbital-anchorage-sweep') }
+    $shots = if ($SkyOnly) { @('skyhook-pod','skyhook-cusp','corridor-far','megastructure-mirror','megastructure-relay') } elseif ($MegastructuresOnly) { @('megastructure-foundry','megastructure-habitat','megastructure-crown') } elseif ($AnchorageOnly) { @('orbital-anchorage','orbital-anchorage-sweep') } else { @('orbital-ground','orbital-detail','orbital-anchorage','orbital-anchorage-sweep') }
     foreach ($shot in $shots) {
         Write-MeridianCommand $Root "$shot $shot"
         Wait-Descent "$shot $shot stage=0"

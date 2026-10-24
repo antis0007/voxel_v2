@@ -42,6 +42,10 @@ pub(super) fn build(
         let ground = orbital::hold_height(&cfg, &world.orbital, site);
         let top = Vec3::new(site.x + 650.0, ground + orbital::UPPER_ANCHORAGE_OFFSET_M, site.z + 260.0);
         let foot = Vec3::new(site.x, ground, site.z);
+        // `ground` is the carriage's hold height, `HOLD_CLEARANCE_M` above the
+        // terrain. The braid and its plinth stand on the terrain itself, or the
+        // corridor reads as hanging free of the ground.
+        let footing = Vec3::new(site.x, ground - orbital::HOLD_CLEARANCE_M, site.z);
         let mark = mesh.mark();
         let hull = [0.26, 0.31, 0.34];
         let signal = if service.requested {
@@ -58,7 +62,7 @@ pub(super) fn build(
             // a 3 m cable at kilometres is a sub-pixel streak the eye never finds.
             let reach = contact.distance_m.max(1.0);
             let width = (if matches!(site.class, Class::Freight) { 6.0_f32 } else { 3.0 }).max(reach * pixel_angle * 1.5);
-            tether(mesh, foot, top, viewer, pixel_angle, [0.58, 0.55, 0.47], width);
+            tether(mesh, footing, top, viewer, pixel_angle, [0.58, 0.55, 0.47], width);
             part(mesh, p, Vec3::splat((site.class.width() * 1.5).max(reach * pixel_angle * 5.0)), Quat::IDENTITY, signal, 0.8);
             megastructures::long_range_since(mesh, mark);
             continue;
@@ -74,6 +78,10 @@ pub(super) fn build(
         // ground cable would visibly detach from a carriage on this wide arc.
         let terminal = top - suspension_axis * site.class.upper_ring_radius_m() * 0.65;
         tether(mesh, joint, terminal, viewer, pixel_angle, hull, 1.2);
+        // Lower braid: from the carriage joint down to the plinth on the ground.
+        let lower = (contact.distance_m * pixel_angle).max(2.0);
+        tether(mesh, footing, joint, viewer, pixel_angle, [0.58, 0.55, 0.47], lower);
+        part(mesh, footing + Vec3::Y * 8.0, Vec3::new(site.class.width() * 2.5, 16.0, site.class.width() * 2.5), Quat::IDENTITY, hull, 0.5);
         carriage::build(mesh, p, suspension_axis, service, day, signal);
         // Family 62 owns local UVs; older pieces reserve surface.y for coverage.
         // The world shader
