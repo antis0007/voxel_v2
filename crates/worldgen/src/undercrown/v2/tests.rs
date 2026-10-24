@@ -6,7 +6,7 @@ use engine_core::VoxelScalePreset;
 use std::collections::HashSet;
 
 fn cfg(seed: u32) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: VERSION, seed, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
+    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
 }
 
 fn plan(seed: u32) -> (WorldSampleConfig, Plan) {

@@ -98,6 +98,9 @@ impl Layout {
                 return alt;
             }
         }
+        if self.version >= super::glow::VERSION && super::glow::seam(style, m) {
+            return B::Crystal;
+        }
         stone(style, m, v)
     }
 

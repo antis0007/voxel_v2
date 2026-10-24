@@ -5,7 +5,7 @@ use super::{Outline, Ceiling, Complex, Corr, Damage, Index, Job, Kind, LEVEL, Ro
 use crate::{BlockId as B, hash2};
 use glam::Vec3;
 
-pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32) -> Complex {
+pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Complex {
     let r = |k: u32| hash2(k as i32, 77, seed);
     let job = Job::roll(r(1));
     let top_floor = (ground - job.depth(r(2))).round();
@@ -242,6 +242,7 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32) -> Complex {
     }
     let index = Index::build(min, max, &rooms, &corrs);
     Complex {
+        version,
         job,
         pal: job.palette(),
         seed,

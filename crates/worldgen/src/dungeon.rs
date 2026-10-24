@@ -1697,7 +1697,7 @@ fn build_complex(cfg: &WorldSampleConfig, ix: i32, iz: i32, key: CellKey) -> Com
     // A generator 32 complex is larger than its collar test: drop it when its
     // footprint would run into the Undercrown's reserve.
     let built = site(cfg, ix, iz)
-        .map(|(seed, cx, cz, ground)| v2::generate(seed, cx, cz, ground))
+        .map(|(seed, cx, cz, ground)| v2::generate(seed, cx, cz, ground, cfg.generator_version))
         .filter(|d| !super::undercrown::overlaps(cfg, d.min, d.max))
         .filter(|d| !super::amberroot::overlaps(cfg, d.min, d.max))
         .map(Rc::new);

@@ -5,7 +5,7 @@ use glam::IVec3;
 use std::collections::{HashSet, VecDeque};
 
 fn cfg(seed: u32, scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: VERSION, seed, world_type: WorldType::Hills, voxel_scale: scale }
+    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale: scale }
 }
 
 /// Complexes owned by cells in rings around the origin, with their cell.
@@ -205,7 +205,7 @@ fn sampling_is_deterministic_and_cache_independent() {
     let (cell, d) = complexes(&c, 1).remove(0);
     let fresh = {
         let (seed, cx, cz, ground) = super::super::site(&c, cell.0, cell.1).unwrap();
-        generate(seed, cx, cz, ground)
+        generate(seed, cx, cz, ground, c.generator_version)
     };
     let height = c.blocks_for_height(d.ground + 200.0);
     for k in 0..4000 {
@@ -330,3 +330,6 @@ fn the_gatehouse_stands_above_ground_in_the_world() {
 
 #[path = "tests_rooms.rs"]
 mod rooms;
+
+#[path = "tests_pin.rs"]
+mod pin;

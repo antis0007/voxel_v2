@@ -235,3 +235,73 @@ fn quarter_metre_starry_and_cleft_rooms_join_their_doors() {
     }
     assert!(rooms >= 8, "only {rooms} rooms");
 }
+
+/// Cross-section and plan at waist height of the longest passage of the
+/// first complex for `V2_SEED`.
+#[test]
+#[ignore = "debug dump"]
+fn dump_passage() {
+    let seed = std::env::var("V2_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(424242);
+    let c = cfg(seed, VoxelScalePreset::OneMeter);
+    let (_, d) = complexes(&c, 1).remove(0);
+    let k = d.corrs.iter().max_by(|a, b| (a.a1 - a.a0).total_cmp(&(b.a1 - b.a0))).unwrap();
+    let height = c.blocks_for_height(1000.0);
+    let glyph = |b: Option<B>| match b {
+        None => ' ',
+        Some(B::Air) => '.',
+        Some(B::Torch) => 't',
+        Some(B::Gravel) => ',',
+        Some(b) if b.is_solid() => '#',
+        Some(_) => '?',
+    };
+    let (mid, f) = ((k.a0 + k.a1) * 0.5, k.fa.min(k.fb));
+    println!("passage {}..{} along_x {} w {} h {}", k.a0, k.a1, k.along_x, if k.along_x { k.z1 - k.z0 } else { k.x1 - k.x0 }, k.h);
+    let (c0, c1) = if k.along_x { (k.z0 - 2.0, k.z1 + 2.0) } else { (k.x0 - 2.0, k.x1 + 2.0) };
+    for dy in (-2..7).rev() {
+        let row: String = (0..((c1 - c0) as i32)).map(|i| {
+            let a = c0 + i as f32 + 0.5;
+            let m = if k.along_x { Vec3::new(mid, f + dy as f32 + 0.5, a) } else { Vec3::new(a, f + dy as f32 + 0.5, mid) };
+            glyph(d.sample(&c, m, height))
+        }).collect();
+        println!("{dy:>3} {row}");
+    }
+    println!("-- plan at waist");
+    for i in 0..((c1 - c0) as i32) {
+        let a = c0 + i as f32 + 0.5;
+        let row: String = (0..((k.a1 - k.a0) as i32)).map(|j| {
+            let l = k.a0 + j as f32 + 0.5;
+            let (x, z) = if k.along_x { (l, a) } else { (a, l) };
+            glyph(d.sample(&c, Vec3::new(x, k.floor_at(x, z) + 1.0, z), height))
+        }).collect();
+        println!("{row}");
+    }
+}
+
+#[test]
+fn galleries_can_be_climbed_to() {
+    let mut decks = 0;
+    for (seed, scale) in (0u32..60).map(|s| (s, if s % 4 == 3 { VoxelScalePreset::HalfMeter } else { VoxelScalePreset::OneMeter })) {
+        let c = cfg(seed.wrapping_mul(3266489917) ^ 11, scale);
+        for (cell, d) in complexes(&c, 3) {
+            if !d.rooms.iter().any(|r| gallery::has(&d, r)) {
+                continue;
+            }
+            let grid = Grid::new(&c, &d);
+            let seen = grid.reach(start(&d, grid.v));
+            for r in d.rooms.iter().filter(|r| gallery::has(&d, r)) {
+                // Someone stands on the deck, 3.5 m over the floor, inside the room.
+                let deck = ((r.floor + (3.5 / grid.v).round() * grid.v + grid.v * 0.5) / grid.v).floor() as i32;
+                let up = seen.iter().any(|p| {
+                    let m = (p.as_vec3() + Vec3::splat(0.5)) * grid.v;
+                    p.y == deck && m.x > r.x0 && m.x < r.x1 && m.z > r.z0 && m.z < r.z1
+                });
+                assert!(up, "cell {cell:?}: {:?} gallery out of reach at {}", r.kind, grid.v);
+                decks += 1;
+            }
+        }
+        if decks >= 8 {
+            break;
+        }
+    }
+    assert!(decks >= 8, "only {decks} galleries");
+}

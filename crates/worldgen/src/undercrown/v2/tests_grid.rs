@@ -7,7 +7,7 @@ use engine_core::VoxelScalePreset;
 use std::collections::{HashSet, VecDeque};
 
 pub(super) fn cfg_scaled(seed: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: VERSION, seed, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale }
 }
 
 pub(super) fn plan_scaled(seed: u32, scale: VoxelScalePreset) -> (WorldSampleConfig, Plan) {

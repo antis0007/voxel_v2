@@ -7,7 +7,7 @@ use crate::undercrown::plan::Plan;
 use engine_core::VoxelScalePreset;
 
 pub(super) fn cfg_at(seed: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: VERSION, seed, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale }
 }
 
 fn layout(seed: u32) -> (WorldSampleConfig, Layout) {
@@ -136,5 +136,48 @@ fn the_index_matches_a_full_scan() {
             }
         }
         assert!(bad.is_empty(), "seed {seed}: index differs from a full scan at {bad:?}");
+    }
+}
+
+/// Wall torches inside a cavern space, and whether each has rock behind it.
+fn cave_lamps(c: &WorldSampleConfig, l: &Layout, name_room: usize) -> (usize, usize) {
+    let v = c.voxel_meters();
+    let (mut lamps, mut hung) = (0, 0);
+    for s in l.spaces.iter().filter(|s| s.room == name_room) {
+        let Shape::Cave { c: cc, rad, .. } = s.shape else { continue };
+        let (lo, hi) = (((cc - rad) / v).floor().as_ivec3(), ((cc + rad) / v).ceil().as_ivec3());
+        for y in lo.y..hi.y {
+            for z in lo.z..hi.z {
+                for x in lo.x..hi.x {
+                    let m = (IVec3::new(x, y, z).as_vec3() + Vec3::splat(0.5)) * v;
+                    let Some(b) = l.sample(c, m, Mech::default()) else { continue };
+                    let behind = match b {
+                        B::TorchWallWest => Vec3::X,
+                        B::TorchWallEast => Vec3::NEG_X,
+                        B::TorchWallNorth => Vec3::Z,
+                        B::TorchWallSouth => Vec3::NEG_Z,
+                        _ => continue,
+                    };
+                    lamps += 1;
+                    hung += usize::from(l.sample(c, m + behind * v, Mech::default()).is_some_and(|b| b.is_solid()));
+                }
+            }
+        }
+    }
+    (lamps, hung)
+}
+
+#[test]
+fn generator_36_lights_the_crown_chasm() {
+    for seed in [424242u32, 7, 99] {
+        let (c, l) = layout(seed);
+        let plan = Plan::for_config(&c);
+        let chasm = plan.rooms.iter().position(|r| r.name == "Crown Chasm").unwrap();
+        let (lamps, hung) = cave_lamps(&c, &l, chasm);
+        assert_eq!(lamps, hung, "seed {seed}: a lamp hangs on air");
+        let old = WorldSampleConfig { generator_version: 35, ..c };
+        let lo = *Plan::for_config(&old).v2.unwrap();
+        let before = cave_lamps(&old, &lo, chasm).0;
+        assert!(lamps >= before + 8, "seed {seed}: {before} lamps before 36, {lamps} after");
     }
 }

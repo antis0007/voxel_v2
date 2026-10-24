@@ -17,6 +17,7 @@ use glam::{IVec3, Vec3};
 mod dress;
 mod feature;
 mod fixtures;
+mod glow;
 mod furnish;
 mod houses;
 mod index;
@@ -34,6 +35,8 @@ mod tests_geometry;
 mod tests_grid;
 #[cfg(test)]
 mod tests_reach;
+#[cfg(test)]
+mod tests_pin;
 
 pub use layout::author;
 
@@ -125,6 +128,8 @@ pub struct Layout {
     pub clear: Vec<Vec3>,
     /// Column grid of candidates, built once the layout is authored.
     pub index: index::Index,
+    /// Generator version the layout was authored for.
+    pub version: u32,
 }
 
 /// Wall, alternate, trim and floor stone for a style.
@@ -266,7 +271,10 @@ impl Layout {
             let dressed = match s.shape {
                 Shape::Hall { .. } => self.hall_dress(s, cell, m, v, mech),
                 Shape::Round { x, z, r, floor, .. } => self.round_dress(x, z, r, floor, m, v, mech),
-                Shape::Cave { .. } => self.cave_dress(si, cell, m, v),
+                Shape::Cave { .. } => {
+                    let lamp = if self.version >= glow::VERSION { self.cave_lamp(s, m, v, mech) } else { None };
+                    lamp.or_else(|| self.cave_dress(si, cell, m, v))
+                }
                 Shape::Shaft { .. } => None,
             };
             if let Some(b) = dressed {

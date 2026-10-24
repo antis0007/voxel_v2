@@ -26,7 +26,7 @@ Finishing work in a shared tree: other sessions edit this tree at the same time.
 - Tick: fixed 1/120 s (`simulation::STEP_SECONDS`). Order per step: expedition → factory → player → adventure → cellular/rigid/thermal → day cycle. Headless (`headless::Session::tick`) and `main.rs` must agree.
 - Every bounded pass takes a `Budget`; the window passes wall-clock budgets, tests and headless pass `Budget::UNBOUNDED`. No `Instant::now()` in simulation logic.
 - Randomness is positional hashing seeded from the world seed (`engine_core::hash`); no `rand` in game code (proptest pulls it into test builds only).
-- Saves: magic `VXWSAV29`, `SAVE_VERSION = 29`; `CURRENT_GENERATOR_VERSION = 35`. Old versions must keep generating identically: never edit a historical version gate.
+- Saves: magic `VXWSAV29`, `SAVE_VERSION = 29`; `CURRENT_GENERATOR_VERSION = 36`. Old versions must keep generating identically: never edit a historical version gate.
 - Shaders are composed in `crates/app/src/shader_sources.rs` and validated by `build.rs`; every `.wgsl` must be listed there (a test enforces it).
 - Anything glued to the camera (arm, wand) is textured in view space; small moving geometry is never clipped by the world grid. See `.claude/skills/render/SKILL.md`.
 

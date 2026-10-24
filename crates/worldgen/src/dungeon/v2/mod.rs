@@ -14,12 +14,14 @@ use glam::Vec3;
 mod chasm;
 mod dress;
 mod footprint;
+mod gallery;
 mod index;
 mod job;
 mod kit;
 mod landmark;
 mod maze;
 mod outline;
+mod passage;
 mod plan;
 mod starry;
 mod treasure;
@@ -34,6 +36,9 @@ pub use plan::generate;
 
 /// First generator with job-driven complexes.
 pub const VERSION: u32 = 32;
+/// First generator with arched corridors, wall niches, pillared galleries
+/// and upper galleries in tall rooms.
+pub const RICH: u32 = 36;
 /// Height between levels, metres.
 pub const LEVEL: f32 = 6.0;
 /// Shell thickness around rooms and corridors, metres.
@@ -207,6 +212,8 @@ impl Corr {
 }
 
 pub struct Complex {
+    /// Generator version the complex was planned for.
+    pub version: u32,
     pub job: Job,
     pub pal: job::Palette,
     pub seed: u32,
@@ -273,8 +280,9 @@ impl Complex {
             }
         }
         for &id in ids.iter().filter(|id| *id & CORR_BIT != 0) {
-            if self.corrs[(id & !CORR_BIT) as usize].in_shell(m) {
-                return Some(kit::stone(self, m, v));
+            let k = &self.corrs[(id & !CORR_BIT) as usize];
+            if k.in_shell(m) {
+                return Some(if self.version >= RICH { passage::shell(self, k, m, v) } else { kit::stone(self, m, v) });
             }
         }
         None

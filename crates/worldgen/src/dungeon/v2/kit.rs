@@ -2,7 +2,7 @@
 //! and corridors. Pure functions of a point in metres; sample points are voxel
 //! centres, so every feature is at least one voxel thick at any scale.
 use super::index::CORR_BIT;
-use super::{Ceiling, Complex, Corr, Kind, LEVEL, Outline, Room, dress, outline, starry};
+use super::{Ceiling, Complex, Corr, Kind, LEVEL, Outline, Room, dress, gallery, outline, passage, starry};
 use crate::{BlockId as B, hash3};
 use glam::Vec3;
 
@@ -190,6 +190,11 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
         }
     }
     let _ = across;
+    if gallery::has(c, r)
+        && let Some(b) = gallery::sample(c, r, rx, rz, fy, v)
+    {
+        return b;
+    }
     dress::furnish(c, r, rx, rz, fy, v, dwall).unwrap_or(B::Air)
 }
 
@@ -250,7 +255,13 @@ pub fn corridor(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
         (m.z, m.x - (k.x0 + k.x1) * 0.5, (k.x1 - k.x0) * 0.5)
     };
     let edge = across.abs() / half.max(0.01);
-    let roof = if k.pointed && edge > 0.5 { k.h - 1.0 } else { k.h };
+    let roof = if k.pointed && edge > 0.5 {
+        k.h - 1.0
+    } else if c.version >= super::RICH {
+        passage::roof(k, edge)
+    } else {
+        k.h
+    };
     if fy >= roof {
         return stone(c, m, v);
     }
@@ -271,6 +282,11 @@ pub fn corridor(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
                 return B::Torch;
             }
         }
+    }
+    if c.version >= super::RICH
+        && let Some(b) = passage::furnish(c, k, m, along, across, half, fy, v)
+    {
+        return b;
     }
     B::Air
 }
