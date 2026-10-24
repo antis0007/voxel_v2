@@ -144,8 +144,8 @@ impl AtmosphereLutGenerationUniform {
                 TRANSMITTANCE_LUT_MAX_ALTITUDE_M,
             ],
             art: [
-                SkyArt::DEFAULT.haze_extinction,
-                SkyArt::DEFAULT.haze_scale_height,
+                SkyArt::active().haze_extinction,
+                SkyArt::active().haze_scale_height,
                 SkyArt::active().fog_seam,
                 0.0,
             ],

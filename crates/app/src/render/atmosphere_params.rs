@@ -76,7 +76,11 @@ pub struct SkyArt {
 
 impl SkyArt {
     pub const DEFAULT: Self = Self {
-        haze_extinction: 3.0e-5,
+        // About 50% of the view lost to haze at 12 km and 10% at 1.5 km along the
+        // ground. Real clear air would show almost none of that at game distances,
+        // which left ranges 10 km out as crisp as the middle distance. Above 1e-4 the
+        // horizon turns into a flat grey wall.
+        haze_extinction: 6.0e-5,
         haze_scale_height: 1400.0,
         solar_radius_deg: 0.65,
         solar_glare: 0.18,
@@ -90,7 +94,7 @@ impl SkyArt {
 
     /// `DEFAULT` with review overrides applied, read once: `VOXEL_FOG_SEAM`,
     /// `VOXEL_SKY_GRADE`, `VOXEL_SUNSET_SATURATION`, `VOXEL_EXPOSURE_EV`,
-    /// `VOXEL_CLOUD_CONTRAST`. Lets one executable capture both sides of an A/B.
+    /// `VOXEL_CLOUD_CONTRAST`, `VOXEL_HAZE` (1/m), `VOXEL_HAZE_HEIGHT` (m). Lets one executable capture both sides of an A/B.
     pub fn active() -> Self {
         static ACTIVE: std::sync::OnceLock<SkyArt> = std::sync::OnceLock::new();
         *ACTIVE.get_or_init(|| {
@@ -102,6 +106,12 @@ impl SkyArt {
                     .filter(|v| v.is_finite())
                     .map(|v| v.clamp(lo, hi))
             };
+            if let Some(v) = read("VOXEL_HAZE", 0.0, 2.0e-4) {
+                art.haze_extinction = v;
+            }
+            if let Some(v) = read("VOXEL_HAZE_HEIGHT", 300.0, 3000.0) {
+                art.haze_scale_height = v;
+            }
             if let Some(v) = read("VOXEL_FOG_SEAM", 0.0, 1.0) {
                 art.fog_seam = v;
             }
@@ -205,4 +215,29 @@ fn saturate(x: f32) -> f32 {
 
 fn vec3_distance(a: Vec3, b: Vec3) -> f32 {
     (a - b).abs().max_element()
+}
+
+#[cfg(test)]
+mod haze_tests {
+    use super::SkyArt;
+
+    /// Haze-only transmittance along the ground for `distance_m`.
+    fn haze_transmittance(distance_m: f32) -> f32 {
+        (-SkyArt::DEFAULT.haze_extinction * distance_m).exp()
+    }
+
+    #[test]
+    fn default_haze_gives_distant_terrain_depth_without_a_grey_wall() {
+        assert!(haze_transmittance(1_500.0) > 0.88, "the middle distance must stay crisp");
+        let far = haze_transmittance(12_000.0);
+        assert!((0.35..0.65).contains(&far), "12 km keeps {far:.2} of the view");
+        assert!(haze_transmittance(40_000.0) > 0.05, "even the horizon is not opaque");
+    }
+
+    #[test]
+    fn default_haze_is_inside_its_documented_range() {
+        let art = SkyArt::DEFAULT;
+        assert!((0.0..=2.0e-4).contains(&art.haze_extinction));
+        assert!((300.0..=3000.0).contains(&art.haze_scale_height));
+    }
 }
