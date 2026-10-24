@@ -665,6 +665,19 @@ static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(3);
 /// Extra divisor added by the adaptive cloud governor (0 = none).
 static CLOUD_AUTO_BUMP: AtomicU32 = AtomicU32::new(0);
 static CLOUD_ADAPTIVE_ENABLED: AtomicBool = AtomicBool::new(true);
+static CLOUDS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Player setting. Off skips the raymarch and reports a cloudless sky to every
+/// shader (no coverage, no storm, no terrain cloud shadow or cloud fog).
+pub fn clouds_enabled() -> bool {
+    CLOUDS_ENABLED.load(Ordering::Relaxed)
+}
+pub fn set_clouds_enabled(enabled: bool) {
+    CLOUDS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+fn draw_clouds() -> bool {
+    clouds_enabled() && !render_isolation().skip_clouds
+}
 
 /// Controlled reviews must compare the same quality even when their GPU cost differs.
 pub fn set_cloud_adaptive_enabled(enabled: bool) {
@@ -783,7 +796,7 @@ fn cloud_weather_uniform_state(
         return CloudWeatherUniformState::default();
     };
     let meta = weather_field.gpu_meta();
-    CloudWeatherUniformState {
+    let mut state = CloudWeatherUniformState {
         regions: std::array::from_fn(|level| {
             [
                 meta[level].origin_x,
@@ -800,7 +813,18 @@ fn cloud_weather_uniform_state(
                 meta[level].avg_precipitation,
             ]
         }),
+    };
+    if !clouds_enabled() {
+        // A zero inverse span maps every position to the clip corner, where
+        // each level's weight is zero, so the terrain samples no cloud shadow.
+        // Zero coverage and storm clear the sky grade and the cloud fog.
+        for (region, summary) in state.regions.iter_mut().zip(&mut state.summaries) {
+            region[3] = 0.0;
+            summary[1] = 0.0;
+            summary[2] = 0.0;
+        }
     }
+    state
 }
 
 /// The material studio's tints with the season layered over the meadow (1) and
@@ -4227,7 +4251,7 @@ impl Gpu {
             u32::from(shadow::enabled()), u32::from(indirect_lighting_enabled()),
             distance.view_distance_chunks as u32, distance.lod_start_chunks as u32,
             distance.lod_levels as u32, self.config.present_mode as u32,
-            u32::from(self.fxaa_enabled), u32::from(render_isolation().skip_clouds),
+            u32::from(self.fxaa_enabled), u32::from(!draw_clouds()),
             u32::from(render_isolation().skip_horizon),
         ].into_iter().fold(0xcbf29ce484222325u64, |hash, value| {
             (hash ^ value as u64).wrapping_mul(0x100000001b3)
@@ -4490,11 +4514,11 @@ impl Gpu {
                 cloud_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 cloud_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 cloud_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if !render_isolation().skip_clouds {
+                if draw_clouds() {
                     cloud_pass.draw(0..3, 0..1);
                 }
             }
-            frame_stats.cloud_raymarch_passes = usize::from(!render_isolation().skip_clouds);
+            frame_stats.cloud_raymarch_passes = usize::from(draw_clouds());
 
             if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid {
                 let mut temporal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

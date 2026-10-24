@@ -278,6 +278,11 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             render::set_indirect_lighting_enabled(false);
             continue;
         }
+        if arg == "--benchmark-no-clouds" {
+            config.enabled = true;
+            render::set_clouds_enabled(false);
+            continue;
+        }
         if arg == "--benchmark-no-shadows" {
             config.enabled = true;
             render::shadow::set_enabled(false);
