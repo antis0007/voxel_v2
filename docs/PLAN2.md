@@ -1,5 +1,7 @@
 # Phase 2 plan: foundations (approved 2026-10-22 with the changes in §1a)
 
+> **Superseded 2026-10-23** by `docs/ENGINE_CORE.md` and `docs/GAME_DESIGN.md` (pending approval of ADR 0014). Kept as history. Decisions D1–D7 (§1a) still hold. Open phases A6–F map onto milestones M1–M7 in ENGINE_CORE §11. The ADR numbers this plan reserved (0012 shader includes, 0013 terrain renderer) are void.
+
 Scope: the six-phase mission (A simulation, B rendering, C automation, D rules, E text, F cheap changes) mapped onto the code as it is after the revamp (`docs/PLAN.md`). This file names crates, files and recipes that do not exist yet; it is exempt from the docs-path test like `AUDIT.md`.
 
 Baseline (2026-10-22): ≈115k Rust lines, 9.3k WGSL, 441 tests, 3 scenarios, 0 benches, 6 crates, `just verify` ≈25 s warm.

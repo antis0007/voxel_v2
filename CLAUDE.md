@@ -1,6 +1,6 @@
 # Voxel engine: orientation for agents
 
-Rust + wgpu voxel game: variable voxel scale, cellular water/sand, factory automation, wand magic. One workspace, six crates.
+Rust + wgpu voxel game: variable voxel scale, cellular water/sand, factory automation, wand magic. One workspace, nine crates.
 
 ## Crate map (`crates/`)
 - `core` (`engine_core`): FNV hashes, `VoxelScalePreset`, `CHUNK_SIZE`/`floor_div`/chunk coords, `Budget` (time budget for a simulation pass).
@@ -8,6 +8,8 @@ Rust + wgpu voxel game: variable voxel scale, cellular water/sand, factory autom
 - `audio` (`engine_audio`): synth, mixer, waveOut thread. No engine dependencies.
 - `voxel` (`engine_voxel`): `ChunkData`, `WorldType`, `WorldSampleConfig`, world height constants.
 - `worldgen` (`engine_worldgen`): every generator (terrain, trees, sites, dungeons, valleys, undercrown plan). Pure functions of `WorldSampleConfig`; no runtime state.
+- `sim` (`engine_sim`): integer 8³-brick cellular world, Margolus kernel, reactions; depends only on `core`. Not yet wired into the game.
+- `sim_gpu` (`engine_sim_gpu`): WGSL port of `sim`, byte-identical to it; `gpu` (`engine_gpu`): the shared test adapter.
 - `app` (binary): `World` hub with simulation, factory, adventure, inventory, storage, regions; meshing; renderer and shaders; egui UI; `headless.rs` scenario runner; `main.rs` loop.
 
 Content lives in `assets/*.ron` (materials, spells, recipes, machines, bestiary) with round-trip tests; scenarios in `assets/scenarios/`.
@@ -31,4 +33,4 @@ Content lives in `assets/*.ron` (materials, spells, recipes, machines, bestiary)
 - No visual change without before/after captures (`docs/design/VISUAL_DIRECTION_EXECUTION.md`).
 - Do not touch `egui_ui/wand_xmb.rs` or `adventure/growth.rs` dead code: in-progress work on this branch.
 
-Docs: `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/PLAN.md` (status and debt), `docs/adr/`.
+Docs: `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/PLAN.md` (status and debt), `docs/adr/`. Roadmap proposal (pending approval): `docs/ENGINE_CORE.md`, `docs/GAME_DESIGN.md`.

@@ -1,0 +1,52 @@
+// DRAFT, for review only (ADR 0014 row 15). Not loaded by the game.
+// Moves to assets/ in M3 with a loader, validator (reachability, no energy-free cycle) and round-trip test.
+// `unlocks` names machines, items or recipes; names that exist today match assets/machines.ron
+// (generator, crusher, furnace, alloy_kiln, coke_oven, blast_furnace, drill, pump, battery, transformer,
+// assembler, induction_matrix). `grants` is the path capability (GAME_DESIGN §6).
+(
+    tiers: [Primitive, Bronze, Iron, ElectricI, Chemical, ElectricII, Nuclear, Advanced],
+    nodes: [
+        // Primitive: fire, stone, hand tools
+        (id: "primitive.fire", tier: Primitive, requires: [], unlocks: ["campfire", "torch"], grants: []),
+        (id: "primitive.stone_tools", tier: Primitive, requires: [], unlocks: ["stone_pick", "stone_axe"], grants: []),
+        (id: "primitive.kiln", tier: Primitive, requires: ["primitive.fire"], unlocks: ["charcoal_kiln", "clay_brick"], grants: []),
+        (id: "primitive.smelting", tier: Primitive, requires: ["primitive.kiln"], unlocks: ["furnace", "copper_ingot", "tin_ingot"], grants: [AutoSmelting]),
+        // Bronze and kinetic
+        (id: "bronze.alloy", tier: Bronze, requires: ["primitive.smelting"], unlocks: ["alloy_kiln", "bronze_ingot"], grants: []),
+        (id: "kinetic.hand_crank", tier: Bronze, requires: ["bronze.alloy"], unlocks: ["hand_crank", "gear", "shaft"], grants: []),
+        (id: "kinetic.water_wheel", tier: Bronze, requires: ["kinetic.hand_crank"], unlocks: ["water_wheel"], grants: []),
+        (id: "kinetic.windmill", tier: Bronze, requires: ["kinetic.hand_crank"], unlocks: ["windmill_sail"], grants: []),
+        (id: "kinetic.press", tier: Bronze, requires: ["kinetic.water_wheel"], unlocks: ["mechanical_press", "crusher"], grants: []),
+        (id: "kinetic.belt", tier: Bronze, requires: ["kinetic.water_wheel"], unlocks: ["belt", "splitter", "inserter"], grants: [ItemTransport]),
+        (id: "kinetic.drill", tier: Bronze, requires: ["kinetic.press"], unlocks: ["drill"], grants: [AutoMining]),
+        // Iron and steam
+        (id: "iron.coke", tier: Iron, requires: ["bronze.alloy"], unlocks: ["coke_oven", "coke"], grants: []),
+        (id: "iron.blast_furnace", tier: Iron, requires: ["iron.coke"], unlocks: ["blast_furnace", "steel_ingot"], grants: []),
+        (id: "steam.boiler", tier: Iron, requires: ["iron.blast_furnace", "kinetic.water_wheel"], unlocks: ["boiler", "steam_engine", "pressure_pipe"], grants: []),
+        (id: "iron.rails", tier: Iron, requires: ["iron.blast_furnace"], unlocks: ["rail", "minecart"], grants: [LongRangeTransport]),
+        (id: "iron.pump", tier: Iron, requires: ["steam.boiler"], unlocks: ["pump", "tank"], grants: []),
+        // Electric I
+        (id: "electric.dynamo", tier: ElectricI, requires: ["steam.boiler"], unlocks: ["generator", "copper_wire"], grants: [PowerGrid]),
+        (id: "electric.battery", tier: ElectricI, requires: ["electric.dynamo"], unlocks: ["battery"], grants: []),
+        (id: "electric.machines", tier: ElectricI, requires: ["electric.dynamo"], unlocks: ["electric_furnace", "assembler"], grants: []),
+        (id: "electric.signal", tier: ElectricI, requires: ["electric.dynamo"], unlocks: ["signal_wire", "gate", "comparator", "counter"], grants: []),
+        // Chemical
+        (id: "chemical.electrolysis", tier: Chemical, requires: ["electric.machines"], unlocks: ["electrolyser"], grants: []),
+        (id: "chemical.acid", tier: Chemical, requires: ["chemical.electrolysis"], unlocks: ["acid_bath", "ore_washer"], grants: []),
+        (id: "chemical.fertiliser", tier: Chemical, requires: ["chemical.acid"], unlocks: ["fertiliser"], grants: [AutoFarming]),
+        (id: "chemical.explosives", tier: Chemical, requires: ["chemical.acid"], unlocks: ["blasting_charge"], grants: [WorldShaping]),
+        // Electric II
+        (id: "electric.solar", tier: ElectricII, requires: ["electric.machines", "chemical.electrolysis"], unlocks: ["solar_panel"], grants: []),
+        (id: "electric.high_voltage", tier: ElectricII, requires: ["electric.battery"], unlocks: ["transformer", "hv_cable"], grants: []),
+        (id: "electric.storage_network", tier: ElectricII, requires: ["electric.signal", "electric.high_voltage"], unlocks: ["storage_controller", "storage_drive", "autocraft_planner"], grants: []),
+        (id: "electric.controller", tier: ElectricII, requires: ["electric.signal"], unlocks: ["program_controller"], grants: []),
+        (id: "electric.drone", tier: ElectricII, requires: ["electric.controller", "electric.storage_network"], unlocks: ["logistics_drone"], grants: [Flight]),
+        // Nuclear
+        (id: "nuclear.reactor", tier: Nuclear, requires: ["electric.high_voltage", "chemical.acid"], unlocks: ["fission_reactor", "fuel_rod", "radiation_suit"], grants: []),
+        (id: "nuclear.induction", tier: Nuclear, requires: ["nuclear.reactor"], unlocks: ["induction_matrix"], grants: []),
+        // Advanced
+        (id: "advanced.airship", tier: Advanced, requires: ["nuclear.reactor", "iron.rails"], unlocks: ["airship_envelope", "airship_engine"], grants: [Flight, LongRangeTransport]),
+        (id: "advanced.teleport", tier: Advanced, requires: ["nuclear.induction"], unlocks: ["teleport_pad"], grants: [LongRangeTransport]),
+        (id: "advanced.terraformer", tier: Advanced, requires: ["nuclear.induction", "chemical.explosives"], unlocks: ["terraformer"], grants: [WorldShaping]),
+    ],
+)

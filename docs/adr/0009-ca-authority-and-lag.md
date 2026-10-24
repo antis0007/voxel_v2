@@ -1,6 +1,6 @@
 # 0009 One CaBackend trait; gameplay reads the cellular world two ticks late
 
-Date: 2026-10-22. Status: accepted, implemented in Phase A (`docs/PLAN2.md`).
+Date: 2026-10-22. Status: accepted; **not yet implemented** (corrected 2026-10-23). The code has no `CaBackend` trait and no 2-tick mirror, only the `step_with` closure in `crates/sim/src/kernel.rs`, and the game still runs `crates/app/src/simulation/`. Both land in M1 session 2 (`docs/ENGINE_CORE.md`).
 
 The cellular world runs behind a `CaBackend` trait with two implementations that must produce identical bytes (ADR 0008):
 - `Cpu`, the reference, used headless and in tests;

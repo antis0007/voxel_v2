@@ -1,0 +1,65 @@
+// DRAFT, for review only (ADR 0014 row 15). Not loaded by the game.
+// Moves to assets/ in M5 with a loader, validator and round-trip test.
+// Schools are aesthetic groupings over one fixed primitive set (GAME_DESIGN §8). Nodes use the same
+// shape as docs/game/drafts/tech.ron so one validator checks both trees; `grants` mirrors the engineer path.
+(
+    aspects: [Fire, Water, Earth, Air, Light, Dark, Life, Order],
+    primitives: [HeatImpulse, ForceImpulse, Transmute, SpawnMaterial, SpawnBody, SpawnMob, SetField, Teleport, Shield, EmitEvent, Text],
+    schools: [
+        (id: "pyromancy", aspect: Fire, primitives: [HeatImpulse, SpawnMaterial], costs_health: false),
+        (id: "hydromancy", aspect: Water, primitives: [SpawnMaterial, SetField], costs_health: false),
+        (id: "geomancy", aspect: Earth, primitives: [SpawnBody, Transmute], costs_health: false),
+        (id: "aeromancy", aspect: Air, primitives: [ForceImpulse, SetField], costs_health: false),
+        (id: "illumination", aspect: Light, primitives: [SetField, EmitEvent], costs_health: false),
+        (id: "umbral", aspect: Dark, primitives: [Transmute, SpawnMob], costs_health: true),
+        (id: "vitalism", aspect: Life, primitives: [SetField, SpawnMob], costs_health: false),
+        (id: "ward", aspect: Order, primitives: [Shield, Teleport], costs_health: false),
+    ],
+    nodes: [
+        // Mana gathering
+        (id: "mana.leyline_well", tier: Gathering, requires: [], unlocks: ["leyline_well"], grants: []),
+        (id: "mana.flower", tier: Gathering, requires: ["mana.leyline_well"], unlocks: ["sunbloom", "mana_pool"], grants: []),
+        (id: "mana.crystal", tier: Gathering, requires: ["mana.leyline_well"], unlocks: ["resonant_crystal", "crystal_cell"], grants: []),
+        (id: "mana.blood", tier: Gathering, requires: ["mana.leyline_well"], unlocks: ["blood_altar"], grants: []),
+        // Wands and cards (today's wand deck evaluator and spells.ron)
+        (id: "wand.first", tier: Wands, requires: ["mana.leyline_well"], unlocks: ["lumen_twig", "spark_card"], grants: []),
+        (id: "wand.modifiers", tier: Wands, requires: ["wand.first"], unlocks: ["speed_card", "bounce_card", "split_card", "trigger_card"], grants: []),
+        (id: "wand.table", tier: Wands, requires: ["wand.modifiers", "mana.crystal"], unlocks: ["wand_table"], grants: []),
+        // Runes: mana-signal cells
+        (id: "rune.conduit", tier: Runes, requires: ["mana.crystal"], unlocks: ["rune_conduit", "mana_pipe"], grants: [ItemTransport]),
+        (id: "rune.gates", tier: Runes, requires: ["rune.conduit"], unlocks: ["rune_emit", "rune_amplify", "rune_delay", "rune_aspect_gate"], grants: []),
+        (id: "rune.converters", tier: Runes, requires: ["rune.gates"], unlocks: ["rune_to_heat", "rune_to_kinetic", "rune_to_light"], grants: [PowerGrid]),
+        // Rituals
+        (id: "ritual.circle", tier: Rituals, requires: ["rune.gates", "wand.table"], unlocks: ["ritual_circle"], grants: []),
+        (id: "ritual.growth", tier: Rituals, requires: ["ritual.circle"], unlocks: ["ritual_verdant_surge"], grants: [AutoFarming]),
+        // Constructs
+        (id: "construct.clay_golem", tier: Constructs, requires: ["ritual.circle"], unlocks: ["clay_golem"], grants: [AutoMining]),
+        (id: "construct.familiar", tier: Constructs, requires: ["construct.clay_golem"], unlocks: ["familiar_bond"], grants: []),
+        // Transmutation and alchemy
+        (id: "alchemy.cauldron", tier: Transmutation, requires: ["mana.crystal"], unlocks: ["cauldron", "alembic"], grants: []),
+        (id: "alchemy.transmute", tier: Transmutation, requires: ["alchemy.cauldron", "ritual.circle"], unlocks: ["transmutation_circle"], grants: [AutoSmelting]),
+        // Enchanting
+        (id: "enchant.table", tier: Enchanting, requires: ["alchemy.cauldron", "rune.gates"], unlocks: ["enchanting_table"], grants: []),
+        // Celestial
+        (id: "celestial.observatory", tier: Celestial, requires: ["enchant.table", "mana.flower"], unlocks: ["star_lens", "moon_altar"], grants: []),
+        (id: "celestial.levitation", tier: Celestial, requires: ["celestial.observatory"], unlocks: ["levitation_card"], grants: [Flight]),
+        // Portals
+        (id: "portal.blink", tier: Portals, requires: ["celestial.levitation", "rune.converters"], unlocks: ["blink_card"], grants: [LongRangeTransport]),
+        (id: "portal.gate", tier: Portals, requires: ["portal.blink", "construct.familiar"], unlocks: ["portal_frame"], grants: [LongRangeTransport]),
+        (id: "portal.terraform", tier: Portals, requires: ["portal.gate", "alchemy.transmute"], unlocks: ["earthshaper_card"], grants: [WorldShaping]),
+    ],
+    rituals: [
+        (
+            id: "ritual.ignite_forge",
+            needs: [Multiblock("forge_3x3"), Mana(40), Aspect(Fire)],
+            effect: [HeatImpulse(2000)],
+            backfire: (chance_per_mille: 50, effect: [SpawnMaterial("lava", 4)]),
+        ),
+        (
+            id: "ritual.verdant_surge",
+            needs: [Multiblock("grove_5x5"), Mana(120), Aspect(Life), MoonPhase(Full)],
+            effect: [SetField("growth", 64)],
+            backfire: (chance_per_mille: 80, effect: [SpawnMaterial("rot_spore", 16)]),
+        ),
+    ],
+)
