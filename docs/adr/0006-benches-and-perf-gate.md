@@ -37,5 +37,6 @@ Date: 2026-10-22. Status: accepted.
 Dependencies added (CLAUDE.md: each needs a line here):
 - `criterion` (dev; `engine_worldgen` and `engine_sim`; default features off, so no plotters or rayon; it still brings `clap`, `regex`, `serde_json`, `tinytemplate`, `ciborium`, `page_size` (and so `winapi`) and `alloca`, which needs a C compiler). Removes the hand-rolled timing of the deleted ratio test.
 - `proptest` (dev; `engine_sim`, `engine_voxel`; default features off). It replaces hand-picked cases for the brick, coordinate and chunk round-trip tests. In `Cargo.lock` it brings `rand` 0.10, a second `getrandom` and `r-efi`, `chacha20`, `cpufeatures`, `core_detect`, `rand_xorshift`, `unarray` and `regex-syntax`, for test builds only; no game code uses `rand`, and the simulation keeps positional hashing (ADR 0008).
+- `naga` 27.0.3 (dev; `engine_sim_gpu`; `wgsl-in` only). The version the app already builds with, so the lockfile gains nothing; it lets an ordinary `just test` parse and validate the cellular shaders without a GPU.
 - `bytemuck` (`engine_sim`; already used by the app). One safe `cast_slice` over the brick pool for the GPU upload.
 - Workspace edges, no new crates: `engine_content` -> `engine_core` (packed material rows), `engine_voxel` -> `engine_sim` (chunk conversion), the new `engine_gpu` -> `wgpu` and `pollster`.
