@@ -196,7 +196,36 @@ fn calendar(day: &DayNightCycle) -> f64 {
     day.day_index as f64 + day.time_of_day as f64
 }
 
+/// Corridors never stand closer than this. Cells are jittered inside 4 km, so
+/// neighbouring cells could otherwise land a kilometre and a half apart.
+pub const MIN_SPACING_M: f32 = 3200.0;
+
+/// A corridor survives unless a higher-priority neighbour stands within
+/// `MIN_SPACING_M`. The starting corridor always wins; otherwise the larger key
+/// does, so every pair of survivors is at least that far apart and no survivor
+/// moves.
 pub fn site(seed: u32, cell: IVec2) -> Option<Site> {
+    let me = raw_site(seed, cell)?;
+    if cell == IVec2::ZERO {
+        return Some(me);
+    }
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let other_cell = cell + IVec2::new(dx, dz);
+            if other_cell == cell {
+                continue;
+            }
+            let Some(other) = raw_site(seed, other_cell) else { continue };
+            let close = Vec3::new(other.x - me.x, 0.0, other.z - me.z).length() < MIN_SPACING_M;
+            if close && (other_cell == IVec2::ZERO || other.key > me.key) {
+                return None;
+            }
+        }
+    }
+    Some(me)
+}
+
+fn raw_site(seed: u32, cell: IVec2) -> Option<Site> {
     let key = hash_u32(
         seed ^ (cell.x as u32).wrapping_mul(0x9e3779b9)
             ^ (cell.y as u32).wrapping_mul(0x85ebca6b)
@@ -489,6 +518,23 @@ mod far_corridor_tests {
                     .count();
                 assert!(far <= MAX_FAR_CORRIDORS, "seed {seed} viewer {viewer}: {far} far corridors");
             }
+        }
+    }
+    #[test]
+    fn corridors_keep_their_distance() {
+        for seed in [1_u32, 74, 9001, 0xdead_beef] {
+            let sites: Vec<Site> = (-30..30)
+                .flat_map(|z| (-30..30).map(move |x| IVec2::new(x, z)))
+                .filter_map(|cell| site(seed, cell))
+                .collect();
+            assert!(sites.len() > 300, "seed {seed}: only {} corridors", sites.len());
+            for (i, a) in sites.iter().enumerate() {
+                for b in &sites[i + 1..] {
+                    let d = Vec3::new(a.x - b.x, 0.0, a.z - b.z).length();
+                    assert!(d >= MIN_SPACING_M, "seed {seed}: {:?} and {:?} are {d:.0} m apart", a.cell, b.cell);
+                }
+            }
+            assert!(site(seed, IVec2::ZERO).is_some(), "the starting corridor must stay");
         }
     }
 }
