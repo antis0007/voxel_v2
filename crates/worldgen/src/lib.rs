@@ -13,7 +13,9 @@ use glam::{IVec3, Vec3};
 use std::collections::HashSet;
 pub use engine_core::hash::{hash01, hash_u32};
 
+pub mod amberroot;
 pub mod architecture;
+pub mod bedrock;
 pub mod cistern;
 pub mod dungeon;
 pub mod habitats_region;
@@ -100,6 +102,7 @@ pub struct TreeProfile {
     branch_start_y: i32,
     lean_x: i32,
     lean_z: i32,
+    form: trees::TreeForm,
 }
 
 #[derive(Clone, Copy)]
@@ -743,6 +746,7 @@ pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32,
         branch_start_y,
         lean_x,
         lean_z,
+        form: trees::TreeForm::Classic,
     };
     if cfg.generator_version >= 6 {
         if let Some(step) = footprint {
@@ -1104,6 +1108,13 @@ pub fn sample_block_with(
         return BlockId::Air;
     }
 
+    if cfg.generator_version >= bedrock::VERSION
+        && p.y <= bedrock::ceiling(cfg)
+        && p.y <= bedrock::top(cfg, p.x, p.z)
+    {
+        return BlockId::Bedrock;
+    }
+
     if cfg.generator_version >= 3 {
         // This patch belongs to generation, so rendering and collision agree.
         let m = p.as_vec3() * cfg.voxel_meters();
@@ -1120,6 +1131,7 @@ pub fn sample_block_with(
             }
         }
         if let Some(block) = undercrown::block(cfg, p, column.height)
+            .or_else(|| amberroot::block(cfg, p, column.height))
             .or_else(|| sites::block(cfg, p, column.height))
             .or_else(|| sites::cavern(cfg, p, column.height))
         {
@@ -1244,7 +1256,7 @@ pub fn generate(cfg: &WorldSampleConfig, chunk_coord: IVec3) -> ChunkData {
                 let world_pos = chunk_origin + IVec3::new(x, y, z);
                 let index = ChunkData::local_index(x, y, z);
                 let block = sample_block_with(cfg, world_pos, column, &profiles);
-                if block.is_torch() {
+                if block.is_light_source() {
                     torches.insert(world_pos);
                 }
                 blocks[index] = block;
@@ -1278,7 +1290,7 @@ mod generated_torches {
                     let origin = coord * CHUNK_SIZE;
                     let mut expected = HashSet::new();
                     for (i, block) in data.blocks.iter().enumerate() {
-                        if block.is_torch() {
+                        if block.is_light_source() {
                             let i = i as i32;
                             expected.insert(
                                 origin

@@ -2,6 +2,9 @@
 use super::{BlockId, IVec3, TreeProfile, WorldSampleConfig, hash2, hash3, landscape};
 use glam::Vec3Swizzles;
 
+mod forms;
+pub(crate) use forms::TreeForm;
+
 pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
     let climate = landscape::sample(cfg, tree.anchor_x, tree.anchor_z);
     profile_from_landscape(cfg, tree, climate);
@@ -109,6 +112,9 @@ fn profile_from_landscape(cfg: &WorldSampleConfig, tree: &mut TreeProfile, clima
             tree.branch_start_y = tree.ground_y + (tree.trunk_h as f32 * branch_fraction) as i32;
             tree.branch_len = (tree.canopy_radius as f32 * 0.76) as i32;
         }
+        if cfg.generator_version >= 33 {
+            forms::choose(cfg, tree, &climate, age, species, individual_form);
+        }
         return;
     }
     if tree.conifer {
@@ -172,7 +178,8 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     let trunk_r = (stem * (1.0 - 0.60 * q.y / height) + flare).max(scale * 0.56);
     // Woody leaders end inside the leafy crown. Letting the trunk run to the
     // mathematical cone tip exposed metres of bare log at coarse voxel sizes.
-    let wood_top = if tree.conifer { height * 0.68 } else { height };
+    let whorled = tree.conifer && tree.form == TreeForm::Classic;
+    let wood_top = if whorled { height * 0.68 } else { height };
     if q.y <= wood_top && (q - trunk_center).xz().length_squared() <= trunk_r * trunk_r {
         return BlockId::Log;
     }
@@ -180,7 +187,22 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
         hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12049)) * std::f32::consts::TAU;
     // Keep saved v10 worlds stable; v11 opens the crown into branch groups.
     let open_crown = cfg.generator_version >= 11;
-    if tree.conifer {
+    let frame = || forms::Frame {
+        q,
+        lean,
+        stem,
+        height,
+        radius,
+        crown_h,
+        rotation,
+        scale,
+    };
+    match tree.form {
+        TreeForm::Umbrella => return forms::umbrella(cfg, &tree, p, &frame()),
+        TreeForm::Weeping => return forms::weeping(cfg, &tree, p, &frame()),
+        TreeForm::Classic | TreeForm::HighCrown => {}
+    }
+    if whorled {
         let base = (tree.branch_start_y - tree.ground_y) as f32 * scale;
         if q.y < base || q.y > height + scale {
             return BlockId::Air;
@@ -286,7 +308,8 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
         0.94 + edge * 0.12
     };
     if field < threshold {
-        BlockId::Leaves
+        // High-crowned pines reuse the open broadleaf crown with needles.
+        if tree.conifer { BlockId::PineLeaves } else { BlockId::Leaves }
     } else {
         BlockId::Air
     }
@@ -303,7 +326,10 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
     let lean = Vec2::new(tree.lean_x as f32, tree.lean_z as f32) * (0.3 + age * 0.45);
     let lean_len = lean.length();
-    if tree.conifer {
+    if let Some(reach) = forms::crown_reach(cfg, tree, radius, lean_len) {
+        return reach;
+    }
+    if tree.conifer && tree.form == TreeForm::Classic {
         // Whorl envelope: radius * (0.91..1.07) * scallop(<=1.03); bounded, not sampled.
         return lean_len + radius * 1.10 + 0.5 * scale;
     }
@@ -339,7 +365,10 @@ pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     let scale = cfg.voxel_meters();
     let height = tree.trunk_h as f32 * scale;
     let crown_h = tree.canopy_height as f32 * scale;
-    if tree.conifer {
+    if let Some(top) = forms::crown_top(cfg, tree, height, crown_h) {
+        return top;
+    }
+    if tree.conifer && tree.form == TreeForm::Classic {
         // Whorls stop at height + one voxel; leaves fill the top cell.
         return height + scale;
     }

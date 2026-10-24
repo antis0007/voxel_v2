@@ -36,6 +36,12 @@ struct Plan {
     tower_fwd: Vec3,
 }
 
+/// True while the valley plan is being built. Later plans (the generator 35
+/// grove) stand aside then, so the valley always sees the same terrain.
+pub(super) fn probing() -> bool {
+    PROBING.get()
+}
+
 pub(super) fn carve(cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32) -> f32 {
     if cfg.generator_version < 14 || cfg.world_type == WorldType::Superflat || PROBING.get() {
         return h;

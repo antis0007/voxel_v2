@@ -296,6 +296,10 @@ block_ids! {
     InductionProvider,
     Transformer,
     Assembler,
+    Bedrock,
+    TombStone,
+    AmberCap,
+    UmberCap,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -314,6 +318,8 @@ pub mod terrain_family {
     pub const TUFT: u32 = 34;
     pub const PEBBLE: u32 = 35;
     pub const CAPPED_TURF: u32 = 36;
+    /// Warm emissive fungus gills (Amberroot grove); also a local light source.
+    pub const AMBER_GILL: u32 = 37;
 }
 
 impl BlockId {
@@ -420,6 +426,9 @@ impl BlockId {
             Self::MushroomStem => 17,
             Self::GlowCap => 18,
             Self::RedCap => 19,
+            Self::AmberCap => terrain_family::AMBER_GILL,
+            // Fungal flesh streaks; family 0 would take the climate turf paint.
+            Self::UmberCap => 17,
             Self::Limestone => 3,
             Self::CopperOre => 20,
             Self::TinOre => 21,
@@ -486,6 +495,11 @@ impl BlockId {
                 | BlockId::TorchWallWest
                 | BlockId::TorchWallEast
         )
+    }
+
+    /// Blocks kept in `ChunkData::torches`, the index the local light list reads.
+    pub fn is_light_source(self) -> bool {
+        self.is_torch() || self == BlockId::AmberCap
     }
 
     pub fn is_ray_pickable(self) -> bool {

@@ -4165,13 +4165,13 @@ fn main() -> Result<()> {
                                             draw_chunks: render_stats.terrain_draw_calls,
                                             terrain_triangles: render_stats.terrain_indices / 3,
                                             nearby_torches: nearby_torch_count,
+                                            visible_missing: visible_missing.0,
+                                            near_missing: visible_missing.1,
                                         },
                                     };
                                     if let Some(review)=benchmark.as_mut() {
                                         let elapsed=review.motion_started_at.elapsed().as_secs_f64();
                                         // Bound diagnostics so a slow run cannot amplify its own
-                                            visible_missing: visible_missing.0,
-                                            near_missing: visible_missing.1,
                                         // stalls with unbounded logging. Normal play is unaffected.
                                         if sample.cpu.total_ms > 50.0 && benchmark_hitch_reports < 24 {
                                             benchmark_hitch_reports += 1;

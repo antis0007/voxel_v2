@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 mod bearer_hall;
 mod layout;
+pub mod v2;
 
 pub const CELL: f32 = 144.0;
 const SLOT: f32 = 28.0;
@@ -1557,7 +1558,7 @@ fn v_up(cfg: &WorldSampleConfig) -> f32 {
     cfg.voxel_meters() * 2.0
 }
 
-fn gatehouse(seed: u32) -> Building {
+pub(crate) fn gatehouse(seed: u32) -> Building {
     let mut s = WingSpec::new(-3.6, -3.6, 2, 2, seed.wrapping_add(5));
     s.h = 4.4;
     s.roof = Roof::Hip;
@@ -1597,6 +1598,12 @@ fn cell_key(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> CellKey {
 
 /// Centre of the complex owned by a cell, if it has one.
 fn plan_cell(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Dungeon> {
+    let (seed, cx, cz, ground) = site(cfg, ix, iz)?;
+    Some(Dungeon::generate(seed, cx, cz, ground, cfg.generator_version))
+}
+
+/// Seed, centre and collar ground of the complex a cell owns, if it has one.
+fn site(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<(u32, f32, f32, f32)> {
     let seed = cfg
         .seed
         .wrapping_add((ix as u32).wrapping_mul(2246822519))
@@ -1631,13 +1638,7 @@ fn plan_cell(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Dungeon> {
             return None;
         }
     }
-    Some(Dungeon::generate(
-        seed,
-        cx,
-        cz,
-        ground,
-        cfg.generator_version,
-    ))
+    Some((seed, cx, cz, ground))
 }
 
 fn cell_at(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Rc<Dungeon>> {
@@ -1669,6 +1670,47 @@ fn cell_at(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Rc<Dungeon>> {
     slot
 }
 
+type ComplexSlot = Option<Rc<v2::Complex>>;
+
+thread_local! {
+    static COMPLEXES: RefCell<FastMap<CellKey, ComplexSlot>> = RefCell::new(FastMap::default());
+    static LAST_COMPLEX: RefCell<Option<(CellKey, ComplexSlot)>> = const { RefCell::new(None) };
+}
+
+/// Generator 32 complex owned by a cell, cached like `cell_at` (a one-entry
+/// fast path in front of the map, since neighbouring voxels share a cell).
+fn complex_at(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> ComplexSlot {
+    let key = cell_key(cfg, ix, iz);
+    if let Some(hit) = LAST_COMPLEX.with(|l| l.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, d)| d.clone())) {
+        return hit;
+    }
+    let found = COMPLEXES.with(|c| c.borrow().get(&key).cloned());
+    let slot = match found {
+        Some(slot) => slot,
+        None => build_complex(cfg, ix, iz, key),
+    };
+    LAST_COMPLEX.with(|l| *l.borrow_mut() = Some((key, slot.clone())));
+    slot
+}
+
+fn build_complex(cfg: &WorldSampleConfig, ix: i32, iz: i32, key: CellKey) -> ComplexSlot {
+    // A generator 32 complex is larger than its collar test: drop it when its
+    // footprint would run into the Undercrown's reserve.
+    let built = site(cfg, ix, iz)
+        .map(|(seed, cx, cz, ground)| v2::generate(seed, cx, cz, ground))
+        .filter(|d| !super::undercrown::overlaps(cfg, d.min, d.max))
+        .filter(|d| !super::amberroot::overlaps(cfg, d.min, d.max))
+        .map(Rc::new);
+    COMPLEXES.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 256 {
+            c.clear();
+        }
+        c.insert(key, built.clone());
+    });
+    built
+}
+
 fn cell_index(v: f32) -> i32 {
     (v / CELL).round() as i32
 }
@@ -1678,6 +1720,9 @@ pub fn block(cfg: &WorldSampleConfig, m: Vec3, height: i32) -> Option<B> {
     if cfg.generator_version < 16 || cfg.world_type == WorldType::Superflat {
         return None;
     }
+    if cfg.generator_version >= v2::VERSION {
+        return complex_at(cfg, cell_index(m.x), cell_index(m.z))?.sample(cfg, m, height);
+    }
     let d = cell_at(cfg, cell_index(m.x), cell_index(m.z))?;
     d.sample(cfg, m, height)
 }
@@ -1686,6 +1731,11 @@ pub fn block(cfg: &WorldSampleConfig, m: Vec3, height: i32) -> Option<B> {
 pub fn reserved(cfg: &WorldSampleConfig, m: Vec3) -> bool {
     if cfg.generator_version < 16 || cfg.world_type == WorldType::Superflat {
         return false;
+    }
+    if cfg.generator_version >= v2::VERSION {
+        return complex_at(cfg, cell_index(m.x), cell_index(m.z)).is_some_and(|d| {
+            m.x >= d.min.x - 6.0 && m.x <= d.max.x + 6.0 && m.z >= d.min.z - 6.0 && m.z <= d.max.z + 6.0
+        });
     }
     cell_at(cfg, cell_index(m.x), cell_index(m.z)).is_some_and(|d| {
         m.x >= d.min.x - 6.0 && m.x <= d.max.x + 6.0 && m.z >= d.min.z - 6.0 && m.z <= d.max.z + 6.0
@@ -1697,6 +1747,11 @@ pub fn reserved(cfg: &WorldSampleConfig, m: Vec3) -> bool {
 pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
     if cfg.generator_version < 21 || cfg.world_type == WorldType::Superflat {
         return 0.0;
+    }
+    if cfg.generator_version >= v2::VERSION {
+        return complex_at(cfg, cell_index(p.x), cell_index(p.z))
+            .filter(|d| d.contains(p))
+            .map_or(0.0, |d| d.cosmos_at(p));
     }
     let Some(d) = cell_at(cfg, cell_index(p.x), cell_index(p.z)) else {
         return 0.0;
@@ -1732,6 +1787,9 @@ pub fn name_at(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
     if cfg.generator_version < 16 || cfg.world_type == WorldType::Superflat {
         return None;
     }
+    if cfg.generator_version >= v2::VERSION {
+        return complex_at(cfg, cell_index(p.x), cell_index(p.z))?.name_at(p);
+    }
     let d = cell_at(cfg, cell_index(p.x), cell_index(p.z))?;
     if !(d.contains(p) && p.y < d.ground - 2.0) {
         return None;
@@ -1755,6 +1813,77 @@ pub fn name_at(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
     Some(d.theme.name)
 }
 
+/// Render-review cameras (eye, target in metres) for the complex nearest to
+/// `around`: the reveal hall and core from generator 32, the hub and a side
+/// room before it. Review only; never used by gameplay.
+pub fn review_views(cfg: &WorldSampleConfig, around: Vec3) -> Vec<(Vec3, Vec3)> {
+    if cfg.generator_version < 16 || cfg.world_type == WorldType::Superflat {
+        return Vec::new();
+    }
+    let (ix, iz) = (cell_index(around.x), cell_index(around.z));
+    for ring in 0..12i32 {
+        for z in iz - ring..=iz + ring {
+            for x in ix - ring..=ix + ring {
+                if (x - ix).abs().max((z - iz).abs()) != ring {
+                    continue;
+                }
+                if cfg.generator_version >= v2::VERSION {
+                    if let Some(d) = complex_at(cfg, x, z) {
+                        return v2_views(&d);
+                    }
+                } else if let Some(d) = cell_at(cfg, x, z) {
+                    let corner = |r: &Room| {
+                        let (cx, cz) = r.centre();
+                        (Vec3::new(r.x0 + 1.5, r.floor + 1.7, r.z0 + 1.5), Vec3::new(cx, r.floor + r.h * 0.4, cz))
+                    };
+                    return vec![corner(&d.rooms[4]), corner(&d.rooms[1]), corner(&d.rooms[7])];
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Review camera for the nearest legacy cosmos chamber (generators 21-31):
+/// from one floor corner toward the far upper corner, so the vault and its
+/// starfield fill the frame. None at generator 32+, whose complexes have none.
+pub fn cosmos_review_view(cfg: &WorldSampleConfig, around: Vec3) -> Option<(Vec3, Vec3)> {
+    if !(21..v2::VERSION).contains(&cfg.generator_version) || cfg.world_type == WorldType::Superflat {
+        return None;
+    }
+    let (ix, iz) = (cell_index(around.x), cell_index(around.z));
+    for ring in 0..12i32 {
+        for z in iz - ring..=iz + ring {
+            for x in ix - ring..=ix + ring {
+                if (x - ix).abs().max((z - iz).abs()) != ring {
+                    continue;
+                }
+                let Some(d) = cell_at(cfg, x, z) else { continue };
+                if let Some(r) = d.rooms.iter().find(|r| r.kind == Kind::Cosmos) {
+                    let eye = Vec3::new(r.x0 + 1.5, r.floor + 1.7, r.z0 + 1.5);
+                    return Some((eye, Vec3::new(r.x1 - 2.0, r.floor + r.h * 0.6, r.z1 - 2.0)));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn v2_views(d: &v2::Complex) -> Vec<(Vec3, Vec3)> {
+    let r = &d.rooms[d.reveal];
+    let (cx, cz) = r.centre();
+    let mut views = vec![
+        (Vec3::new(r.x0 + 1.5, r.floor + v2::LEVEL + 1.7, r.z0 + 1.5), Vec3::new(cx, r.floor + 3.0, cz)),
+        (d.anchors[1] + Vec3::Y * 0.7, Vec3::new(r.x0 + 4.0, r.floor + v2::LEVEL + 2.0, r.z1 - 4.0)),
+    ];
+    let ordinary = d.rooms.iter().find(|q| !matches!(q.kind, v2::Kind::Entry | v2::Kind::Reveal | v2::Kind::Core));
+    for q in d.objective.map(|o| &d.rooms[o]).into_iter().chain(ordinary) {
+        let (qx, qz) = q.centre();
+        views.push((Vec3::new(q.x0 + 1.5, q.floor + 1.7, q.z0 + 1.5), Vec3::new(qx, q.floor + q.h * 0.4, qz)));
+    }
+    views
+}
+
 /// (cell id, point) pairs for complexes within `range` metres of the player. The point
 /// is the middle of a side room, so fights happen away from the shaft.
 pub fn anchors(cfg: &WorldSampleConfig, player: Vec3, range: f32) -> Vec<((i32, i32), Vec3)> {
@@ -1763,6 +1892,16 @@ pub fn anchors(cfg: &WorldSampleConfig, player: Vec3, range: f32) -> Vec<((i32, 
         return out;
     }
     let (ix, iz) = (cell_index(player.x), cell_index(player.z));
+    if cfg.generator_version >= v2::VERSION {
+        for z in iz - 1..=iz + 1 {
+            for x in ix - 1..=ix + 1 {
+                if let Some(d) = complex_at(cfg, x, z) {
+                    out.extend(d.anchors.iter().filter(|p| (**p - player).length() < range).map(|p| ((x, z), *p)));
+                }
+            }
+        }
+        return out;
+    }
     for z in iz - 1..=iz + 1 {
         for x in ix - 1..=ix + 1 {
             if let Some(d) = cell_at(cfg, x, z) {

@@ -10,6 +10,7 @@
 //! - v19 and later author the connected rooms in `plan::Plan::for_config`.
 mod plan;
 mod state;
+pub mod v2;
 
 #[allow(unused_imports)]
 pub use plan::{
@@ -63,6 +64,11 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<BlockId> 
 /// True when random generated space must stay out of this point.
 pub fn reserved(cfg: &WorldSampleConfig, m: Vec3) -> bool {
     cfg.generator_version >= FIRST_VERSION && plan(cfg).reserved(m)
+}
+
+/// True when a box touches the reserved footprint.
+pub fn overlaps(cfg: &WorldSampleConfig, lo: Vec3, hi: Vec3) -> bool {
+    cfg.generator_version >= FIRST_VERSION && plan(cfg).overlaps(lo, hi)
 }
 
 /// Human-readable location name for the journal and surface naming.

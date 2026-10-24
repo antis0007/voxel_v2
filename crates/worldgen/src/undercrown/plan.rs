@@ -1,5 +1,5 @@
-//! Authored Undercrown plan. This milestone defines the content contract and a
-//! test fixture only; `Plan::for_config` intentionally returns an empty plan.
+//! Authored Undercrown plan: rooms, props and links. Generator 19–31 use the
+//! box plan below; generator 32 authors real spaces in `v2`.
 use super::state::ObjectId;
 use crate::{BlockId, WorldSampleConfig};
 use glam::Vec3;
@@ -168,6 +168,8 @@ pub struct Plan {
     pub rooms: Vec<RoomSpec>,
     pub links: Vec<Link>,
     pub props: Vec<Prop>,
+    /// Generator 32 geometry; `None` for the generator 19 box plan.
+    pub v2: Option<Box<super::v2::Layout>>,
 }
 
 impl Plan {
@@ -178,6 +180,7 @@ impl Plan {
             rooms: Vec::new(),
             links: Vec::new(),
             props: Vec::new(),
+            v2: None,
         }
     }
 
@@ -186,6 +189,17 @@ impl Plan {
     pub fn for_config(cfg: &WorldSampleConfig) -> Self {
         if cfg.generator_version < super::FIRST_VERSION {
             return Self::empty();
+        }
+        if cfg.generator_version >= super::v2::VERSION {
+            let (rooms, props, layout) = super::v2::author(cfg);
+            return Self {
+                anchor: layout.anchor,
+                bounds: (layout.min, layout.max),
+                rooms,
+                links: Vec::new(),
+                props,
+                v2: Some(Box::new(layout)),
+            };
         }
         authored(cfg)
     }
@@ -218,6 +232,12 @@ impl Plan {
             && m.z <= self.bounds.1.z + RESERVE_MARGIN
     }
 
+    /// True when a box touches the reserved footprint.
+    pub fn overlaps(&self, lo: Vec3, hi: Vec3) -> bool {
+        let (a, b) = (self.bounds.0 - RESERVE_MARGIN, self.bounds.1 + RESERVE_MARGIN);
+        self.has_bounds() && lo.cmple(b).all() && hi.cmpge(a).all()
+    }
+
     pub fn location(&self, m: Vec3) -> Option<&'static str> {
         self.room_at(m).map(|room| room.name)
     }
@@ -242,9 +262,13 @@ impl Plan {
 
     /// Sample the authored footprint. Points outside a room jacket return
     /// nothing, so the hill above a deep hall stays natural terrain.
-    pub fn sample(&self, _cfg: &WorldSampleConfig, m: Vec3, _height: i32) -> Option<BlockId> {
+    pub fn sample(&self, cfg: &WorldSampleConfig, m: Vec3, _height: i32) -> Option<BlockId> {
         if self.is_empty() || !self.contains(m) {
             return None;
+        }
+        if let Some(layout) = &self.v2 {
+            // Generator 32 samples voxel centres.
+            return layout.sample(cfg, m + Vec3::splat(cfg.voxel_meters() * 0.5), super::v2::Mech::default());
         }
         if let Some(room) = self.room_at(m) {
             return Some(dress(room, m));
@@ -283,6 +307,7 @@ impl Plan {
             rooms: vec![room],
             links: Vec::new(),
             props: vec![prop],
+            v2: None,
         }
     }
 }
@@ -476,6 +501,7 @@ fn authored(cfg: &WorldSampleConfig) -> Plan {
         rooms,
         links,
         props,
+        v2: None,
     }
 }
 

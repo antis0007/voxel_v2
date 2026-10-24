@@ -108,6 +108,9 @@ pub fn visual_ecology(
     if cfg.generator_version >= 15 {
         (heat, wet) = super::terrain_variety::climate(x, z, cfg.seed, heat, wet);
     }
+    if cfg.generator_version >= 33 {
+        (heat, wet) = super::terrain_variety::regional_climate(x, z, cfg.seed, heat, wet);
+    }
     heat = (heat
         - (height - 30.0).max(0.0)
             * if cfg.generator_version >= 7 {
@@ -971,6 +974,10 @@ fn apply_macro_shaping(
     if cfg.generator_version >= 15 {
         (temperature, rain) = super::terrain_variety::climate(wx, wz, cfg.seed, temperature, rain);
     }
+    if cfg.generator_version >= 33 {
+        (temperature, rain) =
+            super::terrain_variety::regional_climate(wx, wz, cfg.seed, temperature, rain);
+    }
     // Generator 7 uses a gentler normalized lapse rate. The previous rate drove
     // the climate field to zero on ordinary highlands, making a single snowy
     // alpine biome swallow most of the visible mountain range.
@@ -1143,6 +1150,9 @@ fn apply_macro_shaping(
     }
     if cfg.generator_version >= 14 && cfg.world_type != WorldType::Superflat {
         h = super::valley::carve(cfg, wx, wz, h);
+    }
+    if cfg.generator_version >= super::amberroot::VERSION && cfg.world_type != WorldType::Superflat {
+        h = super::amberroot::carve(cfg, wx, wz, h);
     }
     (h, slope, temperature, moisture)
 }
@@ -1496,6 +1506,19 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         } else if super::valley::built_up(cfg, wx, wz) {
             vegetation = 0.0;
         }
+    }
+    if cfg.generator_version >= super::amberroot::VERSION
+        && let Some((s, f, v)) = super::amberroot::column(
+            cfg,
+            cfg.world_x(x),
+            cfg.world_z(z),
+            (surface, filler),
+            vegetation,
+        )
+    {
+        surface = s;
+        filler = f;
+        vegetation = v;
     }
     let height = cfg.clamp_height(cfg.blocks_for_height(s.height));
     ColumnSample {

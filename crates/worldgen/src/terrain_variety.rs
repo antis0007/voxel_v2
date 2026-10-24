@@ -18,6 +18,25 @@ pub(super) fn climate(wx: f32, wz: f32, seed: u32, heat: f32, wet: f32) -> (f32,
     (heat.clamp(0.0, 1.0), wet.clamp(0.0, 1.0))
 }
 
+/// Generator 33: continent-scale climate. The 700 m fields alone give every
+/// few hundred metres the same mix of biomes; these kilometre-scale belts and
+/// regions let whole provinces run hot, cold, wet or dry. Faded out near the
+/// origin so spawn stays temperate.
+pub(super) fn regional_climate(wx: f32, wz: f32, seed: u32, heat: f32, wet: f32) -> (f32, f32) {
+    let reach = smoothstep(350.0, 1600.0, (wx * wx + wz * wz).sqrt());
+    if reach <= 0.0 {
+        return (heat, wet);
+    }
+    // Wavy latitude bands about 7 km apart, phase 0 (temperate) at the origin.
+    let lat = wz + (value_noise2(wx / 1900.0, wz / 1900.0, seed.wrapping_add(9701)) - 0.5) * 1800.0;
+    let belt = (lat * std::f32::consts::TAU / 7200.0).sin();
+    let region_t = value_noise2(wx / 2600.0, wz / 2600.0, seed.wrapping_add(9703)) - 0.5;
+    let region_m = value_noise2(wx / 2200.0, wz / 2200.0, seed.wrapping_add(9707)) - 0.5;
+    let heat = heat + (belt * 0.13 + region_t * 0.26) * reach;
+    let wet = wet + region_m * 0.30 * reach;
+    (heat.clamp(0.0, 1.0), wet.clamp(0.0, 1.0))
+}
+
 /// Desert ground is not all sand: dry clay pans, gravel plains (hamada) and
 /// sandstone outcrops break up the dunes. Returns the surface and filler.
 pub(super) fn desert_surface(wx: f32, wz: f32, seed: u32, slope: f32) -> (BlockId, BlockId) {

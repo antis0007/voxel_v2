@@ -6,7 +6,10 @@ use std::cell::RefCell;
 use engine_core::fast_hash::FastMap;
 use std::collections::HashMap;
 
-fn region_span(cfg: &WorldSampleConfig) -> f32 {
+pub mod boss_access;
+pub mod modifiers;
+
+pub(super) fn region_span(cfg: &WorldSampleConfig) -> f32 {
     if cfg.generator_version >= 9 {
         192.0
     } else {
@@ -216,7 +219,7 @@ fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
     }
     let x = ix as f32 * HOME_CELL + (hash2(ix, iz, seed.wrapping_add(901)) - 0.5) * 24.0;
     let z = iz as f32 * HOME_CELL + (hash2(ix, iz, seed.wrapping_add(902)) - 0.5) * 24.0;
-    if x.hypot(z) < 90.0 || super::valley::reserves(cfg, x, z) {
+    if x.hypot(z) < 90.0 || super::valley::reserves(cfg, x, z) || super::amberroot::reserves(cfg, x, z) {
         return None;
     }
     // Leave room around the big ruins.
@@ -375,7 +378,7 @@ pub(super) fn surface_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool 
         && (h.x - x).hypot(h.z - z) < h.reach + 4.0 {
             return true;
         }
-    super::dungeon::reserved(cfg, Vec3::new(x, 0.0, z))
+    super::amberroot::reserves(cfg, x, z) || super::dungeon::reserved(cfg, Vec3::new(x, 0.0, z))
 }
 
 pub fn workshop_heart(cfg: &WorldSampleConfig) -> Option<Vec3> {
@@ -1094,6 +1097,14 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
     } else {
         rz as f32 * region_span(cfg)
     };
+    // Generator 32: the boss complex behind a boss ruin.
+    if cfg.generator_version >= boss_access::VERSION
+        && (m.x - center_x).abs() <= boss_access::REACH
+        && (m.z - center_z).abs() <= boss_access::REACH
+        && let Some(b) = boss_access::site_block(cfg, rx, rz, m)
+    {
+        return Some(b);
+    }
     if (m.x - center_x).abs() <= 48.0 && (m.z - center_z).abs() <= 84.0
         && let Some(s) = site(cfg, rx, rz)
             && let Some(b) = sample_site(s, cfg, m, terrain_top) {
@@ -1238,6 +1249,14 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
     // above-ground voxels here avoids the per-voxel cave/dungeon solve for the
     // sky portion of every surface chunk.
     if p.y > height {
+        // Generator 32 lets the gatehouse over a complex's shaft stand above
+        // ground; older worlds never sampled it there.
+        if cfg.generator_version >= super::dungeon::v2::VERSION
+            && p.y <= height + cfg.blocks_for_span(14.0)
+            && !super::valley::reserves(cfg, m.x, m.z)
+        {
+            return super::dungeon::block(cfg, m, height);
+        }
         return None;
     }
     if super::undercrown::reserved(cfg, m) {
@@ -1258,6 +1277,11 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
         && let Some(b) = super::cistern::sample(cfg, m) {
             return Some(b);
         }
+    if cfg.generator_version >= boss_access::VERSION
+        && let Some(b) = boss_access::cavern_block(cfg, m)
+    {
+        return Some(b);
+    }
     let depth = height as f32 * cfg.voxel_meters() - m.y;
     if !(9.0..=70.0).contains(&depth) {
         return None;
@@ -1462,6 +1486,9 @@ pub fn location(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
     if let Some(name) = super::surface::location(cfg, m) {
         return Some(name);
     }
+    if let Some(name) = super::amberroot::location(cfg, m) {
+        return Some(name);
+    }
     if cfg.generator_version >= 16 {
         let ground = shaft_ground(cfg);
         if let Some(name) = super::dungeon::vault_name(cfg, m, ground) {
@@ -1564,6 +1591,8 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
             if let Some(s) = site(cfg, x, z) {
                 let point = if s.starter {
                     Vec3::new(11.0, s.ground - 18.0, -90.0)
+                } else if let Some(shrine) = boss_access::site_shrine(cfg, x, z) {
+                    shrine.relic_point()
                 } else {
                     Vec3::new(s.x, s.ground + 1.0, s.z + 3.0)
                 };
