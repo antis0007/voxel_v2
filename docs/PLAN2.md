@@ -2,6 +2,8 @@
 
 > **Superseded 2026-10-23** by `docs/ENGINE_CORE.md` and `docs/GAME_DESIGN.md` (pending approval of ADR 0014). Kept as history. Decisions D1–D7 (§1a) still hold. Open phases A6–F map onto milestones M1–M7 in ENGINE_CORE §11. The ADR numbers this plan reserved (0012 shader includes, 0013 terrain renderer) are void.
 
+> North star (2026-10-22): understand it, build it, carry it. Design intent, verdict ledger and the first playable slice (Flooded Observatory) are in `docs/design/NORTH_STAR_UNDERSTAND_BUILD_CARRY.md`. Phases C and D deliver its substrate (sensor/signal graph, one rules schema); sensor-condition wand cards and the notebook wait for D.
+
 Scope: the six-phase mission (A simulation, B rendering, C automation, D rules, E text, F cheap changes) mapped onto the code as it is after the revamp (`docs/PLAN.md`). This file names crates, files and recipes that do not exist yet; it is exempt from the docs-path test like `AUDIT.md`.
 
 Baseline (2026-10-22): ≈115k Rust lines, 9.3k WGSL, 441 tests, 3 scenarios, 0 benches, 6 crates, `just verify` ≈25 s warm.
@@ -333,6 +335,12 @@ Token rationale:
 - Numbers go in ADR 0013, the loser is deleted, and the winner merges as one commit.
 - Known cost asymmetry, stated now so the numbers decide and not the effort: ray-marching must re-host the 3,264-line `world_shader.wgsl` lighting model, while GPU meshing keeps it.
 
+**B2 reference notes (from an external source review, unbenchmarked).**
+- VoxelRT (`dubiousconst282/VoxelRT`, MIT, Slang) compares XBrickMap and Tree64 on the same scenes. For B2(b), and for any secondary-ray query (shadows, probes), read its XBrickMap `Map.slang` and `SparseRayMarch.slang` before fixing the pointer-table layout.
+- XBrickMap uses per-brick occupancy masks, popcount-indexed compacted entries, and empty-region skips. Our 8³ brick = 512 cells = 16 `u32` of occupancy bits, which maps onto the A2 dirty-mask idea. Worth deciding in A4/A6 whether the GPU pool carries an occupancy mask beside the 8 B/cell records, since the cell records alone make empty-space skipping read 4 KiB per brick.
+- Tree64 rebuilds dirty 64³ chunks and stalls the device on reclaim (`WaitDeviceIdle`). Take its traversal tricks (ray mirroring, ancestor jumps, 64-bit masks as two `u32`), not its update path. It is a poor match for edit-heavy water and sand.
+- Licence: keep a notice line per ported file; MIT needs the copyright text retained.
+
 **B4. Wiring.**
 - GPU LOD selection; shadow cascades draw from the same indirect lists.
 - No per-chunk CPU work in steady state, enforced by a bench counter that asserts zero CPU mesh jobs in a static scene.
@@ -410,6 +418,7 @@ A JSON schema of `Action` is generated, by a test-checked hand table or `schemar
 - `look(region)` returns nouns at or near a position.
 - `verbs(position)` returns the legal actions.
 - `describe(...)` builds text from material properties through `assets/descriptors.ron`: property ranges map to words, for example `temp > 330 K → "steaming"` and `tag sulfur → "smells of sulfur"`. No hand-written strings per object.
+- `inspect(cell)` returns material, state, temperature, pressure and the reaction rows that could fire. The GUI shows it as an inspect tool, through the same `Action`, so a player can see why something burned, melted or flooded instead of guessing.
 
 **E-3. Places** are named regions: `assets/places.ron` plus worldgen sites exported as places. Narrative events are Phase D event-tier rules.
 
@@ -418,7 +427,6 @@ A JSON schema of `Action` is generated, by a test-checked hand table or `schemar
 Accept: `assets/scenarios/text_walkthrough.txt` mutates the voxel world (dig, pour, cast). It is verified by the same world-hash snapshot as the RON scenarios, and an `Action` round-trips through JSON. `just verify`.
 
 Token rationale: the agent's playtesting interface becomes text in, text out, with no capture session. Every bug report can be a transcript.
-- `inspect(cell)` returns material, state, temperature, pressure and the reaction rows that could fire. The GUI shows it as an inspect tool, through the same `Action`, so a player can see why something burned, melted or flooded instead of guessing.
 
 ### Phase F: make the next thousand changes cheap · +1k to +2k lines · risk: low · 1–2 sessions
 

@@ -14,14 +14,15 @@ use residency::{ResidentChunk, VoxelAllocations, arena_budget};
 pub use residency::{set_world_residency_budgets_mib, world_residency_budgets_mib};
 mod columns;
 mod arena;
+pub(super) mod indirect_draws;
 mod gpu_upload;
 mod pending_gpu;
 use pending_gpu::{PendingGpuLedger, PendingGpuUpload, PendingGpuLease};
 mod terrain;
 mod local_sources;
 mod visibility;
-mod edit_proxies;
 mod view_missing;
+mod edit_proxies;
 mod quality_proxies;
 #[cfg(test)]
 mod pin_tests;
@@ -870,6 +871,11 @@ impl ChunkCache {
     }
 
     /// The publication transaction calls this only after GPU validation succeeds.
+    /// Vertex and index buffers of one arena page.
+    pub fn page_buffers(&self, page: u32) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        self.arena.buffers(page)
+    }
+
     /// Buffers and ranges for drawing the resident mesh at `coord`, if it has geometry.
     pub fn draw_slice(&self, coord: IVec3) -> Option<DrawSlice<'_>> {
         let mesh = self.gpu_meshes.get(&coord)?;

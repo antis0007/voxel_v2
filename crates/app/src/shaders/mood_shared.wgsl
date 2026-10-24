@@ -46,52 +46,228 @@ fn mood_dir_face(d: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(d.x / a.z, d.y / a.z, select(4.0, 5.0, d.z > 0.0));
 }
 
+// Star colour along a rough black-body ramp: 0 = red dwarf, 1 = blue giant.
+fn mood_star_colour(temp: f32) -> vec3<f32> {
+    let red = vec3<f32>(1.00, 0.52, 0.32);
+    let gold = vec3<f32>(1.00, 0.84, 0.60);
+    let white = vec3<f32>(0.97, 0.97, 1.00);
+    let blue = vec3<f32>(0.62, 0.74, 1.00);
+    let a = mix(red, gold, smoothstep(0.0, 0.30, temp));
+    let b = mix(a, white, smoothstep(0.25, 0.60, temp));
+    return mix(b, blue, smoothstep(0.55, 1.0, temp));
+}
+
+// One layer of stars on a cube-face grid. `cutoff` sets how many cells hold a
+// star, `radius` the core size in cells. Magnitudes are skewed so most stars
+// are faint and a few are bright enough to carry a soft halo. The core never
+// shrinks below about a pixel, so fine layers shimmer rather than sparkle.
 fn mood_stars(dir: vec3<f32>, scale: f32, cutoff: f32, radius: f32, t: f32, seed: f32) -> vec3<f32> {
     let face = mood_dir_face(dir);
     let grid = face.xy * scale;
     let cell = floor(grid);
-    let key = vec3<f32>(cell, face.z + seed);
+    let key = vec3<f32>(cell, face.z * 17.0 + seed);
     let h = mood_hash31(key);
+    if h < cutoff {
+        return vec3<f32>(0.0);
+    }
     let jitter = vec2<f32>(
         mood_hash31(key + vec3<f32>(3.1, 7.7, 1.3)),
         mood_hash31(key + vec3<f32>(9.2, 2.4, 5.8)));
-    let d = length(fract(grid) - (vec2<f32>(0.2) + jitter * 0.6));
-    let present = step(cutoff, h);
-    let shape = 1.0 - smoothstep(radius * 0.35, radius, d);
+    let off = fract(grid) - (vec2<f32>(0.2) + jitter * 0.6);
+    let d2 = dot(off, off);
+    let mag = mood_hash31(key + vec3<f32>(8.8, 0.4, 2.2));
     let temp = mood_hash31(key + vec3<f32>(1.7, 4.9, 6.1));
-    let tint = mix(vec3<f32>(0.62, 0.72, 1.00), vec3<f32>(1.00, 0.90, 0.72), smoothstep(0.15, 0.9, temp));
-    let bright = 0.45 + 0.55 * mood_hash31(key + vec3<f32>(8.8, 0.4, 2.2));
-    let twinkle = 0.78 + 0.22 * sin(t * (0.8 + temp * 2.2) + h * 61.0);
-    return tint * (present * shape * bright * twinkle);
+    let sigma = max(radius * (0.18 + 0.22 * mag), 0.0007 * scale);
+    let core = exp(-d2 / (2.0 * sigma * sigma));
+    let halo = exp(-d2 * 40.0) * 0.12 * mag * mag * mag;
+    let bright = mix(0.18, 1.0, mag * mag);
+    let rate = 0.9 + temp * 2.6;
+    let twinkle = 0.80 + 0.14 * sin(t * rate + h * 61.0) + 0.06 * sin(t * rate * 2.7 + h * 17.0);
+    return mood_star_colour(temp) * (bright * twinkle * (core + halo));
 }
 
-// The inside of a cosmos chamber's sky: a tilted galactic band, nebula, and
-// three layers of stars. Stars are fixed in direction, so the room turns
-// around you as you turn your head.
+// Domain-warped nebula: one cheap warp, three octaves of density. Wide
+// smoothsteps keep the gradients continuous, never stepped.
+fn mood_nebula(dir: vec3<f32>, band: f32, t: f32) -> vec3<f32> {
+    let p = dir * 2.2 + vec3<f32>(0.0, t * 0.0020, t * 0.0012);
+    let w = vec3<f32>(
+        mood_noise3(p * 1.3 + vec3<f32>(1.7, 9.2, 3.1)),
+        mood_noise3(p * 1.3 + vec3<f32>(8.3, 2.8, 5.4)),
+        mood_noise3(p * 1.3 + vec3<f32>(4.6, 6.1, 0.9)));
+    let n = mood_fbm(p + (w - vec3<f32>(0.5)) * 1.7);
+    let dens = smoothstep(0.28, 0.86, n);
+    let filament = pow(1.0 - abs(2.0 * n - 1.0), 5.0);
+    let violet = vec3<f32>(0.30, 0.08, 0.55);
+    let teal = vec3<f32>(0.05, 0.36, 0.60);
+    let rose = vec3<f32>(0.78, 0.16, 0.36);
+    let hue = mix(violet, teal, smoothstep(0.25, 0.75, w.x));
+    // Dark dust lanes cut the galactic band so it reads as a disc seen edge-on.
+    let dust = 1.0 - 0.65 * smoothstep(0.42, 0.72, w.y) * band;
+    let milk = vec3<f32>(0.11, 0.10, 0.16) * band * 0.40;
+    return (hue * dens * (0.22 + band * 0.95) + rose * filament * dens * 0.30 * (0.3 + band) + milk) * dust * 0.55;
+}
+
+// A distant spiral galaxy: a tilted disc with two logarithmic arms, a bulge,
+// and a little dust. `size` is its angular radius in radians.
+fn mood_galaxy(dir: vec3<f32>, centre: vec3<f32>, size: f32, spin: f32, squash: f32, tint: vec3<f32>, t: f32) -> vec3<f32> {
+    let c = normalize(centre);
+    if dot(dir, c) < cos(size * 1.6) {
+        return vec3<f32>(0.0);
+    }
+    let u0 = normalize(cross(c, vec3<f32>(0.0, 1.0, 0.0)));
+    let v0 = cross(c, u0);
+    let u = u0 * cos(spin) + v0 * sin(spin);
+    let v = cross(c, u);
+    let xy = vec2<f32>(dot(dir, u), dot(dir, v) / squash) / size;
+    let r = length(xy);
+    let th = atan2(xy.y, xy.x);
+    let arms = pow(0.5 + 0.5 * cos(2.0 * th - log(r + 0.04) * 4.2 - t * 0.004), 2.2);
+    let disc = exp(-r * 3.4) * smoothstep(1.6, 0.9, r);
+    let bulge = exp(-r * r * 38.0);
+    let grain = 0.72 + 0.28 * mood_noise3(vec3<f32>(xy * 7.0, spin * 3.0));
+    return tint * disc * (0.20 + 0.80 * arms) * grain * 0.55 + vec3<f32>(1.0, 0.88, 0.70) * bulge * 0.9;
+}
+
+fn mood_seg_dist(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let ab = b - a;
+    let k = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+    return length(p - a - ab * k);
+}
+
+fn mood_constellation_node(key: vec3<f32>, k: f32) -> vec2<f32> {
+    return vec2<f32>(0.14) + vec2<f32>(
+        mood_hash31(key + vec3<f32>(1.3, 7.1, 2.9) * (k + 1.0)),
+        mood_hash31(key + vec3<f32>(5.7, 3.3, 9.1) * (k + 1.0))) * 0.72;
+}
+
+// Constellations: in some coarse cells four or five bright stars joined by a
+// faint thread. The whole sphere turns very slowly so they drift overhead.
+fn mood_constellations(dir: vec3<f32>, t: f32) -> vec3<f32> {
+    let a = t * 0.0015;
+    let d = vec3<f32>(dir.x * cos(a) - dir.z * sin(a), dir.y, dir.x * sin(a) + dir.z * cos(a));
+    let face = mood_dir_face(d);
+    let scale = 3.0;
+    let grid = face.xy * scale;
+    let key = vec3<f32>(floor(grid), face.z * 13.0 + 41.0);
+    let h = mood_hash31(key);
+    if h < 0.45 {
+        return vec3<f32>(0.0);
+    }
+    let f = fract(grid);
+    let count = 4.0 + floor(mood_hash31(key + vec3<f32>(6.6)) * 2.0);
+    var prev = mood_constellation_node(key, 0.0);
+    var line = 0.0;
+    var nodes = vec3<f32>(0.0);
+    let pulse = 0.65 + 0.35 * sin(t * 0.21 + h * 40.0);
+    let width = 0.0016 * scale;
+    for (var k = 0; k < 5; k++) {
+        let fk = f32(k);
+        if fk >= count {
+            break;
+        }
+        let p = mood_constellation_node(key, fk);
+        let dn = length(f - p);
+        let sigma = 0.0012 * scale;
+        let temp = mood_hash31(key + vec3<f32>(fk * 2.3, 1.1, 0.7));
+        nodes += mood_star_colour(temp) * exp(-dn * dn / (2.0 * sigma * sigma)) * 2.2;
+        if k > 0 {
+            let ds = mood_seg_dist(f, prev, p);
+            // The thread stops short of each star so the star stays a point.
+            let gap = smoothstep(0.02, 0.05, length(f - prev)) * smoothstep(0.02, 0.05, dn);
+            line = max(line, exp(-ds * ds / (width * width)) * gap);
+        }
+        prev = p;
+    }
+    return nodes + vec3<f32>(0.42, 0.58, 1.0) * line * 0.045 * pulse;
+}
+
+// Shooting stars. Time is cut into slots; a slot may hold one streak whose
+// start, direction and timing come from its hash, so every viewer sees the
+// same meteor at the same moment.
+fn mood_shooting_stars(dir: vec3<f32>, t: f32) -> vec3<f32> {
+    var acc = vec3<f32>(0.0);
+    for (var k = 0; k < 2; k++) {
+        let fk = f32(k);
+        let tt = t / (6.0 + fk * 4.5) + fk * 0.37;
+        let s = vec3<f32>(floor(tt), fk * 19.0, 7.7);
+        if mood_hash31(s) < 0.30 {
+            continue;
+        }
+        let life = 0.14;
+        let start = mood_hash31(s + vec3<f32>(2.0, 0.0, 0.0)) * (1.0 - life);
+        let tau = (fract(tt) - start) / life;
+        if tau < 0.0 || tau > 1.0 {
+            continue;
+        }
+        let c = normalize(vec3<f32>(
+            mood_hash31(s + vec3<f32>(0.0, 3.0, 0.0)) * 2.0 - 1.0,
+            mood_hash31(s + vec3<f32>(0.0, 0.0, 4.0)) * 0.9 + 0.15,
+            mood_hash31(s + vec3<f32>(5.0, 1.0, 0.0)) * 2.0 - 1.0));
+        if dot(dir, c) < 0.85 {
+            continue;
+        }
+        let u0 = normalize(cross(c, vec3<f32>(0.0, 1.0, 0.0)));
+        let ang = mood_hash31(s + vec3<f32>(6.0, 2.0, 9.0)) * 6.2832;
+        let u = u0 * cos(ang) + cross(c, u0) * sin(ang);
+        let v = cross(c, u);
+        let x = dot(dir, u);
+        let y = dot(dir, v);
+        let behind = (tau - 0.5) * 0.36 - x;
+        let w = 0.0011;
+        let glow = exp(-y * y / (w * w)) * exp(-max(behind, 0.0) / 0.07) * smoothstep(-0.003, 0.0, behind);
+        acc += vec3<f32>(0.85, 0.92, 1.0) * glow * sin(tau * 3.14159) * 2.6;
+    }
+    return acc;
+}
+
+// Thin aurora curtains low around the chamber: a bright lower hem fading
+// upward, combed into rays by a little noise.
+fn mood_cosmos_aurora(dir: vec3<f32>, t: f32) -> vec3<f32> {
+    let phi = atan2(dir.z, dir.x);
+    let hem = 0.16 + 0.09 * sin(phi * 3.0 + t * 0.03) + 0.04 * sin(phi * 7.0 - t * 0.05);
+    let h = dir.y - hem;
+    let curtain = smoothstep(-0.03, 0.02, h) * exp(-max(h, 0.0) * 5.5);
+    let flat_dir = dir.xz / max(length(dir.xz), 1e-3);
+    let rays = 0.55 + 0.45 * mood_noise3(vec3<f32>(flat_dir * 11.0, t * 0.05));
+    let colour = mix(vec3<f32>(0.10, 0.85, 0.55), vec3<f32>(0.50, 0.25, 0.95), smoothstep(0.0, 0.35, h));
+    return colour * curtain * rays * 0.06;
+}
+
+// The inside of a cosmos chamber's sky, all of it fixed in direction (it is
+// infinitely far): nebula, a galactic band, two galaxies, four layers of stars,
+// constellations, shooting stars and aurora curtains. The near layer of stars
+// with real parallax is `mood_motes`, which lives in world metres.
 fn mood_cosmos_backdrop(dir: vec3<f32>, t: f32) -> vec3<f32> {
     let axis = normalize(vec3<f32>(0.35, 0.62, 0.70));
-    let band = exp(-pow(dot(dir, axis) * 3.4, 2.0));
-    let p = dir * 2.4 + vec3<f32>(0.0, t * 0.003, 0.0);
-    let n1 = mood_fbm(p);
-    let n2 = mood_fbm(p * 1.9 + vec3<f32>(11.0, 3.0, 7.0));
-    let cloud = smoothstep(0.34, 0.80, n1) * (0.30 + band * 1.10);
-    let hue = mix(vec3<f32>(0.34, 0.07, 0.58), vec3<f32>(0.05, 0.40, 0.62), n2);
-    let rose = vec3<f32>(0.70, 0.12, 0.34) * smoothstep(0.55, 0.9, n2) * smoothstep(0.5, 0.9, n1);
-    var c = vec3<f32>(0.003, 0.004, 0.011) + (hue + rose) * cloud * 0.62;
-    c += mood_stars(dir, 46.0, 0.95, 0.20, t, 0.0) * 3.0;
-    c += mood_stars(dir, 110.0, 0.965, 0.17, t, 7.0) * 2.4 * (0.6 + band);
-    c += mood_stars(dir, 260.0, 0.98, 0.15, t, 19.0) * 1.8 * (0.5 + band * 1.5);
-    return c;
+    let band = exp(-pow(dot(dir, axis) * 3.0, 2.0));
+    var c = vec3<f32>(0.0025, 0.003, 0.009) + vec3<f32>(0.003, 0.0015, 0.006) * (dir.y * 0.5 + 0.5);
+    c += mood_nebula(dir, band, t);
+    c += mood_galaxy(dir, vec3<f32>(-0.55, 0.42, -0.72), 0.11, 0.6, 0.42, vec3<f32>(0.70, 0.80, 1.00), t);
+    c += mood_galaxy(dir, vec3<f32>(0.70, -0.12, 0.62), 0.055, 2.1, 0.75, vec3<f32>(1.00, 0.74, 0.86), t);
+    c += mood_stars(dir, 30.0, 0.965, 0.22, t, 0.0) * 3.6;
+    c += mood_stars(dir, 80.0, 0.95, 0.18, t, 7.0) * 2.0 * (0.6 + band);
+    c += mood_stars(dir, 190.0, 0.95, 0.16, t, 19.0) * 1.3 * (0.4 + band * 1.6);
+    c += mood_stars(dir, 420.0, 0.93, 0.20, t, 31.0) * 0.6 * (0.2 + band * 2.0);
+    c += mood_constellations(dir, t);
+    c += mood_shooting_stars(dir, t);
+    c += mood_cosmos_aurora(dir, t);
+    // A whisper of fixed per-direction dither so dark gradients never band.
+    let n = mood_hash31(floor(dir * 4096.0)) - 0.5;
+    return max(c * (1.0 + n * 0.03) + vec3<f32>(n * 0.0006), vec3<f32>(0.0));
 }
 
-// Motes of starlight hung in the air of the chamber. They live in world
-// space, so they slide past you as you walk and sell the sense of depth.
+// Motes of starlight hung in the air of the chamber: the near star layer.
+// They live in world metres, so they slide past you as you walk (true
+// parallax) and have one density at every voxel scale.
 fn mood_motes(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32) -> vec3<f32> {
+    let mpu = cam.world_params.x;
+    let o = origin * mpu;
+    let reach = max_d * mpu;
     var acc = vec3<f32>(0.0);
-    for (var i = 0; i < 5; i++) {
-        let d = 1.8 + f32(i) * 3.1;
-        if d > max_d { break; }
-        let g = (origin + dir * d) / 1.9 + vec3<f32>(0.0, t * 0.04, 0.0);
+    for (var i = 0; i < 6; i++) {
+        let d = 1.6 + f32(i) * 2.7;
+        if d > reach { break; }
+        let g = (o + dir * d) / 1.9 + vec3<f32>(0.0, t * 0.04, 0.0);
         let cell = floor(g);
         let h = mood_hash31(cell);
         if h > 0.94 {
@@ -101,7 +277,7 @@ fn mood_motes(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32) -> vec3<f32
                 mood_hash31(cell + vec3<f32>(7.0, 8.0, 9.0))) * 0.6 + vec3<f32>(0.2);
             let dd = length(g - c);
             let glow = exp(-dd * dd * 110.0);
-            let tint = mix(vec3<f32>(0.5, 0.65, 1.0), vec3<f32>(1.0, 0.8, 0.6), mood_hash31(cell + vec3<f32>(3.3)));
+            let tint = mood_star_colour(mood_hash31(cell + vec3<f32>(3.3)));
             acc += tint * glow * (0.5 + 0.5 * sin(t * 1.3 + h * 40.0)) * 0.9;
         }
     }
@@ -109,12 +285,13 @@ fn mood_motes(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32) -> vec3<f32
 }
 
 // Fog that is the cosmos. The same optical-depth idea as the air it replaces,
-// but the in-scattered light is the starfield instead of the sky.
+// but the in-scattered light is the starfield instead of the sky. Depth is in
+// metres so the room reads the same at every voxel scale.
 fn mood_cosmos_fog(lit: vec3<f32>, view_dir: vec3<f32>, dist: f32, cosmos: f32, t: f32, origin: vec3<f32>) -> vec3<f32> {
-    let fog = (1.0 - exp(-dist / 30.0)) * cosmos;
+    let fog = (1.0 - exp(-dist * cam.world_params.x / 30.0)) * cosmos;
     let space = mood_cosmos_backdrop(view_dir, t) + mood_motes(origin, view_dir, dist, t);
     // Surfaces keep a hint of their own colour so the room is still readable.
-    return mix(lit, space, clamp(fog, 0.0, 0.92)) + lit * 0.0;
+    return mix(lit, space, clamp(fog, 0.0, 0.92));
 }
 
 // ---- Sky events ----

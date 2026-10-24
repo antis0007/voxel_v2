@@ -147,3 +147,4 @@ Content moved to data: `assets/materials.ron` (83 blocks), `spells.ron` (80), `r
 7. **Dead code in `egui_ui/wand_xmb.rs` and `adventure/growth.rs`** (14 warnings): in-progress work on this branch; owner decides. `just clippy` keeps `-A dead_code` until then.
 8. **Mixed CRLF/LF in the working tree**: `.gitattributes` normalises on commit; a one-time `git add --renormalize` plus checkout would make the tree uniform.
 9. **`.codex/hooks.json`** points at an absolute `D:\AI\...` virtualenv; either make it relative or drop it.
+10. **Capture tool, render arena, horizon evidence**: `tools/Review-VisualDirection.ps1` still checks `src/` (gone since the workspace split), so captures throw. The fix, a view-28 render baseline, the chunk mesh arena, multi-draw indirect and horizon agreement tests are planned task by task in `docs/plans/2026-10-22-render-arena-and-horizon-evidence.md`.

@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$Label,
     [ValidateSet('1','0.5','0.25')][string]$Scale='1',
-    [ValidateSet('entry','reverse','lower','roof','motion')][string]$Pose='entry',
+    [ValidateSet('entry','reverse','lower','roof','motion','cosmos')][string]$Pose='entry',
+    [int]$GeneratorVersion=0,
     [int]$Seconds=32,
     [int]$MaxWallSeconds=180,
     [switch]$Video
@@ -21,6 +22,7 @@ $arguments=@('--benchmark-world=hills','--benchmark-seed=2738958700',
     '--benchmark-terrain-camera=0,0,1,0,0','--benchmark-warmup=14',
     "--benchmark-duration=$Seconds",'--benchmark-capture-frames')
 if($Video){$arguments+='--benchmark-capture-interval=2'}
+if($GeneratorVersion -gt 0){$arguments+="--benchmark-generator-version=$GeneratorVersion"}
 $vars=@{VOXEL_REVIEW_DUNGEON=$Pose;VOXEL_CAPTURE_DIR=$root;
     VOXEL_SAVE_DIR=(Join-Path $root 'generated-world');VOXEL_REVIEW_WAND=$null;
     VOXEL_TERRAIN_ROUTE=$null;VOXEL_TERRAIN_EDITS=$null;VOXEL_TERRAIN_LIGHT=$null;

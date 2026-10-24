@@ -18,7 +18,7 @@ fn strictly_inside(first: f32, last: f32, middle: i32) -> bool {
 }
 
 pub(super) fn sample(
-    cfg: WorldSampleConfig, center: (i32, i32), focus: Vec3, pixels: f32,
+    cfg: WorldSampleConfig, center: (i32, i32), focus: Vec3, pixels: f32, reach: f32,
     cancel: &AtomicBool, samples: &mut Samples, old: &mut Samples,
 ) -> Option<HashMap<usize, (i32, i32)>> {
     let mut chosen = HashMap::new();
@@ -39,7 +39,7 @@ pub(super) fn sample(
         for z in 0..SIDE - 1 {
             if cancel.load(Ordering::Relaxed) { return None; }
             for x in 0..SIDE - 1 {
-                if !cell_in_domain(x,z,step) {continue;}
+                if !cell_in_domain(x,z,step,reach) {continue;}
                 if level > 0 {
                     if (lo..hi).contains(&x) && (lo..hi).contains(&z) { continue; }
                     // Preserve every existing fine/coarse transition triangle.
@@ -119,6 +119,6 @@ mod tests {
         assert!(strictly_inside(0.0,4.0,2));
         assert_eq!(33_554_434i32 as f32,33_554_432.0);
         assert!(!strictly_inside(33_554_432.0,33_554_436.0,33_554_434));
-        assert!(cell_in_domain(HALF,HALF,ring_step(0)),"coarse coverage is independent of refinement eligibility");
+        assert!(cell_in_domain(HALF,HALF,ring_step(0),domain_reach(FAR_PLANE as u32)),"coarse coverage is independent of refinement eligibility");
     }
 }

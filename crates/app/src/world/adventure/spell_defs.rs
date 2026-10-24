@@ -134,11 +134,12 @@ pub fn spell_base_damage(spell: u32) -> f32 {
 }
 
 /// Damage a bolt deals on a direct hit. Older spells keep a floor of 22 so a
-/// missing table value never makes a bolt toothless; the two deliberately weak
-/// spam spells (Chainsaw, Bounce orb) are allowed to be below it.
+/// missing table value never makes a bolt toothless; the deliberately weak
+/// spam and utility bolts (Chainsaw, Bounce orb, Lodestone, Dig bolt, Scatter
+/// shot pellets) are allowed to be below it.
 pub fn spell_hit_damage(spell: u32) -> f32 {
     let base = spell_base_damage(spell);
-    if matches!(spell, 71 | 76) {
+    if matches!(spell, 71 | 76 | 84 | 86 | 87) {
         base
     } else {
         base.max(22.0)
@@ -228,7 +229,7 @@ mod tests {
 
     #[test]
     fn unknown_ids_fall_back_to_the_documented_defaults() {
-        for id in [33, 80, 95, 4000] {
+        for id in [33, 95, 4000] {
             assert!(def(id).is_none());
             assert_eq!(spell_name(id), "Unknown spell");
             assert_eq!(spell_class(id), Class::Other);

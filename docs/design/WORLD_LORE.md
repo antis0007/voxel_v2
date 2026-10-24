@@ -55,12 +55,12 @@ text inside its office's concern.
 
 | Office | Site | Guardian | Inscription | Concern | Above |
 | --- | --- | --- | --- | --- | --- |
-| Artificers | Ruined artificer workshop | (Unwritten Keeper's module) | Artificer's mark | sparks, tallies, signed coils | courier anchorage |
+| Artificers | Ruined artificer workshop | (Glassweaver's module) | Artificer's mark | sparks, tallies, signed coils | courier anchorage |
 | Watch | Overgrown watchtower | | Storm lens | the timetable, the light on the braid | carriages |
 | Sluice | Sunken waterworks | | Tidal seal | water as weight; the *held breath* unit | |
-| Founders | Abandoned foundry | Cinder Castellan | Cinder script | couplings, braid parts; flaws shipped up | Loom orbital foundry |
+| Founders | Abandoned foundry | The Unfinished Engine | Cinder script | couplings, braid parts; flaws shipped up | Loom orbital foundry |
 | Keepers | Mycologist conservatory | Orchard Matron | Verdant covenant | two gardens, one promise | Harbour conservatory crown |
-| Archivists | Resonant archive | Unwritten Keeper | Archivist's cipher | the ledger of the Ballast; the scraped name | living archives (cargo) |
+| Archivists | Resonant archive | Glassweaver | Archivist's cipher | the ledger of the Ballast; the scraped name | living archives (cargo) |
 | Toll | Ruined toll crossing | Last Tollkeeper | Keeper's passage | the up/down tithe | |
 | Choir | Crystal cathedral | Prism Hart | Prism facet | braid tension sung as notes | |
 
@@ -71,7 +71,7 @@ offices closed. Their text is domestic: meals, banked fires, knots, breath.
 
 - **The ninth office.** Every directory has eight offices and a ninth line painted over. See **The ninth office** below. This is the main secret.
 - **The scraped name.** One line of the Ballast ledger was erased by someone who knew it.
-  The Unwritten Keeper guards it. Candidate answers: the last keeper; someone who went up
+  The Glassweaver guards it. Candidate answers: the last keeper; someone who went up
   after promising to stay; the player's own line. Never confirm.
 - **"Paid. Go up."** Someone settled their tally and left. The tollkeeper's timber says
   nothing is owed. The wardens disagree.
@@ -81,6 +81,7 @@ offices closed. Their text is domestic: meals, banked fires, knots, breath.
   knot in the drowned grotto. The Undercrown's air bells and breath timer make it bodily.
 - **The return.** The braid keeps delivering. Something above still thinks the anchor
   is inhabited, or knows it is again.
+- **The unscheduled descent.** The Watch's instrument house (flooded after the fall, held at a drain gate set to four tenths) logs one carriage that is on no timetable. Never say who rode it. Mechanics and slice: `NORTH_STAR_UNDERSTAND_BUILD_CARRY.md` section 11.
 - **Undercrown leads** (spec: `superpowers/specs/2026-10-19-undercrown-region-design.md`):
   the waterfall door, the singing ice (the choir's lower register), the vanished barge,
   the missing partner in the bridge village. Each should touch one thread above.

@@ -1,6 +1,6 @@
 mod dungeon_review;
 use anyhow::Result;
-use glam::{DVec2, Mat4, Vec3, Vec3Swizzles};
+use glam::{DVec2, IVec3, Mat4, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread;
@@ -14,6 +14,7 @@ use winit::{
 };
 
 use engine_audio as audio;
+mod crash_log;
 mod creative;
 mod egui_ui;
 use engine_core::fast_hash;
@@ -35,6 +36,7 @@ mod tool_effects;
 mod torch_review;
 mod terrain_review;
 mod horizon_review;
+mod low_spec;
 #[cfg(test)]
 mod repo_layout;
 #[cfg(test)]
@@ -266,6 +268,11 @@ fn parse_benchmark_config() -> BenchmarkConfig {
             config.saved_review = true;
             continue;
         }
+        if arg == "--benchmark-no-multidraw" {
+            config.enabled = true;
+            render::set_multidraw_enabled(false);
+            continue;
+        }
         if arg == "--benchmark-no-indirect" {
             config.enabled = true;
             render::set_indirect_lighting_enabled(false);
@@ -394,14 +401,14 @@ fn parse_benchmark_config() -> BenchmarkConfig {
                 "cloud-alpha" => RenderDebugView::CloudAlpha,
                 "cloud-density" => RenderDebugView::CloudLayerDensity,
                 "cloud-shadow" => RenderDebugView::CloudShadowDensity,
-                "cloud-bounds" => RenderDebugView::CloudLayerAabb,
+                "cloud-bounds" => RenderDebugView::SunShadowVisibility,
                 "cloud-steps" => RenderDebugView::CloudStepCount,
                 "cloud-weather" => RenderDebugView::CloudWeatherDecode,
                 "cloud-history" => RenderDebugView::CloudTemporalWeight,
                 "weather-near" => RenderDebugView::WeatherClipmapNear,
                 "weather-mid" => RenderDebugView::WeatherClipmapMid,
                 "weather-far" => RenderDebugView::WeatherClipmapFar,
-                "terrain-shadow" => RenderDebugView::CloudLayerAabb,
+                "terrain-shadow" => RenderDebugView::SunShadowVisibility,
                 "cascades" => RenderDebugView::ShadowCascadeIndex,
                 "albedo" => RenderDebugView::Albedo,
                 "material-id" => RenderDebugView::MaterialId,
@@ -956,6 +963,7 @@ fn push_cast_light(
 
 fn collect_nearby_torches(
     snapshot: &world::WorldSnapshot,
+    cache: &ChunkCache,
     player_pos: Vec3,
     world_scale: f32,
 ) -> Vec<TorchLight> {
@@ -971,38 +979,33 @@ fn collect_nearby_torches(
     let max_radius_sq = max_radius_blocks * max_radius_blocks;
     let chunk_radius =
         ((max_radius_blocks.ceil() as i32) + world::CHUNK_SIZE - 1) / world::CHUNK_SIZE;
-    let mut torches = Vec::new();
+    // Edited chunks sit in the snapshot; generated terrain lives only in the render
+    // cache. Both feed the light list, so dedup by cell.
+    let mut sources: Vec<(IVec3, BlockId)> = Vec::new();
     for (coord, chunk) in snapshot.chunks.iter() {
         if (*coord - center_chunk).abs().max_element() > chunk_radius {
             continue;
         }
-        for &pos in &chunk.torches {
-            let dist_sq = (pos.as_vec3() + Vec3::splat(0.5) - player_pos).length_squared();
-            if dist_sq <= max_radius_sq {
-                torches.push((dist_sq, pos));
-            }
-        }
+        sources.extend(chunk.torches.iter().map(|&pos| (pos, snapshot.get(pos))));
     }
+    sources.extend(cache.torch_cells_within(center_chunk, chunk_radius));
+    sources.sort_unstable_by_key(|(pos, _)| (pos.x, pos.y, pos.z));
+    sources.dedup_by_key(|(pos, _)| *pos);
     // Amber gills grow in clumps: one light per 4 m cell, chosen from the
     // cell's own positions so the pick does not hop as the player moves.
+    // `sources` is sorted by position, so the first gill seen in a cell wins.
     let cell = (4.0 / world_scale.max(1e-6)).max(1.0) as i32;
-    let mut amber_cells: std::collections::HashMap<glam::IVec3, glam::IVec3> =
-        std::collections::HashMap::new();
-    for &(_, pos) in &torches {
-        if snapshot.get(pos) == BlockId::AmberCap {
-            let key = pos.div_euclid(glam::IVec3::splat(cell));
-            let entry = amber_cells.entry(key).or_insert(pos);
-            if (pos.x, pos.y, pos.z) < (entry.x, entry.y, entry.z) {
-                *entry = pos;
-            }
+    let mut amber_cells = HashSet::new();
+    sources.retain(|&(pos, block)| {
+        block != BlockId::AmberCap || amber_cells.insert(pos.div_euclid(IVec3::splat(cell)))
+    });
+    let mut torches: Vec<(f32, IVec3, BlockId)> = Vec::new();
+    for (pos, block) in sources {
+        let dist_sq = (pos.as_vec3() + Vec3::splat(0.5) - player_pos).length_squared();
+        if dist_sq <= max_radius_sq {
+            torches.push((dist_sq, pos, block));
         }
     }
-    torches.retain(|&(_, pos)| {
-        amber_cells
-            .get(&pos.div_euclid(glam::IVec3::splat(cell)))
-            .is_none_or(|kept| *kept == pos)
-            || snapshot.get(pos) != BlockId::AmberCap
-    });
     torches.sort_by(|a, b| {
         a.0.total_cmp(&b.0)
             .then_with(|| (a.1.x, a.1.y, a.1.z).cmp(&(b.1.x, b.1.y, b.1.z)))
@@ -1016,8 +1019,7 @@ fn collect_nearby_torches(
     torches.truncate(MAX_TORCH_LIGHTS);
     torches
         .into_iter()
-        .map(|(distance_sq, pos)| {
-            let block = snapshot.get(pos);
+        .map(|(distance_sq, pos, block)| {
             let amber = block == BlockId::AmberCap;
             let light_offset = match block {
                 BlockId::Torch => Vec3::new(0.50, 0.82, 0.50),
@@ -1397,6 +1399,7 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
 
 fn main() -> Result<()> {
     env_logger::init();
+    crash_log::install();
 
     if let Some(path) = std::env::args().find_map(|arg| arg.strip_prefix("--headless=").map(str::to_owned)) {
         std::process::exit(headless::main(&path));
@@ -1453,7 +1456,11 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    let mut preferences = preferences::PreferenceStore::new(!benchmark_config.enabled);
+    let low_spec = low_spec::requested() && !benchmark_config.enabled;
+    let mut preferences = preferences::PreferenceStore::new(!benchmark_config.enabled && !low_spec);
+    if low_spec {
+        low_spec::apply(&mut preferences.loaded);
+    }
     if !benchmark_config.enabled {
         preferences.loaded.apply_globals();
     }
@@ -2651,7 +2658,7 @@ fn main() -> Result<()> {
                                     gpu.request_capture(root.join(format!("{:?}-{capture_phase:03}.png", selected_voxel_scale)));
                                     if mode == "motion" {
                                         let snapshot = world.as_mut().unwrap().snapshot();
-                                        let lights = collect_nearby_torches(&snapshot, player.pos, selected_voxel_scale.meters());
+                                        let lights = collect_nearby_torches(&snapshot, &chunk_cache, player.pos, selected_voxel_scale.meters());
                                         println!("[torch-review] t={elapsed:.2} camera_m={:?} lights={:?}", player.pos * selected_voxel_scale.meters(), lights.iter().map(|t| (t.position, t.strength)).collect::<Vec<_>>());
                                         for (coord, chunk) in snapshot.chunks.iter().filter(|(_, c)| !c.torches.is_empty()) {
                                             println!("[torch-review-lod] chunk={coord:?} torches={} resident_lod={:?}", chunk.torches.len(), chunk_cache.gpu_meshes.get(coord).map(|m| m.lod));
@@ -3046,12 +3053,12 @@ fn main() -> Result<()> {
 
                             combat_audio.set_active(matches!(mode,AppMode::Playing) && focused && !spawning);
                             let mut draw_list = Vec::new();
+                            let mut visible_missing = (0, 0);
                             let mut outline = Vec::new();
                             let mut invert_outline = Vec::new();
                             let mut nearby_torch_count = 0usize;
                             let render_world =
                                 !matches!(mode, AppMode::WorldSelect) && world.is_some();
-                            let mut visible_missing = (0, 0);
                             let paused_render = !render_world;
 
                             if matches!(mode, AppMode::Playing)
@@ -3157,6 +3164,7 @@ fn main() -> Result<()> {
                                 let can_act=(grabbed || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning;
                                 if !can_act {world.adventure.cancel_cast_input();}
                                 combat_audio.set_active(matches!(mode,AppMode::Playing) && (focused || wand_review.as_ref().is_some_and(|r|r.automatic)) && !spawning);
+                                world.adventure.hand_slot = creative.selected_slot;
                                 if world::adventure::tick(world,&mut player,gameplay_dt,(active_input.cast_spell || active_input.cast_pressed || enemy_review_cast || hart_review_cast || tollkeeper_review_cast)&&can_act,active_input.cycle_spell&&can_act,break_edit&&can_act&&creative.tool==creative::ToolKind::Hand) {break_edit=false;}
                                 input.cast_pressed=false;
                                 world::adventure::enemy_review_checkpoint(world,&mut player,&mut day_night,&mut saves);
@@ -3598,7 +3606,13 @@ fn main() -> Result<()> {
                                 let snapshot_start = Instant::now();
                                 world.set_visual_region_interest(&chunk_cache.edit_proxy_source_coords());
                                 chunk_cache.set_horizon_pins(gpu.horizon_retention_columns());
-                                let snapshot = if chunk_cache.has_horizon_pins() || !dirty_chunks.is_empty() { world.stream_regions(center_chunk, render_distance_settings().view_distance_chunks); world.snapshot() } else { world.snapshot_near(center_chunk,render_distance_settings().view_distance_chunks) };
+                                // Edits inside the near window already invalidate the near snapshot, so
+                                // only dirt outside it needs the full (whole-world clone) snapshot.
+                                let view_chunks = render_distance_settings().view_distance_chunks;
+                                let dirt_in_near_window = dirty_chunks.iter().all(|c| {
+                                    c.x.abs_diff(center_chunk.x).max(c.z.abs_diff(center_chunk.z)) <= (view_chunks + 1) as u32
+                                });
+                                let snapshot = if chunk_cache.has_horizon_pins() || !dirt_in_near_window { world.stream_regions(center_chunk, view_chunks); world.snapshot() } else { world.snapshot_near(center_chunk,view_chunks) };
                                 cpu_stats.snapshot_ms =
                                     snapshot_start.elapsed().as_secs_f32() * 1000.0;
                                 let streaming_start = Instant::now();
@@ -3698,12 +3712,12 @@ fn main() -> Result<()> {
                                 draw_list = build_draw_list(&chunk_cache, cull_proj * cull_view);
                                 cpu_stats.culling_ms =
                                     culling_start.elapsed().as_secs_f32() * 1000.0;
+                                if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 let held_torch =
                                     held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp);
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
-                                    collect_nearby_torches(&snapshot, player.pos, world_scale);
-                                if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
+                                    collect_nearby_torches(&snapshot, &chunk_cache, player.pos, world_scale);
                                 append_fire_lights(world, player.pos, world_scale, &mut nearby_torches);
                                 for blast in world.adventure.blasts.iter().filter(|b| b.age<0.28).take(4) {
                                     if nearby_torches.len()>=MAX_TORCH_LIGHTS {nearby_torches.pop();}
@@ -3915,12 +3929,12 @@ fn main() -> Result<()> {
                                 draw_list = build_draw_list(&chunk_cache, cull_proj * cull_view);
                                 cpu_stats.culling_ms =
                                     culling_start.elapsed().as_secs_f32() * 1000.0;
+                                if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 let held_torch =
                                     held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp);
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
-                                    collect_nearby_torches(&snapshot, player.pos, world_scale);
-                                if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
+                                    collect_nearby_torches(&snapshot, &chunk_cache, player.pos, world_scale);
                                 append_fire_lights(world, player.pos, world_scale, &mut nearby_torches);
                                 for (pos, radius, color, strength) in world.adventure.spell_lights() {
                                     if nearby_torches.len() >= MAX_TORCH_LIGHTS {
@@ -4070,9 +4084,9 @@ fn main() -> Result<()> {
                             let render_start = Instant::now();
                             let orbital_pixel_angle = 2.0 * (egui_ui.fov_degrees.to_radians() * 0.5).tan()
                                 / window.inner_size().height.max(1) as f32;
-                            // The day clock moves in whole simulation steps; stations cross the sky at tens of
-                            // degrees per second, so those hops read as jumps. Orbits are drawn at the clock
-                            // plus the banked remainder.
+                            // The day clock moves in whole simulation steps; stations cross
+                            // the sky at tens of degrees per second, so those hops read as
+                            // jumps. Orbits are drawn at the clock plus the banked remainder.
                             let mut sky_day = day_night;
                             // Orbits run at a fixed pace of their own whenever the day is not
                             // running at its default speed (long day, frozen time); otherwise a
@@ -4365,7 +4379,7 @@ fn main() -> Result<()> {
                 if !benchmark_config.enabled {
                     if let Some(loaded)=library.poll(){pending_loaded=Some(loaded);}
                     if matches!(mode,AppMode::WorldSelect) && !exit_pending && Instant::now()>=next_library_refresh {
-                        if !library.busy(){library.refresh();}
+                        if !library.busy(){library.refresh_quietly();}
                         next_library_refresh=Instant::now()+Duration::from_secs(5);
                     }
                     if let Some(ui)=egui_ui.as_mut() {
@@ -4373,7 +4387,7 @@ fn main() -> Result<()> {
                             ui.library_entries=std::sync::Arc::clone(&library.entries);
                             ui.library_revision=library.revision;
                         }
-                        ui.library_busy=library.busy();ui.library_loading=library.loading();
+                        ui.library_busy=library.busy_visible();ui.library_loading=library.loading();
                         ui.library_status=library.status.clone();
                         if preferences_render_applied
                             && let StartupState::Ready {gpu,..}=&startup {

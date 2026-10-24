@@ -23,6 +23,7 @@ mod tool_hud;
 mod wand_atelier;
 mod wand_xmb;
 mod wands;
+mod wand_icon;
 mod world_browser;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use glam::Vec3Swizzles;

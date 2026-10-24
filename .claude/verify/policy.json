@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "limits": {"stop_continuations": 1, "repair_attempts": 2, "check_timeout_s": 1500},
+  "classifier": {
+    "enabled": false,
+    "url": "http://127.0.0.1:8009/v1/systemone",
+    "timeout_s": 2,
+    "note": "Kev measured 37 s per request on CPU (.code-advisor/latest.json); stays off until a warm request fits timeout_s."
+  },
+  "checks": {
+    "compile":      {"kind": "auto", "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "check", "-q", "--all-targets", "--message-format=short"]},
+    "clippy":       {"kind": "auto", "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "clippy", "-q", "--all-targets", "--message-format=short", "--", "-D", "warnings", "-A", "dead_code"]},
+    "tests":        {"kind": "auto", "covers": ["compile", "tests_shader", "tests_headless", "tests_save", "tests_content", "tests_layout"], "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "immediate", "--hide-progress-bar", "--cargo-quiet"]},
+    "tests_shader":   {"kind": "auto", "covers": ["compile"], "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "immediate", "--hide-progress-bar", "--cargo-quiet", "shader", "wgsl"]},
+    "tests_headless": {"kind": "auto", "covers": ["compile"], "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "immediate", "--hide-progress-bar", "--cargo-quiet", "headless", "mesh", "seam"]},
+    "tests_save":     {"kind": "auto", "covers": ["compile"], "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "immediate", "--hide-progress-bar", "--cargo-quiet", "save", "migrate", "round_trip"]},
+    "tests_content":  {"kind": "auto", "covers": ["compile"], "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "immediate", "--hide-progress-bar", "--cargo-quiet", "round_trips"]},
+    "tests_layout":   {"kind": "auto", "covers": ["compile"], "argv": ["python", "-I", "scripts/filter.py", "--", "cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "immediate", "--hide-progress-bar", "--cargo-quiet", "repo_layout", "agent_docs"]},
+    "tests_workflow": {"kind": "auto", "argv": ["python", "-I", "scripts/test_workflow.py"]},
+    "perf":         {"kind": "auto", "argv": ["python", "-I", "scripts/bench.py", "check"]},
+    "capture_ab":   {"kind": "manual", "what": "Before/after captures of the affected scene from the same pose (tools/Review-VisualDirection.ps1, unique -Label), PNGs inspected. Attest with the evidence directory."},
+    "seam_route":   {"kind": "manual", "what": "Fixed seed + camera route across chunk/LOD boundaries incl. negative and large coordinates, captures inspected before/after."},
+    "review_contract": {"kind": "manual", "what": "One independent read-only review of the diff for unsafe/concurrency/shader-interface contracts. Attest after resolving findings."},
+    "review_save":  {"kind": "manual", "what": "One independent read-only review of version handling and preservation of old data, plus an old-save fixture/migration test run."},
+    "review_policy": {"kind": "manual", "what": "Independent review of dependency/feature/verification-policy changes; baselines preserved."}
+  },
+  "inert_paths": ["*.md", "docs/*", ".claude/*", "scripts/workflow*.py", "scripts/test_workflow.py"],
+  "routes": [
+    {"id": "docs_only", "only_paths": ["*.md", "docs/*", ".claude/skills/*", ".claude/rules/*"], "checks": ["tests_layout"]},
+    {"id": "rust", "paths": ["crates/*.rs", "crates/*Cargo.toml", "Cargo.toml", "Cargo.lock", "*/build.rs"], "checks": ["tests", "clippy", "perf"]},
+    {"id": "shader", "paths": ["*.wgsl"], "checks": ["tests_shader", "capture_ab"]},
+    {"id": "gpu_contract", "diff": "^[+-].*(@group|@binding|var<uniform|var<storage|BindGroupLayout|VertexBufferLayout|TextureFormat|#\\[repr\\(C\\)\\]|RenderPipeline|struct [A-Z][A-Za-z]*Uniform)", "checks": ["tests", "capture_ab", "review_contract"]},
+    {"id": "render_rs", "paths": ["crates/app/src/render*", "crates/app/src/postprocess*"], "checks": ["tests_shader", "capture_ab"]},
+    {"id": "world_meshing", "paths": ["crates/app/src/mesh*", "crates/app/src/render/horizon*", "crates/app/src/render/streaming*", "crates/voxel/*", "crates/worldgen/*", "crates/core/*"], "checks": ["tests_headless", "seam_route"]},
+    {"id": "concurrency_unsafe", "diff": "^[+-].*\\b(unsafe|Atomic[A-Z]|Mutex<|RwLock<|mpsc::|thread::spawn|Arc<)", "checks": ["tests", "review_contract"]},
+    {"id": "saves", "diff": "^[+-].*(SAVE_VERSION|VXWSAV|CURRENT_GENERATOR_VERSION)", "checks": ["tests_save", "review_save"]},
+    {"id": "content", "paths": ["assets/*.ron"], "checks": ["tests_content"]},
+    {"id": "policy", "paths": ["Cargo.toml", "Cargo.lock", "rust-toolchain*", "justfile", ".claude/verify/*", "scripts/workflow*.py", "scripts/test_workflow.py", ".claude/settings.json"], "checks": ["tests", "tests_workflow", "perf", "review_policy"]}
+  ],
+  "review_classifier": {
+    "agent": "change-classifier",
+    "min_changed_lines": 30,
+    "labels": {
+      "none": [],
+      "correctness": ["review_contract"],
+      "concurrency": ["review_contract"],
+      "shader_contract": ["review_contract"],
+      "save_format": ["review_save"]
+    },
+    "note": "Subagent label may only ADD these manual checks. It cannot remove or satisfy a rule-required check."
+  },
+  "contexts": {
+    "rendering": "Rendering contracts: see .claude/rules/render.md. Host structs, bind groups and pipelines are shader contracts even when no .wgsl changes. Keep a before/after capture from the same pose.",
+    "world": "World/meshing contracts: see .claude/rules/world.md. Cover negative and large chunk coordinates and adjacent chunk/LOD transitions; use a fixed seed and camera route.",
+    "saves": "Save/generator contracts: see .claude/rules/saves.md. Never edit a historical version gate; test an old fixture, not only a new round trip.",
+    "rust": "Ordinary Rust: use focused tests first; the Stop gate derives required checks from the actual diff."
+  },
+  "keywords": {
+    "rendering": "shader|wgsl|wgpu|render|pipeline|bind ?group|postprocess|cloud|shadow|flicker|artifact|gpu|texture|lighting|shading",
+    "world": "chunk|mesh|lod|horizon|seam|terrain|worldgen|stream|voxel|coordinate|boundary",
+    "saves": "save|serializ|migrat|generator version|ron format",
+    "rust": "refactor|borrow|lifetime|api|trait|test|rust|clippy"
+  }
+}

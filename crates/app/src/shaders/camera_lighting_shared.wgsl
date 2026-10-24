@@ -58,6 +58,9 @@ struct Lighting {
     ambience: vec4<f32>,
     // Palette A/B/C, strength/speed/width/chromatic, density/angle/sparkle.
     magic: array<vec4<f32>,5>,
+    // SkyArt (render/atmosphere_params.rs): [disc cos radius, glare, sky grade,
+    // sunset saturation], [cloud contrast, exposure gain, -, -].
+    sky_art: array<vec4<f32>,2>,
 };
 
 @group(1) @binding(0) var<uniform> light : Lighting;

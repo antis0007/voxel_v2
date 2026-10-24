@@ -143,6 +143,8 @@ impl MeshArena {
         self.pages.get(page as usize).map(|p| (&p.vertices, &p.indices))
     }
 
+    /// Occupancy for tests and fragmentation diagnosis; not shown in the HUD.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn used_bytes(&self) -> u64 {
         self.pages.iter().map(|p| p.vertex_alloc.used() + p.index_alloc.used()).sum()
     }
@@ -202,14 +204,17 @@ impl RangeAllocator {
         self.used -= size;
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn used(&self) -> u64 {
         self.used
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn largest_free(&self) -> u64 {
         self.free.values().copied().max().unwrap_or(0)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn capacity(&self) -> u64 {
         self.capacity
     }

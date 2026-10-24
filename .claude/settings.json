@@ -1,25 +1,33 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "UserPromptSubmit": [
       {
-        "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          {
-            "type": "command",
-            "command": "just check",
-            "timeout": 120
-          }
+          {"type": "command", "command": "python -I \"$CLAUDE_PROJECT_DIR/scripts/workflow.py\" hook prompt", "timeout": 10}
         ]
       }
     ],
-    "Stop": [
+    "PreToolUse": [
       {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell",
         "hooks": [
-          {
-            "type": "command",
-            "command": "just verify",
-            "timeout": 600
-          }
+          {"type": "command", "command": "python -I \"$CLAUDE_PROJECT_DIR/scripts/workflow.py\" hook pre", "timeout": 10}
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell",
+        "hooks": [
+          {"type": "command", "command": "python -I \"$CLAUDE_PROJECT_DIR/scripts/workflow.py\" hook post", "timeout": 10}
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell",
+        "hooks": [
+          {"type": "command", "command": "python -I \"$CLAUDE_PROJECT_DIR/scripts/workflow.py\" hook post", "timeout": 10}
         ]
       }
     ]

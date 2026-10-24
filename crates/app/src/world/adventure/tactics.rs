@@ -212,9 +212,6 @@ impl Adventure {
     }
     pub(super) fn danger_models(&self, m: &mut Model) {
         for e in &self.enemies {
-            if matches!(e.kind, 6 | 7) {
-                boss_patterns::telegraph(e, m);
-            }
             if e.kind == 8 {
                 hart::telegraph(e, m);
             }

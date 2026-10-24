@@ -2,4 +2,4 @@
 source: crates/app/src/headless.rs
 expression: outcome.json()
 ---
-{"scenario":"sand_falls","ticks":510,"hash":"91db86efe6a60ee6","failed":0,"failures":[]}
+{"scenario":"sand_falls","ticks":510,"hash":"714a7ec928d9191e","failed":0,"failures":[]}

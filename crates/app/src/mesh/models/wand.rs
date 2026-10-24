@@ -22,6 +22,21 @@ pub struct WandView {
     pub tier: u32,
     /// Mana as a 0..1 fraction.
     pub mana: f32,
+    /// One entry per deck slot the wand has: the spell's colour, or `None` when
+    /// the slot is empty. Slots beyond the wand's capacity are absent.
+    pub deck: Vec<Option<[f32; 3]>>,
+    pub cursor: usize,
+    /// Chassis seed of a found wand (0 for crafted): proportions vary with it.
+    pub seed: u32,
+}
+
+/// Found wands differ in length and girth, so two wands never share a silhouette.
+fn proportions(seed: u32) -> (f32, f32) {
+    if seed == 0 {
+        (1.0, 1.0)
+    } else {
+        (0.86 + 0.3 * hash01(seed ^ 0x51), 0.8 + 0.45 * hash01(seed ^ 0xA7))
+    }
 }
 
 /// First-person viewmodel scale. The arm and wand are authored in world metres,
@@ -214,7 +229,7 @@ fn pose(v: &WandView) -> (Vec3, Vec3, f32) {
     let dir = idle_dir
         .lerp((cast_tip - cast_grip).normalize(), cast)
         .normalize();
-    let length = [0.34, 0.34, 0.39, 0.44][(v.tier as usize).min(3)];
+    let length = [0.34, 0.34, 0.39, 0.44][(v.tier as usize).min(3)] * proportions(v.seed).0;
     (grip, dir, length)
 }
 
@@ -241,7 +256,7 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
     let tip = at(length);
     let glow = style.glow_colour(v.spell);
     let shaft = &SHAFTS[style.shaft as usize];
-    let radius = 0.016 + v.tier.min(3) as f32 * 0.0015;
+    let radius = (0.016 + v.tier.min(3) as f32 * 0.0015) * proportions(v.seed).1;
     let pulse = 0.5 + 0.5 * (v.time * 0.7).sin();
     let power = 2.3 + pulse * 0.3 + cast * 2.4;
     let ring = |a: f32| side * a.cos() + back * a.sin();
@@ -467,6 +482,20 @@ pub fn draw(m: &mut Model, style: WandStyle, v: &WandView) {
             if vein > 0.02 {
                 m.glow_beam(at(0.02), at(0.02 + vein), 0.0045, glow, 2.8 + pulse, 0.85);
             }
+        }
+    }
+
+    // Spell sockets: the deck is set into the shaft, one stone per slot, in the
+    // colour of the spell mounted there. The next spell to fire pulses.
+    let sockets = v.deck.len().max(1) as f32;
+    for (i, slot) in v.deck.iter().enumerate() {
+        let s = length * (0.3 + 0.5 * (i as f32 + 0.5) / sockets);
+        let at_slot = at(s) - side * (radius + 0.004);
+        m.cuboid(at_slot, Vec3::new(0.016, 0.018, 0.016), rot, scaled(shaft.dark, 0.7), 0.0);
+        if let Some(colour) = slot {
+            let next = i == v.cursor % v.deck.len().max(1);
+            let flare = if next { 1.6 + pulse * 1.4 + cast * 3.0 } else { 0.9 };
+            m.glow_voxel(at_slot - side * 0.004, Vec3::new(0.011, 0.013, 0.008), rot, *colour, flare, 0.95);
         }
     }
 
@@ -979,6 +1008,9 @@ mod tests {
                 last_cast: 0,
                 tier: 1,
                 mana: 0.8,
+                deck: vec![Some([1.0, 0.4, 0.1]), None, Some([0.3, 0.6, 1.0]), None],
+                cursor: 2,
+                seed: 41,
             },
         );
         assert!(!mesh.vertices.is_empty());

@@ -183,6 +183,8 @@ fn begin(e: &mut Enemy, kind: Action, target: Vec3, sounds: &mut Vec<Sound>) {
         Action::Plant => (1.25, 0.1, 0.8),
         Action::Retrieve => (1.45, 0.1, 1.25),
     };
+    // Verdigris keepers strike sooner; Ashwardens hold a longer, heavier coil.
+    let prepare = prepare * [1.0, 0.9, 1.12][boss_look::index(e)];
     e.aim = target;
     e.lunge = horizontal(target - e.pos).normalize_or_zero();
     if e.lunge != Vec3::ZERO {
@@ -386,166 +388,8 @@ pub(super) fn tick(
     (damage, (e.center() - eye).normalize_or_zero() * damage)
 }
 
-pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
-    let mark = m.mark();
-    m.set_surface_kind(58.0);
-    let p = e.pos;
-    let run = e.toll.run.as_ref();
-    let wind = run.map_or(0.0, |r| {
-        if r.phase() == Phase::Prepare {
-            r.wind()
-        } else {
-            0.0
-        }
-    });
-    let active = run.is_some_and(|r| r.phase() == Phase::Active);
-    let iron = if e.flash > 0.0 {
-        [0.9, 0.83, 0.66]
-    } else {
-        [0.25, 0.28, 0.29]
-    };
-    let timber = [0.32, 0.21, 0.12];
-    let gait = (e.phase * 5.5).sin() * 0.14;
-    for x in [-0.22, 0.22] {
-        m.cuboid(
-            p + Vec3::new(x, 0.53, gait * x.signum()),
-            Vec3::new(0.27, 1.0, 0.32),
-            Quat::IDENTITY,
-            iron,
-            0.0,
-        );
-        m.cuboid(
-            p + Vec3::new(x, 0.12, -0.08 + gait * x.signum()),
-            Vec3::new(0.32, 0.24, 0.46),
-            Quat::IDENTITY,
-            iron,
-            0.0,
-        );
-    }
-    m.cuboid(
-        p + Vec3::Y * 1.4,
-        Vec3::new(0.8, 0.8, 0.48),
-        Quat::from_rotation_x(-wind * 0.18),
-        iron,
-        0.0,
-    );
-    // Overlapping plates, a narrow gorget and an inset visor break the mannequin outline.
-    for x in [-0.5, 0.5] {
-        m.cuboid(
-            p + Vec3::new(x, 1.72, 0.0),
-            Vec3::new(0.42, 0.25, 0.58),
-            Quat::from_rotation_z(-x * 0.3),
-            iron,
-            0.0,
-        );
-        m.cuboid(
-            p + Vec3::new(x * 0.45, 0.88, -0.06),
-            Vec3::new(0.31, 0.32, 0.5),
-            Quat::from_rotation_x(-0.12),
-            [0.19, 0.21, 0.22],
-            0.0,
-        );
-    }
-    m.cuboid(
-        p + Vec3::Y * 1.84,
-        Vec3::new(0.52, 0.18, 0.48),
-        Quat::IDENTITY,
-        [0.15, 0.17, 0.18],
-        0.0,
-    );
-    m.cuboid(
-        p + Vec3::Y * 2.05,
-        Vec3::new(0.46, 0.5, 0.42),
-        Quat::IDENTITY,
-        iron,
-        0.0,
-    );
-    m.cuboid(
-        p + Vec3::new(0.0, 2.16, -0.21),
-        Vec3::new(0.54, 0.11, 0.13),
-        Quat::IDENTITY,
-        [0.13, 0.15, 0.16],
-        0.0,
-    );
-    m.cuboid(
-        p + Vec3::new(0.0, 2.1, -0.23),
-        Vec3::new(0.3, 0.055, 0.035),
-        Quat::IDENTITY,
-        [0.86, 0.61, 0.28],
-        0.6,
-    );
-    let sweep = run.is_some_and(|r| r.kind == Action::Sweep);
-    let strike = if sweep {
-        let t = run.map_or(0.0, |r| {
-            ((r.elapsed - r.prepare) / r.active).clamp(0.0, 1.0)
-        });
-        Quat::from_rotation_y(if active {
-            -1.65 + t * 3.3
-        } else {
-            -wind * 1.65
-        }) * Vec3::new(0.0, 0.0, -2.9)
-    } else if run.is_some_and(|r| r.kind == Action::Shove) {
-        Vec3::new(0.0, 0.0, if active { -1.45 } else { -0.8 })
-    } else {
-        Vec3::new(
-            0.0,
-            wind * 0.25,
-            if active { -3.8 } else { -1.5 + wind * 0.7 },
-        )
-    };
-    let hand = p + Vec3::new(0.55, 1.35, -0.1);
-    m.beam(p + Vec3::new(0.4, 1.65, 0.0), hand, 0.17, iron, 0.0);
-    m.beam(hand - strike * 0.2, hand + strike, 0.07, timber, 0.0);
-    m.beam(
-        hand + strike,
-        hand + strike + Vec3::new(-0.36, -0.25, 0.0),
-        0.12,
-        iron,
-        0.0,
-    );
-    if e.toll.stock > 0 || !e.toll.initialized {
-        let lowering = run
-            .filter(|r| r.kind == Action::Plant)
-            .map_or(0.0, |r| r.wind());
-        let gate = p + Vec3::new(-0.95, 1.35 - lowering * 0.1, -0.45 - lowering * 0.9);
-        for x in [-1.25, 1.25] {
-            m.cuboid(
-                gate + Vec3::X * x,
-                Vec3::new(0.22, 2.5, 0.22),
-                Quat::IDENTITY,
-                iron,
-                0.0,
-            );
-        }
-        for y in [-1.05, -0.55, 0.8, 1.15] {
-            m.cuboid(
-                gate + Vec3::Y * y,
-                Vec3::new(2.5, 0.3, 0.18),
-                Quat::IDENTITY,
-                timber,
-                0.0,
-            );
-        }
-        m.beam(p + Vec3::new(-0.4, 1.65, 0.0), gate, 0.18, iron, 0.0);
-    } else {
-        let reach = if run.is_some_and(|r| r.kind == Action::Retrieve) {
-            wind * 1.15
-        } else {
-            0.0
-        };
-        m.beam(
-            p + Vec3::new(-0.4, 1.65, 0.0),
-            p + Vec3::new(-0.6, 1.0, -reach),
-            0.17,
-            iron,
-            0.0,
-        );
-    }
-    m.bake_model_uv_since(mark, p, 58.0);
-    m.rotate_since(mark, p, Quat::from_rotation_y(e.yaw));
-    m.set_surface_kind(41.0);
-    let _ = time;
-}
+mod model;
+pub(super) use model::model;
 
 pub(super) fn snapshot(e: &Enemy) -> Saved {
     let mut state = e.toll.clone();

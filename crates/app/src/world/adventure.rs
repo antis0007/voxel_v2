@@ -15,6 +15,9 @@ pub use enemy_review::checkpoint as enemy_review_checkpoint;
 mod bosses;
 mod action;
 mod matron;
+mod engine;
+mod glassweaver;
+mod boss_look;
 mod tollkeeper;
 pub use tollkeeper::{install_review as install_tollkeeper_review, observe_review as observe_tollkeeper_review,
     review_cast as tollkeeper_review_cast, review_input as tollkeeper_review_input,
@@ -36,13 +39,15 @@ mod rare_magic;
 pub mod reliquaries;
 mod rewards;
 mod spells;
+mod arcana;
 pub mod status;
 mod tactics;
 mod navigation;
 mod encounters;
-mod boss_patterns;
+mod modifiers;
 pub mod tinkering;
 pub mod wands;
+pub mod wand_items;
 
 pub const MAX_ENEMIES: usize = 24;
 // Metres: reach along the aim ray and the widening melee sweep around it.
@@ -228,6 +233,8 @@ pub struct Enemy {
     hart: hart::State,
     toll: tollkeeper::State,
     matron: matron::State,
+    engine: engine::State,
+    glass: glassweaver::State,
 }
 impl Enemy {
     pub(crate) fn preparing_stamp(&self)->bool {
@@ -274,6 +281,8 @@ impl Enemy {
             hart: hart::State::default(),
             toll: tollkeeper::State::default(),
             matron: matron::State::default(),
+            engine: engine::State::default(),
+            glass: glassweaver::State::default(),
         }
     }
     fn with_affixes(mut self, affixes: status::Affixes) -> Self {
@@ -535,6 +544,9 @@ pub struct View {
     pub wand: u32,
     pub spell: u32,
     pub loadout: wands::Loadout,
+    /// Every owned wand, for inventory cards.
+    pub wand_bank: Vec<wand_items::WandRecord>,
+    pub active_wand: Option<u16>,
     pub cast_total: f32,
     pub cast_delay_total: f32,
     pub recharge_total: f32,
@@ -564,6 +576,8 @@ pub struct View {
     pub sigils: u32,
     pub heart_restored: bool,
     pub route: String,
+    /// Active site modifier (name, one-line description) for the HUD.
+    pub site_modifier: Option<(&'static str, &'static str)>,
     pub rare_spells: u32,
     pub quest: Option<QuestMarker>,
     pub relic_focus: Option<reliquaries::RelicFocus>,
@@ -579,6 +593,11 @@ pub struct Adventure {
     pub wand: u32,
     pub spell: u32,
     pub loadout: wands::Loadout,
+    /// Every wand the player has owned; items reference these by index.
+    pub wand_bank: Vec<wand_items::WandRecord>,
+    pub active_wand: Option<u16>,
+    /// Hotbar slot in the player's hand, set by the frame loop before `tick`.
+    pub hand_slot: usize,
     pub last_cast: u32,
     cast_total: f32,
     cast_delay_total: f32,
@@ -588,6 +607,9 @@ pub struct Adventure {
     pub last_death_pos: Option<Vec3>,
     terrain_blasts: std::collections::VecDeque<(Vec3, f32)>,
     pub time: f32,
+    /// Modifier of the site the player stands in; re-derived each step, not saved.
+    pub(super) site_modifier: engine_worldgen::sites::modifiers::SiteModifier,
+    haunt_clock: f32,
     pub enemies: Vec<Enemy>,
     pub projectiles: Vec<Projectile>,
     pub effects: Vec<Effect>,
@@ -668,6 +690,9 @@ impl Default for Adventure {
             wand: 0,
             spell: 0,
             loadout: Default::default(),
+            wand_bank: Vec::new(),
+            active_wand: None,
+            hand_slot: 0,
             last_cast: 0,
             cast_total: 0.28,
             cast_delay_total: 0.28,
@@ -677,6 +702,8 @@ impl Default for Adventure {
             last_death_pos: None,
             terrain_blasts: Default::default(),
             time: 0.0,
+            site_modifier: engine_worldgen::sites::modifiers::SiteModifier::None,
+            haunt_clock: 0.0,
             enemies: Vec::new(),
             projectiles: Vec::new(),
             effects: Vec::new(),
@@ -776,8 +803,9 @@ impl Adventure {
     pub fn max_health(&self) -> f32 {
         100.0 + self.rank() as f32 * 20.0
     }
+    /// The held wand's mana pool; plain crafted wands keep the rank formula.
     pub fn max_mana(&self) -> f32 {
-        100.0 + self.rank() as f32 * 15.0
+        wand_items::stats_for(self.wand, &self.loadout, self.rank()).mana_max
     }
     pub fn swing(&self) -> f32 {
         (self.melee_cd / self.swing_duration()).clamp(0.0, 1.0)
@@ -810,6 +838,8 @@ impl Adventure {
             wand: self.wand,
             spell: self.spell,
             loadout: self.loadout,
+            wand_bank: self.wand_bank.clone(),
+            active_wand: self.active_wand,
             cast_total: self.cast_total,
             cast_delay_total: self.cast_delay_total,
             recharge_total: self.recharge_total,
@@ -839,6 +869,7 @@ impl Adventure {
             sigils: self.sigils,
             heart_restored: self.heart_restored(),
             route: self.route.clone(),
+            site_modifier: modifiers::hud(self.site_modifier),
             quest: None,
             relic_focus: self.relic_focus,
             undercrown_focus: self.undercrown_focus,
@@ -1019,6 +1050,7 @@ impl Adventure {
                             zone_archetype(world, pos),
                         )
                     };
+                    let affixes = modifiers::affixes(modifiers::for_site(&world.sample_config(), id), affixes);
                     self.enemies
                         .push(Enemy::new(id, slot, kind, pos, menace).with_affixes(affixes));
                 }
@@ -1097,7 +1129,7 @@ impl Adventure {
         if self.combo_time == 0.0 && !strike_now && self.melee_cd == 0.0 {
             self.combo = 0;
         }
-        self.mana = (self.mana + dt * (8.0 + rank as f32 * 1.5)).min(self.max_mana());
+        self.mana = (self.mana + dt * (8.0 + rank as f32 * 1.5) * wand_items::charge_scale(&self.loadout)).min(self.max_mana());
         // Hunger drains slowly; adequate food restores health only when safe.
         world.inventory.tick(dt);
         let armor_reduction = world.inventory.armor_reduction();
@@ -1142,6 +1174,7 @@ impl Adventure {
         // Echo step changes the current-frame collision and aiming origin.
         let eye = player.eye(world.voxel_scale) * scale;
         let feet = player.pos * scale;
+        modifiers::step(self, world, player, feet, dt);
         // Drain surface-contact events once. The splash uses the exposed top of
         // the local water column, not the player's feet, so partial cells and
         // cave pools put the ring on the visible surface.
@@ -1217,7 +1250,7 @@ impl Adventure {
                         && e.guard
                         && !shatter
                         && forward.dot(Vec3::new(-e.yaw.sin(), 0.0, -e.yaw.cos())) < -0.3)
-                        || (!shatter && tollkeeper::guarded(e, forward));
+                        || (!shatter && (tollkeeper::guarded(e, forward) || engine::guarded(e, forward)));
                     let base = match self.weapon {
                         1 => 22.0,
                         2 => 32.0,
@@ -1386,7 +1419,7 @@ impl Adventure {
             if !e.visible
                 && let Some((_, _, seen)) = alerts
                     .iter()
-                    .find(|(p, site, _)| *site == e.site && (*p - e.pos).length_squared() < 144.0)
+                    .find(|(p, site, _)| *site == e.site && (*p - e.pos).length_squared() < modifiers::alert_radius_sq(self.site_modifier))
                 {
                     e.last_seen = *seen;
                     e.alert = e.alert.max(3.0);
@@ -1494,7 +1527,7 @@ impl Adventure {
             let distance = d.length();
             if e.sight <= 0.0 {
                 e.sight = 0.12 + (e.slot % 4) as f32 * 0.025;
-                e.visible = distance < 27.0 && line(world, e.center(), eye);
+                e.visible = distance < modifiers::sight_range(self.site_modifier) && line(world, e.center(), eye);
                 if e.visible {
                     e.last_seen = feet;
                     e.alert = 4.0;
@@ -1518,7 +1551,6 @@ impl Adventure {
                     &mut self.sounds,
                     &mut self.dirty_voxels,
                     &mut navigation_budget,
-                    self.ward > 0.0 && self.ward_hits > 0,
                 );
                 incoming += boss_damage;
                 incoming_direction += boss_direction;
@@ -1749,6 +1781,7 @@ impl Adventure {
                         self.release_payload(world, &mut shot);
                     }
                 }
+                self.arcana_flight(world, &mut shot, dt);
                 if shot.mods.homing || shot.mods.seek_ally {
                     let ally = if shot.mods.seek_ally {
                         self.companion.as_ref().and_then(|c| {
@@ -1913,6 +1946,7 @@ impl Adventure {
                         shot.velocity -= 2.0 * shot.velocity.dot(normal) * normal;
                         shot.pos += normal * 0.04;
                         self.spawn_voxel_burst(shot.pos, shot.color(), 6, 1.8, 0.032);
+                        self.arcana_bounce(world, &mut shot);
                         let (cue, pitch) = wands::spell_audio(shot.spell);
                         sound_pitched(&mut self.sounds, cue, Some(shot.pos), 0.35, pitch);
                         break;
@@ -1969,6 +2003,7 @@ impl Adventure {
                     }
                 } else if let Some(e) = self.enemies.iter_mut().find(|e| {
                     e.health > 0.0
+                        && e.slot + 1 != shot.mods.pierced
                         && if e.kind == 8 { hart::hit(e, shot.pos, if shot.mods.orbit { 0.24 } else { 0.0 }) } else { (e.center() - shot.pos).length()
                             < if tall(e.kind) { 0.8 } else { 0.58 }
                                 + if shot.mods.orbit { 0.24 } else { 0.0 } }
@@ -1987,7 +2022,7 @@ impl Adventure {
                             0.0,
                             -e.yaw.cos(),
                         )) < -0.3)
-                        || (!shatter && !shot.mods.bore && tollkeeper::guarded(e, shot.velocity));
+                        || (!shatter && !shot.mods.bore && (tollkeeper::guarded(e, shot.velocity) || engine::guarded(e, shot.velocity)));
                     sound(
                         &mut self.sounds,
                         if shield {
@@ -2006,6 +2041,7 @@ impl Adventure {
                             * shot.mods.damage_mul
                             * if shield { 0.3 } else { 1.0 }
                             * e.affixes.damage_taken();
+                    dealt *= Adventure::arcana_hit_mul(&shot.mods, e);
                     let crit = shot.mods.crit && wands::crit_roll(self.time, e.slot);
                     if crit {
                         dealt *= 2.5;
@@ -2060,6 +2096,12 @@ impl Adventure {
                     } else if shatter {
                         e.slow = 0.0;
                     }
+                    if shot.mods.pierce > 0 {
+                        // Piercing: the bolt carries on through this foe.
+                        shot.mods.pierce -= 1;
+                        shot.mods.pierced = e.slot + 1;
+                        continue;
+                    }
                     hit = true;
                     break;
                 }
@@ -2082,6 +2124,7 @@ impl Adventure {
                         sound(&mut self.sounds, Cue::Spark, Some(at), 0.7);
                     }
                 }
+                self.arcana_impact(world, &shot, eye);
                 if !shot.hostile && shot.mods.shrapnel {
                     self.spawn_voxel_burst(shot.pos, spell_color(62), 16, 4.5, 0.035);
                     let element = shot.mods.element;
@@ -2313,11 +2356,13 @@ impl Adventure {
         self.tick_wells(world, dt);
         self.tick_crosses(world, dt);
         self.tick_particles(world, dt);
+        modifiers::reap(&mut self.enemies);
         let mut death_blasts: Vec<Vec3> = Vec::new();
         // Spells found this frame: (salt, where). Applied after the loop, which
         // borrows the enemy list.
         let mut finds: Vec<(u32, Vec3, bool)> = Vec::new();
         let mut cleared_sites = Vec::new();
+        let mut wand_drops = Vec::new();
         for e in &mut self.enemies {
             if e.health > 0.0 {
                 continue;
@@ -2363,6 +2408,9 @@ impl Adventure {
                 if let Some(salt) = discovery::drop_roll(e.site, e.slot, e.menace) {
                     finds.push((salt, e.center(), false));
                 }
+                if let Some(drop) = wand_items::drop_roll(e.site, e.slot, e.kind, e.menace, is_boss(e.kind), rank) {
+                    wand_drops.push((drop, e.center()));
+                }
                 if e.kind == 5 && self.weapons & 2 == 0 {
                     self.weapons |= 2;
                     world
@@ -2387,6 +2435,12 @@ impl Adventure {
             }
         }
         for (id, at) in cleared_sites { self.complete_site(world, id, at); }
+        for ((seed, tier), at) in wand_drops {
+            if let Some(item) = self.mint_wand(wand_items::generate(seed, tier)) {
+                world.inventory.dropped.push(super::inventory::DroppedStack { pos: at, stack: super::inventory::ItemStack::new(item, 1) });
+                world.expedition.say(match tier { 3 => "A masterwork wand clatters to the ground.", 2 => "A fine wand clatters to the ground.", _ => "A wand clatters to the ground." });
+            }
+        }
         for (salt, at, guaranteed) in finds {
             self.discover_spell(world, salt, at, guaranteed);
         }
@@ -2598,7 +2652,7 @@ impl Adventure {
             a.health.is_finite()
                 && (0.0..=160.0).contains(&a.health)
                 && a.mana.is_finite()
-                && (0.0..=145.0).contains(&a.mana),
+                && (0.0..=400.0).contains(&a.mana),
             "Invalid adventurer vitals"
         );
         ensure!(
@@ -2691,7 +2745,9 @@ impl Adventure {
             a.loadout.aux_slots = [wands::EMPTY; 4];
         }
         ensure!(
-            a.health <= a.max_health() && a.mana <= a.max_mana(),
+            // The held wand's seed arrives later with the wand bank (v29), so allow
+            // the largest pool any wand can roll here; the bank decode checks exactly.
+            a.health <= a.max_health() && a.mana <= a.max_mana() * wand_items::MAX_MANA_SCALE,
             "Vitals exceed attained mastery"
         );
         Ok(a)
@@ -2739,6 +2795,9 @@ pub fn tick(
             if let Some(p)=adventure.projectiles.last_mut() {p.farm=Some(shot.owner);p.velocity=shot.velocity;p.life=shot.life;}
         }
     }
+    let feet = player.pos * world.voxel_scale.meters();
+    let hand = adventure.hand_slot;
+    adventure.sync_wands(&mut world.inventory, hand, feet);
     adventure.habitat_emitters(world);
     let consumed = adventure.update(world, player, dt, cast, cycle, melee);
     world.adventure = adventure;

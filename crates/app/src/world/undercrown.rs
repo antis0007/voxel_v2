@@ -1,6 +1,7 @@
 //! Player-facing undercrown interaction. Generation (plan, blocks, reserved
 //! volumes) lives in `engine_worldgen::undercrown`; this module re-exports it.
 mod interact;
+mod rewards;
 
 pub use engine_worldgen::undercrown::{FIRST_VERSION, State, plan};
 #[cfg(test)]

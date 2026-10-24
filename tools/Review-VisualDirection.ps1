@@ -11,6 +11,9 @@ param(
     [switch]$Resize,
     [switch]$HideHud,
     [switch]$LiveClock,
+    [switch]$AllowBusy,
+    [string]$CameraPose = '',
+    [ValidateRange(0,1)] [double]$TimeOfDay = 0.5,
     [string]$Executable = 'target/release-fast/minecraft_style_voxel_prototype.exe',
     # 6 keeps old evidence comparable; draw-cost measurements use the game default, 28.
     [ValidateRange(4,64)] [int]$ViewChunks = 6,
@@ -23,7 +26,7 @@ Set-Location -LiteralPath $repo
 $exe = (Resolve-Path -LiteralPath $Executable).Path
 # A capture taken while cargo/rustc run is a timing baseline polluted by the build.
 $busy = Get-Process -Name cargo, rustc -ErrorAction SilentlyContinue
-if ($busy) { throw "Build activity running ($($busy.Name -join ', ')); wait for it to finish, then capture." }
+if ($busy -and -not $AllowBusy) { throw "Build activity running ($($busy.Name -join ', ')); wait for it to finish, then capture." }
 # A stale exe silently measures old code. Cargo's dep-info lists exactly the files the exe
 # was built from (cfg(test) modules and unused crates excluded, include_bytes assets included).
 $depInfo = [IO.Path]::ChangeExtension($exe, '.d')
@@ -51,7 +54,7 @@ $ErrorActionPreference = 'Stop'
 $stateBytes = [Text.Encoding]::UTF8.GetBytes("$gitStatus`n---`n$gitDiff")
 $stateHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($stateBytes)).Replace('-', '')
 $argsList = @("--benchmark-world=$World",'--benchmark-seed=2738958700',
-    '--benchmark-weather=partly','--benchmark-review-time=0.5',
+    '--benchmark-weather=partly',"--benchmark-review-time=$($TimeOfDay.ToString([Globalization.CultureInfo]::InvariantCulture))",
     "--benchmark-view-chunks=$ViewChunks",'--benchmark-cloud-divisor=3',"--benchmark-width=$Width","--benchmark-height=$Height",
     '--benchmark-warmup=8',"--benchmark-duration=$Seconds",'--benchmark-capture-frames')
 if (-not $HideHud) { $argsList += '--benchmark-capture-hud' }
@@ -70,6 +73,7 @@ switch ($Case) {
     'cave' { $argsList += '--benchmark-torch-review' }
     'motion' { $argsList += '--benchmark-horizon-sweep' }
 }
+if ($CameraPose) { $camera = $CameraPose }
 if ($Case -notin @('cave','motion')) { $argsList += "--benchmark-terrain-camera=$camera" }
 if ($DebugView) { $argsList += "--benchmark-debug=$DebugView" }
 $names = @('VOXEL_CAPTURE_DIR','VOXEL_REVIEW_WAND','VOXEL_REVIEW_WATER','VOXEL_REVIEW_TERRAIN')

@@ -96,11 +96,14 @@ fn terrain_pixel_uv(p: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
 fn terrain_pixel_albedo(color: vec3<f32>, p: vec3<f32>, n: vec3<f32>, footprint_m: f32) -> vec3<f32> {
     let uv = terrain_pixel_uv(p, n) * PIXEL_RES;
     let cell = floor(uv);
-    let mid = 1.0 - smoothstep(0.22, 0.65, footprint_m);
+    // Fade in texels per screen pixel, like every other 5 cm lattice term.
+    // The old 0.22-0.65 m (4-13 texels per pixel) window kept the 4x4 dither
+    // alive far past Nyquist, where it aliased into broad moire bands on
+    // flat canopy and wall faces.
+    let mid = surface_detail_weight(footprint_m * PIXEL_RES);
     // No palette quantisation: tone stays continuous so gradients never band.
     // A small ordered-dither lift on the 5 cm lattice keeps the pixel-art
-    // texture up close, and fades out as the lattice shrinks below a pixel so
-    // distant ground does not shimmer. Multiplicative gain preserves hue.
+    // texture up close. Multiplicative gain preserves hue.
     let grain = (terrain_bayer4(cell) - 0.5) * 0.07 * mid;
     return color * (1.0 + grain);
 }
@@ -283,11 +286,17 @@ fn eval_water_vertex_wave(voxel_xz: vec2<f32>, scale: f32, t: f32) -> vec3<f32> 
     return mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
 }
 
+// Mirrors `CAMERA_RELATIVE_FLAG` in mesh/models.rs: 64 * 4096, above any block key.
+const CAMERA_RELATIVE_FLAG: f32 = 262144.0;
+
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
     let scale     = max(cam.world_params.x, 1e-6);
-    let geometry_kind=f32(u32(round(max(in.surface.z,0.0)))%64u);
+    // Viewmodel vertices carry CAMERA_RELATIVE_FLAG on top of kind + 64 * block.
+    let camera_relative = in.surface.z >= CAMERA_RELATIVE_FLAG;
+    let surface_key = select(in.surface.z, in.surface.z - CAMERA_RELATIVE_FLAG, camera_relative);
+    let geometry_kind=f32(u32(round(max(surface_key,0.0)))%64u);
     var model_pos = in.pos;
     if geometry_kind == 34.0 {
         model_pos = tuft_wind_position(in.pos, in.surface.y, scale, light.torch_meta.y,
@@ -420,7 +429,11 @@ fn vs_main(in: VsIn) -> VsOut {
         // overlies so water still lies over the seabed.
         backdrop_depth_bias = underlap * select(select(0.0, 0.002, geometry_kind == 8.0), 0.0035, geometry_kind == 0.0);
     }
-    out.pos        = cam.view_proj * vec4<f32>(world_pos - cam.camera_pos.xyz, 1.0);
+    // Viewmodel vertices (CAMERA_RELATIVE_FLAG) are already camera-relative; going
+    // through absolute world space would round them to the f32 grid of the
+    // world position.
+    let vertex_relative = select(world_pos - cam.camera_pos.xyz, world_pos, camera_relative);
+    out.pos        = cam.view_proj * vec4<f32>(vertex_relative, 1.0);
     // Separate exact fallback/resident depth without splitting shared world edges.
     // Per-face normal insets opened sky pinholes on fine voxel silhouettes.
     // Depth is reverse-Z (1 near, 0 far): pushing a surface away scales its depth
@@ -442,7 +455,7 @@ fn vs_main(in: VsIn) -> VsOut {
     }
     // Decode BEFORE interpolation, so gradients and biome averages are linear.
     out.base_color = terrain_srgb_to_linear(in.color);
-    out.relative_pos = world_pos - cam.camera_pos.xyz;
+    out.relative_pos = vertex_relative;
     out.voxel_pos  = in.pos;
     out.normal     = terrain_safe_unit3(in.normal, vec3<f32>(0.0, 1.0, 0.0));
     out.surface    = in.surface;
@@ -450,8 +463,8 @@ fn vs_main(in: VsIn) -> VsOut {
     out.material_family = u32(geometry_kind);
     out.ao_strength = in.ao_strength;
     // Resolve IDs at vertices; interpolate colors/finish, never material IDs.
-    let far_terrain=in.ao_strength<0.0 && in.ao_strength> -1.5 && in.surface.z==0.0;
-    let key=u32(round(max(select(in.surface.z,in.surface.w,far_terrain),0.0)));
+    let far_terrain=in.ao_strength<0.0 && in.ao_strength> -1.5 && surface_key==0.0;
+    let key=u32(round(max(select(surface_key,in.surface.w,far_terrain),0.0)));
     // The capped face is a grass renderer variant; preserve its configured
     // tint/response and stable block key while the draw diagnostic reports 36.
     let family=select(key%64u, 1u, geometry_kind == 36.0);
@@ -990,6 +1003,17 @@ fn flame_lift(surface_w: f32) -> f32 {
     return clamp(-surface_w - 2.0, 0.0, 1.0);
 }
 
+// Black-body ramp for fire voxels and torch flames, at unit emission scale:
+// deep orange edges, orange body and a small warm core. The body keeps little
+// green: at 0.31 with a full white core, the hottest cells summed to near-white
+// and read as pale salmon.
+fn fire_ramp(heat: f32) -> vec3<f32> {
+    let edge = vec3<f32>(0.75, 0.055, 0.006);
+    let body = vec3<f32>(1.0, 0.18, 0.015);
+    let core = vec3<f32>(1.0, 0.60, 0.25);
+    return mix(edge, body, heat) + core * (heat * heat * heat * 0.5 / 3.1);
+}
+
 // Light cast by a torch: a slow sway plus a quicker flutter, +/-8% around the
 // same 0.96 mean as torch_flicker, so the average brightness of lights is kept.
 fn torch_light_flicker(seed: vec3<f32>, time: f32) -> f32 {
@@ -1070,6 +1094,11 @@ fn surface_noise(p: vec2<f32>) -> f32 {
 // Conservative octave clamping, not an exact integral of the complete shader.
 // A noise cell loses contrast between five and two pixels across and converges
 // to its statistical mean. Fixed wavelengths never change with camera distance.
+// Means of the per-texel leaf tint/tone ramps (surface_hash is uniform on
+// [0,1)), so the footprint fade keeps a canopy's average colour.
+const LEAF_TINT_MEAN: vec3<f32> = vec3<f32>(0.985, 1.01, 0.89);
+const LEAF_TONE_MEAN: vec3<f32> = vec3<f32>(0.97, 0.995, 0.825);
+
 fn surface_detail_weight(footprint_in_cells: f32) -> f32 {
     return 1.0 - smoothstep(0.20, 0.50, max(footprint_in_cells, 0.0));
 }
@@ -1828,15 +1857,18 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
             leaf_pixel_hue,
         );
         // Canopy stays on the authored leaf hue. Autumn is the copper swatch.
+        // Per-texel tint and tone fade toward their own means, not toward 1:
+        // fading to 1 shifted unresolved faces about 18% bluer than resolved
+        // faces, so the detail fade showed up as a hue seam across a canopy.
+        let leaf_resolved = surface_detail_weight(metric_footprint * PIXEL_RES);
         color = mix(broadleaf, needles, pine) * (1.04 + (clusters-0.5) * 0.16 * medium_fade
-            + leaf_light * fine_fade + grain * 0.10 + leaf_px * 0.30)
-            * mix(vec3<f32>(1.0), leaf_tint,
-                surface_detail_weight(metric_footprint * PIXEL_RES) * 0.45);
+            + leaf_light * fine_fade + grain * 0.10 + leaf_px * 0.16)
+            * mix(vec3<f32>(1.0), mix(LEAF_TINT_MEAN, leaf_tint, leaf_resolved), 0.45);
         // Per-leaf hue drift: some leaves run yellow-green, some cool and dark.
         // Stays within the canopy's hue family and fades with the footprint.
         let leaf_drift = surface_hash(leaf_cell + vec2<f32>(13.1, -5.3));
         let leaf_tone = mix(vec3<f32>(1.10, 1.03, 0.72), vec3<f32>(0.84, 0.96, 0.93), leaf_drift);
-        color *= mix(vec3<f32>(1.0), leaf_tone, surface_detail_weight(metric_footprint * PIXEL_RES) * 0.8);
+        color *= mix(vec3<f32>(1.0), mix(LEAF_TONE_MEAN, leaf_tone, leaf_resolved), 0.8);
     } else if kind == 9 {
         color *= 1.0 + mottling * 0.2;
     } else if kind == 11 {
@@ -2796,7 +2828,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let sky_up      = atmosphere_color(vec3<f32>(0.0, 1.0, 0.0));
     // Diffuse illumination belongs to the world, not the camera. Key the
     // horizon sample to the sun azimuth so a pan cannot relight a hillside.
-    let sky_horizon = atmosphere_color(normalize(vec3<f32>(sun_dir.x, 0.16, sun_dir.z)));
+    // Sky irradiance approximation: radiance of the horizon band the face
+    // looks at. A face turned to the sun sees the warm solar sky; one turned
+    // away sees the cooler anti-solar sky. Sampling only the solar side gave
+    // every shaded face the same warm fill and erased the light direction.
+    let sun_az = safe_normalize2(sun_dir.xz, vec2<f32>(1.0, 0.0));
+    let face_toward_sun = saturate1(dot(n.xz, sun_az) * 0.5 + 0.5);
+    let solar_horizon = atmosphere_color(normalize(vec3<f32>(sun_az.x, 0.16, sun_az.y)));
+    let antisolar_horizon = atmosphere_color(normalize(vec3<f32>(-sun_az.x, 0.16, -sun_az.y)));
+    let sky_horizon = mix(antisolar_horizon, solar_horizon, face_toward_sun);
     let clear_sky_ambient = mix(sky_horizon * 0.78, sky_up, pow(hemi, 0.72));
     let overcast_sky_ambient = mix(
         sky_horizon * 0.62,
@@ -2805,7 +2845,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     );
     let sky_ambient = mix(clear_sky_ambient, overcast_sky_ambient, cloudiness * 0.65);
     let twilight_fill = 1.0 - smoothstep(-0.10, 0.22, sun_dir.y);
-    let low_horizon_sky = atmosphere_color(normalize(vec3<f32>(sun_dir.x, 0.035, sun_dir.z)));
+    let low_solar_sky = atmosphere_color(normalize(vec3<f32>(sun_az.x, 0.035, sun_az.y)));
+    let low_horizon_sky = mix(antisolar_horizon, low_solar_sky, face_toward_sun);
     let terrain_sky_ambient = mix(sky_ambient, mix(sky_ambient, low_horizon_sky, 0.38), twilight_fill);
     // Dense clouds remove the direct sun, but should replace it with a broad
     // bright sky dome rather than turning the terrain nearly black. Keep the
@@ -2893,12 +2934,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // core. Keeping the ramp in HDR preserves dark contrast between flame
         // cells. The body keeps little green: at 0.31 with a full white core,
         // the hottest voxels summed to near-white and read as pale salmon.
-        let edge = vec3<f32>(0.75, 0.055, 0.006);
-        let body = vec3<f32>(1.0, 0.18, 0.015);
-        let core = vec3<f32>(1.0, 0.60, 0.25);
         let heat2 = fire_heat * fire_heat;
-        let heat3 = heat2 * fire_heat;
-        emissive += (mix(edge, body, fire_heat) * 3.1 + core * heat3 * 0.5) * fire_exposure;
+        emissive += fire_ramp(fire_heat) * 3.1 * fire_exposure;
         albedo = mix(vec3<f32>(0.16, 0.028, 0.004), vec3<f32>(0.95, 0.36, 0.05), heat2);
     }
     if kind == 43 { emissive += albedo * 0.10 * fire_exposure; }
@@ -2946,7 +2983,32 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let flame_wave = select(torch_flicker(floor(in.voxel_pos), flame_time), 0.96 + 0.14 * lick, flame);
         // base_color is already linear (decoded in the vertex stage), so the
         // HDR emission keeps its saturated orange instead of washing toward white.
-        emissive += max(in.base_color, vec3<f32>(0.0)) * select(0.65, 3.2, flame) * flame_wave * fire_exposure;
+        var flame_color = max(in.base_color, vec3<f32>(0.0));
+        if flame {
+            // Shadertoy-style flame field: noise scrolled up the flame and shaped
+            // by height and the view-facing rim, so the silhouette cools to red
+            // and hot tongues climb from the core. Coordinates are the mesh's
+            // own lift and normal, never world cells, so swaying geometry keeps
+            // its pattern (render invariant 2).
+            let around = in.normal.xz * 1.7;
+            let tongue = surface_noise_filtered(
+                vec2<f32>(around.x + lift * 0.4, lift * 3.4 - flame_time * 2.6),
+                footprint * 3.4,
+            );
+            let flick = surface_noise_filtered(
+                vec2<f32>(around.y - lift * 0.3, lift * 5.6 - flame_time * 3.9),
+                footprint * 5.6,
+            );
+            let facing = clamp(abs(dot(n, to_eye)), 0.0, 1.0);
+            let heat = clamp(1.12 - lift * 0.9 - (1.0 - facing) * 0.4
+                + ((tongue - 0.5) * 0.6 + (flick - 0.5) * 0.3) * (0.35 + lift), 0.0, 1.0);
+            // Same palette as fire voxels, blended with the mesher's ring colour
+            // so the yellow core -> red tip authoring still leads; the hot core
+            // keeps most of its authored yellow. The heat gain averages near 1,
+            // keeping mean brightness.
+            flame_color = mix(flame_color, fire_ramp(heat), 0.6 - 0.45 * heat) * (0.55 + 0.75 * heat);
+        }
+        emissive += flame_color * select(0.65, 3.2, flame) * flame_wave * fire_exposure;
         albedo *= select(0.5, 0.03, flame);
     }
 
@@ -3099,8 +3161,12 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // even under cloudy skies so water reflections never flatten into grey paint.
         let refl_elev = clamp(refl_dir.y, 0.0, 1.0);
         let sun_align = pow(max(dot(terrain_safe_unit2(refl_dir.xz, vec2<f32>(0.0, 1.0)), terrain_safe_unit2(sun_dir.xz, vec2<f32>(0.0, 1.0))), 0.0), 3.0);
+        // The cloud-softened dome comes from the reflected direction's own sky.
+        // It used the solar horizon for every azimuth, so water facing away
+        // from a sunset mirrored the sunset side as a flat bright sheet.
+        let reflected_luma = dot(reflection, vec3<f32>(0.2126, 0.7152, 0.0722));
         let cloud_sky_dome = mix(
-            sky_horizon * (1.08 + sun_align * 0.28 * sun_trans),
+            mix(reflection, vec3<f32>(reflected_luma), 0.35) * (1.0 + sun_align * 0.28 * sun_trans),
             sky_up * 0.88,
             smoothstep(0.02, 0.55, refl_elev)
         );
@@ -3138,7 +3204,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
             world_pos.xz * 0.45 + vec2<f32>(glint_t * 0.30, -glint_t * 0.21), fp_m * 0.45);
         lit += light.sun_color_daylight.rgb * sun_spectral
              * (sun_glint_sharp * glint_breakup * 0.105 + sun_glint_broad * 0.045)
-             * light.sun_dir_intensity.w * (0.18 + 0.82 * sun_trans * sun_shadow)
+             // Fully gated: an 18% floor let the glint shine through
+             // terrain shadow and cloud, doubling the path under overcast.
+             * light.sun_dir_intensity.w * sun_trans * sun_shadow
              * sky_access * (1.0 - water_foam * 0.65);
         if geometric_normal.y > 0.5 && terrain_has_resident_metadata(in.ao_strength) {
             // Sun glitter: each 5 cm texel is a tiny facet with a fixed random tilt
@@ -3209,7 +3277,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let cloud_fog = cloud_fog_amount(view_dir, dist)
         * mix(1.0, 0.25, cave_amount);
     let cloud_transmittance = 1.0 - cloud_fog;
-    let cloud_fog_radiance = max(mix(sky_horizon, sky_up, 0.50), vec3<f32>(0.0));
+    // Fog radiance is a property of the air, not of the surface normal.
+    let cloud_fog_radiance = max(mix((solar_horizon + antisolar_horizon) * 0.5, sky_up, 0.50), vec3<f32>(0.0));
     lit = lit * cloud_transmittance + cloud_fog_radiance * (1.0 - cloud_transmittance);
     // Sky in-scatter should not flood a roofed tunnel with daylight haze.
     atmosphere_scatter *= mix(1.0, 0.28, cave_amount);

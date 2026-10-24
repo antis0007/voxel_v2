@@ -223,6 +223,8 @@ impl ChunkCache {
         source_revision: u64,
         _parent_source_revision: Option<u64>,
     ) -> Vec<ChunkKey> {
+        // Minimum spec: no render-only cover for edits beyond the view radius.
+        if crate::low_spec::active() { return Vec::new(); }
         self.edit_proxies.latest_source_revision=source_revision;
         let now = Instant::now();
         let span = 32.0 * snapshot.cfg.voxel_scale.meters();

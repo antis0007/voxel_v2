@@ -359,6 +359,27 @@ pub fn recycle(vertices: Vec<Vertex3>) {
     SCENE_POOL.with(|pool| *pool.borrow_mut() = vertices);
 }
 
+/// Added to `surface.z` of vertices whose `pos` is already relative to the
+/// camera (metres / scale). `surface.z` is `kind + 64 * (block + 1)`, so the
+/// flag sits far above any block key (64 * 4096); the vertex shader strips it
+/// before decoding. Mirrored as `CAMERA_RELATIVE_FLAG` in `world_shader.wgsl`
+/// (a test keeps them equal). Exact in f32: integers are exact below 2^24.
+const CAMERA_RELATIVE_FLAG: f32 = 262_144.0;
+
+/// Sub-f32 part of the precise eye in metres. `upload_camera` rounds the eye to
+/// f32 for the camera uniform and folds this remainder into the view matrix, so
+/// camera-relative vertices must carry it to stay rigid with the lens.
+fn camera_residual(precise_eye_m: glam::DVec3) -> Vec3 {
+    (precise_eye_m - precise_eye_m.as_vec3().as_dvec3()).as_vec3()
+}
+
+/// Mark vertices as camera-relative (see `CAMERA_RELATIVE_FLAG`).
+fn tag_camera_relative(vertices: &mut [Vertex3]) {
+    for vertex in vertices {
+        vertex.surface[2] += CAMERA_RELATIVE_FLAG;
+    }
+}
+
 pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::DayNightCycle, pixel_angle: f32) -> Vec<Vertex3> {
     let scale = world.voxel_scale.meters();
 
@@ -1574,6 +1595,10 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
             }
             Item::Food(_) => ([0.84, 0.52, 0.30], 0.35, None),
             Item::Tool(_) => ([0.68, 0.82, 0.92], 0.9, Some([0.68, 0.82, 0.92])),
+            Item::Wand { look, .. } => {
+                crate::world::adventure::wand_items::draw_dropped(&mut mesh, drop.pos + Vec3::Y * bob, rot, look);
+                continue;
+            }
         };
 
         let center = drop.pos + Vec3::Y * bob;
@@ -1680,6 +1705,14 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
             );
         }
     }
+
+    // Everything glued to the camera (tool swing, hand, wand) is authored
+    // camera-relative: an absolute f32 position far from the origin quantises
+    // to millimetres or worse, which made the hand shimmer. The shader treats
+    // vertices tagged `CAMERA_RELATIVE_FLAG` as offsets from the camera, so
+    // the only world term left is the eye's sub-f32 residual.
+    let viewmodel_mark = mesh.mark();
+    let eye = camera_residual(player.precise_eye(world.voxel_scale) * scale as f64);
 
     if world.adventure.swing() > 0.0 {
         let heavy = world.adventure.finisher();
@@ -1865,7 +1898,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         let spell = adv.loadout.slot(adv.loadout.cursor);
         wand::draw(
             &mut mesh,
-            crate::wand_style::current(),
+            crate::world::adventure::wand_items::style(adv.loadout.seed, crate::wand_style::current()),
             &wand::WandView {
                 eye,
                 forward,
@@ -1883,9 +1916,13 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                 last_cast: adv.last_cast,
                 tier: adv.wand,
                 mana: (adv.mana / adv.max_mana().max(1.0)).clamp(0.0, 1.0),
+                deck: adv.deck_view(),
+                cursor: adv.loadout.cursor,
+                seed: adv.loadout.seed,
             },
         );
     }
+    tag_camera_relative(&mut mesh.vertices[viewmodel_mark..]);
     mesh.vertices
 }
 
@@ -1905,7 +1942,7 @@ pub fn wand_tip_light(
     let up = right.cross(forward).normalize_or_zero();
     let spell = adv.loadout.slot(adv.loadout.cursor);
     Some(wand::tip_light(
-        crate::wand_style::current(),
+        crate::world::adventure::wand_items::style(adv.loadout.seed, crate::wand_style::current()),
         &wand::WandView {
             eye,
             forward,
@@ -1923,6 +1960,9 @@ pub fn wand_tip_light(
             last_cast: adv.last_cast,
             tier: adv.wand,
             mana: (adv.mana / adv.max_mana().max(1.0)).clamp(0.0, 1.0),
+            deck: Vec::new(),
+            cursor: 0,
+            seed: adv.loadout.seed,
         },
     ))
 }
@@ -1980,5 +2020,41 @@ mod dissolve_tests {
         );
         assert!(model.vertices.iter().all(|v| v.surface[2] == 54.0));
         assert!(model.vertices.iter().all(|v| v.surface[1] == 0.42));
+    }
+
+    #[test]
+    fn camera_residual_restores_the_precise_eye() {
+        for eye in [
+            glam::DVec3::new(1.0e6 + 0.123_456_789, 80.7, -3.0e5 + 0.7),
+            glam::DVec3::new(-2.5e4 - 0.31, 12.34, 9.0e3 + 0.002),
+            glam::DVec3::ZERO,
+        ] {
+            let residual = camera_residual(eye);
+            let rounded = eye.as_vec3().as_dvec3();
+            assert!((rounded + residual.as_dvec3() - eye).abs().max_element() < 1e-8);
+            // The remainder is below half an f32 step at that magnitude.
+            let step = (eye.abs().max_element() as f32).max(1.0) * f32::EPSILON;
+            assert!(residual.abs().max_element() <= step);
+        }
+    }
+
+    #[test]
+    fn camera_relative_flag_leaves_kind_and_block_key_decodable() {
+        // surface.z = kind + 64 * (block + 1); the flag must clear every block key.
+        const { assert!(CAMERA_RELATIVE_FLAG >= 64.0 * 4096.0) };
+        for z in [0.0_f32, 41.0, 54.0, 55.0, 64.0 * 3.0 + 8.0, 64.0 * 256.0 + 63.0] {
+            let mut v = [<Vertex3 as bytemuck::Zeroable>::zeroed()];
+            v[0].surface[2] = z;
+            tag_camera_relative(&mut v);
+            assert!(v[0].surface[2] >= CAMERA_RELATIVE_FLAG);
+            assert_eq!(v[0].surface[2] - CAMERA_RELATIVE_FLAG, z);
+        }
+    }
+
+    #[test]
+    fn shader_flag_matches_the_mesh_flag() {
+        let shader = include_str!("../shaders/world_shader.wgsl");
+        let want = format!("const CAMERA_RELATIVE_FLAG: f32 = {:.1};", CAMERA_RELATIVE_FLAG);
+        assert!(shader.contains(&want), "world_shader.wgsl must declare `{want}`");
     }
 }

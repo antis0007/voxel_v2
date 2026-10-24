@@ -203,6 +203,12 @@ pub enum WeatherPreset {
     WinterSky,    // High cirrus with low stratus, 55-70% coverage
 }
 
+/// 0 while the sun is up, rising to 1 a few degrees after it sets, then back
+/// to 0 by astronomical night. Drives exposure adaptation only.
+fn afterglow_adaptation(sun_height: f32) -> f32 {
+    smoothstep(-0.01, 0.06, -sun_height) * (1.0 - smoothstep(0.12, 0.26, -sun_height))
+}
+
 impl LightingState {
     pub fn from_time(time_of_day: f32) -> Self {
         Self::from_time_and_day(time_of_day, 0, 0xA341_316C, CloudControls::default())
@@ -431,10 +437,13 @@ impl LightingState {
             daylight * (1.0 - overcast * 0.70) * (1.0 - storminess * 0.40) * 0.64,
         );
 
-        let sun_elev = smoothstep(-0.08, 0.85, sun_height);
-        let solar_extinction = 1.0 - smoothstep(-0.18, 0.10, sun_height);
-        let mut sun_intensity =
-            daylight * (2.1 + 7.9 * sun_elev + twilight * 0.38) * (1.0 - solar_extinction * 0.30);
+        // Top-of-atmosphere source strength. Every consumer multiplies it by
+        // the atmosphere transmittance LUT, which already dims and reddens a
+        // low sun; the former elevation ramp (2.1 + 7.9 * elevation) dimmed it
+        // a second time and left sunset terrain lit almost only by the sky.
+        // The source fades only while its disc crosses the planet horizon.
+        let disc_above_horizon = smoothstep(-0.035, 0.02, sun_height);
+        let mut sun_intensity = 10.0 * disc_above_horizon;
 
         let sun_occlusion = saturate(
             low_cloudiness * 0.32
@@ -459,7 +468,14 @@ impl LightingState {
         let fog_end = (320.0 + daylight * 842.0) / fog_scale.powf(0.86);
 
         let exposure =
-            (0.465 + daylight * 0.400 + twilight * 0.22) * (1.0 - overcast * 0.08) + haze * 0.008;
+            // The twilight lift was +0.22 while the low sun was dimmed twice and
+            // the sky LUT carried a daylight factor; both are gone, so sunset
+            // now needs only a small lift to keep shade readable.
+            // Once the disc is down the scene is lit only by afterglow;
+            // exposure adapts upward (blue-hour adaptation) instead of the
+            // sky being repainted brighter, and settles back by full night.
+            (0.465 + daylight * 0.400 + twilight * 0.06 + afterglow_adaptation(sun_height) * 0.42)
+                * (1.0 - overcast * 0.08) + haze * 0.008;
         let saturation =
             (0.84 + daylight * 0.16) * (1.0 - overcast * 0.34 - storminess * 0.24 - stratus * 0.08);
 
@@ -1280,7 +1296,8 @@ impl World {
     /// chassis upgrades keep their existing altar/workbench progression.
     /// Returns true only when a wand was actually added.
     pub fn ensure_starter_wand(&mut self) -> bool {
-        if self.adventure.wand > 0 {
+        // Owning any wand item (even stored or dropped) is not a fresh start.
+        if self.adventure.wand > 0 || !self.adventure.wand_bank.is_empty() {
             return false;
         }
         self.adventure.wand = 1;
@@ -1460,9 +1477,13 @@ impl World {
 
     pub(super) fn invalidate_snapshot_at(&mut self, c: IVec3) {
         self.full_snapshot_cache = None;
-        if self.snapshot_range.is_none_or(|(center, radius)| {
-            c.x.abs_diff(center.x).max(c.z.abs_diff(center.z)) <= (radius + 1) as u32
-        }) {
+        // Visual-interest chunks stay in the near snapshot outside the window
+        // (see snapshot_near), so an edit there must invalidate it too.
+        if self.regions.visual_interest.contains(&c)
+            || self.snapshot_range.is_none_or(|(center, radius)| {
+                c.x.abs_diff(center.x).max(c.z.abs_diff(center.z)) <= (radius + 1) as u32
+            })
+        {
             self.snapshot_revision = u64::MAX;
         }
     }
@@ -1783,6 +1804,16 @@ impl World {
     }
 
     pub fn set_many(&mut self, edits: &[(IVec3, BlockId)]) {
+        self.set_many_with(edits, false);
+    }
+
+    /// Edits written by an authored mechanism: the only path that may open a
+    /// tombstone seal.
+    pub fn set_many_mechanism(&mut self, edits: &[(IVec3, BlockId)]) {
+        self.set_many_with(edits, true);
+    }
+
+    fn set_many_with(&mut self, edits: &[(IVec3, BlockId)], unseal: bool) {
         let mut changed = false;
         for &(p, id) in edits {
             // Assemblies are dismantled as one metre-sized object. Builder and
@@ -1799,7 +1830,7 @@ impl World {
                 continue;
             }
             let current = self.get(p);
-            if current == id {
+            if current == id || current == BlockId::Bedrock || (current == BlockId::TombStone && !unseal) {
                 continue;
             }
 
@@ -2127,6 +2158,28 @@ mod sky_variety {
             dusk.sky_top
         );
     }
+
+    #[test]
+    fn solar_source_is_dimmed_only_by_transmittance_and_fades_smoothly() {
+        let clear = CloudControls { coverage: 0.0, ..CloudControls::default() };
+        let at = |t: f32| LightingState::from_time_and_day(t, 0, 0xA341_316C, clear);
+        let noon = at(0.50);
+        // The former ramp peaked near 10 at noon; only the cloud-occlusion
+        // factor (non-zero via storminess even at zero coverage) remains.
+        assert!(noon.sun_intensity > 9.5 && noon.sun_intensity <= 10.0, "noon source changed: {}", noon.sun_intensity);
+        // A few degrees up the source is unchanged; the LUT does the reddening.
+        let low = at(0.738);
+        assert!(low.sun_dir.y > 0.05);
+        assert!((low.sun_intensity - noon.sun_intensity).abs() < 1e-3);
+        // Through the horizon crossing: no jumps between 0.1-minute samples.
+        let mut previous = at(0.740).sun_intensity;
+        for step in 1..=200 {
+            let value = at(0.740 + step as f32 * 0.0001).sun_intensity;
+            assert!((value - previous).abs() < 0.5, "step at {step}: {previous} -> {value}");
+            previous = value;
+        }
+        assert!(previous < 1e-3, "sun still shining well below the horizon: {previous}");
+    }
 }
 
 #[cfg(test)]
@@ -2175,5 +2228,19 @@ mod far_ring_seam {
             }
         }
         assert!(worst <= 1, "ring step of {worst} voxels around the 110 m radius");
+    }
+}
+
+#[cfg(test)]
+mod bedrock_tests {
+    use super::*;
+
+    #[test]
+    fn bedrock_cannot_be_edited_away() {
+        let mut world = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 7);
+        let floor = IVec3::new(5, world.sample_config().min_world_y(), 5);
+        assert_eq!(world.get(floor), BlockId::Bedrock);
+        world.set_many(&[(floor, BlockId::Air)]);
+        assert_eq!(world.get(floor), BlockId::Bedrock);
     }
 }

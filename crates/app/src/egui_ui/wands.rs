@@ -9,14 +9,16 @@ use crate::world::{
 };
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, vec2};
 
-const BOLTS: &[u32] = &[0, 2, 3, 5, 6, 9, 10, 11, 12, 13, 14, 15, 28, 29, 71, 72, 73, 74, 76];
+const BOLTS: &[u32] = &[0, 2, 3, 5, 6, 9, 10, 11, 12, 13, 14, 15, 28, 29, 71, 72, 73, 74, 76, 80, 81, 82, 83, 84,
+    85, 86, 87,
+];
 const EFFECTS: &[u32] = &[1, 4, 7, 24, 25, 30, 31, 32, 34, 35, 39, 75];
 const SUMMONS: &[u32] = &[36];
 const SHOT_MODIFIERS: &[u32] = &[
     16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 37, 38, 45, 51, 52, 53, 54, 55, 64, 65, 66, 67, 68,
-    69, 77, 78,
+    69, 77, 78, 88, 89, 90, 94,
 ];
-const PROGRAM_MODIFIERS: &[u32] = &[40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 70, 79];
+const PROGRAM_MODIFIERS: &[u32] = &[40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 70, 79, 91, 92, 93];
 const ELEMENTS: &[u32] = &[56, 57, 58, 59, 60, 61, 62, 63];
 
 /// The workbench column and every hover card use this width. A card that grows
@@ -264,7 +266,7 @@ pub(super) fn paint_cast_block_brackets(
 /// Every row is a fixed height, including empty ones, so the card does not
 /// change size as the pointer moves across the wand.
 pub(super) fn show_wand_hover_card(ui: &mut egui::Ui, view: &View) {
-    let stats = wands::stats(view.wand, view.loadout.mode, view.rank);
+    let stats = crate::world::adventure::wand_items::stats_for(view.wand, &view.loadout, view.rank);
     let eval = wands::evaluate_cast_block(
         view.wand,
         view.rare_spells,
@@ -870,7 +872,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
     ui.scope(|ui| {
     ui.set_width(BOARD_W);
     ui.set_max_width(BOARD_W);
-    let stats = wands::stats(view.wand, view.loadout.mode, view.rank);
+    let stats = crate::world::adventure::wand_items::stats_for(view.wand, &view.loadout, view.rank);
 
     ui.horizontal(|ui| {
         let title_resp = ui.add(
@@ -1070,7 +1072,7 @@ pub(super) fn draw_inline_wand_bar(
     if view.wand == 0 {
         return;
     }
-    let stats = wands::stats(view.wand, view.loadout.mode, view.rank);
+    let stats = crate::world::adventure::wand_items::stats_for(view.wand, &view.loadout, view.rank);
     let sel_id = ui.make_persistent_id("inline_wand_slot");
     let drag_id = ui.make_persistent_id("inline_wand_drag");
     let cap = wands::capacity(view.wand);

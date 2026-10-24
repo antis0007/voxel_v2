@@ -102,6 +102,10 @@ pub(super) fn tick(
     navigation::gravity(e, world, dt);
     if !e.matron.ready {
         e.matron.ready = true;
+        // Variants differ in how far their nursery work has progressed, never in
+        // free stock: every pod and spore charge is still paid for in biomass.
+        let variant = boss_look::index(e);
+        e.matron.work = e.matron.work.max([0.0, 6.0, 10.0][variant]);
     }
     e.matron.work += dt as f64;
     // A source's real stock replenishes one resource, never both from one payment.
@@ -305,129 +309,5 @@ pub(super) fn tick(
     (0.0, Vec3::ZERO)
 }
 
-pub(super) fn model(e: &Enemy, m: &mut Model, _time: f32) {
-    let mark = m.mark();
-    m.set_surface_kind(58.0);
-    let run = e.matron.run.as_ref();
-    let wind = run.map_or(0.0, |r| {
-        if r.phase() == Phase::Prepare {
-            r.wind()
-        } else {
-            0.0
-        }
-    });
-    let stamp = run.is_some_and(|r| r.kind == Action::Stamp);
-    let plant = run.is_some_and(|r| r.kind == Action::Plant);
-    let rake = run.is_some_and(|r| r.kind == Action::Rake);
-    let sweep = run.map_or(0.0, |r| {
-        if r.kind == Action::Rake && r.phase() == Phase::Active {
-            ((r.elapsed - r.prepare) / r.active).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    });
-    let color = if e.flash > 0.0 {
-        [0.96, 0.9, 0.79]
-    } else {
-        [0.42, 0.58, 0.32]
-    };
-    let local = |x, y, z| e.pos + Vec3::new(x, y, z);
-    let lift = if stamp { wind * 0.35 } else { 0.0 };
-    m.cuboid(
-        local(0.0, 0.85 + lift, 0.0),
-        Vec3::new(1.5, 1.4, 1.3),
-        Quat::IDENTITY,
-        color,
-        0.0,
-    );
-    for i in 0..6 {
-        let a = i as f32 * std::f32::consts::TAU / 6.0;
-        m.cuboid(
-            local(a.sin() * 0.5, 2.0 + lift, a.cos() * 0.5),
-            Vec3::new(0.35, 0.65, 0.15),
-            Quat::from_rotation_y(a) * Quat::from_rotation_x(0.35 + wind * 0.4),
-            [0.52, 0.36, 0.52],
-            0.0,
-        );
-    }
-    m.cuboid(
-        local(0.0, 1.85 + lift, 0.0),
-        Vec3::new(0.85, 0.65, 0.8),
-        Quat::from_rotation_x(wind * 0.2),
-        [0.52, 0.36, 0.52],
-        0.0,
-    );
-    for side in [-1.0, 1.0] {
-        for i in 0..3 {
-            let z = i as f32 * 0.5 - 0.5;
-            let gait = (e.phase * 5.0 + i as f32 * 1.5).sin() * 0.1;
-            m.beam(
-                local(side * 0.5, 0.7 + lift, z),
-                local(side * 1.1, 0.1, z + gait),
-                0.15,
-                [0.3, 0.4, 0.2],
-                0.0,
-            );
-        }
-        let arm_x = side * (1.1 + if rake { wind * 0.5 } else { 0.0 });
-        let arm_y = if plant {
-            1.2 - wind * 0.6
-        } else {
-            1.1 + wind * 0.6
-        };
-        let arm_z = if rake { -0.9 + sweep * 1.8 } else { -0.5 };
-        m.beam(
-            local(side * 0.6, 1.55 + lift, 0.0),
-            local(arm_x, arm_y, arm_z),
-            0.15,
-            color,
-            0.0,
-        );
-        for finger in 0..3 {
-            m.beam(
-                local(arm_x, arm_y, arm_z),
-                local(
-                    arm_x + side * (finger as f32 - 1.0) * 0.2,
-                    arm_y - 0.1,
-                    arm_z - 0.5,
-                ),
-                0.05,
-                color,
-                0.0,
-            );
-        }
-    }
-    for i in 0..e.matron.pods {
-        m.cuboid(
-            local(
-                (i as f32 - 0.5) * 0.6,
-                1.2 - if plant { wind * 0.6 } else { 0.0 },
-                -0.7,
-            ),
-            Vec3::new(0.45, 0.6, 0.45),
-            Quat::IDENTITY,
-            [0.62, 0.74, 0.38],
-            0.0,
-        );
-    }
-    for x in [-0.2, 0.2] {
-        m.cuboid(
-            local(x, 1.9 + lift, -0.43),
-            Vec3::splat(0.1),
-            Quat::IDENTITY,
-            [0.9, 0.72, 0.42],
-            0.25,
-        );
-    }
-    m.bake_model_uv_since(mark, e.pos, 58.0);
-    m.rotate_since(mark, e.pos, Quat::from_rotation_y(e.yaw));
-    m.set_surface_kind(41.0);
-    if let Some(r) = run {
-        if r.kind == Action::Stamp && r.phase() == Phase::Prepare {
-            tactics::ring(m, e.pos, 3.4, PALETTE_CORAL, 0.2);
-        }
-        if r.kind == Action::Plant && r.phase() == Phase::Prepare {
-            tactics::ring(m, e.aim, 0.6, PALETTE_LEAF, 0.0);
-        }
-    }
-}
+mod model;
+pub(super) use model::model;

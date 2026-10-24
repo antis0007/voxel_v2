@@ -1,6 +1,8 @@
 //! Diegetic, deterministic discovery objects. Record flags survive saves and streaming.
 use super::*;
 
+mod access;
+
 // These values belong to the existing save format; do not renumber them.
 const BOSS_DEFEATED: u32 = 1 << 3;
 const GUARDIANS_CLEARED: u32 = 1 << 8;
@@ -120,7 +122,7 @@ impl Adventure {
         self.reliquaries[index].state = state;
     }
 
-    pub(super) fn update_reliquaries(&mut self, world: &World, feet: Vec3) {
+    pub(super) fn update_reliquaries(&mut self, world: &mut World, feet: Vec3) {
         self.reliquaries.clear();
         let cfg = world.sample_config();
         for (site, center, _) in sites::encounters(&cfg, feet) {
@@ -144,6 +146,7 @@ impl Adventure {
                 state,
             });
         }
+        access::tend(self, world);
         self.update_stations(world);
     }
 
@@ -255,15 +258,12 @@ impl Adventure {
             }
         }
         self.boss_view = closest_boss.map(|enemy| BossView {
-            action: if matches!(enemy.kind,6|7) {
-                if enemy.tell > 0.0 { boss_patterns::PATTERNS.iter().find(|p|p.id == enemy.attack).map(|p|p.name) }
-                else if enemy.encounter.exposed > 0.0 { Some("Exposed — strike now") } else { None }
+            action: if enemy.kind == engine::KIND {
+                engine::action_name(enemy)
+            } else if enemy.kind == glassweaver::KIND {
+                glassweaver::action_name(enemy)
             } else if enemy.kind==matron::KIND {matron::action_name(enemy)} else {None},
-            name: if enemy.kind == 8 {
-                hart::name(enemy)
-            } else {
-                bosses::name(enemy.kind)
-            },
+            name: bosses::title(enemy),
             health: enemy.health,
             maximum: enemy.max_health(),
         });

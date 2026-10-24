@@ -6,6 +6,19 @@ struct AtmosphereLutUniform {
     sky_top_reserved: vec4<f32>,
     sky_horizon_reserved: vec4<f32>,
     fog_color_max_altitude: vec4<f32>,
+    // SkyArt haze: x extinction at sea level (1/m), y scale height (m), z fog seam weight.
+    art: vec4<f32>,
+    // AtmosphereConfig (assets/atmosphere.ron), all SI units.
+    // x planet radius, y atmosphere height, z Rayleigh scale height, w Mie scale height.
+    planet: vec4<f32>,
+    // rgb Rayleigh scattering, w Mie phase anisotropy g.
+    beta_r_g: vec4<f32>,
+    // rgb Mie scattering, w ozone layer width.
+    beta_m_width: vec4<f32>,
+    // rgb ozone absorption, w ozone layer centre altitude.
+    beta_o_center: vec4<f32>,
+    // rgb Mie absorption.
+    beta_ma: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: AtmosphereLutUniform;
@@ -24,18 +37,30 @@ struct CameraUniform {
 @group(1) @binding(0) var<uniform> camera: CameraUniform;
 
 @group(2) @binding(0) var ap_out_tex: texture_storage_3d<rgba16float, write>;
-const PLANET_RADIUS: f32  = 6360000.0;
-const ATMOS_RADIUS: f32   = 6420000.0;
-const RAYLEIGH_SCALE: f32 = 8000.0;
-const MIE_SCALE: f32      = 1200.0;
+// Physical coefficients come from `params` (AtmosphereConfig), not constants.
 // Extinction per METER; path integration is in meters as well.
-const BETA_R: vec3<f32>   = vec3<f32>(5.8e-6, 13.5e-6, 33.1e-6);
-const BETA_M: vec3<f32>   = vec3<f32>(3.0e-6);
-// Broad ozone absorption separates blue twilight from the warm horizon.
-const BETA_O: vec3<f32>   = vec3<f32>(0.650e-6, 1.881e-6, 0.085e-6);
-
 fn ozone_density(altitude_m: f32) -> f32 {
-    return max(1.0 - abs(altitude_m - 25000.0) / 15000.0, 0.0);
+    return max(1.0 - abs(altitude_m - params.beta_o_center.w) / params.beta_m_width.w, 0.0);
+}
+
+// Low aerosol haze (SkyArt). It scatters with the Mie phase, so the same air
+// that layers distant ridges also brightens the sky toward the sun, and it
+// extinguishes the low sun in the transmittance table. Every LUT includes it:
+// terrain aerial perspective and the horizon sky behind that terrain agree.
+const HAZE_ALBEDO: f32 = 0.92;
+// Haze forward lobe. Narrower than the background Mie (0.76) so the brightest
+// sky concentrates around the disc instead of saturating a wide sector.
+const HAZE_G: f32 = 0.80;
+
+fn haze_extinction(altitude_m: f32) -> f32 {
+    return params.art.x * exp(-max(altitude_m, 0.0) / max(params.art.y, 1.0));
+}
+
+// Humid, cloudier air is hazier along the view. Applied identically to the
+// sky-view and aerial-perspective tables (rebuilt when cover changes); the
+// startup transmittance table keeps the clear-air haze.
+fn view_haze_gain() -> f32 {
+    return 1.0 + params.sun_color_cloud_cover.w * 0.8;
 }
 
 fn ray_intersect_sphere(ro: vec3<f32>, rd: vec3<f32>, radius: f32) -> vec2<f32> {
@@ -51,15 +76,15 @@ fn ray_intersect_sphere(ro: vec3<f32>, rd: vec3<f32>, radius: f32) -> vec2<f32> 
 
 fn integrate_sun_transmittance(altitude_m: f32, sun_dir_y: f32) -> vec3<f32> {
     let h = max(altitude_m, 1.0);
-    let radius = PLANET_RADIUS + h;
-    let horizon = -sqrt(h * (2.0 * PLANET_RADIUS + h)) / radius;
+    let radius = params.planet.x + h;
+    let horizon = -sqrt(h * (2.0 * params.planet.x + h)) / radius;
     // Finite solar disk softens the terminator; high clouds remain sunlit longer.
     let visibility = smoothstep(horizon - 0.00465, horizon + 0.00465, sun_dir_y);
     if visibility <= 0.0 { return vec3<f32>(0.0); }
     let mu = clamp(max(sun_dir_y, horizon + 0.00001), -1.0, 1.0);
     let ro = vec3<f32>(0.0, radius, 0.0);
     let rd = vec3<f32>(sqrt(max(1.0 - mu * mu, 0.0)), mu, 0.0);
-    let distance = max(ray_intersect_sphere(ro, rd, ATMOS_RADIUS).y, 0.0);
+    let distance = max(ray_intersect_sphere(ro, rd, (params.planet.x + params.planet.y)).y, 0.0);
     var tau = vec3<f32>(0.0);
     // Quadratic quadrature concentrates samples in the dense lower atmosphere.
     for (var i = 0u; i < 32u; i += 1u) {
@@ -67,10 +92,11 @@ fn integrate_sun_transmittance(altitude_m: f32, sun_dir_y: f32) -> vec3<f32> {
         let u1 = f32(i + 1u) / 32.0;
         let dt = (u1 * u1 - u0 * u0) * distance;
         let p = ro + rd * ((u1 * u1 + u0 * u0) * 0.5 * distance);
-        let sample_h = max(length(p) - PLANET_RADIUS, 0.0);
-        tau += (BETA_R * exp(-sample_h / RAYLEIGH_SCALE)
-            + BETA_M * exp(-sample_h / MIE_SCALE)
-            + BETA_O * ozone_density(sample_h)) * dt;
+        let sample_h = max(length(p) - params.planet.x, 0.0);
+        tau += (params.beta_r_g.xyz * exp(-sample_h / params.planet.z)
+            + params.beta_m_width.xyz * exp(-sample_h / params.planet.w)
+            + params.beta_o_center.xyz * ozone_density(sample_h) + vec3<f32>(haze_extinction(sample_h))
+            + params.beta_ma.xyz * exp(-sample_h / params.planet.w)) * dt;
     }
     return exp(-tau) * visibility;
 }
@@ -142,6 +168,7 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let sun_dir = normalize(params.sun_dir_daylight.xyz);
     let daylight = params.sun_dir_daylight.w;
+    let haze_gain = view_haze_gain();
 
     // Build a sun-relative azimuth frame so the LUT origin aligns with the
     // runtime atmosphere_sky_view_uv() which stores view angle relative to sun.
@@ -166,10 +193,10 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     let dir = vec3<f32>(cos_elev * cos(world_azimuth), sin_elev, cos_elev * sin(world_azimuth));
     
     let cam_alt = max(camera.camera_pos.y, 1.0);
-    let ro = vec3<f32>(0.0, PLANET_RADIUS + cam_alt, 0.0);
+    let ro = vec3<f32>(0.0, params.planet.x + cam_alt, 0.0);
     
-    let hit_ground = ray_intersect_sphere(ro, dir, PLANET_RADIUS);
-    let hit_atmos  = ray_intersect_sphere(ro, dir, ATMOS_RADIUS);
+    let hit_ground = ray_intersect_sphere(ro, dir, params.planet.x);
+    let hit_atmos  = ray_intersect_sphere(ro, dir, (params.planet.x + params.planet.y));
     
     var max_dist = hit_atmos.y;
     if (hit_ground.y > 0.0) {
@@ -182,7 +209,8 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let cos_theta = dot(dir, sun_dir);
     let p_r = rayleigh_phase(cos_theta);
-    let p_m = mie_phase(cos_theta, 0.76);
+    let p_m = mie_phase(cos_theta, params.beta_r_g.w);
+    let p_h = mie_phase(cos_theta, HAZE_G);
 
     for (var i = 0u; i < 32u; i = i + 1u) {
         let u0 = f32(i) / 32.0;
@@ -190,25 +218,31 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
         let dt = (u1 * u1 - u0 * u0) * max_dist;
         let t = (u1 * u1 + u0 * u0) * 0.5 * max_dist;
         let p = ro + dir * t;
-        let h = max(length(p) - PLANET_RADIUS, 0.0);
+        let h = max(length(p) - params.planet.x, 0.0);
         
-        let rho_r = exp(-h / RAYLEIGH_SCALE);
-        let rho_m = exp(-h / MIE_SCALE);
+        let rho_r = exp(-h / params.planet.z);
+        let rho_m = exp(-h / params.planet.w);
 
         let local_up = normalize(p);
         let sun_trans = get_sun_transmittance(h, dot(local_up, sun_dir));
         
-        let scatter_r = BETA_R * rho_r;
-        let scatter_m = BETA_M * rho_m;
-        
-        let s_scatter = (scatter_r * p_r + scatter_m * p_m) * sun_trans * daylight;
+        let scatter_r = params.beta_r_g.xyz * rho_r;
+        let haze = haze_extinction(h) * haze_gain;
+        let scatter_m = params.beta_m_width.xyz * rho_m + vec3<f32>(haze * HAZE_ALBEDO);
+
+        // No CPU daylight factor: sun_trans carries the planet shadow and
+        // extinction, so the glow fades physically through the horizon. The
+        // old daylight multiply dimmed a still-sunlit sky a second time.
+        let s_scatter = (scatter_r * p_r + params.beta_m_width.xyz * rho_m * p_m
+            + vec3<f32>(haze * HAZE_ALBEDO * p_h)) * sun_trans;
         let m_scatter = (scatter_r + scatter_m)
-            * get_multiple_scattering(h, dot(local_up, sun_dir)) * daylight;
-        
+            * get_multiple_scattering(h, dot(local_up, sun_dir));
+
         // The transmittance solve already reddens sunlight. Its incident
         // spectrum must not also carry the CPU's legacy sunset color grade.
         let step_scatter = (s_scatter + m_scatter) * vec3<f32>(1.0, 0.98, 0.96);
-        let extinction = scatter_r + scatter_m + BETA_O * ozone_density(h);
+        let extinction = scatter_r + params.beta_m_width.xyz * rho_m + vec3<f32>(haze) + params.beta_o_center.xyz * ozone_density(h)
+            + params.beta_ma.xyz * rho_m;
         let segment_trans = exp(-extinction * dt);
         in_scatter += view_trans * step_scatter
             * (vec3<f32>(1.0) - segment_trans) / max(extinction, vec3<f32>(1e-9));
@@ -222,11 +256,15 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     if hit_ground.x > 0.0 {
         let up = normalize(ro + dir * max_dist);
         let irradiance = vec3<f32>(1.0, 0.98, 0.96) * get_sun_transmittance(0.0, dot(up, sun_dir))
-            * max(dot(up, sun_dir), 0.0) * daylight;
+            * max(dot(up, sun_dir), 0.0);
         let ambient = params.sky_horizon_reserved.rgb * 0.16 + params.sky_top_reserved.rgb * 0.08;
         ground = vec3<f32>(0.16, 0.19, 0.12) * (irradiance + ambient) * ground_trans;
     }
-    let night_sky = mix(params.sky_horizon_reserved.rgb, params.sky_top_reserved.rgb, max(dir.y, 0.0)) * (1.0 - daylight) * 0.35;
+    // Faint dark-sky floor (airglow, starlight) so night is not black. It
+    // takes the day's zenith hue only: the CPU horizon colour carries the
+    // sunset palette, and as this floor rises after sunset it dyed the whole
+    // blue-hour dome maroon over the physical violet-blue twilight.
+    let night_sky = params.sky_top_reserved.rgb * mix(1.15, 1.0, max(dir.y, 0.0)) * (1.0 - daylight) * 0.35;
     textureStore(out_tex, id.xy, vec4<f32>(in_scatter * 8.0 + ground + night_sky, 1.0));
 }
 
@@ -240,7 +278,7 @@ fn generate_multiscatter_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     let mu = signed_mu * abs(signed_mu);
     let h = clamp(uv.y * uv.y * params.fog_color_max_altitude.w, 1.0, 59999.0);
     let sun_dir = vec3<f32>(sqrt(max(1.0 - mu * mu, 0.0)), mu, 0.0);
-    let ro = vec3<f32>(0.0, PLANET_RADIUS + h, 0.0);
+    let ro = vec3<f32>(0.0, params.planet.x + h, 0.0);
     var incident = vec3<f32>(0.0);
     var feedback = vec3<f32>(0.0);
     // Equal-solid-angle Fibonacci quadrature. Higher orders approach an
@@ -252,8 +290,8 @@ fn generate_multiscatter_lut(@builtin(global_invocation_id) id: vec3<u32>) {
         let angle = f32(ray) * 2.39996323;
         let r = sqrt(max(1.0 - y * y, 0.0));
         let dir = vec3<f32>(r * cos(angle), y, r * sin(angle));
-        let ground_hit = ray_intersect_sphere(ro, dir, PLANET_RADIUS);
-        var distance = max(ray_intersect_sphere(ro, dir, ATMOS_RADIUS).y, 0.0);
+        let ground_hit = ray_intersect_sphere(ro, dir, params.planet.x);
+        var distance = max(ray_intersect_sphere(ro, dir, (params.planet.x + params.planet.y)).y, 0.0);
         if ground_hit.x > 0.0 { distance = min(distance, ground_hit.x); }
         var trans = vec3<f32>(1.0);
         for (var step = 0u; step < 20u; step += 1u) {
@@ -261,10 +299,12 @@ fn generate_multiscatter_lut(@builtin(global_invocation_id) id: vec3<u32>) {
             let u1 = f32(step + 1u) / 20.0;
             let dt = (u1 * u1 - u0 * u0) * distance;
             let p = ro + dir * ((u0 * u0 + u1 * u1) * 0.5 * distance);
-            let altitude = max(length(p) - PLANET_RADIUS, 0.0);
-            let scattering = BETA_R * exp(-altitude / RAYLEIGH_SCALE)
-                + BETA_M * exp(-altitude / MIE_SCALE);
-            let extinction = scattering + BETA_O * ozone_density(altitude);
+            let altitude = max(length(p) - params.planet.x, 0.0);
+            let haze = haze_extinction(altitude);
+            let scattering = params.beta_r_g.xyz * exp(-altitude / params.planet.z)
+                + params.beta_m_width.xyz * exp(-altitude / params.planet.w) + vec3<f32>(haze * HAZE_ALBEDO);
+            let extinction = scattering + params.beta_o_center.xyz * ozone_density(altitude)
+                + vec3<f32>(haze * (1.0 - HAZE_ALBEDO)) + params.beta_ma.xyz * exp(-altitude / params.planet.w);
             let segment_trans = exp(-extinction * dt);
             let integral = trans * (vec3<f32>(1.0) - segment_trans)
                 / max(extinction, vec3<f32>(1e-9));
@@ -313,9 +353,9 @@ fn generate_aerial_perspective(@builtin(global_invocation_id) id: vec3<u32>) {
     let daylight = params.sun_dir_daylight.w;
     
     let cam_alt = max(camera.camera_pos.y, 1.0);
-    let ro = vec3<f32>(0.0, PLANET_RADIUS + cam_alt, 0.0);
+    let ro = vec3<f32>(0.0, params.planet.x + cam_alt, 0.0);
     
-    let hit_atmos  = ray_intersect_sphere(ro, dir, ATMOS_RADIUS);
+    let hit_atmos  = ray_intersect_sphere(ro, dir, (params.planet.x + params.planet.y));
     
     // Do NOT clamp d_max to hit_ground.x (the sea-level planet sphere):
     // mountains and valleys sit above or below dir.y = 0, and truncating the
@@ -333,33 +373,43 @@ fn generate_aerial_perspective(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let cos_theta = dot(dir, sun_dir);
     let p_r = rayleigh_phase(cos_theta);
-    let p_m = mie_phase(cos_theta, 0.76);
+    let p_m = mie_phase(cos_theta, params.beta_r_g.w);
+    let p_h = mie_phase(cos_theta, HAZE_G);
 
-    // Clear air retains blue depth; humid overcast carries a denser veil.
-    let fog_density = mix(0.000018, 0.000085, params.sun_color_cloud_cover.w);
+    // Clear and broken skies get their depth from the directional haze shared
+    // with the sky-view table. Only heavy cover adds the flat, sky-coloured
+    // veil, which stands in for light the clouds scatter down into the haze.
+    let fog_density = params.art.z * 0.000085 * smoothstep(0.35, 0.90, params.sun_color_cloud_cover.w);
+    let haze_gain = view_haze_gain();
 
     for (var i = 0u; i < 16u; i = i + 1u) {
         let p = ro + dir * t;
-        let h = max(length(p) - PLANET_RADIUS, 0.0);
+        let h = max(length(p) - params.planet.x, 0.0);
         
-        let rho_r = exp(-h / RAYLEIGH_SCALE);
-        let rho_m = exp(-h / MIE_SCALE);
+        let rho_r = exp(-h / params.planet.z);
+        let rho_m = exp(-h / params.planet.w);
 
         let fog_extinction = fog_density * exp(-h / 2000.0);
         let sun_trans = get_sun_transmittance(h, dot(normalize(p), sun_dir));
         
-        let scatter_r = BETA_R * rho_r;
-        let scatter_m = BETA_M * rho_m;
+        let scatter_r = params.beta_r_g.xyz * rho_r;
+        let haze = haze_extinction(h) * haze_gain;
+        let scatter_m = params.beta_m_width.xyz * rho_m + vec3<f32>(haze * HAZE_ALBEDO);
         let scatter_fog = params.fog_color_max_altitude.rgb * fog_extinction;
-        
-        let s_scatter = (scatter_r * p_r + scatter_m * p_m) * sun_trans * daylight;
-        
+
+        // Same transport as generate_sky_view_lut, so a distant ridge fades
+        // toward the sky directly behind it. No CPU daylight factor (see there).
+        let s_scatter = (scatter_r * p_r + params.beta_m_width.xyz * rho_m * p_m
+            + vec3<f32>(haze * HAZE_ALBEDO * p_h)) * sun_trans;
+
         // Fog already contains the sky's illumination; multiplying it by the
         // warm sun again made cool storm haze uniformly orange at dusk.
         let m_scatter = (scatter_r + scatter_m)
-            * get_multiple_scattering(h, dot(normalize(p), sun_dir)) * daylight;
+            * get_multiple_scattering(h, dot(normalize(p), sun_dir));
         let step_scatter = (s_scatter + m_scatter) * vec3<f32>(1.0, 0.98, 0.96) * 8.0 + scatter_fog;
-        let extinction = scatter_r + scatter_m + BETA_O * ozone_density(h) + vec3<f32>(fog_extinction);
+        let extinction = scatter_r + params.beta_m_width.xyz * rho_m + vec3<f32>(haze)
+            + params.beta_o_center.xyz * ozone_density(h) + vec3<f32>(fog_extinction)
+            + params.beta_ma.xyz * rho_m;
         let segment_trans = exp(-extinction * dt);
         in_scatter += view_trans * step_scatter
             * (vec3<f32>(1.0) - segment_trans) / max(extinction, vec3<f32>(1e-9));

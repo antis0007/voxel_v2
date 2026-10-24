@@ -240,3 +240,21 @@ pub(super) fn encounter(ctx: &egui::Context, view: &View) {
             });
     }
 }
+
+/// The active site modifier, shown like a Noita perk: name and one line.
+pub(super) fn site_modifier(ctx: &egui::Context, view: &View) {
+    let Some((name, line)) = view.site_modifier else {
+        return;
+    };
+    let top = if view.boss.is_some() { 150.0 } else { 82.0 };
+    egui::Area::new("site_modifier".into())
+        .anchor(Align2::LEFT_TOP, [12.0, top])
+        .interactable(false)
+        .show(ctx, |ui| {
+            style::hud_frame().show(ui, |ui| {
+                ui.set_width((ctx.content_rect().width() - 48.0).clamp(100.0, 220.0));
+                ui.label(RichText::new(name).color(style::AMBER).size(12.0));
+                ui.label(RichText::new(line).color(style::MUTED).size(11.0));
+            });
+        });
+}

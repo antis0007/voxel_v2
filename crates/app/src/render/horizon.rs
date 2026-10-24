@@ -29,6 +29,27 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub const FAR_PLANE: f32 = 24576.0;
+/// Smallest distant range the settings offer. Below the ordinary view radius
+/// there is nothing left for the horizon to cover.
+pub const MIN_HORIZON_RANGE_M: u32 = 2048;
+static HORIZON_RANGE_M: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(FAR_PLANE as u32);
+
+/// Distance in metres out to which the distant terrain mesh is built. Every
+/// sample and triangle beyond it is skipped, so cost falls with its square.
+pub fn horizon_range_m() -> u32 {
+    HORIZON_RANGE_M.load(Ordering::Relaxed).clamp(MIN_HORIZON_RANGE_M, FAR_PLANE as u32)
+}
+pub fn set_horizon_range_m(metres: u32) {
+    HORIZON_RANGE_M.store(metres.clamp(MIN_HORIZON_RANGE_M, FAR_PLANE as u32), Ordering::Relaxed);
+}
+/// Reach of the built domain: the range plus slack for a retained mesh whose
+/// centre lags the camera. The slack shrinks with the range, so short ranges
+/// are not padded by the full 5.8 km that the 24 km view needs.
+fn domain_reach(range_m: u32) -> f32 {
+    let range = range_m.clamp(MIN_HORIZON_RANGE_M, FAR_PLANE as u32) as f32;
+    let slack = MAX_CENTER_DISTANCE * std::f32::consts::SQRT_2 * (range / FAR_PLANE);
+    range + slack.clamp(1024.0, MAX_CENTER_DISTANCE * std::f32::consts::SQRT_2)
+}
 // The outer guard ring covers the far-plane disk even while the retained mesh
 // is up to MAX_CENTER_DISTANCE away from the camera. Its unused knots are not
 // evaluated. Previously the grid stopped at the far plane around its OLD center.
@@ -95,14 +116,14 @@ fn canonical_source() -> bool {
     *CANONICAL.get_or_init(|| std::env::var("VOXEL_HORIZON_SOURCE").as_deref() != Ok("preview"))
 }
 
-fn sample_in_domain(dx: f32, dz: f32, step: f32) -> bool {
-    dx.hypot(dz) <= FAR_PLANE + MAX_CENTER_DISTANCE * 2.0_f32.sqrt() + step * 3.0
+fn sample_in_domain(dx: f32, dz: f32, step: f32, reach: f32) -> bool {
+    dx.hypot(dz) <= reach + step * 3.0
 }
 
-fn cell_in_domain(x:usize,z:usize,step:f32)->bool {
+fn cell_in_domain(x:usize,z:usize,step:f32,reach:f32)->bool {
     let closest_x=((x as f32-HALF as f32+0.5).abs()*step-step*0.5).max(0.0);
     let closest_z=((z as f32-HALF as f32+0.5).abs()*step-step*0.5).max(0.0);
-    let limit=FAR_PLANE+MAX_CENTER_DISTANCE*2.0_f32.sqrt()+step;
+    let limit=reach+step;
     closest_x*closest_x+closest_z*closest_z<=limit*limit
 }
 
@@ -113,6 +134,8 @@ struct BaseCover {
     quality:Arc<Vec<quality::Candidate>>,
     refinement_eye: Vec3,
     projection_pixels: f32,
+    // Extent the mesh was built to: a base built for another range is not reusable.
+    range_m: u32,
     center: (i32, i32),
     mesh: Arc<ChunkMesh>,
     samples: Arc<Samples>,
@@ -146,6 +169,7 @@ struct BuildTarget {
     collar:Option<Arc<collar::Input>>,
     refinement_eye_y: f32,
     projection_pixels: f32,
+    range_m: u32,
     center: (i32, i32),
     request_generation: u64,
     source_revision: u64,
@@ -210,7 +234,7 @@ impl BuildTarget {
     }
     fn matches(&self, other: &Self) -> bool {
         if !same_collar(self.collar.as_ref(),other.collar.as_ref()) {return false;}
-        if self.center != other.center || self.projection_pixels.to_bits() != other.projection_pixels.to_bits() || self.refinement_eye_y.to_bits() != other.refinement_eye_y.to_bits() { return false; }
+        if self.range_m != other.range_m || self.center != other.center || self.projection_pixels.to_bits() != other.projection_pixels.to_bits() || self.refinement_eye_y.to_bits() != other.refinement_eye_y.to_bits() { return false; }
         // Desired targets are immutable between coalesced checks. Cache the
         // whole comparison, including the structural scan, across those frames.
         let eye_bits=other.eye.to_array().map(f32::to_bits);
@@ -257,6 +281,7 @@ pub struct Horizon {
     checked_revision: Option<u64>,
     checked_eye: Option<IVec3>,
     checked_radius: f32,
+    checked_range: u32,
     last_check: Option<Instant>,
     last_build: Option<Instant>,
     desired: Option<BuildTarget>,
@@ -382,7 +407,7 @@ impl Horizon {
             // Use the guaranteed inner footprint, not the speculative guard.
             let far=((lo.x*scale-center.x).abs().max((hi.x*scale-center.x).abs()))
                 .hypot((lo.z*scale-center.z).abs().max((hi.z*scale-center.z).abs()));
-            if far>FAR_PLANE { continue; }
+            if far>published.range_m as f32 { continue; }
             if !published.omitted.iter().any(|&(a,b)|a.x<hi.x&&b.x>lo.x&&a.z<hi.z&&b.z>lo.z) {
                 baked.insert((x,z));
             }
@@ -439,6 +464,13 @@ impl Horizon {
         eye: Vec3,
         hidden_radius: f32,
     ) {
+        static ENV_RANGE: std::sync::Once = std::sync::Once::new();
+        // `VOXEL_HORIZON_RANGE_M` seeds the range for A/B captures with one exe.
+        ENV_RANGE.call_once(|| {
+            if let Some(m) = std::env::var("VOXEL_HORIZON_RANGE_M").ok().and_then(|v| v.trim().parse().ok()) {
+                set_horizon_range_m(m);
+            }
+        });
         let now = Instant::now();
         self.exclusion_radius = hidden_radius.max(0.0);
         if eye.is_finite() {
@@ -591,6 +623,8 @@ impl Horizon {
         }
 
         let eye_cell = eye.floor().as_ivec3();
+        // One read per check, so the target and `checked_range` never disagree.
+        let range_m = horizon_range_m();
         let changed_center = self
             .desired
             .as_ref()
@@ -599,6 +633,7 @@ impl Horizon {
             || self.desired.as_ref().is_some_and(|d| d.coverage != self.desired_resident)
             || self.checked_eye != Some(eye_cell)
             || self.checked_radius != hidden_radius
+            || self.checked_range != range_m
             || self.checked_revision != Some(revision);
         let check_due = changed_center
             || self
@@ -624,6 +659,7 @@ impl Horizon {
                     .and(self.current_collar.clone()),
                 refinement_eye_y: self.refinement_eye_y.unwrap_or((eye.y/64.0).round()*64.0),
                 projection_pixels: if self.refinement_projection_pixels > 0.0 { self.refinement_projection_pixels } else { 512.0 },
+                range_m,
                 center,
                 request_generation:self.request_generation,
                 source_revision:revision,
@@ -638,6 +674,7 @@ impl Horizon {
             self.checked_revision = Some(revision);
             self.checked_eye = Some(eye_cell);
             self.checked_radius = hidden_radius;
+            self.checked_range = range_m;
             self.last_check = Some(now);
         }
 
@@ -811,7 +848,7 @@ impl Horizon {
         let base = self
             .base
             .as_ref()
-            .filter(|base| base.center == target.center && base.projection_pixels.to_bits() == target.projection_pixels.to_bits() && base.refinement_eye.y.to_bits() == target.refinement_eye_y.to_bits())
+            .filter(|base| base.center == target.center && base.range_m == target.range_m && base.projection_pixels.to_bits() == target.projection_pixels.to_bits() && base.refinement_eye.y.to_bits() == target.refinement_eye_y.to_bits())
             .cloned();
         self.building_base = base.is_none();
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -832,7 +869,7 @@ impl Horizon {
             }
             let cache_hit = base.is_some();
             let base = if let Some(base) = base { base } else {
-                let Some((mesh, samples, trees, tree_samples)) = build_with_focus(cfg, center, Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), target.projection_pixels, &cancel, samples,(*tree_samples).clone()) else { return; };
+                let Some((mesh, samples, trees, tree_samples)) = build_with_focus(cfg, center, Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), target.projection_pixels, &cancel, samples,(*tree_samples).clone(), target.range_m) else { return; };
                 if mesh_bytes(&mesh) > MAX_MESH_BYTES {
                     eprintln!("[horizon] procedural base exceeds publication budget");
                     return;
@@ -846,7 +883,7 @@ impl Horizon {
                     println!("[horizon-timing] detail_ms={:.0}", detail_started.elapsed().as_secs_f64() * 1000.0);
                     Some(Arc::new(map))
                 } else { None };
-                let base = BaseCover { quality:Arc::new(quality),center, refinement_eye: Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), projection_pixels: target.projection_pixels, mesh: Arc::new(mesh), samples: Arc::new(samples), trees:Arc::new(trees), tree_samples:Arc::new(tree_samples), detail };
+                let base = BaseCover { quality:Arc::new(quality),center, refinement_eye: Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), projection_pixels: target.projection_pixels, range_m: target.range_m, mesh: Arc::new(mesh), samples: Arc::new(samples), trees:Arc::new(trees), tree_samples:Arc::new(tree_samples), detail };
                 if tx.send(BuildEvent::Base(base.clone())).is_err() { return; }
                 base
             };
@@ -1086,7 +1123,7 @@ fn build(cfg: WorldSampleConfig, center: (i32,i32), cancel: &AtomicBool, old: Sa
     trees: vegetation::TreeSamples) -> Option<(ChunkMesh, Samples, Vec<vegetation::TreeSource>, vegetation::TreeSamples)> {
     let scale = cfg.voxel_meters();
     let height = distant_surface(&cfg, (center.0 as f32/scale).floor() as i32, (center.1 as f32/scale).floor() as i32).0 * scale;
-    build_with_focus(cfg, center, Vec3::new(center.0 as f32, ((height+100.0)/64.0).round()*64.0, center.1 as f32), 512.0, cancel, old, trees)
+    build_with_focus(cfg, center, Vec3::new(center.0 as f32, ((height+100.0)/64.0).round()*64.0, center.1 as f32), 512.0, cancel, old, trees, horizon_range_m())
 }
 
 fn build_with_focus(
@@ -1097,7 +1134,11 @@ fn build_with_focus(
     cancel: &AtomicBool,
     mut old: Samples,
     mut tree_samples:vegetation::TreeSamples,
+    // Range of the target being built: read once so one build never mixes values
+    // when the setting changes mid-build.
+    range_m: u32,
 ) -> Option<(ChunkMesh, Samples, Vec<vegetation::TreeSource>,vegetation::TreeSamples)> {
+    let reach = domain_reach(range_m);
     // Sibling appenders index these SIDE*SIDE grids directly. Keep every grid,
     // including the inactive inner vertices, contiguous and in the old order.
     debug_assert_eq!(SIDE, HALF * 2 + 1);
@@ -1136,6 +1177,7 @@ fn build_with_focus(
                     (x as f32 - HALF as f32) * step,
                     (z as f32 - HALF as f32) * step,
                     step,
+                    reach,
                 ) {
                     continue;
                 }
@@ -1167,7 +1209,7 @@ fn build_with_focus(
 
 
     let surface = cfg.water_level() as f32 + 1.0 - crate::mesh::WATER_SURFACE_INSET;
-    let refinement_points = refinement::sample(cfg, center, focus, projection_pixels, cancel, &mut samples, &mut old)?;
+    let refinement_points = refinement::sample(cfg, center, focus, projection_pixels, reach, cancel, &mut samples, &mut old)?;
     println!("[horizon-timing] refinement_ms={:.0}", lap.elapsed().as_secs_f64() * 1000.0);
     lap = std::time::Instant::now();
     let mut refinement_level_samples = [0usize; LEVELS];
@@ -1283,7 +1325,7 @@ fn build_with_focus(
                 // Keep every cell whose horizontal bounds intersect the far
                 // radius, with one cell of margin. The old 17 km cutoff removed
                 // otherwise visible terrain before the 24,576 m far plane.
-                if !cell_in_domain(x,z,step) { continue; }
+                if !cell_in_domain(x,z,step,reach) { continue; }
                 let a = owner[base + z * SIDE + x];
                 let b = owner[base + z * SIDE + x + 1];
                 let c = owner[base + (z + 1) * SIDE + x];
@@ -1513,6 +1555,7 @@ mod continuity_contract {
             collar:None,
             refinement_eye_y: (eye.y/64.0).round()*64.0,
             projection_pixels: 512.0,
+            range_m: FAR_PLANE as u32,
             center: (0, 0),
             request_generation:0,
             source_revision:world.revision(),
@@ -1731,7 +1774,8 @@ mod continuity_contract {
                         assert!(sample_in_domain(
                             (a as f32 - HALF as f32) * step,
                             (b as f32 - HALF as f32) * step,
-                            step
+                            step,
+                            domain_reach(FAR_PLANE as u32)
                         ));
                     }
                 }
@@ -1971,7 +2015,12 @@ mod refinement_contract {
                 assert!((a.y-surface).abs()<0.0001&&(b.y-surface).abs()<0.0001&&(c.y-surface).abs()<0.0001);
                 (b-a).cross(c-a).y.abs()*0.5
             }).sum();
-            assert!((water_area-if island {192.0}else{64.0}).abs()<0.002,"canonical dry island/wet pond must survive without a duplicate full sheet");
+            // Slope is 16 voxels over the half-width 8, so the clip at
+            // `surface - COAST_BIAS_VOXELS` sits (8 - bias)/16 of the way from
+            // the low knot to the high one, and area scales with its square.
+            let wet_reach=(8.0-water::COAST_BIAS_VOXELS)/16.0;
+            let expected=256.0*if island {1.0-(1.0-wet_reach)*(1.0-wet_reach)}else{wet_reach*wet_reach};
+            assert!((water_area-expected).abs()<0.002,"canonical dry island/wet pond must survive without a duplicate full sheet");
         }
     }
 

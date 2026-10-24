@@ -1,0 +1,42 @@
+// Atmosphere presets for the LUT generator (crates/app/src/render/atmosphere_config.rs).
+// SI units: scattering and absorption are per metre, heights in metres.
+// `active` names the preset used at startup. `earthlike` equals the values the
+// shader used before this file existed, so selecting it changes no pixels.
+// planet_radius_m is fixed at 6_360_000 until sky_shader.wgsl and
+// atmosphere_shared.wgsl read it from the uniform; the validator enforces that.
+(
+    active: "earthlike",
+    presets: [
+        (
+            name: "earthlike",
+            planet_radius_m: 6360000.0,
+            atmosphere_height_m: 60000.0,
+            rayleigh_scattering: (5.8e-6, 13.5e-6, 33.1e-6),
+            rayleigh_scale_height_m: 8000.0,
+            mie_scattering: (3.0e-6, 3.0e-6, 3.0e-6),
+            mie_absorption: (0.0, 0.0, 0.0),
+            mie_scale_height_m: 1200.0,
+            mie_g: 0.76,
+            ozone_absorption: (0.650e-6, 1.881e-6, 0.085e-6),
+            ozone_center_m: 25000.0,
+            ozone_width_m: 15000.0,
+        ),
+        // Amber-violet sky: a flatter Rayleigh spectrum (heavier gas, less blue
+        // bias), dense forward-scattering haze that absorbs blue so low sun goes
+        // amber, and a green-absorbing layer that leaves the zenith violet.
+        (
+            name: "alien_default",
+            planet_radius_m: 6360000.0,
+            atmosphere_height_m: 60000.0,
+            rayleigh_scattering: (21.0e-6, 15.0e-6, 24.0e-6),
+            rayleigh_scale_height_m: 7000.0,
+            mie_scattering: (14.0e-6, 11.0e-6, 8.0e-6),
+            mie_absorption: (1.5e-6, 2.5e-6, 4.5e-6),
+            mie_scale_height_m: 1800.0,
+            mie_g: 0.82,
+            ozone_absorption: (0.10e-6, 1.40e-6, 0.30e-6),
+            ozone_center_m: 22000.0,
+            ozone_width_m: 14000.0,
+        ),
+    ],
+)

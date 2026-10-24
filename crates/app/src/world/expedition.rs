@@ -718,12 +718,15 @@ pub fn interact(
             let ground = super::sites::holy_ground(&cfg);
             if let Some(tier) = super::dungeon::wand_altar(&cfg, metres, ground) {
                 let names = ["", "Lumen Twig", "Quarry Conduit", "Sanctum Sovereign"];
-                if world.adventure.wand >= tier {
+                // Gate on the best wand owned, so swapping to a weaker wand
+                // cannot re-claim an altar.
+                let owned = world.adventure.best_wand_tier();
+                if owned >= tier {
                     world.expedition.say(format!(
                         "{} already attuned. The next wand is one landing deeper.",
                         names[tier as usize]
                     ));
-                } else if world.adventure.wand + 1 < tier {
+                } else if owned + 1 < tier {
                     world
                         .expedition
                         .say("This altar is sealed. Claim the wand on the landing above first.");
@@ -749,6 +752,15 @@ pub fn interact(
                         "{} claimed. Hold R to cast. Arrange the deck in E. The brick mouth is 18 m east of the clearing.",
                         names[tier as usize]
                     ));
+                    // A second, found wand rests on the altar: its own chassis and deck.
+                    let seed = engine_core::hash::hash_u32((p.x as u32).wrapping_mul(0x9E37_79B9) ^ (p.y as u32) ^ (p.z as u32).wrapping_mul(0x85EB_CA6B));
+                    if let Some(item) = world.adventure.mint_wand(super::adventure::wand_items::generate(seed, tier)) {
+                        world.inventory.dropped.push(super::inventory::DroppedStack {
+                            pos: metres + Vec3::Y * 1.2,
+                            stack: super::inventory::ItemStack::new(item, 1),
+                        });
+                        world.expedition.say("Another wand rests on the altar. Take it, or leave it for later.");
+                    }
                 }
             }
         }

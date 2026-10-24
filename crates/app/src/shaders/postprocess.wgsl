@@ -85,7 +85,10 @@ fn neutral_tonemap(input: vec3<f32>) -> vec3<f32> {
     // Neutral highlights still roll to white. A chromatic sun (gold, orange,
     // rose) keeps its hue, or the disk clips to white inside a colored sky.
     let sat = clamp(1.0 - min(color.r, min(color.g, color.b)) / max(compressed_peak, 1e-4), 0.0, 1.0);
-    let keep_hue = smoothstep(0.28, 0.62, sat);
+    // Only up to ordinary highlight levels: a saturated sky band (peak 2-5)
+    // and fire keep their hue, but the solar disc (peak ~30+) rolls to pale
+    // gold. Holding hue at every level mapped disc and sky to one orange.
+    let keep_hue = smoothstep(0.28, 0.62, sat) * (1.0 - smoothstep(6.0, 24.0, peak));
     return mix(color, vec3<f32>(compressed_peak), white_mix * (1.0 - keep_hue));
 }
 

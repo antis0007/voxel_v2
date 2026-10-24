@@ -68,3 +68,10 @@ seam-route:
 
 # The single pre-commit gate: check, clippy, tests, the perf gate, then the LOC report.
 verify: check clippy test bench-check loc
+
+# Run the checks the current task diff requires and record evidence (docs/TESTING.md).
+gate:
+    python -I scripts/workflow.py verify
+
+gate_status:
+    python -I scripts/workflow.py status

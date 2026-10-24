@@ -7,6 +7,9 @@ use std::sync::OnceLock;
 pub fn camera(player: &mut Player, cfg: &WorldSampleConfig, elapsed: f32) -> bool {
     static MODE: OnceLock<String> = OnceLock::new();
     let mode = MODE.get_or_init(|| std::env::var("VOXEL_REVIEW_DUNGEON").unwrap_or_default());
+    if let Some((eye, target)) = view(mode, cfg) {
+        return place(player, cfg, mode, eye, target);
+    }
     if mode.is_empty() || cfg.generator_version < 28 { return false; }
     let floor = world::sites::holy_ground(cfg) - 79.0;
     let jib_side = if cfg.seed.wrapping_add(303) & 1 == 0 { 1.0 } else { -1.0 };
@@ -37,5 +40,40 @@ pub fn camera(player: &mut Player, cfg: &WorldSampleConfig, elapsed: f32) -> boo
         == world::BlockId::Water;
     static RECEIPT: OnceLock<()> = OnceLock::new();
     RECEIPT.get_or_init(|| println!("[dungeon-review] mode={mode} generator={} voxel_m={scale} hall_floor_m={floor} eye_m={:?} camera_only=true", cfg.generator_version, eye + offset));
+    true
+}
+
+/// `complex:<k>`: view k of the generated complex nearest (300, 0).
+/// `undercrown:<room name>`: from a near corner of that Undercrown room
+/// toward its middle. Both work for any generator version, so the same seed
+/// and mode give a before/after pair across a generator bump.
+fn view(mode: &str, cfg: &WorldSampleConfig) -> Option<(Vec3, Vec3)> {
+    if mode == "cosmos" {
+        return world::dungeon::cosmos_review_view(cfg, Vec3::new(300.0, 0.0, 0.0));
+    }
+    if let Some(k) = mode.strip_prefix("complex:") {
+        let views = world::dungeon::review_views(cfg, Vec3::new(300.0, 0.0, 0.0));
+        return views.get(k.parse::<usize>().ok()?).copied();
+    }
+    let name = mode.strip_prefix("undercrown:")?;
+    let plan = world::undercrown::plan(cfg);
+    let r = plan.rooms.iter().find(|r| r.name == name)?;
+    let (cx, cz) = ((r.x0 + r.x1) * 0.5, (r.z0 + r.z1) * 0.5);
+    let reach = Vec3::new(cx - r.x0, 0.0, cz - r.z0).clamp_length_max(9.0);
+    let eye = Vec3::new(cx, r.floor + 1.7, cz) - reach;
+    Some((eye, Vec3::new(cx, r.floor + (r.headroom * 0.3).min(4.0), cz) + reach * 0.5))
+}
+
+fn place(player: &mut Player, cfg: &WorldSampleConfig, mode: &str, eye: Vec3, target: Vec3) -> bool {
+    let scale = cfg.voxel_meters();
+    let eye_offset = player.eye(cfg.voxel_scale) - player.pos;
+    player.pos = eye / scale - eye_offset;
+    player.precise_pos = player.pos.as_dvec3();
+    let direction = (target - eye).normalize();
+    player.yaw = direction.x.atan2(-direction.z);
+    player.pitch = direction.y.asin();
+    player.underwater = false;
+    static RECEIPT: OnceLock<()> = OnceLock::new();
+    RECEIPT.get_or_init(|| println!("[dungeon-review] mode={mode} generator={} voxel_m={scale} eye_m={eye:?} target_m={target:?} camera_only=true", cfg.generator_version));
     true
 }

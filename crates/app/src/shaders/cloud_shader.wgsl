@@ -600,7 +600,9 @@ fn cloud_phase(cos_theta: f32, forward_g: f32, silver: f32) -> f32 {
     let forward  = cs_phase(cos_theta, clamp(forward_g, 0.55, 0.80));
     let backward = hg_phase(cos_theta, -0.3);
     let broad    = cs_phase(cos_theta, 0.10);
-    let silver_peak = hg_phase(cos_theta, 0.97) * silver * 0.06;
+    // g 0.97 peaked near 170 within a degree of the sun: every thin edge that
+    // crossed the disc became a white needle. 0.90 keeps a lining, not a smear.
+    let silver_peak = hg_phase(cos_theta, 0.90) * silver * 0.06;
     return mix(mix(forward, broad, 0.25), backward, 0.12) + silver_peak;
 }
 
@@ -621,13 +623,20 @@ fn scatter_order_phase(mu: f32, g: f32, silver: f32, sun_elev: f32, ice: bool) -
         primary,
         (hg_phase(mu, g_soft) * 0.30 + 0.012) * ms,
         (hg_phase(mu, g_soft * 0.30) * 0.12 + 0.010) * ms,
-        0.008 * ms,
+        // Fourth slot stands for every higher order. Those orders are nearly
+        // isotropic (1/4pi ~ 0.08), which is why a thick cloud's sunlit face
+        // reads as a bright diffuse body. 0.008 left side- and back-lit
+        // clouds lit almost only by the sky, dull brown at sunset.
+        0.090 * ms,
     );
 }
 
 // Ice-crystal phase for cirrus: strong forward diffraction + 22° halo ring.
 fn cirrus_phase(cos_theta: f32, sun_elevation: f32) -> f32 {
-    let fwd   = cs_phase(cos_theta, 0.96) * 0.72;
+    // Ice diffraction is narrower than water forward scatter, but g 0.96
+    // (peak ~70x the water lobe's scale at the sun) turned a faint, low-alpha
+    // wisp into a flat white streak across the disc at reduced resolution.
+    let fwd   = cs_phase(cos_theta, 0.86) * 0.72;
     let broad = cs_phase(cos_theta, 0.40) * 0.20;
     let halo_elev_weight = saturate1(1.0 - abs(sun_elevation) * 1.8);
     let halo  = exp(-pow((cos_theta - 0.9272) / 0.040, 2.0)) * 0.08 * halo_elev_weight;
@@ -1428,6 +1437,23 @@ fn march_layer_core(
                 let mid_xz = p.xz + shadow_dir.xz * mid_project;
                 shadow_d += shadow_field_at_world(mid_xz).y * 0.30;
             }
+            // Seen from the sun's side, light reaching a sample near the
+            // visible face leaves through that same face, so its optical depth
+            // is bounded by how deep the view ray is into the cloud. The coarse
+            // column shadow (and 900 m light taps at a low sun) cannot tell the
+            // lit face from the far one and shadowed every distant cloud.
+            let view_od = -log(max(pre_step_trans, 1e-4))
+                + 0.5 * sample_density * extinction * integration_length;
+            let sun_side_view = smoothstep(0.45, 0.95, 0.5 - 0.5 * cos_theta_sun);
+            shadow_d = mix(shadow_d, min(shadow_d, view_od * 2.5), sun_side_view);
+            // Facing the sun, a silhouette fringe has a short path to the
+            // light behind it while the dense core does not. The coarse column
+            // field gives both the same depth, so far backlit clouds lost their
+            // rims and read as flat slabs. Thin density stands in for fringe.
+            let toward_sun_view = smoothstep(0.45, 0.95, 0.5 + 0.5 * cos_theta_sun);
+            let fringe = mix(0.25, 1.0, smoothstep(0.08, 0.70, sample_density));
+            // The 900 m local taps at a low sun cross the whole body too.
+            shadow_d *= mix(1.0, fringe, toward_sun_view);
             debug_shadow_max = max(debug_shadow_max, shadow_d);
 
             let h_frac     = saturate1(remap01(p.y, step_base_y, step_top_y));
@@ -1473,13 +1499,17 @@ fn march_layer_core(
             let rim = mix(sun_rgb, sun_rgb * vec3<f32>(0.70, 0.80, 0.92), step_weather.storm * 0.60);
             let warm = mix(white, sun_rgb, mix(0.58, 0.82, twilight_light));
             let core = mix(white, sun_rgb, mix(0.16, 0.40, twilight_light));
+            // Higher orders: droplets scatter all wavelengths alike, so the lit
+            // body carries the reddened sun at dusk. Pure luminance here made
+            // sunset-lit faces grey-lilac.
+            let deep = mix(white, sun_rgb, mix(0.30, 0.78, twilight_light));
             let rim_gain = 1.0 + twilight_light * (0.08 - step_weather.storm * 0.16);
             let a2 = albedo * albedo;
             let sun_scatter = (
                     rim  * sun_orders.x * primary_trans * rim_gain
                   + (warm * sun_orders.y * beer1 * albedo
                   + core * sun_orders.z * beer2 * a2
-                  + white * sun_orders.w * beer3 * a2 * albedo) * bounce_gain
+                  + deep * sun_orders.w * beer3 * a2 * albedo) * bounce_gain
                 ) * cloud_solar_irradiance * cirrus_transmittance_atten;
 
             // A gentle floor on the base. The lobe shadow comes from shadow_d;
@@ -1501,7 +1531,9 @@ fn march_layer_core(
             let shaded_sky = mix(
                 sky_amb_col,
                 cloud_shadow_chroma(sun_dir.y, h_frac) * sky_luma_amb,
-                (1.0 - amb_trans) * 0.65);
+                // Dusk shade leans further cool so occluded mass separates
+                // from the warm lit crowns instead of reading brown.
+                (1.0 - amb_trans) * mix(0.65, 0.90, twilight_light));
             let sky_amb = shaded_sky * amb_trans * (0.30 + ambient_gain * 0.58) * core_shade;
             let ground_bounce = ground_base * saturate1(1.0 - h_frac * 1.45)
                 * exp(-ambient_od * 0.10) * mix(1.0, 1.40, twilight_light);
@@ -1511,9 +1543,12 @@ fn march_layer_core(
             let moon_lit = moon_light * (beer0 * phase_moon * 0.55 + beer1 * 0.020)
                 * core_shade;
 
-            let scatter = sun_scatter * mix(1.0, core_shade, 0.35)
+            // SkyArt.cloud_contrast trades sky fill for sunlight, so lit
+            // crowns and cooler occluded mass separate without a global grade.
+            let contrast = light.sky_art[1].x;
+            let scatter = sun_scatter * mix(1.0, core_shade, 0.35) * contrast
                 + moon_lit
-                + ambient * mix(1.0, 0.62, step_weather.storm);
+                + ambient * mix(1.0, 0.62, step_weather.storm) * (2.0 - contrast);
 
             radiance += pre_step_trans * scatter * step_alpha_cheap;
         }
@@ -1788,17 +1823,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     high.debug_metrics.x
                 ) * 1.8,
                 vec3<f32>(1.0)
-            ),
-            1.0,
-        );
-    }
-
-    if debug_mode == i32(DEBUG_VIEW_CLOUD_LAYER_AABB) {
-        return vec4<f32>(
-            vec3<f32>(
-                low.debug_metrics.y,
-                mid.debug_metrics.y,
-                high.debug_metrics.y
             ),
             1.0,
         );

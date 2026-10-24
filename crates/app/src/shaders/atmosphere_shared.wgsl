@@ -231,14 +231,12 @@ fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>, haze: f32) -> 
     grade = mix(grade, ozone, zenith_w * zenith_w * 0.38 * open_sky);
     grade = mix(grade, chroma, chroma_band * 0.62 * open_sky);
 
-    // Tight solar aureole, then a wider low golden field. Neither one paints
-    // the opposite half of the sky.
-    let facing = saturate1(dot(dir, sun));
-    let aureole = pow(facing, 12.0) * open_sky;
-    let disk_hue = solar_disk_chroma(sun.y);
-    grade = mix(grade, disk_hue, aureole * (twilight * 0.85 + day * 0.06));
-    let gold = pow(toward, 1.7) * horizon_w * twilight * open_sky;
-    grade = mix(grade, disk_hue, gold * 0.42);
+    // No painted aureole or golden field: the LUTs' aerosol haze scatters
+    // with a Mie phase, so the bright warm region around the sun is already in
+    // `physical`, sized by SkyArt.haze and dimmed by the same transmittance
+    // as the disc. The grade below keeps that chroma on the solar side.
+    let sun_side = pow(toward, 1.5) * twilight * open_sky;
+    grade = mix(grade, radiance_chroma(max(physical, vec3<f32>(1e-5))) * sky_luma(grade), sun_side * 0.85);
 
     // Belt of Venus sits a few degrees up, opposite the sun. Dusty air shifts
     // it from rose toward copper. Below it, the earth shadow cools back down.
@@ -262,12 +260,18 @@ fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>, haze: f32) -> 
     grade = mix(grade, mix(airglow, ozone * 0.20, zenith_w), night * (1.0 - cover * 0.45));
 
     let luminance = max(sky_luma(physical), 0.0);
-    let grade_amount = day * 0.50 + twilight * 0.74 + night * 0.58;
+    // Twilight leans on the physical sky-view chroma (warm toward the sun,
+    // cool and rose away from it); SkyArt.sky_grade caps the authored palette.
+    // The old 0.74 replaced most of that directional colour with one mauve.
+    let grade_amount = day * 0.50 + twilight * light.sky_art[0].z + night * 0.58;
     var result = mix(physical, radiance_chroma(grade) * luminance, grade_amount);
+    // Sunset saturation: chroma gain on the sun side of a twilight sky only.
+    let sat_gain = mix(1.0, light.sky_art[0].w, twilight * open_sky * (0.35 + 0.65 * toward));
+    result = max(mix(vec3<f32>(sky_luma(result)), result, sat_gain), vec3<f32>(0.0));
     // The last degree of sky is the fog colour, so terrain haze and the dome meet.
     // Near surfaces pass haze ~ 0 and the mix weight is zero: skip the fog
     // colour fetch and mix entirely. Exact up to the 1e-4 threshold.
-    let seam = exp(-abs(elev) * 18.0) * haze;
+    let seam = exp(-abs(elev) * 18.0) * haze * light.sky_art[1].z;
     if seam > 1e-4 {
         let fog = max(light.fog_color_density.rgb, vec3<f32>(0.02));
         result = mix(result, radiance_chroma(fog) * max(luminance, sky_luma(fog) * 0.20 * haze), seam * 0.55);
@@ -300,7 +304,9 @@ fn cloud_shadow_chroma(sun_height: f32, height_fraction: f32) -> vec3<f32> {
     let storm = saturate1(light.weather_clip_summaries[0].z);
     let cover = saturate1(light.weather_clip_summaries[0].y);
     var hue = mix(sky, vec3<f32>(0.55, 0.64, 0.78), 0.28);
-    hue = mix(hue, vec3<f32>(0.48, 0.40, 0.50), evening * 0.28);
+    // Evening shade leans cool lilac, opposite the warm lit crowns; the
+    // former brown-mauve made backlit low cloud read as stone.
+    hue = mix(hue, vec3<f32>(0.44, 0.44, 0.62), evening * 0.32);
     hue = mix(hue, vec3<f32>(0.40, 0.46, 0.52), cover * 0.45);
     hue = mix(hue, vec3<f32>(0.22, 0.26, 0.32), storm * 0.70);
     return radiance_chroma(mix(hue, sky, height_fraction * 0.30));
@@ -392,13 +398,8 @@ fn runtime_sky_view_atmosphere_color(
     sky += light.sky_horizon_reserved.rgb * horizon_w * daylight * 0.03;
     sky += light.sky_top_saturation.rgb * up * 0.02;
     sky += light.fog_color_density.rgb * down * 0.04 * alt_factor;
-    let beam_luma = dot(sun_trans, vec3<f32>(0.2126, 0.7152, 0.0722));
-    sky += solar_disk_chroma(sun_dir.y)
-        * beam_luma
-        * light.sun_dir_intensity.w
-        * vec3<f32>(mie_phase_atmo(cos_theta, 0.76) * 0.004)
-        * daylight
-        * (0.28 + 0.72 * (1.0 - up));
+    // The solar aureole is the sky-view LUT's own aerosol Mie scattering. A
+    // second analytic Mie lobe here stacked a pale halo over it.
 
     return photographic_sky_radiance(max(sky, vec3<f32>(0.0)), dir, 1.0);
 }

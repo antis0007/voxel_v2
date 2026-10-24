@@ -1,27 +1,21 @@
 # Undercrown schema and interaction contracts
 
-Status: **contract milestone implemented and verified; no authored Undercrown content is generated yet.**
-
-This pass establishes the data model, persistence layout, interaction protocol and reservation rules that the
-authored region will use. `Plan::for_config` deliberately returns an empty plan, `CURRENT_GENERATOR_VERSION`
-remains 18, and production saves remain `VXWSAV16`. The only player-visible change is that the existing prompt
-card can display a mechanism prompt; with no props it never does.
-
-The content design is `docs/superpowers/specs/2026-10-19-undercrown-region-design.md`. The first playable
-slice authors 18 rooms. The other scenarios in that design stay a catalogue until a later slice.
+Status (2026-10-22): generator 19–31 worlds get the box plan (29 rooms as joined boxes, flag-only props). Generator 32 worlds get the authored region below: real spaces, mechanisms that write voxels, claim rewards and a sealed Glass Archive. Save identity (district, room, prop ids and flags) is unchanged between the two.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `src/world/interaction.rs` | Shared `Prompt { title, action }` used by relics and mechanisms |
-| `src/world/undercrown.rs` | Module gate, plan cache, block/reservation/location/focus/interact entry points |
-| `src/world/undercrown/plan.rs` | Districts, rooms, links, props, actions, empty plan and test fixture |
-| `src/world/undercrown/state.rs` | Permanent `ObjectId`, bounded `State`, flag semantics, encode/decode |
-| `src/world/undercrown/interact.rs` | Reach/aim/line-of-sight focus, action dispatch, cooldown, edit contract |
-| `src/world/trace.rs` | Shared metre-space DDA, moved from `adventure/trace.rs` |
-| `src/world/sites.rs`, `src/world/dungeon.rs` | Footprint reservation hooks |
-| `src/world/storage.rs` | Dormant v17 footer/decode layout and synthetic round-trip test |
+| `crates/worldgen/src/undercrown.rs` | Module gate, plan cache, `block`/`reserved`/`location` |
+| `crates/worldgen/src/undercrown/plan.rs` | Districts, rooms, props, actions; the generator 19 box plan; `Plan::for_config` picks the generator 32 layout |
+| `crates/worldgen/src/undercrown/state.rs` | Permanent `ObjectId`, bounded `State`, flags, encode/decode |
+| `crates/worldgen/src/undercrown/v2/mod.rs` | Generator 32 shapes, tunnels, sampler, `Mech` states, `edits`, `current` |
+| `crates/worldgen/src/undercrown/v2/layout.rs` | Site search and the Rootbound Halls and Lantern Gardens |
+| `crates/worldgen/src/undercrown/v2/layout_chasm.rs` | Crown Chasm, bell tower, observatory, choir |
+| `crates/worldgen/src/undercrown/v2/layout_deep.rs` | Drowned Borough, Ashen Foundry, Glass Archive |
+| `crates/worldgen/src/undercrown/v2/feature.rs` | Ramps, pillars, bridges, huts, counterweight, tower, waterfall, lava, house fronts, shelves |
+| `crates/app/src/world/undercrown/interact.rs` | Focus, actions, mechanism edits and messages |
+| `crates/app/src/world/undercrown/rewards.rs` | Claim rewards from `assets/undercrown_rewards.ron` |
 
 ## Identity
 
@@ -31,118 +25,70 @@ room:    10 bits (1024 per district)
 prop:     8 bits (256 per room)
 ```
 
-`ObjectId` is permanent. IDs are authored explicitly, never derived from array order or coordinates. Reordering
-content must not renumber saves. `District` needs an explicit `index(self) -> u8` match. A derived `as u8`
-would renumber saves if the enum is reordered.
-
-Prop `0` on a room id is the room itself (`KNOWN`, `DISCOVERED`, `FAILED`). Props `1` and above are mechanisms
-and people. The first slice allocates:
+`ObjectId` is permanent and authored explicitly. Prop `0` on a room id is the room itself; props `1` and above are mechanisms. Never renumber: a cut room stays allocated.
 
 | District index | District | Rooms |
 | --- | --- | --- |
 | 0 | Rootbound Halls | 1 well, 2 landing, 3 counterweight hall, 4 broken stair, 5 service corridor, 6 door behind the first camp, 7 pilgrims' kitchen, 8 chapel growing through the prison |
-| 1 | Crown Chasm | 1 overlook, 2 bridge village, 3 hall of patient bells, 4 freight cradle, 5 bell, 6 observatory, 7 listening stair, 8 stone giant's pocket, 9 observatory stair |
-| 2 | Drowned Borough | 1 chain lift, 2 air-bell street, 3 courthouse, 4 reservoir control, 5 ferry, 6 maintenance duct, 7 bathhouse, 8 aqueduct house |
+| 1 | Crown Chasm | 1 chasm, 2 bridge village, 3 hall of patient bells, 4 freight cradle, 5 bell tower, 6 observatory, 7 listening stair, 8 stone giant's pocket, 9 observatory stair |
+| 2 | Drowned Borough | 1 chain lift, 2 street beneath the air bell, 3 courthouse, 4 reservoir control, 5 ferry landing, 6 maintenance duct, 7 bathhouse, 8 aqueduct house |
 | 3 | Lantern Gardens | 1 orchard mouth, 2 seed bank |
 | 4 | Ashen Foundry | 1 furnace mouth |
-| 5 | Glass Archive | No rooms yet. Index reserved. |
+| 5 | Glass Archive | 1 archive (generator 32) |
 | 6 | Frozen Choir | 1 choir antechamber |
-| 7 | Hollow Sea | No rooms yet. Index reserved. |
+| 7 | Hollow Sea | Reserved |
 
-These numbers are the save identity. Room display names live in the region design. Do not compact the table
-when a room is cut; mark it unused.
+## Generator 32 region
 
-## State
+The site is the best of 40 seeded hills 220–480 m from spawn whose whole footprint stands over the landing's roof. Levels hang off the surface S at the well: landing L = S − 30, chasm floor C = L − 34, borough B = C − 14.
 
-`State` is a sorted `BTreeMap<ObjectId, u32>` with at most 2048 records. Known flags:
+- **Rootbound Halls (L).** Spiral well down from the surface. A vaulted landing with the creed inscription. A 20 m counterweight hall entered from a gallery 10 m up, with a ramp down, a hanging counterweight and a static jib. Kitchen, chapel and the door behind the camp.
+- **The broken stair.** A collapse chamber on the way to the chasm. The first descent is a 4 m drop, so the chasm is one-way until the bell or the repaired platform brings you back.
+- **Crown Chasm (C).** A 60 m noise-carved cavern with a rock shelf where the stair arrives and a ramp down. A bridge village of plank huts stands on a pillar. The waterfall falls into a plunge pool. The bell tower has a spiral stair, a bell chamber and three doors.
+- **Around the chasm.**
+  - The listening stair climbs back to the landing level.
+  - The observatory sits on the east cliff, with its stair continuing to a second surface exit.
+  - East: the hall of patient bells, with the frozen choir's ice pipes beyond it.
+  - South: the freight cradle.
+- **Drowned Borough (B), behind the chain lift's portcullis.** A flooded vaulted street with house fronts and a jeweler's balcony.
+  - The courthouse sits under 5.5 m of water.
+  - Reservoir control holds the sluice.
+  - Also: the ferry landing, a duct above the flood line, the bathhouse and the aqueduct house.
+- **Ashen Foundry (C + 2).** A lava channel across the furnace hall. The Glass Archive lies beyond it.
+- **Glass Archive.** Sealed in tombstone, its passage too, so nothing digs around the door. It holds shelves and a reliquary.
 
-| Flag | Meaning |
-|---|---|
-| `DISCOVERED` | The object has been observed or focused |
-| `OPERATED` | A one-shot mechanism has moved |
-| `REPAIRED` | A durable repair has been completed at least once |
-| `OPEN` | A gate or sluice is currently open |
-| `RESTORED` | A bell, lift or system has been restored |
-| `CLAIMED` | A reward has been claimed at this object |
-| `KNOWN` | The player has learned a route or fact |
-| `FAILED` | A local objective has been lost (history only) |
+## Mechanisms
 
-Flags record **history and knowledge, not permission**. `OPEN`, `REPAIRED` and `RESTORED` never make a route
-usable by themselves; the actual voxels and mechanism are authoritative. Destroying a repaired bridge removes the
-route even though `REPAIRED` remains set. `CLAIMED` prevents duplicate reward grants.
+A prop's flag implies a mechanism state (`v2::current`). When an action changes that state, `Layout::edits` diffs the sampler between the old and new state over the mechanism's boxes. The app writes exactly those cells with `World::set_many_mechanism`, the only edit path that may replace tombstone. Edited chunks persist like any player edit; flags stay history, not permission.
 
-Unknown flag bits are masked on write and rejected on load. Capacity exhaustion returns `false` without
-disturbing existing records.
+| Prop | Action | Effect |
+|---|---|---|
+| 0.4 Freight platform | Repair | A ramp up the collapse chamber |
+| 1.2 Repair the water lift | Repair | A bridge from the village to the tower |
+| 1.5 Bell clapper | Ring | The listening stair's missing flight returns |
+| 2.1 Chain lift | Operate | The portcullis at the lift's foot rises |
+| 2.4 Bypass sluice | Open / Close | The courthouse drains / refills |
+| 4.1 Cooling gate | Open | The lava channel crusts to basalt |
+| 1.4 Receiving platform | Repair | A bridge over the lava (the other crossing) |
+| 1.6 Observatory lens | Restore | The archive door opens |
 
-## Serialization (dormant v17 contract)
+Claiming a plinth grants the row for its id in `assets/undercrown_rewards.ron`. The named relics (ring, gloves, buckler) have no items of their own yet; the rows are stand-ins.
 
-The undercrown block belongs after `adventure` and before `sandbox`:
+## Interaction constants
 
-```text
-u32 count                         // <= 2048
-repeat count times, sorted by raw id:
-    u32 object_id_raw
-    u32 flags                     // subset of 0x00FF
-```
+Reach 3.4 m, aim radius 0.55 m, focus height 0.9 m, cooldown 0.35 s. Focus needs a clear `trace::solid` line. Every generator 32 prop stands on a pedestal.
 
-Decoding rejects oversized counts, invalid raw IDs, unsorted/duplicate IDs and unknown flags. Trailing or
-truncated data is an error.
+## Tests
 
-`SAVE_VERSION` is currently 16 and `MAGIC` remains `VXWSAV16`. `session_footer(world, save_version)` writes the
-block only for version 17 or later, and `load_exact` decodes it only for version 17 or later. A synthetic v17
-manifest in `storage.rs` proves the layout now. `save_version` temporarily accepts 1–17 so that test and future
-reads work; production still writes 16.
-
-## Interaction
-
-Constants: reach 3.4 m, aim radius 0.55 m, focus height 0.9 m, cooldown 0.35 s.
-
-Focus requires finite eye/forward, target within reach, perpendicular offset inside the aim radius, and an
-unobstructed segment using the shared `trace::solid` DDA. The nearest valid prop wins; an occluded nearer prop
-cannot hide a visible farther one.
-
-`interact` returns `Outcome { used, changed, message }`. Reliquary focus takes priority; the caller asks for a
-mechanism prompt only when no relic is focused. A one-shot action returns `used = true` with an explanatory
-message on repeat, but no edits and no flag change. A failed focus returns `used = false` and does not consume
-the cooldown. Edits are applied through `world.set_many`; `changed` contains only cells whose contents differed.
-`main.rs` marks those blocks and their chunk neighbours dirty for remeshing.
-
-The current action dispatch records flags only. No content produces voxel edits yet.
-
-## Generation integration
-
-`sample_block_in_column` calls `undercrown::block` before random sites and caverns. Reservation hooks keep random
-caverns, dungeon cells, surface sites and homesteads out of the footprint. With an empty plan every hook returns
-`false` immediately, and the v18 generation hash is unchanged.
-
-## Version activation checklist
-
-When the first authored content lands:
-
-1. Bump `CURRENT_GENERATOR_VERSION` to 19.
-2. Set `SAVE_VERSION` to 17 and `MAGIC` to `VXWSAV17`.
-3. Replace `Plan::for_config` with the authored plan.
-4. Use the district/room allocation table already recorded above. Do not renumber it.
-5. Replace the v18/v19 equality test with a v18 golden-hash regression test; v19 is now allowed to differ.
-6. Add connectivity, water-outcome and reward-duplication tests for the real rooms.
-7. Add the counterweight / ring / cistern content and the first equipment item.
-
-## Verified in this milestone
-
-- `cargo test --offline --target-dir target`: **55 passed, 0 failed, 4 ignored** (full suite).
-- Undercrown contract tests: 12 passed, plus the storage v17 and v18/v19 generation guards.
-- Golden generation test: v18 and an empty v19 sample identical over a fixed grid.
-- Synthetic v17 save: state round-trips through `session_footer`/`load_exact`.
-- v16 save load leaves the state empty.
-- Existing trace, inventory, storage, site, dungeon and wand tests remain green.
-
-## Explicitly not implemented
-
-- Any room, shaft, well, cistern, chasm, bridge, bell or observatory geometry.
-- Any treasure, equipment item, spell verb, NPC, settlement, trade or dialogue.
-- Any water-level outcome, durable repair, shortcut or reward.
-- Any generator or save-version activation.
-- Any performance validation of a large authored cavern.
-
-These remain the content milestones in `docs/superpowers/specs/2026-10-19-undercrown-region-design.md`.
-
+- `crates/worldgen/src/undercrown/v2/tests.rs` flood-fills real sampled voxels on foot over eight seeds. It checks:
+  - with no mechanism set, every room except the borough and the archive is reachable;
+  - the winch opens the borough;
+  - the archive needs the lens plus a crossing;
+  - the chasm is one-way until the bell or the stair repair;
+  - every prop has a standing spot in reach;
+  - edits are bounded and idempotent;
+  - the sluice only drains;
+  - ids are a superset of generator 19's;
+  - the archive shell is tombstone.
+- `crates/app/src/world/undercrown/interact.rs` checks that the bell writes solid stair cells, a player edit cannot open the seal while the lens does, and a claim grants once.
+- `rewards.rs` checks that the asset round-trips and covers every plinth.

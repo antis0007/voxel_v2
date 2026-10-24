@@ -5,7 +5,7 @@ use std::io::{Seek, SeekFrom};
 use std::sync::mpsc;
 use std::time::UNIX_EPOCH;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorldEntry {
     pub id: String,
     pub name: String,
@@ -313,7 +313,9 @@ fn scan() -> Result<Vec<WorldEntry>> {
             problem,
         });
     }
-    entries.sort_by_key(|e| std::cmp::Reverse(e.saved));
+    // Ties on `saved` need a stable order: `grouped` is a HashMap, and an unstable order
+    // would make every rescan look changed.
+    entries.sort_by(|a, b| b.saved.cmp(&a.saved).then_with(|| a.id.cmp(&b.id)));
     Ok(entries)
 }
 fn load_selected(id: &str) -> Result<SavedSession> {
@@ -369,7 +371,8 @@ fn load_selected(id: &str) -> Result<SavedSession> {
     )
 }
 enum Command {
-    Scan,
+    /// `quiet` marks the periodic background rescan, which must not show progress in the UI.
+    Scan { quiet: bool },
     Load(String),
     Edit {
         id: String,
@@ -394,6 +397,7 @@ pub struct WorldLibrary {
     rx: mpsc::Receiver<LibraryEvent>,
     queue: VecDeque<Command>,
     active: bool,
+    active_quiet: bool,
     loading: bool,
     pub entries: Arc<Vec<WorldEntry>>,
     pub status: Option<String>,
@@ -409,7 +413,7 @@ impl WorldLibrary {
                 .spawn(move || {
                     while let Ok(job) = jobs.recv() {
                         let result = match job {
-                            Command::Scan => LibraryEvent::Entries(guarded(scan)),
+                            Command::Scan { .. } => LibraryEvent::Entries(guarded(scan)),
                             Command::Load(id) => {
                                 LibraryEvent::Loaded(guarded(|| load_selected(&id)))
                             }
@@ -432,6 +436,7 @@ impl WorldLibrary {
             rx,
             queue: VecDeque::new(),
             active: false,
+            active_quiet: false,
             loading: false,
             entries: Arc::default(),
             status,
@@ -445,6 +450,15 @@ impl WorldLibrary {
     pub fn busy(&self) -> bool {
         self.active || !self.queue.is_empty()
     }
+    /// Busy work the player asked for. The quiet background rescan is excluded so its
+    /// progress line does not flash in and out of the world list every few seconds.
+    pub fn busy_visible(&self) -> bool {
+        (self.active && !self.active_quiet)
+            || self
+                .queue
+                .iter()
+                .any(|q| !matches!(q, Command::Scan { quiet: true }))
+    }
     pub fn loading(&self) -> bool {
         self.loading || self.queue.iter().any(|q| matches!(q, Command::Load(_)))
     }
@@ -456,8 +470,13 @@ impl WorldLibrary {
         self.queue.push_back(command);
     }
     pub fn refresh(&mut self) {
-        if !self.queue.iter().any(|q| matches!(q, Command::Scan)) {
-            self.enqueue(Command::Scan);
+        if !self.queue.iter().any(|q| matches!(q, Command::Scan { .. })) {
+            self.enqueue(Command::Scan { quiet: false });
+        }
+    }
+    pub fn refresh_quietly(&mut self) {
+        if !self.queue.iter().any(|q| matches!(q, Command::Scan { .. })) {
+            self.enqueue(Command::Scan { quiet: true });
         }
     }
     pub fn open(&mut self, id: String) {
@@ -485,12 +504,17 @@ impl WorldLibrary {
             match self.rx.try_recv() {
                 Ok(event) => {
                     self.active = false;
+                    self.active_quiet = false;
                     self.loading = false;
                     match event {
                         LibraryEvent::Entries(result) => match result {
                             Ok(entries) => {
-                                self.entries = Arc::new(entries);
-                                self.revision += 1;
+                                // An unchanged rescan must not bump the revision: the browser
+                                // re-syncs its selection and name field on every revision.
+                                if *self.entries != entries {
+                                    self.entries = Arc::new(entries);
+                                    self.revision += 1;
+                                }
                                 self.status = None;
                             }
                             Err(e) => self.status = Some(format!("Library scan failed: {e:#}")),
@@ -519,9 +543,11 @@ impl WorldLibrary {
         if !self.active
             && let Some(command) = self.queue.pop_front() {
                 let loading = matches!(command, Command::Load(_));
+                let quiet = matches!(command, Command::Scan { quiet: true });
                 match self.tx.try_send(command) {
                     Ok(()) => {
                         self.active = true;
+                        self.active_quiet = quiet;
                         self.loading = loading;
                     }
                     Err(mpsc::TrySendError::Full(command)) => self.queue.push_front(command),

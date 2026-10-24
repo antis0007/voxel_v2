@@ -122,6 +122,8 @@ pub enum Item {
     Weapon(u8),
     Armor(EquipSlot, ArmorTier),
     Tool(u8),
+    /// A wand in the adventure's wand bank; `look` caches its icon (tier, shaft, head, glow).
+    Wand { id: u16, look: u16 },
 }
 
 impl Item {
@@ -149,7 +151,7 @@ impl Item {
     pub fn max_stack(self) -> u32 {
         match self {
             Self::PowerKit(_) => 1,
-            Self::Weapon(_) | Self::Armor(_, _) | Self::Tool(_) => 1,
+            Self::Weapon(_) | Self::Armor(_, _) | Self::Tool(_) | Self::Wand { .. } => 1,
             Self::Food(_) => 16,
             Self::Block(block) => {
                 if matches!(
@@ -208,6 +210,12 @@ impl Item {
             Self::Tool(3) => "Lumen wand",
             Self::Tool(4) => "Frost wand",
             Self::Tool(_) => "Resonant wand",
+            Self::Wand { look, .. } if look & 1 << 11 != 0 => "Crafted wand",
+            Self::Wand { look, .. } => match look & 3 {
+                1 => "Found wand",
+                2 => "Found wand · fine",
+                _ => "Found wand · masterwork",
+            },
         }
     }
 
@@ -230,6 +238,7 @@ impl Item {
             },
             Self::Tool(1 | 2) => "Excavation tool",
             Self::Tool(_) => "Arcane focus",
+            Self::Wand { .. } => "Wand",
         }
     }
 
@@ -265,6 +274,7 @@ impl Item {
             Self::Tool(1) => "1.6m Seam bore [Alt+LMB]",
             Self::Tool(2) => "2.8m Seam bore [Alt+LMB]",
             Self::Tool(_) => "Spell focus [R / T]",
+            Self::Wand { .. } => "Select in the hotbar to hold · [R] cast · [T] cycle",
         }
     }
 
@@ -293,6 +303,7 @@ impl Item {
             Self::Weapon(w) => (4, w as u32),
             Self::Armor(slot, tier) => (5, ((slot as u32) << 8) | (tier as u32)),
             Self::Tool(t) => (6, t as u32),
+            Self::Wand { id, look } => (8, id as u32 | (look as u32) << 16),
         }
     }
 
@@ -345,6 +356,11 @@ impl Item {
                     "Invalid tool item in survival inventory"
                 );
                 Self::Tool(payload as u8)
+            }
+            8 => {
+                let look = (payload >> 16) as u16;
+                ensure!(look & 3 != 0 && look >> 12 == 0, "Invalid wand item in survival inventory");
+                Self::Wand { id: payload as u16, look }
             }
             _ => anyhow::bail!("Unknown survival item kind {kind}"),
         })
@@ -1301,7 +1317,7 @@ impl SurvivalInventory {
         let sort_key = |item: Item| -> (u8, u32) {
             let (kind, payload) = item.encode_u32();
             let order = match item {
-                Item::Weapon(_) | Item::Tool(_) => 0,
+                Item::Weapon(_) | Item::Tool(_) | Item::Wand { .. } => 0,
                 Item::Armor(_, _) => 1,
                 Item::Food(_) => 2,
                 Item::Resource(_) => 3,

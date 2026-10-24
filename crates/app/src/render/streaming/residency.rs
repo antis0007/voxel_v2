@@ -1,8 +1,9 @@
 //! Explicit budgets for regenerable world data. Worker-held voxel allocations
 //! remain charged after cache eviction. Edited world data is never evicted here.
 use crate::mesh::GeneratedChunk;
+use crate::world::BlockId;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const MIB: usize = 1024 * 1024;
@@ -41,6 +42,8 @@ pub struct ResidentChunk {
     data: GeneratedChunk,
     allocations: Arc<VoxelAllocations>,
     bytes: usize,
+    /// Torch cells, scanned on first light query and dropped on any mutable access.
+    torches: Mutex<Option<Vec<(IVec3, BlockId)>>>,
 }
 
 impl ResidentChunk {
@@ -51,7 +54,13 @@ impl ResidentChunk {
             data,
             allocations: Arc::clone(allocations),
             bytes,
+            torches: Mutex::new(None),
         }
+    }
+
+    pub(super) fn torch_cells(&self) -> Vec<(IVec3, BlockId)> {
+        let mut cached = self.torches.lock().unwrap_or_else(|e| e.into_inner());
+        cached.get_or_insert_with(|| self.data.torch_cells()).clone()
     }
 
     pub(super) fn refresh_allocation_size(&mut self) {
@@ -77,6 +86,7 @@ impl Deref for ResidentChunk {
 }
 impl DerefMut for ResidentChunk {
     fn deref_mut(&mut self) -> &mut GeneratedChunk {
+        *self.torches.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
         &mut self.data
     }
 }
@@ -93,6 +103,17 @@ use super::{ChunkCache, ChunkKey};
 use glam::IVec3;
 
 impl ChunkCache {
+    /// Torch cells of every resident source within `chunk_radius` chunks of `center`.
+    pub(crate) fn torch_cells_within(&self, center: IVec3, chunk_radius: i32) -> Vec<(IVec3, BlockId)> {
+        let mut out = Vec::new();
+        for (coord, source) in &self.cpu_chunks {
+            if (*coord - center).abs().max_element() <= chunk_radius {
+                out.extend(source.torch_cells());
+            }
+        }
+        out
+    }
+
     pub(super) fn mesh_limit(&self) -> usize {
         self.residency_limits
             .1

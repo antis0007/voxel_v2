@@ -64,7 +64,7 @@ pub(super) fn damage_taken(e: &Enemy) -> f32 {
     }
 }
 pub(super) fn hit(e: &Enemy, point: Vec3, extra: f32) -> bool {
-    let local = Quat::from_rotation_y(-e.yaw) * (point - e.pos);
+    let local = Quat::from_rotation_y(-e.yaw) * (point - e.pos) / boss_look::scale(e);
     // Match the torso, neck and pointed skull, rather than a single small central sphere.
     [
         (Vec3::new(0.0, 1.65, 0.05), Vec3::new(0.55, 0.62, 1.05)),
@@ -112,7 +112,20 @@ pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
         recover: if variant(e)==0 && e.hart.crown.phase==hart_crown::Phase::Vent { 1.0 } else { (e.hart.recovery / 1.8).clamp(0.0, 1.0) },
         breath: (time * 1.7).sin(),
     };
+    let mark = m.mark();
     m.crystal_hart(e.pos, e.yaw, pose, color(e), e.flash > 0.0);
+    // Prism motes circle the crown, drawing in tight and bright through a wind-up
+    // and flung wide in the recovery; their count reads the hart's menace.
+    let c = color(e);
+    let recover = (e.hart.recovery / 1.8).clamp(0.0, 1.0);
+    let crown = e.pos + Quat::from_rotation_y(e.yaw) * Vec3::new(0.0, 3.0, -1.35);
+    for i in 0..(3 + e.menace.min(3) as usize) {
+        let a = time * (0.9 + wind * 3.5) + i as f32 * std::f32::consts::TAU / (3.0 + e.menace.min(3) as f32);
+        let r = 0.9 - wind * 0.5 + recover * 0.6;
+        let q = crown + Vec3::new(a.cos() * r, 0.25 * (a * 2.0 + time).sin(), a.sin() * r);
+        m.cuboid(q, Vec3::new(0.06, 0.16, 0.06), Quat::from_rotation_y(a) * Quat::from_rotation_z(0.5), c, 1.2 + wind * 2.0);
+    }
+    m.scale_since(mark, e.pos, Vec3::splat(boss_look::scale(e)));
 }
 
 fn plan(e: &Enemy, distance: f32) -> Attack {

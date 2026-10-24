@@ -154,7 +154,7 @@ impl Adventure {
                 deck.set_slot(idx, wands::EMPTY);
             }
         }
-        if deck.mode == 3 {
+        if deck.mode == 3 || super::wand_items::shuffled(deck.seed, self.wand) {
             shuffle_deck(&mut deck, self.shuffle_seed, wands::capacity(self.wand));
         }
         deck

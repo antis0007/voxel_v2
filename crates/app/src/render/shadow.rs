@@ -87,6 +87,10 @@ pub struct ShadowRenderer {
     horizon_generation: u64,
     resident_coverage: ResidentCoverage,
     parent_draw_lists: [Vec<(usize, std::ops::Range<u32>)>; CASCADE_COUNT],
+    /// One indirect buffer per cascade: writes to a shared one would all land
+    /// before submit and every cascade would read the last list.
+    indirect: [super::streaming::indirect_draws::IndirectDraws; CASCADE_COUNT],
+    multidraw: bool,
 }
 
 fn unproject_clip(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
@@ -269,6 +273,8 @@ impl ShadowRenderer {
             horizon_generation: u64::MAX,
             resident_coverage: ResidentCoverage::default(),
             parent_draw_lists: std::array::from_fn(|_| Vec::new()),
+            indirect: std::array::from_fn(|_| Default::default()),
+            multidraw: false,
         }
     }
 
@@ -537,6 +543,20 @@ impl ShadowRenderer {
     pub fn renders_cascade(&self, i: usize) -> bool {
         self.frame_cascades & (1 << i) != 0
     }
+    /// Writes this frame's cascade lists as indirect arguments when multi-draw
+    /// is active. Call after `build_cascade_draw_lists`, before `render`.
+    pub fn prepare_indirect(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cache: &ChunkCache) {
+        self.multidraw = super::streaming::indirect_draws::active();
+        if !self.multidraw {
+            return;
+        }
+        for i in 0..CASCADE_COUNT {
+            if self.renders_cascade(i) {
+                self.indirect[i].prepare(device, queue, cache, self.draw_lists[i].iter().copied());
+            }
+        }
+    }
+
     pub fn build_cascade_draw_lists(&mut self, cache: &ChunkCache, horizon: Option<&GpuMesh>) {
         // Rebuild and submit lists only for layers selected this frame.
         for i in 0..CASCADE_COUNT {
@@ -637,7 +657,10 @@ impl ShadowRenderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.gen_bind_groups[i], &[]);
             let mut bound_page = None;
-            for coord in &self.draw_lists[i] {
+            if self.multidraw {
+                self.indirect[i].draw(&mut pass, cache);
+            }
+            for coord in self.draw_lists[i].iter().filter(|_| !self.multidraw) {
                 if let Some(slice) = cache.draw_slice(*coord) {
                     if bound_page != Some(slice.page) {
                         pass.set_vertex_buffer(0, slice.vertices.slice(..));

@@ -142,7 +142,7 @@ fn resource_grid(
         });
 }
 
-fn container_panel(
+pub(super) fn container_panel(
     ui: &mut egui::Ui,
     pos: IVec3,
     node: &crate::world::factory::Node,

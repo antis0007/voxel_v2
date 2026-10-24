@@ -141,7 +141,7 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
                     + (tone_two * 0.18 + metal * 0.12) * ring
                     + high * 0.025 * (-t * 30.0).exp()
             }
-            // Unwritten Keeper: hollow rising page resonance, then a clear
+            // Glassweaver: hollow rising glass resonance, then a clear
             // two-note release rather than a pulsing alarm-like tone.
             16 => {
                 let swell = (std::f32::consts::PI * u * 0.72).sin().max(0.0);

@@ -664,6 +664,7 @@ pub(super) fn hud(
     }
     super::relics::reward(ctx, view);
     super::relics::encounter(ctx, view);
+    super::relics::site_modifier(ctx, view);
     draw_compass(ctx, yaw, view.quest.as_ref());
     combat_feedback(ctx, view, yaw);
     bounds

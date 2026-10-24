@@ -16,8 +16,10 @@ pub use streaming::{
     set_mesh_budget_mib, set_world_residency_budgets_mib, world_residency_budgets_mib,
 };
 pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
+pub use streaming::indirect_draws::set_enabled as set_multidraw_enabled;
 
 mod atmosphere;
+pub mod atmosphere_config;
 pub mod atmosphere_params;
 pub mod cloud_governor;
 mod debug;
@@ -96,6 +98,12 @@ fn sanitize_render_distance_settings(
     settings.lod_levels = settings.lod_levels.clamp(1, 4);
     settings
 }
+
+/// Metres of distant terrain built beyond the streamed chunks.
+pub fn horizon_range_m() -> u32 { horizon::horizon_range_m() }
+pub fn set_horizon_range_m(metres: u32) { horizon::set_horizon_range_m(metres) }
+pub const MIN_HORIZON_RANGE_M: u32 = horizon::MIN_HORIZON_RANGE_M;
+pub const MAX_HORIZON_RANGE_M: u32 = horizon::FAR_PLANE as u32;
 
 pub fn render_distance_settings() -> RenderDistanceSettings {
     sanitize_render_distance_settings(RenderDistanceSettings {
@@ -693,7 +701,8 @@ fn render_isolation() -> RenderIsolation {
     static OPTIONS: std::sync::OnceLock<RenderIsolation> = std::sync::OnceLock::new();
     *OPTIONS.get_or_init(|| RenderIsolation {
         skip_clouds: std::env::var("VOXEL_REVIEW_SKIP_CLOUDS").as_deref() == Ok("1"),
-        skip_horizon: std::env::var("VOXEL_REVIEW_SKIP_HORIZON").as_deref() == Ok("1"),
+        skip_horizon: crate::low_spec::active()
+            || std::env::var("VOXEL_REVIEW_SKIP_HORIZON").as_deref() == Ok("1"),
     })
 }
 
@@ -748,6 +757,8 @@ struct LightingUniform {
     ambience: [f32; 4],
     /// Three linear palette colours, flow controls, then detail controls.
     magic: [[f32; 4]; 5],
+    /// `SkyArt::lighting_words`: solar disc, sky grade and cloud art controls.
+    sky_art: [[f32; 4]; 2],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -973,6 +984,7 @@ fn lighting_uniform_from_state(
         mood: state.mood,
         ambience: state.ambience,
         magic: crate::egui_ui::magic_style::world_uniform(),
+        sky_art: atmosphere_params::SkyArt::active().lighting_words(),
     }
 }
 
@@ -1081,6 +1093,8 @@ pub struct Gpu {
     lighting_bind_group: wgpu::BindGroup,
     atmosphere: AtmosphereRuntime,
     shadow_renderer: shadow::ShadowRenderer,
+    /// Indirect arguments for the main terrain pass (multi-draw path).
+    chunk_indirect: streaming::indirect_draws::IndirectDraws,
     horizon_detail: horizon::detail::Gpu,
     world_surface_bind_group: wgpu::BindGroup,
     cloud_texture_layout: wgpu::BindGroupLayout,
@@ -1536,9 +1550,15 @@ impl GpuBootstrap {
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window)?;
 
+        // `VOXEL_GPU_POWER=low` picks the integrated GPU, to measure weak-hardware cost on a dev box.
+        let power_preference = if std::env::var("VOXEL_GPU_POWER").as_deref() == Ok("low") {
+            wgpu::PowerPreference::LowPower
+        } else {
+            wgpu::PowerPreference::HighPerformance
+        };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -1546,6 +1566,7 @@ impl GpuBootstrap {
             .context("No suitable GPU adapter found")?;
         let adapter_info = adapter.get_info();
         streaming::configure_gpu_residency(&adapter);
+        streaming::indirect_draws::set_supported(&adapter);
         let adapter_summary = format!(
             "{} / {:?} / {:?}",
             adapter_info.name, adapter_info.backend, adapter_info.device_type
@@ -2893,6 +2914,7 @@ impl GpuPendingInit {
                     atmosphere: self.atmosphere_runtime.take().unwrap(),
 
                     shadow_renderer: self.shadow_renderer.take().unwrap(),
+                    chunk_indirect: Default::default(),
                     horizon_detail: self.horizon_detail.take().unwrap(),
                     world_surface_bind_group: self.world_surface_bind_group.take().unwrap(),
 
@@ -3624,7 +3646,7 @@ impl Gpu {
         fov_degrees:f32,
     ) {
         self.horizon.set_device_loss_signal(&self.device_lost);
-        if !self.device_usable() { return; }
+        if !self.device_usable() || crate::low_spec::active() { return; }
         self.horizon.set_refinement_projection(self.config.height as f32/(2.0*(fov_degrees.to_radians()*0.5).tan()));
         let cfg=world.sample_config();
         let root=&world.regions.view.root;
@@ -4261,6 +4283,7 @@ impl Gpu {
 
         if redraw_shadow_map {
             self.shadow_renderer.build_cascade_draw_lists(chunk_cache, self.horizon.mesh.as_ref());
+            self.shadow_renderer.prepare_indirect(&self.device, &self.queue, chunk_cache);
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {
@@ -4290,8 +4313,15 @@ impl Gpu {
         };
         frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0;
 
-        let scene_view = &self.postprocess.scene;
         let terrain_start = Instant::now();
+        // Indirect arguments are written before the pass (writes land before submit).
+        let multidraw = !paused && streaming::indirect_draws::active();
+        let multidraw_counts = if multidraw {
+            self.chunk_indirect.prepare(&self.device, &self.queue, chunk_cache, draw_list.iter().map(|k| k.coord))
+        } else {
+            (0, 0)
+        };
+        let scene_view = &self.postprocess.scene;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
@@ -4351,7 +4381,12 @@ impl Gpu {
                 pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
                 // Front-to-back order stays; buffers rebind only on a page change.
                 let mut bound_page = None;
-                for key in draw_list {
+                if multidraw {
+                    self.chunk_indirect.draw(&mut pass, chunk_cache);
+                    terrain_draw_calls += multidraw_counts.0;
+                    terrain_indices += multidraw_counts.1;
+                }
+                for key in draw_list.iter().filter(|_| !multidraw) {
                     if let Some(slice) = chunk_cache.draw_slice(key.coord) {
                         if bound_page != Some(slice.page) {
                             pass.set_vertex_buffer(0, slice.vertices.slice(..));
@@ -4661,7 +4696,14 @@ impl Gpu {
             &view,
             &self.depth,
             [
-                self.current_lighting.exposure.max(0.01),
+                // A locked review exposure is an absolute value, so the
+                // art compensation applies to the time-of-day policy only.
+                if crate::terrain_review::fixed_exposure().is_some() {
+                    self.current_lighting.exposure.max(0.01)
+                } else {
+                    self.current_lighting.exposure.max(0.01)
+                        * atmosphere_params::SkyArt::active().exposure_gain()
+                },
                 self.current_lighting.saturation,
                 if self.fxaa_enabled { 1.0 } else { 0.0 },
                 if matches!(self.current_debug_view, RenderDebugView::None | RenderDebugView::Unfogged) {
@@ -4673,7 +4715,11 @@ impl Gpu {
                 0.85, // native 8x8 ordered dither, one 8-bit code at most
                 0.0,  // no palette quantization: preserve the authored ramps
                 0.0,  // no block contour: lighting owns the silhouettes
-                if crate::terrain_review::fixed_exposure().is_some() { 0.0 } else { 0.30 },
+                if crate::terrain_review::fixed_exposure().is_some() {
+                    0.0
+                } else {
+                    atmosphere_params::SkyArt::active().bloom_strength
+                },
                 0.72, // glow threshold: emissives, not ordinary daylight
                 self.effect_time,
                 0.06, // restrained vignette

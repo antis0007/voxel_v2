@@ -73,6 +73,20 @@ pub struct ShotMods {
     pub crit: bool,
     /// The attached payload also fires if the bolt times out without a hit.
     pub expire: bool,
+    /// Hits on wet or chilled foes land for double damage (Soaked strike).
+    pub crit_wet: bool,
+    /// A larger blast that hurts foes, and the careless caster, on impact.
+    pub explosive: bool,
+    /// Foes this bolt may pass through before it stops.
+    pub pierce: u8,
+    /// Slot + 1 of the foe last pierced, so one foe is not hit every substep.
+    pub pierced: u32,
+    /// The attached payload fires at the bolt's first bounce.
+    pub bounce_release: bool,
+    /// The attached payload fires when a foe comes within reach.
+    pub proximity: bool,
+    /// Drags nearby foes toward the impact.
+    pub pull: bool,
 }
 
 impl Default for ShotMods {
@@ -106,6 +120,13 @@ impl Default for ShotMods {
             mana_leech: false,
             crit: false,
             expire: false,
+            crit_wet: false,
+            explosive: false,
+            pierce: 0,
+            pierced: 0,
+            bounce_release: false,
+            proximity: false,
+            pull: false,
         }
     }
 }
@@ -153,12 +174,14 @@ pub struct CastBlockEval {
     pub mods: ShotMods,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Loadout {
     pub slots: [u32; 4],
     pub aux_slots: [u32; 4],
     pub cursor: usize,
     pub mode: u32,
+    /// Found wands roll their chassis from this; 0 is the plain crafted wand.
+    pub seed: u32,
 }
 
 impl Default for Loadout {
@@ -168,6 +191,7 @@ impl Default for Loadout {
             aux_slots: [EMPTY; 4],
             cursor: 0,
             mode: 0,
+            seed: 0,
         }
     }
 }
@@ -369,6 +393,13 @@ fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
         69 => mods.fork = true,
         77 => mods.mana_leech = true,
         78 => mods.crit = true,
+        88 => mods.crit_wet = true,
+        89 => {
+            mods.explosive = true;
+            mods.speed_mul = (mods.speed_mul * 0.85).max(0.65);
+        }
+        90 => mods.pierce = (mods.pierce + 2).min(4),
+        94 => mods.pull = true,
         _ => return false,
     }
     true
@@ -398,7 +429,7 @@ pub fn evaluate_programmed(
             mods: ShotMods::default(),
         };
     }
-    let wand_stats = stats(wand, loadout.mode, rank);
+    let wand_stats = super::wand_items::stats_for(wand, loadout, rank);
     let find_next = |after: usize| -> usize {
         (1..=cap)
             .map(|n| (after + n) % cap)
@@ -522,6 +553,18 @@ pub fn evaluate_programmed(
                         // Trigger bolt plus: also fires if the bolt times out.
                         attach_trigger = true;
                         mods.expire = true;
+                    }
+                    91 => draws = (draws + 3).min(4),
+                    92 => {
+                        // Trigger bolt that fires its payload at the first bounce.
+                        attach_trigger = true;
+                        mods.bounce_release = true;
+                        mods.bounces = (mods.bounces + 1).min(4);
+                    }
+                    93 => {
+                        // Trigger bolt that fires its payload beside a foe.
+                        attach_trigger = true;
+                        mods.proximity = true;
                     }
                     _ => {}
                 }
@@ -758,6 +801,7 @@ impl Adventure {
             // Bounce orb always ricochets, whatever else is on the deck.
             mods.bounces = mods.bounces.max(4);
         }
+        arcana::innate_mods(spell, &mut mods);
         let speed = spell_base_speed(spell) * mods.speed_mul;
         let arc_lift = match spell {
             5 => Vec3::Y * 2.0,
@@ -765,23 +809,30 @@ impl Adventure {
             28 => Vec3::Y * 1.2,
             _ => Vec3::ZERO,
         };
+        for dir in arcana::scatter_dirs(spell, dir) {
+        if self.projectiles.len() >= 96 {
+            return;
+        }
         self.projectiles.push(Projectile {
             farm: None,
             pos,
             velocity: dir * speed + arc_lift,
             hostile: false,
             spell,
-            life: (match spell {
+            life: ((match spell {
                 10 => 3.6,
                 71 => 0.16, // Chainsaw: a few metres of reach
                 76 => 4.0,
-                _ => 3.0,
-            }) * mods.life_mul.max(0.25),
+                _ => arcana::base_life(spell).unwrap_or(3.0),
+            }) * mods.life_mul.max(0.25))
+            .min(arcana::life_cap(spell)),
             payload,
             payload_mods: ShotMods::default(),
             mods,
             bore_budget: if spell == 10 {
                 24
+            } else if spell == arcana::DIG_BOLT {
+                12
             } else if mods.bore {
                 6
             } else {
@@ -791,6 +842,7 @@ impl Adventure {
             splashed: false,
             follow: None,
         });
+        }
     }
 
     fn room_for_spell(&self, spell: u32, count: usize) -> bool {
@@ -862,7 +914,7 @@ impl Adventure {
                 self.mana_flash = 0.45;
                 return;
             }
-        } else if self.mana < eval.mana_cost {
+        } else if self.mana < eval.mana_cost * super::modifiers::mana_mul(self.site_modifier) {
             self.cast_cd = 0.12;
             self.mana_flash = 0.45;
             return;
@@ -903,8 +955,9 @@ impl Adventure {
             self.health -= health_cost;
             self.spawn_voxel_burst(eye + forward * 0.4, [0.72, 0.16, 0.22], 8, 1.0, 0.03);
         } else {
-            self.mana = (self.mana - eval.mana_cost).clamp(0.0, self.max_mana());
+            self.mana = (self.mana - eval.mana_cost * super::modifiers::mana_mul(self.site_modifier)).clamp(0.0, self.max_mana());
         }
+        let forward = super::modifiers::wobble(self.site_modifier, forward, self.time);
         if eval.actions.iter().any(|a| a.mods.reckless) {
             // Never lethal: Reckless trades health for damage, not for a death.
             self.health = (self.health - 4.0).max(1.0);

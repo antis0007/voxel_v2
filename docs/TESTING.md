@@ -2,6 +2,12 @@
 
 One command gates everything: `just verify` (check, clippy, tests, the perf gate, LOC report).
 
+The task gate (`scripts/workflow.py`, run from the Stop hook) derives its required checks from the
+diff via `.claude/verify/policy.json`. It runs the perf gate (`scripts/bench.py check`) on Rust and
+policy changes. It blocks at most once per user turn (`stop_continuations`); after that it reports
+the checks still UNVERIFIED and lets the session end, so run `just verify` before committing.
+Manual checks are self-attested by evidence file and must be reviewed by a person or independent agent.
+
 ## Unit tests
 
 `just test` runs every `#[test]` in the workspace with nextest. `just test <substring>`
@@ -25,6 +31,21 @@ median of 3 runs and fails above +8% or on a bench with no baseline; `just bench
 records new baselines, which are committed with the reason. A new bench is a
 `[[bench]]` entry with `harness = false` in its crate's `Cargo.toml` plus a
 `just bench-save`. Example: `crates/worldgen/benches/terrain.rs`.
+
+## Seam route
+
+The `seam_route` gate check (policy route `world_meshing`: mesh, horizon, streaming, voxel, worldgen, core) has two halves, both owned by whoever changes those paths.
+
+1. Automated: `just seam-route` runs `crates/worldgen/src/seam_route.rs`. It walks a fixed route of chunk coordinates (deep negative, across the origin, about 96 000 voxels out), at two voxel scales and at generator 33 and current. It checks that each padded halo equals direct `sample_block`, that padded interiors equal `generate`, and that neighbouring padded chunks agree on their overlap.
+2. Captures: the gate demands at least two images, before and after, from the same pose. Run `tools/Review-HorizonContinuity.ps1 -Executable <exe> -Case route -Label <unique> -GeneratorVersion <n>` once per side (default version 25) and attest with `python -I scripts/workflow.py attest seam_route --evidence <capture dir> --note ...`.
+
+## Task gate: ownership and its limits
+
+A session's required checks come from the files that session wrote and that still differ from the current HEAD, so committed work leaves every task. The PreToolUse and PostToolUse hooks snapshot the dirty set around each writing tool call and record what changed in between; `claim PATH... --note TEXT` adds files written another way, and `adopt-ownership` switches a legacy session over once. Owned files stay in the task for its life, so a peer's later edit to one of them still counts. Gaps: a peer write that lands during one of your tool calls is attributed to you (conservative), and a background process's writes after its tool call returns are not attributed, so `claim` them.
+
+The post handler also runs on `PostToolUseFailure`, so a shell command that writes files and then exits non-zero is still attributed. A tool call whose post hook never ran (hook timeout, crash, or a hook config older than the session) leaves its pre snapshot behind. At Stop, a snapshot older than 15 minutes is diffed against the tree, and the files changed or created inside that call's possible window (11 minutes) are reported, not attributed: any window in a shared checkout also holds peers' writes. Claim the ones you wrote. The reverse case, a peer's write that landed inside one of your calls, is removed with `disown PATH... --note TEXT`; it is logged, announced at the next Stop, and undone automatically if your session writes or claims the file again. The Stop hook also announces once which files `adopt-ownership` dropped from the task.
+
+Evidence binding: automatic checks (build, clippy, test runs) are bound to the fingerprint of the whole task. A manual check is bound to the files whose routes require it plus every non-doc file in the task. A capture or review stays verified while you edit inert files (the policy's `inert_paths`: docs, `.claude/`, the gate scripts), but any code, shader or content edit makes it stale, even one no capture route names. A test fails if the game ever embeds an inert-pattern file. `status` prints the binding when it differs from the task fingerprint. `verify CHECK...` runs only the named required automatic checks, so an unrelated failure in the full test run does not stop an independent check from being recorded; the failing ones stay required. `owners PATH...` lists which sessions own a path and when each was last active, to find who else is editing it; a path changed only by legacy sessions shows no owner. `python -I scripts/test_workflow.py` runs the gate's own tests in a throwaway git repo, two simulated sessions each. The `policy` route requires it (`tests_workflow`) for any change to the gate scripts, the policy or the hooks config.
 
 ## Scenarios: how an agent plays the game
 
@@ -89,10 +110,3 @@ Edit values in the file; if you change a struct, run the ignored
 2. `just run assets/scenarios/<name>.ron` until the checks pass.
 3. `INSTA_UPDATE=always just test headless` to record the snapshot.
 4. Commit both files.
-
-## Seam route
-
-The `seam_route` gate check (policy route `world_meshing`: mesh, horizon, streaming, voxel, worldgen, core) has two halves, both owned by whoever changes those paths.
-
-1. Automated: `just seam-route` runs `crates/worldgen/src/seam_route.rs`. It walks a fixed route of chunk coordinates (deep negative, across the origin, about 96 000 voxels out), at two voxel scales and at generator 33 and current. It checks that each padded halo equals direct `sample_block`, that padded interiors equal `generate`, and that neighbouring padded chunks agree on their overlap.
-2. Captures: the gate demands at least two images, before and after, from the same pose. Run `tools/Review-HorizonContinuity.ps1 -Executable <exe> -Case route -Label <unique> -GeneratorVersion <n>` once per side (default version 25) and attest with the workflow script's `attest seam_route --evidence <capture dir> --note ...` command.

@@ -25,4 +25,7 @@ struct Lighting {
     // x: fireflies, y: pollen, z: diamond dust, w: embers.
     ambience: vec4<f32>,
     magic: array<vec4<f32>,5>,
+    // SkyArt (render/atmosphere_params.rs): [disc cos radius, glare, sky grade,
+    // sunset saturation], [cloud contrast, exposure gain, -, -].
+    sky_art: array<vec4<f32>,2>,
 };

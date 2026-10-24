@@ -361,7 +361,12 @@ fn photographic_low_density(
     // while the kilometer-scale organization bends whole banks. Apply this
     // to the density masks too; warping only the interior left flat layer caps.
     let height_warp = (shape.b - 0.5) * 0.38 + organization.y * 0.20;
-    let shaped_h = clamp(h + height_warp * convective, 0.0, 1.0);
+    // Cumulus condense at a shared lifting level, so a field has one flat
+    // underside and differs only in how far each tower climbs. Warping the
+    // whole profile floated each cloud at its own height (±30% of the slab).
+    // The warp fades in above the base and keeps full strength in the tops.
+    let warp_weight = smoothstep(0.02, 0.40, h);
+    let shaped_h = clamp(h + height_warp * convective * warp_weight, 0.0, 1.0);
     let lobes = (shape.r - 0.5) * 1.18 + (shape.g - 0.5) * 0.48;
     var field = 0.0;
     if convective > 0.0 {

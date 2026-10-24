@@ -1,0 +1,13 @@
+// What each Undercrown plinth gives when claimed (generator 32 and later).
+// `district` and `room` are the plinth's save identity (`UNDERCROWN_SCHEMA.md`).
+// Items go to the pack, or drop at the plinth when the pack is full. The
+// named relics have no item of their own yet; these are their stand-ins.
+[
+    (district: 0, room: 3, label: "Counterweight Ring", items: [(Block(SilverBlock), 4), (Block(CopperBlock), 6)]),
+    (district: 0, room: 8, label: "Confiscated locker", items: [(Armor(Head, Copper), 1)]),
+    (district: 1, room: 3, label: "Bellkeeper's Gloves", items: [(Armor(Feet, Steel), 1)]),
+    (district: 1, room: 8, label: "A letter and a tool", items: [(Block(Crystal), 3), (Block(Torch), 16)]),
+    (district: 2, room: 2, label: "Jeweler's balcony", items: [(Block(GoldBlock), 3), (Block(SilverBlock), 3)]),
+    (district: 2, room: 3, label: "Rimeglass Buckler", items: [(Armor(Chest, Steel), 1)]),
+    (district: 5, room: 1, label: "Archive reliquary", items: [(Armor(Chest, Lumen), 1), (Block(MithrilBlock), 2), (Block(StarGlass), 8)]),
+]

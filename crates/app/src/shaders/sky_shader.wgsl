@@ -126,37 +126,48 @@ fn star_field(dir: vec3<f32>, night: f32, cloud_cover: f32) -> vec3<f32> {
     return star_color * (present * shape * twinkle * fade);
 }
 
-// Sun disk with limb darkening.
-// The core stays hotter than the limb. Both follow solar_disk_chroma so a
-// gold or rose sky has a sun of the same family, redder than the scattered air.
+// Disc radiance relative to the terrain's direct-sun irradiance scale. The
+// disc covers ~1e-4 sr, so it must be far brighter than the sky to read as the
+// source; tone mapping then holds a pale-gold core with a coloured limb.
+const SUN_DISC_GAIN: f32 = 24.0;
+
+// The visible sun: one disc and one tight glare skirt. Its colour and
+// brightness are the source times the same transmittance that lights the
+// terrain, so disc, ground and clouds agree. The broad aureole is the sky
+// LUT's aerosol scattering; clouds occlude this per pixel in the composite,
+// so nothing here is dimmed by a global cloud-cover number.
 fn sun_disk(dir: vec3<f32>, sun_dir: vec3<f32>,
-            sun_color: vec3<f32>, sun_intensity: f32,
-            cloud_cover: f32, daylight: f32) -> vec3<f32> {
-    let cos_angle = dot(dir, sun_dir);
-    // Angular radius of sun disk: ~0.5° → cos ≈ 1 - 3.8e-5
-    // Larger apparent disk (0.9°) is more visually readable in a game.
-    let disk_cos  = 0.99998;   // inner disk
+            sun_color: vec3<f32>, sun_intensity: f32) -> vec3<f32> {
+    let cos_angle = clamp(dot(dir, sun_dir), -1.0, 1.0);
+    // Small-angle separation in radians; exact enough below a few degrees.
+    let theta = sqrt(max(2.0 * (1.0 - cos_angle), 0.0));
+    let radius = sqrt(max(2.0 * (1.0 - light.sky_art[0].x), 1e-8));
+    // One-pixel antialiased limb at any resolution or field of view.
+    let aa = max(fwidth(theta), radius * 0.03);
+    let disk = 1.0 - smoothstep(radius - aa, radius + aa, theta);
+    let x = saturate1(theta / radius);
+    let mu = sqrt(max(1.0 - x * x, 0.0));
+    // Limb darkening u ~ 0.6; the limb also loses blue faster than the core.
+    let limb_dark = 1.0 - 0.6 * (1.0 - mu);
 
-    let low = 1.0 - smoothstep(0.02, 0.24, sun_dir.y);
-    let chroma = solar_disk_chroma(sun_dir.y);
-    // Noon stays the authored near-white source. Low sun replaces it.
-    let core = mix(sun_color, chroma, smoothstep(0.08, 0.55, low));
-    // Limb and glow lose green and blue first, matching a real photosphere.
-    let limb = core * vec3<f32>(1.0, mix(0.94, 0.42, low), mix(0.88, 0.18, low));
-    let glow = mix(core, chroma, 0.65 + 0.35 * low);
+    let trans = sky_transmittance_to_sun_at_altitude(sun_dir.y, max(cam.camera_pos.y, 0.0));
+    let source = max(sun_color, vec3<f32>(0.0)) * trans * sun_intensity;
+    // Photographic core: the centre saturates toward pale gold before the
+    // limb does, so a low sun reads as a luminous gold point in amber air.
+    let hue = radiance_chroma(max(source, vec3<f32>(1e-6)));
+    let core_hue = mix(hue, vec3<f32>(1.0, 0.93, 0.78) * 1.06, 0.55 * mu);
+    let disc = core_hue * sky_luma(source) * limb_dark * SUN_DISC_GAIN;
+    // Forward-scatter glare: falls by e every 1.3 radii outside the limb.
+    let skirt = exp(-max(theta - radius, 0.0) / (radius * 1.3)) * (1.0 - disk);
+    let glare = source * light.sky_art[0].y * SUN_DISC_GAIN * 0.25 * skirt;
+    return disc * disk + glare;
+}
 
-    // Limb darkening coefficient u ≈ 0.6 (solar observation)
-    let mu         = saturate1((cos_angle - disk_cos) / max(1.0 - disk_cos, 1e-6));
-    let limb_dark  = 1.0 - 0.6 * (1.0 - sqrt(max(mu, 0.0)));
-    let disk_color = mix(limb, core, sqrt(max(mu, 0.0)));
-
-    let disk  = smoothstep(disk_cos - 0.00002, disk_cos, cos_angle) * limb_dark;
-    let halo  = pow(max(cos_angle, 0.0), mix(380.0, 220.0, low)) * mix(0.38, 0.55, low);
-    let corona = pow(max(cos_angle, 0.0), mix(40.0, 16.0, low))
-        * mix(0.06, 0.20, low) * (1.0 - cloud_cover * 0.80);
-
-    let cover = 1.0 - cloud_cover * 0.72;
-    return (disk_color * disk + glow * halo + glow * corona) * sun_intensity * cover;
+// Stars appear only where the sky behind them is dark at this exposure, so a
+// twilight dome hides them and they come through as blue hour deepens.
+fn star_visibility(background: vec3<f32>) -> f32 {
+    let exposure = max(light.ambient_exposure.w, 0.01);
+    return 1.0 - smoothstep(0.02, 0.07, sky_luma(background) * exposure);
 }
 
 // Moon disk with flat shading and subtle blue-grey colour temperature.
@@ -207,11 +218,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var sky = background;
 
     // --- Sun disk (with limb darkening) ---
-    sky += sun_disk(
-        dir, sun_dir,
-        light.sun_color_daylight.rgb, light.sun_dir_intensity.w,
-        cloud_cover, daylight,
-    );
+    sky += sun_disk(dir, sun_dir, light.sun_color_daylight.rgb, light.sun_dir_intensity.w);
 
     // --- Moon disk ---
     sky += moon_disk(
@@ -221,7 +228,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     );
 
     // --- Star field ---
-    sky += star_field(dir, night, cloud_cover_stars);
+    sky += star_field(dir, night, cloud_cover_stars) * star_visibility(background);
 
     // --- Sky events: aurora, meteor shower, rainbow ---
     let event_time = light.torch_meta.y;

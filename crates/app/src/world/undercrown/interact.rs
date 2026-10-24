@@ -1,8 +1,7 @@
-//! Focus and interaction for authored Undercrown mechanisms.
-//!
-//! This milestone wires the contract but ships no props, so the public path is
-//! inert. Tests exercise the same functions with a fixture plan.
-use engine_worldgen::undercrown::{Action, Plan, State, flags};
+//! Focus and interaction for authored Undercrown mechanisms. From generator
+//! 32 a mechanism writes the voxels it changes (a stair, a bridge, a drained
+//! hall, an opened door) and a claimed plinth grants its reward.
+use engine_worldgen::undercrown::{Action, Plan, State, flags, v2};
 use crate::player::Player;
 use crate::world::interaction::Prompt;
 use crate::world::{World, trace};
@@ -128,6 +127,7 @@ pub(super) fn interact_with_plan(
     };
     let prop = plan.props[index];
     let current = state.get(prop.id);
+    let before = v2::current(state);
     let action = prop.action(current);
     let message = match action {
         Action::Inspect => {
@@ -167,6 +167,9 @@ pub(super) fn interact_with_plan(
                 "Nothing remains here."
             } else {
                 state.set(prop.id, flags::CLAIMED);
+                if plan.v2.is_some() {
+                    super::rewards::grant(world, prop.id, prop.pos);
+                }
                 "Claimed."
             }
         }
@@ -184,10 +187,38 @@ pub(super) fn interact_with_plan(
         }
     };
     state.cooldown = ACTION_COOLDOWN;
+    let after = v2::current(state);
+    let mut changed = Vec::new();
+    let mut message = message;
+    if before != after
+        && let Some(layout) = &plan.v2
+    {
+        let edits = layout.edits(&world.sample_config(), before, after);
+        changed = edits.iter().filter(|(p, b)| world.get(*p) != *b).map(|(p, _)| *p).collect();
+        world.set_many_mechanism(&edits);
+        message = mechanism_message(before, after);
+    }
     Outcome {
         used: true,
-        changed: Vec::new(),
+        changed,
         message: Some(message),
+    }
+}
+
+/// What the player hears when a mechanism moves.
+fn mechanism_message(before: v2::Mech, after: v2::Mech) -> &'static str {
+    let gained = v2::Mech(after.0 & !before.0);
+    match gained {
+        m if m == v2::Mech::BELL => "The bell's note runs down the stone. Far off, a stair settles back into place.",
+        m if m == v2::Mech::STAIR => "The platform takes the weight. The stair is whole again.",
+        m if m == v2::Mech::BRIDGE => "The lift swings out and locks: a bridge to the tower.",
+        m if m == v2::Mech::WINCH => "The chain takes up. Below, a portcullis grinds open.",
+        m if m == v2::Mech::SLUICE => "Water roars into the bypass. The courthouse is draining.",
+        m if m == v2::Mech::COOLING => "Cold water floods the channel. The lava crusts over.",
+        m if m == v2::Mech::LENS => "Light gathers in the lens and falls somewhere east. A seal lets go.",
+        m if m == v2::Mech::FREIGHT => "The platform locks into its rails. A crossing waits at the furnace.",
+        _ if after.0 & !before.0 == 0 => "The water finds its old level.",
+        _ => "The mechanism moves.",
     }
 }
 
@@ -280,5 +311,63 @@ mod tests {
             .map(|(_, prompt)| prompt)
             .unwrap();
         assert_eq!(after.action, "F  Recall this detail");
+    }
+
+    fn face(world: &World, prop: engine_worldgen::undercrown::Prop, from: Vec3) -> Player {
+        let mut player = Player::new();
+        player.pos = from;
+        let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
+        let forward = (prop.pos + Vec3::Y * FOCUS_HEIGHT - eye).normalize();
+        player.yaw = forward.x.atan2(-forward.z);
+        player.pitch = forward.y.asin();
+        player
+    }
+
+    #[test]
+    fn generator_32_mechanisms_write_their_voxels_and_the_seal_opens_only_for_the_lens() {
+        let mut world = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 424242);
+        let plan = super::super::plan(&world.sample_config());
+        let layout = plan.v2.as_ref().expect("generator 32 plan");
+        let mut state = State::default();
+        let find = |label: &str| *plan.props.iter().find(|p| p.label == label).unwrap();
+
+        // The archive door is tombstone; a player edit cannot open it.
+        let door = layout.edits(&world.sample_config(), v2::Mech::default(), v2::Mech::LENS);
+        let (cell, open) = door[0];
+        assert_eq!(world.get(cell), BlockId::TombStone);
+        world.set_many(&[(cell, BlockId::Air)]);
+        assert_eq!(world.get(cell), BlockId::TombStone);
+
+        // Ringing the bell restores the listening stair.
+        let bell = find("Bell clapper");
+        let player = face(&world, bell, bell.pos + Vec3::new(1.6, -0.2, 0.0));
+        let rung = interact_with_plan(&plan, &mut state, &mut world, &player);
+        assert!(rung.used, "the clapper was not focused");
+        assert!(!rung.changed.is_empty(), "ringing changed no voxels");
+        for p in &rung.changed {
+            assert!(world.get(*p).is_solid(), "a restored stair cell is not solid");
+        }
+        assert!(v2::current(&state).has(v2::Mech::BELL));
+
+        // Restoring the lens opens the seal.
+        state.cooldown = 0.0;
+        let lens = find("Observatory lens");
+        let player = face(&world, lens, lens.pos + Vec3::new(1.8, -0.2, 0.0));
+        let restored = interact_with_plan(&plan, &mut state, &mut world, &player);
+        assert!(restored.used && restored.changed.contains(&cell));
+        assert_eq!(world.get(cell), open);
+
+        // Claiming the gloves grants them once.
+        state.cooldown = 0.0;
+        let gloves = find("Bellkeeper's Gloves");
+        let player = face(&world, gloves, gloves.pos + Vec3::new(-1.8, -0.2, 0.0));
+        let before = world.inventory.pack.iter().chain(world.inventory.hotbar.iter()).flatten().count();
+        assert!(interact_with_plan(&plan, &mut state, &mut world, &player).used);
+        let after = world.inventory.pack.iter().chain(world.inventory.hotbar.iter()).flatten().count();
+        assert!(after > before, "claim granted nothing");
+        state.cooldown = 0.0;
+        interact_with_plan(&plan, &mut state, &mut world, &player);
+        let again = world.inventory.pack.iter().chain(world.inventory.hotbar.iter()).flatten().count();
+        assert_eq!(again, after, "a second claim granted more");
     }
 }

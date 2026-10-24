@@ -23,7 +23,8 @@ use wgpu::util::DeviceExt;
 
 use crate::world::{CloudControls, LightingState};
 
-use super::atmosphere_params::{AtmosphereMode, AtmosphereParameters};
+use super::atmosphere_config::{AtmosphereConfig, AtmospherePreset};
+use super::atmosphere_params::{AtmosphereMode, AtmosphereParameters, SkyArt};
 use super::debug::RenderDebugView;
 
 pub const TRANSMITTANCE_LUT_WIDTH: u32 = 256;
@@ -88,6 +89,17 @@ struct AtmosphereLutGenerationUniform {
     sky_top_reserved: [f32; 4],
     sky_horizon_reserved: [f32; 4],
     fog_color_max_altitude: [f32; 4],
+    /// x: haze extinction 1/m, y: haze scale height m. Transmittance and
+    /// multiscatter are built once at startup, so these are startup constants.
+    art: [f32; 4],
+    /// `AtmospherePreset::uniform_words`: planet, Rayleigh + g, Mie + ozone
+    /// width, ozone + centre, Mie absorption.
+    physics: [[f32; 4]; 5],
+}
+
+fn active_preset() -> &'static AtmospherePreset {
+    static ACTIVE: std::sync::OnceLock<AtmospherePreset> = std::sync::OnceLock::new();
+    ACTIVE.get_or_init(AtmosphereConfig::shipped_active)
 }
 
 impl AtmosphereLutGenerationUniform {
@@ -130,6 +142,13 @@ impl AtmosphereLutGenerationUniform {
                 params.fog_color.z,
                 TRANSMITTANCE_LUT_MAX_ALTITUDE_M,
             ],
+            art: [
+                SkyArt::DEFAULT.haze_extinction,
+                SkyArt::DEFAULT.haze_scale_height,
+                SkyArt::active().fog_seam,
+                0.0,
+            ],
+            physics: active_preset().uniform_words(),
         }
     }
 }

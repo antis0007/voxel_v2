@@ -106,6 +106,24 @@ impl GeneratedChunk {
         self.chunk * CHUNK_SIZE - IVec3::splat(CHUNK_PAD)
     }
 
+    /// Torch blocks in this chunk's own cells. The halo belongs to the neighbour,
+    /// which reports those cells itself.
+    pub fn torch_cells(&self) -> Vec<(IVec3, BlockId)> {
+        let origin = self.origin();
+        let mut out = Vec::new();
+        for y in CHUNK_PAD..CHUNK_PAD + CHUNK_SIZE {
+            for z in CHUNK_PAD..CHUNK_PAD + CHUNK_SIZE {
+                for x in CHUNK_PAD..CHUNK_PAD + CHUNK_SIZE {
+                    let block = self.blocks[Self::local_index(x, y, z)];
+                    if block.is_light_source() {
+                        out.push((origin + IVec3::new(x, y, z), block));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn local_index(x: i32, y: i32, z: i32) -> usize {
         ((y * PADDED_CHUNK_SIZE + z) * PADDED_CHUNK_SIZE + x) as usize
     }

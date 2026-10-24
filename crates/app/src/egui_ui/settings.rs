@@ -18,6 +18,7 @@ struct TerrainPreset {
     lod_levels: u8,
     cloud_scale: u32,
     indirect: bool,
+    horizon_m: u32,
 }
 
 impl TerrainPreset {
@@ -46,6 +47,7 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
         lod_levels: 2,
         cloud_scale: 4,
         indirect: false,
+        horizon_m: 4096,
     },
     TerrainPreset {
         name: "Balanced",
@@ -57,6 +59,7 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
         lod_levels: 4,
         cloud_scale: 3,
         indirect: true,
+        horizon_m: 12288,
     },
     TerrainPreset {
         name: "Far view",
@@ -68,6 +71,7 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
         lod_levels: 4,
         cloud_scale: 3,
         indirect: true,
+        horizon_m: 24576,
     },
 ];
 
@@ -102,6 +106,7 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
                 state.settings = preset.settings(chunk_meters);
                 crate::render::set_cloud_render_scale(preset.cloud_scale);
                 crate::render::set_indirect_lighting_enabled(preset.indirect);
+                crate::render::set_horizon_range_m(preset.horizon_m);
             }
         }
     });
@@ -126,6 +131,25 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
             "Beyond full detail, distant terrain uses 2, 4 and 8 voxel cells. \
              Fewer levels look sharper and cost more triangles.",
         );
+    let mut range_km = crate::render::horizon_range_m() as f32 / 1000.0;
+    if ui
+        .add(
+            egui::Slider::new(
+                &mut range_km,
+                crate::render::MIN_HORIZON_RANGE_M as f32 / 1000.0
+                    ..=crate::render::MAX_HORIZON_RANGE_M as f32 / 1000.0,
+            )
+            .logarithmic(true)
+            .suffix(" km")
+            .text("Distant view"),
+        )
+        .on_hover_text(
+            "How far the low-detail horizon extends past the loaded terrain.              Shorter ranges build and draw far fewer samples and triangles.",
+        )
+        .changed()
+    {
+        crate::render::set_horizon_range_m((range_km * 1000.0).round() as u32);
+    }
     let side = (2 * s.view_distance_chunks + 1) as usize;
     let full_side = (2 * s.lod_start_chunks + 1) as usize;
     ui.small(format!(

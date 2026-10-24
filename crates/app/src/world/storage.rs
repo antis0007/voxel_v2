@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV28";
+const MAGIC: &[u8; 8] = b"VXWSAV29";
 /// Current writer version. Companion bytes follow the adventure block from 18;
 /// the found-spell log (3 words) follows the companion from 19. Version 20
 /// widens the resource table to 22 and the machine table to 21 kinds, and
@@ -24,7 +24,7 @@ const MAGIC: &[u8; 8] = b"VXWSAV28";
 /// Version 25 adds the ground receiver and finite cargo contract ledger.
 /// Version 26 adds habitat sources, residents, production and separate mana/XP ledgers.
 /// Version 28 adds radio equipment, finite knowledge and registered dish tracking.
-pub(crate) const SAVE_VERSION: u8 = 28;
+pub(crate) const SAVE_VERSION: u8 = 29;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -218,6 +218,7 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
         world.adventure.encode_spell_log(&mut bytes);
     }
     if save_version >= 23 { world.adventure.encode_boss_series(&mut bytes); }
+    if save_version >= 29 { world.adventure.encode_wand_bank(&mut bytes); }
     if save_version >= 17 {
         world.undercrown.encode(&mut bytes);
     }
@@ -530,6 +531,9 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                     super::adventure::Adventure::decode_spell_log(&mut || input.u32())?;
             }
             if version >= 23 { world.adventure.decode_boss_series(&mut || input.u32())?; }
+            // Before 29 the single wand lives only in the working copy; the first
+            // tick mints it into the bank and the inventory.
+            if version >= 29 { world.adventure.decode_wand_bank(&mut || input.u32())?; }
         }
         if version >= 17 {
             world.undercrown = super::undercrown::State::decode(&mut || input.u32())?;
@@ -570,6 +574,14 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                         });
                 }
             }
+            let bank = world.adventure.wand_bank.len();
+            let inv = &world.inventory;
+            ensure!(
+                inv.hotbar.iter().chain(inv.pack.iter()).chain(inv.craft_grid.iter()).chain(std::iter::once(&inv.cursor)).flatten().map(|s| s.item)
+                    .chain(inv.dropped.iter().map(|d| d.stack.item))
+                    .all(|item| !matches!(item, super::inventory::Item::Wand { id, .. } if id as usize >= bank)),
+                "Wand item without a wand record"
+            );
             world.sync_from_inventory();
         } else {
             world.migrate_legacy_save_to_inventory();
@@ -1066,6 +1078,58 @@ mod tests {
         let path = synth_save(&legacy, 21, &dir, "legacy21.vxw");
         assert!(load_exact(&path, &path).is_ok());
         drop(loaded); drop(w); drop(view);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn v29_keeps_every_wand_and_v28_wand_becomes_an_item() {
+        use super::super::adventure::wand_items;
+        let dir = std::env::temp_dir().join(format!("voxel_v29_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut w = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        w.inventory = super::super::inventory::SurvivalInventory::empty();
+        w.adventure.wand = 2;
+        w.adventure.loadout.set_slot(3, 4);
+        w.adventure.sync_wands(&mut w.inventory, 0, Vec3::ZERO);
+        let found = w.adventure.mint_wand(wand_items::generate(4242, 3)).unwrap();
+        w.inventory.pack[4] = Some(ItemStack::new(found, 1));
+        let stray = w.adventure.mint_wand(wand_items::generate(17, 1)).unwrap();
+        w.inventory.dropped.push(super::super::inventory::DroppedStack { pos: Vec3::new(3.0, 40.0, 3.0), stack: ItemStack::new(stray, 1) });
+        let path = synth_save(&w, SAVE_VERSION, &dir, "world_v29.dat");
+        let loaded = load_exact(&path, &path).unwrap().world;
+        assert_eq!(loaded.adventure.wand_bank, w.adventure.wand_bank);
+        assert_eq!(loaded.adventure.active_wand, Some(0));
+        assert_eq!(loaded.adventure.loadout.slot(3), 4);
+        assert_eq!(loaded.inventory.pack[4], w.inventory.pack[4]);
+        assert_eq!(loaded.inventory.dropped[0].stack.item, stray);
+        // Holding a found wand with a bigger pool than the plain formula, at full mana.
+        let mut rich = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        rich.inventory = super::super::inventory::SurvivalInventory::empty();
+        let seed = (1..10_000).find(|&s| wand_items::stats_for(3, &wand_items::generate(s, 3).loadout, 0).mana_max > 150.0).unwrap();
+        let item = rich.adventure.mint_wand(wand_items::generate(seed, 3)).unwrap();
+        rich.inventory.hotbar[0] = Some(ItemStack::new(item, 1));
+        rich.adventure.sync_wands(&mut rich.inventory, 0, Vec3::ZERO);
+        rich.adventure.mana = rich.adventure.max_mana();
+        assert!(rich.adventure.mana > 150.0);
+        let path = synth_save(&rich, SAVE_VERSION, &dir, "world_v29_rich.dat");
+        let back = load_exact(&path, &path).unwrap().world;
+        assert_eq!(back.adventure.mana, rich.adventure.mana);
+        assert_eq!(back.adventure.loadout.seed, seed);
+        // A version 28 save knows one wand only; the first tick turns it into an item.
+        let mut legacy = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        legacy.inventory = super::super::inventory::SurvivalInventory::empty();
+        legacy.adventure.wand = 3;
+        legacy.adventure.loadout.set_slot(5, 2);
+        let path = synth_save(&legacy, 28, &dir, "world_v28.dat");
+        let mut old = load_exact(&path, &path).unwrap().world;
+        assert!(old.adventure.wand_bank.is_empty());
+        assert_eq!(old.adventure.wand, 3);
+        let mut inv = std::mem::take(&mut old.inventory);
+        old.adventure.sync_wands(&mut inv, 0, Vec3::ZERO);
+        assert_eq!(old.adventure.wand_bank.len(), 1);
+        assert_eq!(old.adventure.wand_bank[0].tier, 3);
+        assert_eq!(old.adventure.wand_bank[0].loadout.slot(5), 2);
+        assert!(inv.hotbar.iter().chain(inv.pack.iter()).flatten().any(|s| matches!(s.item, Item::Wand { id: 0, .. })));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

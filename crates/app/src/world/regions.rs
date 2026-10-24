@@ -468,7 +468,7 @@ pub struct RegionStream {
     pending: HashMap<IVec3, u64>,
     reading: HashSet<IVec3>,
     // Source-only renderer interest. Loading these records never wakes physics.
-    visual_interest: HashSet<IVec3>,
+    pub(super) visual_interest: HashSet<IVec3>,
     next_version: u64,
     tx: mpsc::SyncSender<Command>,
     rx: mpsc::Receiver<Completion>,
@@ -758,6 +758,7 @@ impl World {
         } else {
             self.chunks
                 .insert(c, Arc::new(engine_worldgen::generate(&self.sample_config(), c)));
+            self.invalidate_snapshot_at(c);
         }
         Ok(())
     }

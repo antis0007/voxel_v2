@@ -45,7 +45,8 @@ fn creative_items() -> &'static [Item] {
             }
         }
         items.push(Item::Armor(EquipSlot::Head, ArmorTier::Lumen));
-        for tool in 1..=5 {
+        // Wands are real items with their own decks now; only the bores remain tools.
+        for tool in 1..=2 {
             items.push(Item::Tool(tool));
         }
         for food in [
@@ -65,6 +66,7 @@ fn creative_item_group(item: Item) -> &'static str {
         Item::Weapon(_) => "Weapons",
         Item::Armor(_, _) => "Armour",
         Item::Tool(_) => "Tools",
+        Item::Wand { .. } => "Wands",
         Item::Food(_) => "Food",
         Item::Block(_) | Item::PowerKit(_) => "Blocks",
     }
@@ -143,6 +145,7 @@ pub(super) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: It
         }
         Item::Tool(1 | 2) => icons::paint(painter, rect, icons::Icon::Bore),
         Item::Tool(t) => icons::paint(painter, rect, icons::Icon::Wand(t)),
+        Item::Wand { look, .. } => super::wand_icon::paint(painter, rect, look),
     }
 }
 
@@ -332,6 +335,9 @@ fn show_item_tooltip(resp: &egui::Response, stack: ItemStack, inv: &SurvivalInve
                 .color(presentation::MUTED),
         );
         let total = inv.count_item(stack.item);
+        if let Item::Wand { id, .. } = stack.item {
+            super::wand_icon::card(ui, id);
+        }
         if let Item::PowerKit(k) = stack.item {
             ui.small(format!("Stored: {} · upgrade {}", crate::world::factory::power::fmt_energy(k.energy as f64), k.upgrade));
             ui.small("One assembly per slot. Charge travels with this item.");
@@ -479,8 +485,9 @@ fn draw_survival_slot(
         }
 
     // Interactions, matching Minecraft's inventory pointer:
-    // - Left press picks the stack up immediately. Releasing on that same slot
-    //   leaves it on the cursor; releasing on one other slot places it all.
+    // - Left click on an empty hand picks the stack up on release over the same
+    //   slot, so a press that is cancelled or dragged away does nothing. Releasing
+    //   on one other slot later places it all.
     // - Left press while already carrying starts a drag. One slot places the
     //   whole stack on release; several slots split it evenly.
     // - A second press on the same slot within 300ms gathers matching stacks.
@@ -532,13 +539,6 @@ fn draw_survival_slot(
             *drag_slot = None;
             *lmb_split_origin = None;
             lmb_split_visited.clear();
-        } else if inv.cursor.is_none() {
-            if inv.slot(addr).is_some() {
-                inv.click_slot(addr);
-                *drag_slot = Some(addr);
-                *lmb_split_origin = None;
-                lmb_split_visited.clear();
-            }
         } else if let Some(cur) = inv.cursor {
             *drag_slot = Some(addr);
             *lmb_split_origin = Some(cur);
@@ -548,6 +548,14 @@ fn draw_survival_slot(
                 lmb_split_visited.push(addr);
             }
         }
+    }
+
+    // Empty-hand pickup fires on release over the slot it was pressed on.
+    if response.clicked() && !shift && !ctrl && inv.cursor.is_none() && inv.slot(addr).is_some() {
+        inv.click_slot(addr);
+        *drag_slot = Some(addr);
+        *lmb_split_origin = None;
+        lmb_split_visited.clear();
     }
 
     // Mouse Tweaks: Scroll wheel over slot pushes/pulls 1 item (Shift+Wheel transfers whole stack)
@@ -711,6 +719,7 @@ fn draw_survival_pack_view(
     open_wand_tab: &mut bool,
     bench: bool,
 ) {
+    super::wand_icon::publish(ui.ctx(), equipment_view);
     let recipes = crate::world::inventory::all_recipes();
     // Leaving the bench folds the 3 × 3 grid back to the 2 × 2 corner.
     if !bench {
@@ -931,18 +940,11 @@ fn draw_survival_pack_view(
                                     "{batches} ready · Click takes one · Right-click takes one · Shift-click crafts the stack into the pack"
                                 ));
                             });
-                            if out_resp.contains_pointer()
-                                && ui.ctx().input(|i| {
-                                    i.pointer.button_pressed(egui::PointerButton::Primary)
-                                        || i.pointer.button_pressed(egui::PointerButton::Secondary)
-                                })
-                            {
-                                let bulk = ui.ctx().input(|i| {
-                                    i.pointer.button_pressed(egui::PointerButton::Primary)
-                                        && (i.modifiers.shift
-                                            || i.modifiers.ctrl
-                                            || i.modifiers.command)
-                                });
+                            if out_resp.clicked() || out_resp.secondary_clicked() {
+                                let bulk = out_resp.clicked()
+                                    && ui.ctx().input(|i| {
+                                        i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command
+                                    });
                                 let _ = survival.craft_from_grid(bulk, bench);
                             }
                         } else if let Some(rec) = ghost_recipe.and_then(|idx| recipes.get(idx)) {
@@ -1131,23 +1133,14 @@ fn draw_survival_pack_view(
                                     }
                                     ui.small("Click fills the grid · Right-click crafts one · Shift-click crafts every batch");
                                 });
-                                if resp.contains_pointer()
-                                    && ui.ctx().input(|i| {
-                                        i.pointer.button_pressed(egui::PointerButton::Primary)
-                                            || i.pointer.button_pressed(egui::PointerButton::Secondary)
-                                    })
-                                {
+                                if resp.clicked() || resp.secondary_clicked() {
                                     if craftable {
                                         ghost_recipe = None;
-                                        let bulk = ui.ctx().input(|i| {
-                                            i.pointer.button_pressed(egui::PointerButton::Primary)
-                                                && (i.modifiers.shift
-                                                    || i.modifiers.ctrl
-                                                    || i.modifiers.command)
-                                        });
-                                        let single_now = ui.ctx().input(|i| {
-                                            i.pointer.button_pressed(egui::PointerButton::Secondary)
-                                        });
+                                        let bulk = resp.clicked()
+                                            && ui.ctx().input(|i| {
+                                                i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command
+                                            });
+                                        let single_now = resp.secondary_clicked();
                                         if survival.stage_recipe_into_grid(recipe, bench) {
                                             if bulk {
                                                 let _ = survival.craft_from_grid(true, bench);
@@ -1383,6 +1376,19 @@ pub(super) fn draw(
     let mut sort_by_name = ctx.data_mut(|d| d.get_temp::<bool>(sort_name_id).unwrap_or(true));
     let screen = ctx.content_rect();
     let compact = screen.height() < 400.0 || screen.width() < 680.0;
+    // An inspected storage node (F) sits beside the pack on the survival page.
+    let chest_focus = machines
+        .focused
+        .as_ref()
+        .filter(|(_, node)| node.kind == crate::world::factory::Kind::Storage);
+    // Container panel is 360 wide, plus the 12 pt gap that separates it from the pack.
+    // Hidden rather than clipped when pack + chest + window margins do not fit.
+    let pack_w = (if compact { 22.0 } else { 24.0 }) * 9.0 + 24.0 + 12.0 + 228.0;
+    let side_w = if chest_focus.is_some() && pack_w + 372.0 + 48.0 <= screen.width() {
+        372.0
+    } else {
+        0.0
+    };
 
     let window = egui::Window::new("Inventory")
         .frame(egui::Frame::new().fill(grimoire::LEATHER)
@@ -1395,7 +1401,7 @@ pub(super) fn draw(
         .default_width(if page == 2 {
             // Pack width + gap + recipe column + window margins.
             let slot = if compact { 22.0 } else { 24.0 };
-            (slot * 9.0 + 24.0 + 12.0 + 228.0 + 28.0_f32).min(screen.width() - 20.0)
+            (slot * 9.0 + 24.0 + 12.0 + 228.0 + 28.0_f32 + side_w).min(screen.width() - 20.0)
         } else {
             (screen.width() - 60.0).clamp(240.0, 520.0)
         })
@@ -1408,7 +1414,7 @@ pub(super) fn draw(
                 // The survival page has a fixed width: pack and recipe columns.
                 // Without it the tab strip claims the whole screen.
                 let slot = if compact { 22.0 } else { 24.0 };
-                let inv_w = slot * 9.0 + 24.0 + 12.0 + 228.0;
+                let inv_w = slot * 9.0 + 24.0 + 12.0 + 228.0 + side_w;
                 ui.set_width(inv_w);
                 ui.set_max_width(inv_w);
             }
@@ -1482,17 +1488,25 @@ pub(super) fn draw(
             // Page 2: Minecraft-style Survival Inventory (Armor + Character + 2×2 Craft + 27 Pack + 9 Hotbar)
             if page == 2 {
                 let mut open_wand_tab = false;
-                draw_survival_pack_view(
-                    ui,
-                    creative,
-                    player,
-                    survival,
-                    equipment,
-                    action,
-                    compact,
-                    &mut open_wand_tab,
-                    machines.bench,
-                );
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        draw_survival_pack_view(
+                            ui,
+                            creative,
+                            player,
+                            survival,
+                            equipment,
+                            action,
+                            compact,
+                            &mut open_wand_tab,
+                            machines.bench,
+                        );
+                    });
+                    if let Some((pos, node)) = chest_focus {
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| super::factory::container_panel(ui, *pos, node, action));
+                    }
+                });
                 if open_wand_tab {
                     page = 1;
                 }

@@ -44,10 +44,17 @@ fn vertex(
     i
 }
 
+/// Far water is clipped one voxel below the drawn sheet. The coarse lattice
+/// interpolates beach corners down toward the water, so clipping at the sheet
+/// itself floods dry shore (measured in `horizon_agreement`: p95 error is 4 to
+/// 19 m at the 16 to 64 m columns). Shallows under one voxel read as bed.
+pub(super) const COAST_BIAS_VOXELS: f32 = 1.0;
+
 pub(super) fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
     let scale = cfg.voxel_meters();
     let sea = cfg.water_level() as f32 + 1.0;
     let surface = sea - crate::mesh::WATER_SURFACE_INSET;
+    let waterline = surface - COAST_BIAS_VOXELS;
     let count = mesh.indices.len();
     let mut cache = HashMap::new();
     for offset in (0..count).step_by(3) {
@@ -57,7 +64,7 @@ pub(super) fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
             mesh.indices[offset + 2],
         ];
         let points = ids.map(|i| Vec3::from_array(mesh.vertices[i as usize].pos));
-        if points.iter().all(|p| p.y >= surface) {
+        if points.iter().all(|p| p.y >= waterline) {
             continue;
         }
         let mut polygon = [0u32; 4];
@@ -67,8 +74,8 @@ pub(super) fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
             let b = points[(edge + 1) % 3];
             let ia = ids[edge];
             let ib = ids[(edge + 1) % 3];
-            let wet_a = a.y < surface;
-            let wet_b = b.y < surface;
+            let wet_a = a.y < waterline;
+            let wet_b = b.y < waterline;
             if wet_a {
                 let bed_color=mesh.vertices[ia as usize].color;
                 polygon[n] = vertex(mesh, &mut cache, (ia, ia), a, sea, surface, scale,bed_color);
@@ -78,9 +85,9 @@ pub(super) fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
                 // Evaluate crossings in canonical endpoint order so adjacent
                 // triangles obtain bit-identical shoreline positions.
                 let (first, last) = if ia < ib { (a, b) } else { (b, a) };
-                let p = first.lerp(last, (surface - first.y) / (last.y - first.y));
+                let p = first.lerp(last, (waterline - first.y) / (last.y - first.y));
                 let (first_color,last_color)=if ia<ib {(mesh.vertices[ia as usize].color,mesh.vertices[ib as usize].color)} else {(mesh.vertices[ib as usize].color,mesh.vertices[ia as usize].color)};
-                let t=(surface-first.y)/(last.y-first.y);
+                let t=(waterline-first.y)/(last.y-first.y);
                 let bed_color=filtered_bed(first_color,last_color,t);
                 polygon[n] = vertex(
                     mesh,
