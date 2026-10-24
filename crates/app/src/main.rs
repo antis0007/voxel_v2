@@ -1023,10 +1023,10 @@ fn collect_nearby_torches(
     // Fade out at the budget boundary as well as the distance boundary. Sources
     // exchanging the final slot therefore enter with zero intensity.
     let fade_end = torches
-        .get(MAX_TORCH_LIGHTS)
+        .get(render::torch_light_budget())
         .map_or(max_distance, |t| t.0.sqrt() * world_scale)
         .min(max_distance);
-    torches.truncate(MAX_TORCH_LIGHTS);
+    torches.truncate(render::torch_light_budget());
     torches
         .into_iter()
         .map(|(distance_sq, pos, block)| {

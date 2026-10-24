@@ -39,6 +39,10 @@ struct VsOut {
     @location(12) model_uv: vec2<f32>,
 };
 
+// Integrated-GPU shading tier (render::lean_shading). Desktop pipelines keep
+// the default, so every lean branch is folded away there.
+override LEAN_SHADING: bool = false;
+
 fn terrain_safe_unit3(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
     let l2 = dot(v, v);
     return select(fallback, v * inverseSqrt(max(l2, 1e-20)), l2 > 1e-20);
@@ -879,6 +883,9 @@ fn cloud_fog_amount(view_dir: vec3<f32>, seg_len: f32) -> f32 {
     let density   = 1.0;
     let cirrus    = saturate1(summary.y * 0.45);
     let storm     = saturate1(summary.z);
+    if coverage <= 0.0 {
+        return 0.0;
+    }
 
     // Use cloud_layer_bounds() — the single source of truth for cloud heights.
     // Previous code hardcoded mix(900, 2200, ...) * scale which disagreed with
@@ -934,6 +941,9 @@ fn weather_level_weight(uv: vec2<f32>, level: i32) -> f32 {
 }
 
 fn shadow_field_at_world(world_xz: vec2<f32>) -> vec4<f32> {
+    if weather_clip_region(0).w == 0.0 {
+        return vec4<f32>(0.0);
+    }
     let uv0 = weather_uv(world_xz, 0);
     let uv1 = weather_uv(world_xz, 1);
     let uv2 = weather_uv(world_xz, 2);
@@ -963,7 +973,7 @@ fn project_shadow_world_xz(world_pos: vec3<f32>, light_dir: vec3<f32>, cloud_hei
 }
 
 fn sample_shared_cloud_shadow_transmittance(world_pos: vec3<f32>, light_dir: vec3<f32>) -> f32 {
-    if light_dir.y <= 0.02 {
+    if light_dir.y <= 0.02 || weather_clip_region(0).w == 0.0 {
         return 1.0;
     }
 
@@ -3094,8 +3104,12 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let reflection_dir = reflect(-to_eye, n);
         let sky_direction = terrain_safe_unit3(vec3<f32>(reflection_dir.x,
             max(reflection_dir.y, 0.02), reflection_dir.z), vec3<f32>(0.0, 1.0, 0.0));
-        let reflected_sky = atmosphere_color(sky_direction);
         let environment_mean = mix(sky_horizon, sky_up, 0.55);
+        // Lean: the per-frame horizon and zenith terms stand in for a sky lookup.
+        var reflected_sky = mix(sky_horizon, sky_up, sqrt(saturate1(sky_direction.y)));
+        if !LEAN_SHADING {
+            reflected_sky = atmosphere_color(sky_direction);
+        }
         let environment = mix(reflected_sky, environment_mean, roughness * roughness);
         let grazing = vec3<f32>(max(1.0 - roughness, 0.0));
         let environment_fresnel = f0 + (max(grazing, f0) - f0)
@@ -3242,7 +3256,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Shared contract: aerial_perspective returns (in-scattered radiance,
     // transmittance), i.e. RGB is already premultiplied by path extinction.
     // ============================================================
-    let raw_sky_radiance = max(atmosphere_color(view_dir), vec3<f32>(0.0));
+    var raw_sky_radiance: vec3<f32>;
+    if LEAN_SHADING {
+        // Per-frame horizon terms toward or away from the sun, then zenith.
+        let toward_sun = saturate1(dot(safe_normalize2(view_dir.xz, sun_az), sun_az) * 0.5 + 0.5);
+        raw_sky_radiance = max(mix(mix(antisolar_horizon, solar_horizon, toward_sun), sky_up,
+            smoothstep(0.0, 0.6, view_dir.y)), vec3<f32>(0.0));
+    } else {
+        raw_sky_radiance = max(atmosphere_color(view_dir), vec3<f32>(0.0));
+    }
     let sky_luma = dot(raw_sky_radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
     let weather_sky_radiance = mix(raw_sky_radiance, vec3<f32>(sky_luma), heavy_cloud * 0.55)
         * mix(1.0, 0.78, heavy_cloud * daylight);
@@ -3315,7 +3337,11 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let edge_fade = 1.0 - (1.0 - coverage_fade) * cable_coverage;
     if edge_fade > 0.0 {
         // This must equal the sky pass in HDR at the outer boundary.
-        lit = mix(lit, raw_sky_radiance, edge_fade);
+        var edge_sky = raw_sky_radiance;
+        if LEAN_SHADING {
+            edge_sky = max(atmosphere_color(view_dir), vec3<f32>(0.0));
+        }
+        lit = mix(lit, edge_sky, edge_fade);
     }
 
     // Nearby mist sits in front of the graded surface and distant haze, just

@@ -675,6 +675,25 @@ pub fn integrated_gpu() -> bool {
     INTEGRATED_GPU.load(Ordering::Relaxed)
 }
 
+/// Integrated-GPU shading tier: `LEAN_SHADING` in world_shader.wgsl (sky
+/// colour for mist and reflections from the per-frame probe) and a smaller
+/// torch-light budget. `VOXEL_LEAN_SHADING=0|1` overrides it for comparisons.
+pub fn lean_shading() -> bool {
+    static FORCED: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    FORCED
+        .get_or_init(|| match std::env::var("VOXEL_LEAN_SHADING").as_deref() {
+            Ok("1") => Some(true),
+            Ok("0") => Some(false),
+            _ => None,
+        })
+        .unwrap_or_else(integrated_gpu)
+}
+
+/// Nearest world lights uploaded per frame. Every terrain pixel tests each one.
+pub fn torch_light_budget() -> usize {
+    if lean_shading() { 16 } else { MAX_TORCH_LIGHTS }
+}
+
 /// Player setting. Off skips the raymarch and reports a cloudless sky to every
 /// shader (no coverage, no storm, no terrain cloud shadow or cloud fog).
 pub fn clouds_enabled() -> bool {
@@ -2723,7 +2742,10 @@ impl GpuPendingInit {
                         fragment: Some(wgpu::FragmentState {
                             module: world_shader,
                             entry_point: Some("fs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            compilation_options: wgpu::PipelineCompilationOptions {
+                                constants: &[("LEAN_SHADING", if lean_shading() { 1.0 } else { 0.0 })],
+                                ..Default::default()
+                            },
                             targets: &[
                                 Some(wgpu::ColorTargetState {
                                     format: postprocess::SCENE_FORMAT,
