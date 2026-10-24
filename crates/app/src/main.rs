@@ -2141,6 +2141,10 @@ fn main() -> Result<()> {
                             };
 
                             if !preferences_render_applied {
+                                if !benchmark_config.enabled && !low_spec::active() && render::integrated_gpu() {
+                                    low_spec::apply_integrated(&mut preferences.loaded, !preferences.from_file);
+                                    preferences.loaded.apply_globals();
+                                }
                                 if !benchmark_config.enabled {
                                     gpu.set_vsync(preferences.loaded.vsync);
                                     gpu.fxaa_enabled=preferences.loaded.fxaa;

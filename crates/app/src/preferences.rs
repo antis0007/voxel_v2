@@ -404,6 +404,9 @@ fn write(value: Preferences) -> Result<()> {
 }
 pub struct PreferenceStore {
     pub loaded: Preferences,
+    /// The player has a saved preferences file, so first-run hardware
+    /// defaults (see `low_spec::apply_integrated`) must not override it.
+    pub from_file: bool,
     pub status: Option<String>,
     failed: bool,
     tx: Option<mpsc::SyncSender<Preferences>>,
@@ -418,13 +421,14 @@ pub struct PreferenceStore {
 impl PreferenceStore {
     pub fn new(enabled: bool) -> Self {
         let (mut loaded, mut status) = (Preferences::default(), None);
+        let mut from_file = false;
         let load_path = storage::preference_read_path();
         if enabled && (load_path.is_file() || load_path.with_extension("prev.vxp").is_file()) {
             match read(&load_path) {
-                Ok((p, _)) => loaded = p,
+                Ok((p, _)) => (loaded, from_file) = (p, true),
                 Err(error) => match read(&load_path.with_extension("prev.vxp")) {
                     Ok((p, _)) => {
-                        loaded = p;
+                        (loaded, from_file) = (p, true);
                         status = Some("Recovered your previous preferences".into());
                     }
                     Err(_) => {
@@ -458,6 +462,7 @@ impl PreferenceStore {
         };
         Self {
             loaded,
+            from_file,
             status,
             failed: false,
             tx,

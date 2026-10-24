@@ -667,6 +667,13 @@ static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(3);
 static CLOUD_AUTO_BUMP: AtomicU32 = AtomicU32::new(0);
 static CLOUD_ADAPTIVE_ENABLED: AtomicBool = AtomicBool::new(true);
 static CLOUDS_ENABLED: AtomicBool = AtomicBool::new(true);
+static INTEGRATED_GPU: AtomicBool = AtomicBool::new(false);
+
+/// The selected adapter shares system memory and power with the CPU (or is a
+/// software rasterizer). Known once the GPU is initialised.
+pub fn integrated_gpu() -> bool {
+    INTEGRATED_GPU.load(Ordering::Relaxed)
+}
 
 /// Player setting. Off skips the raymarch and reports a cloudless sky to every
 /// shader (no coverage, no storm, no terrain cloud shadow or cloud fog).
@@ -1632,6 +1639,10 @@ impl GpuBootstrap {
             .await
             .context("No suitable GPU adapter found")?;
         let adapter_info = adapter.get_info();
+        INTEGRATED_GPU.store(
+            matches!(adapter_info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu),
+            Ordering::Relaxed,
+        );
         streaming::configure_gpu_residency(&adapter);
         streaming::indirect_draws::set_supported(&adapter);
         let adapter_summary = format!(
@@ -1667,7 +1678,9 @@ impl GpuBootstrap {
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            desired_maximum_frame_latency: 2,
+            // A GPU-bound integrated adapter would otherwise queue a whole
+            // extra 30-60 ms frame between input and the screen.
+            desired_maximum_frame_latency: if integrated_gpu() { 1 } else { 2 },
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: caps.alpha_modes[0],
             view_formats: if format.is_srgb() {
