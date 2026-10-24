@@ -95,11 +95,16 @@ mod tests {
 
     /// GPU tests get their adapter from `engine_gpu::test_adapter()`, so
     /// `just test-gpu` controls backend selection and fails without a GPU.
-    /// Only that helper and the windowed renderer may request an adapter.
+    /// Only that helper, the windowed renderer and the menu art export (a runtime tool, not a test) may
+    /// request an adapter.
     #[test]
     fn only_engine_gpu_and_the_renderer_request_an_adapter() {
         let root = repo_root();
-        let allowed = [root.join("crates/gpu/src/lib.rs"), root.join("crates/app/src/render.rs")];
+        let allowed = [
+            root.join("crates/gpu/src/lib.rs"),
+            root.join("crates/app/src/render.rs"),
+            root.join("crates/app/src/egui_ui/menu_capture.rs"),
+        ];
         let mut stack = vec![root.join("crates")];
         let mut offenders = Vec::new();
         while let Some(dir) = stack.pop() {
@@ -148,7 +153,8 @@ mod tests {
                         files.push(skill);
                     }
                 } else if path.extension().is_some_and(|e| e == "md")
-                    && path.file_name().is_some_and(|n| n != "AUDIT.md" && n != "PLAN2.md")
+                    // Roadmaps name recipes and paths that do not exist yet.
+                    && path.file_name().is_some_and(|n| !["AUDIT.md", "PLAN2.md", "ENGINE_CORE.md", "MASTER_PLAN.md"].contains(&n.to_str().unwrap_or("")))
                 {
                     files.push(path);
                 }
