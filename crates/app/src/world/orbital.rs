@@ -7,6 +7,7 @@ pub mod receiver;
 pub mod radio;
 pub mod megastructures;
 pub mod skyhook;
+pub mod meteors;
 
 const CELL_M: f32 = 4096.0;
 pub const SIGHT_RANGE_M: f32 = 6000.0;

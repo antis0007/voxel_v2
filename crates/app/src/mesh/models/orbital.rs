@@ -11,6 +11,7 @@ mod carriage;
 mod dish;
 mod megastructures;
 mod skyhook;
+mod meteors;
 use architecture::{part, strut};
 
 pub(super) fn build(
@@ -35,6 +36,7 @@ pub(super) fn build(
     dish::build(mesh,world,day,viewer);
     megastructures::build(mesh,world,day,viewer);
     skyhook::build(mesh, world, day, viewer, pixel_angle);
+    meteors::build(mesh, world, day, viewer, pixel_angle);
     for contact in orbital::visual_contacts(world.seed, day, &world.orbital, viewer) {
         let service = contact.service;
         // Between visits the carriage remains high on the same persistent braid.

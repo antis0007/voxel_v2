@@ -1500,7 +1500,8 @@ fn main() -> Result<()> {
     let mut day_night = DayNightCycle::new(DEFAULT_START_TIME_OF_DAY, DEFAULT_DAY_LENGTH_SECONDS);
     let mut cloud_weather = WeatherRuntimeState::new(selected_seed);
     let mut freeze_time = false;
-    let mut sky_clock: Option<f64> = None;
+    // Orbit time off the default day pace, with the calendar it was last in step with.
+    let mut sky_clock: Option<(f64, f64)> = None;
     let mut input = Input::default();
     let mut creative = CreativeState::default();
     player.selected_block = creative.selected_block();
@@ -4099,7 +4100,15 @@ fn main() -> Result<()> {
                                     sky_day.advance(simulation_clock.lead_seconds());
                                 }
                             } else {
-                                let seconds = sky_clock.get_or_insert_with(|| world::orbital::skyhook::clock(&day_night));
+                                let calendar = world::orbital::skyhook::clock(&day_night);
+                                let (seconds, last_calendar) = sky_clock.get_or_insert((calendar, calendar));
+                                // A jump in the calendar (time slider, loaded save, review
+                                // harness) asks to be somewhere else in the day: follow it,
+                                // or the sky would show a different time than the sun.
+                                if (calendar - *last_calendar).abs() > 600.0 {
+                                    *seconds = calendar;
+                                }
+                                *last_calendar = calendar;
                                 if matches!(mode, AppMode::Playing) {
                                     *seconds += display_frame_dt as f64
                                         * (world::orbital::megastructures::DAY_SECONDS / DEFAULT_DAY_LENGTH_SECONDS as f64);

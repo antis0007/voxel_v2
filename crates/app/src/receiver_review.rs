@@ -223,6 +223,30 @@ impl Review {
                 println!("[skyhook-review] port={port:?} tip={tip:?} wait_s={wait:.1} to_next={:.1} lift={lift:.1} pod={pod:?}",hook.next_port_cusp(skyhook::clock(day)));
                 self.report(w,text);
             }
+            "meteor" => {
+                // Park the clock a moment before a streak's peak and look at its head.
+                use world::orbital::{meteors,skyhook};
+                let cfg=w.sample_config();
+                let (x,z)=(1400.0_f32,-1200.0_f32);
+                let ground=cfg.world_y(world::terrain_height(&cfg,(x*cfg.inv_voxel_meters()).floor() as i32,(z*cfg.inv_voxel_meters()).floor() as i32)).max(cfg.world_y(cfg.water_level()));
+                p.pos=Vec3::new(x,ground+3.0,z);p.precise_pos=p.pos.as_dvec3();p.vel=Vec3::ZERO;
+                let now=skyhook::clock(day)*480.0/86400.0;
+                let mut found=None;
+                for k in 0..3840 {
+                    let r=now+k as f64*0.25;
+                    let mut probe=*day;probe.set_day_index((r/480.0).floor() as u32);probe.set_time_of_day((r/480.0).fract() as f32);
+                    if let Some(s)=meteors::streaks(w.seed,&probe,p.pos).into_iter().find(|s|s.fade>0.95) {found=Some((r,s));break;}
+                }
+                if let Some((r,s))=found {
+                    let at=(r-0.25)/480.0;
+                    day.set_day_index(at.floor() as u32);day.set_time_of_day(at.fract() as f32);
+                    let d=s.head-p.pos;
+                    p.yaw=d.x.atan2(-d.z);p.pitch=d.y.atan2(Vec3::new(d.x,0.0,d.z).length());
+                    println!("[meteor-review] peak_in_real_s=0.25 head={:?}",s.head);
+                } else {println!("[meteor-review] no streak found in two days");}
+                creative.show_palette=false;
+                self.report(w,text);
+            }
             "corridor-far" => {
                 // Ground-level view of the origin corridor from beyond sight range.
                 day.set_day_index(1);day.set_time_of_day(0.45);
