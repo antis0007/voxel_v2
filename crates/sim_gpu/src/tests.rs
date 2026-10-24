@@ -54,7 +54,7 @@ fn random_cell(h: u32) -> Cell {
     let fluid = matches!(b, B::Water | B::Smoke | B::Lava | B::Steam);
     let volume = if fluid { 1 + (h >> 8) as u8 % VOLUME_FULL } else { VOLUME_FULL };
     // 250 K to 1450 K: across freezing, boiling, condensing and ignition points.
-    Cell { volume, temperature: 2500 + (h >> 16) as u16 % 12_000, ..Cell::filled(b as u8) }
+    Cell { volume, temperature: 2500 + (h >> 16) as u16 % 12_000, pressure: (h >> 3) as i16, charge: (h >> 9) as i16, ..Cell::filled(b as u8) }
 }
 
 /// Every block on its own: random cells, phase counters (heat and not, first and second phase) and
