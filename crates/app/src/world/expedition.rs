@@ -190,7 +190,7 @@ pub(crate) fn resource(block: B) -> Option<usize> {
         B::CoalOre => 3,
         B::GlowCap => 4,
         B::Crystal => 5,
-        B::RedCap | B::MushroomStem => 13,
+        B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => 13,
         _ => return None,
     })
 }
@@ -621,7 +621,7 @@ pub fn hint(block: B, tier: u32) -> &'static str {
         B::SalvageCrate | B::SurveyCache | B::CultivatorCache => "F  Open salvage cache",
         B::Workbench => "F  Use workbench   ·   E  Craft",
         B::Smelter => "F  Smelt ore   ·   Requires coal",
-        B::RedCap | B::MushroomStem => "F  Harvest biomass",
+        B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => "F  Harvest biomass",
         B::GlowCap => "F  Harvest lumen fibre",
         B::CopperOre
         | B::TinOre
@@ -708,7 +708,7 @@ pub fn interact(
                 }
             }
         }
-        B::GlowCap | B::RedCap | B::MushroomStem => {
+        B::GlowCap | B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => {
             harvest(world, p, blocks, chunks);
         }
         B::Crystal => {

@@ -893,6 +893,10 @@ fn reset_gameplay_input(
 const TORCH_LIGHT_RADIUS: f32 = 18.0;
 const TORCH_LIGHT_COLOR: [f32; 3] = [1.00, 0.48, 0.20];
 const TORCH_LIGHT_STRENGTH: f32 = 4.40;
+// Amber gills: a small warm pool under each clump, well below a torch.
+const AMBER_LIGHT_RADIUS: f32 = 9.0;
+const AMBER_LIGHT_COLOR: [f32; 3] = [1.00, 0.60, 0.26];
+const AMBER_LIGHT_STRENGTH: f32 = 1.70;
 
 fn held_torch_light(
     player: &Player,
@@ -979,6 +983,26 @@ fn collect_nearby_torches(
             }
         }
     }
+    // Amber gills grow in clumps: one light per 4 m cell, chosen from the
+    // cell's own positions so the pick does not hop as the player moves.
+    let cell = (4.0 / world_scale.max(1e-6)).max(1.0) as i32;
+    let mut amber_cells: std::collections::HashMap<glam::IVec3, glam::IVec3> =
+        std::collections::HashMap::new();
+    for &(_, pos) in &torches {
+        if snapshot.get(pos) == BlockId::AmberCap {
+            let key = pos.div_euclid(glam::IVec3::splat(cell));
+            let entry = amber_cells.entry(key).or_insert(pos);
+            if (pos.x, pos.y, pos.z) < (entry.x, entry.y, entry.z) {
+                *entry = pos;
+            }
+        }
+    }
+    torches.retain(|&(_, pos)| {
+        amber_cells
+            .get(&pos.div_euclid(glam::IVec3::splat(cell)))
+            .is_none_or(|kept| *kept == pos)
+            || snapshot.get(pos) != BlockId::AmberCap
+    });
     torches.sort_by(|a, b| {
         a.0.total_cmp(&b.0)
             .then_with(|| (a.1.x, a.1.y, a.1.z).cmp(&(b.1.x, b.1.y, b.1.z)))
@@ -994,6 +1018,7 @@ fn collect_nearby_torches(
         .into_iter()
         .map(|(distance_sq, pos)| {
             let block = snapshot.get(pos);
+            let amber = block == BlockId::AmberCap;
             let light_offset = match block {
                 BlockId::Torch => Vec3::new(0.50, 0.82, 0.50),
                 BlockId::TorchWallNorth => Vec3::new(0.50, 0.74, 0.56),
@@ -1003,15 +1028,22 @@ fn collect_nearby_torches(
                 _ => Vec3::new(0.50, 0.82, 0.50),
             };
             TorchLight {
-                position: block.torch_point_meters(pos.as_vec3(), light_offset, world_scale),
-                radius: TORCH_LIGHT_RADIUS,
-                color: TORCH_LIGHT_COLOR,
+                // Gills glow from their own voxel centre at every voxel scale;
+                // the torch anchor and model offsets are metre-sized torch geometry.
+                position: if amber {
+                    (pos.as_vec3() + Vec3::splat(0.5)) * world_scale
+                } else {
+                    block.torch_point_meters(pos.as_vec3(), light_offset, world_scale)
+                },
+                radius: if amber { AMBER_LIGHT_RADIUS } else { TORCH_LIGHT_RADIUS },
+                color: if amber { AMBER_LIGHT_COLOR } else { TORCH_LIGHT_COLOR },
                 strength: {
                     let distance = distance_sq.sqrt() * world_scale;
                     let fade_start = (fade_end * 0.8).max(fade_end - 24.0);
                     let t = ((fade_end - distance) / (fade_end - fade_start).max(0.001))
                         .clamp(0.0, 1.0);
-                    TORCH_LIGHT_STRENGTH * t * t * (3.0 - 2.0 * t)
+                    let peak = if amber { AMBER_LIGHT_STRENGTH } else { TORCH_LIGHT_STRENGTH };
+                    peak * t * t * (3.0 - 2.0 * t)
                 },
                 moving: false,
             }
@@ -1409,6 +1441,15 @@ fn main() -> Result<()> {
         }
         for (biome, (_, x, z, height)) in locations {
             println!("[terrain-survey] {biome}: x={x} z={z} height_m={height:.1}");
+        }
+        if let Some((centre, forward)) = engine_worldgen::amberroot::anchor(&cfg) {
+            println!(
+                "[terrain-survey] Amberroot grove: x={:.0} z={:.0} floor_m={:.1} approach=({:.3},{:.3})",
+                centre.x, centre.z, centre.y, forward.x, forward.y
+            );
+        }
+        if let Some((door, undercroft)) = engine_worldgen::amberroot::interior_points(&cfg) {
+            println!("[terrain-survey] Amberroot hollow door: {door:.1} undercroft floor: {undercroft:.1}");
         }
         return Ok(());
     }

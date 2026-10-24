@@ -327,7 +327,7 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
     ensure!(count <= VOXELS, "Invalid region water count");
     let mut torches = HashSet::new();
     for (i, b) in blocks.iter().enumerate() {
-        if b.is_torch() {
+        if b.is_light_source() {
             torches.insert(coord * CHUNK_SIZE + local_pos(i));
         }
     }

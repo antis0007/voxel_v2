@@ -1910,6 +1910,10 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         color*=1.0-rim*0.22;
     } else if kind == 17 {
         color *= 0.8 + surface_noise_filtered(vec2<f32>(uv.x*12.0,uv.y*2.0), metric_footprint*12.0)*0.35;
+    } else if kind == 37 {
+        // Amber gills: fine diagonal lamellae, no cap spots.
+        let lamella = step(0.5, fract((uv.x + uv.y) * 10.0));
+        color *= mix(0.9, 1.08, lamella * surface_detail_weight(metric_footprint * 10.0));
     } else if kind == 18 || kind == 19 {
         let spot_cell=floor(uv*4.0);
         let spot_pos=fract(uv*4.0)-0.5;
@@ -2658,8 +2662,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
         return debug_surface_output(vec4<f32>(select(color, vec3<f32>(0.9, 0.4, 0.1), in.ao_strength < -1.5), 1.0));
     }
     if debug_mode == 19 {
-        // Known families are 0..36, 40..44, 47..56. Unsupported keys are magenta.
-        let supported = kind <= 36 || (kind >= 40 && kind <= 60);
+        // Known families are 0..37, 40..44, 47..56. Unsupported keys are magenta.
+        let supported = kind <= 37 || (kind >= 40 && kind <= 60);
         let id_color = 0.15 + 0.75 * fract(f32(kind + 1) * vec3<f32>(0.618034, 0.381966, 0.236068));
         return debug_surface_output(vec4<f32>(select(vec3<f32>(1.0, 0.0, 1.0), id_color, supported), 1.0));
     }
@@ -3068,6 +3072,13 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let cap = mix(albedo, albedo.brg, 0.28);
         // Emissive, so it keeps its authored luminance at night like fire does.
         lit += (cap * (0.24 + 0.28 * pulse) + vec3<f32>(0.004, 0.022, 0.014) * pulse) * fire_exposure;
+    }
+    if kind == 37 {
+        // Amber gills: a steady warm glow, strongest on the shaded undersides.
+        // The ground around them is lit by the indexed local light, not by this.
+        let under = select(0.55, 1.0, geometric_normal.y < -0.5);
+        let gill = albedo * vec3<f32>(1.0, 0.82, 0.62);
+        lit += gill * (0.20 + 0.16 * under) * fire_exposure;
     }
     if kind == 22 {
         // A quiet inner rim preserves the violet identity in caves. Direct

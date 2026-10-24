@@ -11,7 +11,7 @@ Bricks: `crates/sim/src/` (`engine_sim`) stores the cellular world as 8³ bricks
 
 Coordinates: voxel `IVec3`, chunk `IVec3` = `floor_div(voxel, 32)`, metres = voxel × `VoxelScalePreset::meters()`. Generation code is written in metres and converted with `cfg.blocks_for_height` so every scale shares a landscape.
 
-Generator rule: `CURRENT_GENERATOR_VERSION` (30) is what new worlds use; every historical gate (`cfg.generator_version >= N`) must stay literal because old saves regenerate unedited chunks from their own version. A test pins a bit-exact golden for generation (`gen_golden.rs`); `generation_bench` tests in `worldgen/src/lib.rs` compare generator versions.
+Generator rule: `CURRENT_GENERATOR_VERSION` (35) is what new worlds use; every historical gate (`cfg.generator_version >= N`) must stay literal because old saves regenerate unedited chunks from their own version. A test pins a bit-exact golden for generation (`gen_golden.rs`); `generation_bench` tests in `worldgen/src/lib.rs` compare generator versions.
 
 Read path: `World::get` → resident edit → region file → `sample_cache.get(cfg, p)` (pure generation). Write path: `World::set` → copy-on-write chunk → water map cleared → neighbours woken → dirty marks.
 

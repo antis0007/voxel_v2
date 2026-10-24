@@ -1828,7 +1828,7 @@ impl World {
                 let chunk_mut = Arc::make_mut(&mut chunk);
                 chunk_mut.blocks[ChunkData::local_index(p.x, p.y, p.z)] = id;
                 chunk_mut.note_modified(p,current,id);
-                if id.is_torch() {
+                if id.is_light_source() {
                     chunk_mut.torches.insert(p);
                 } else {
                     chunk_mut.torches.remove(&p);

@@ -667,7 +667,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         ensure!(offset == VOXELS, "Incomplete chunk");
         let mut torches = HashSet::new();
         for (index, block) in blocks.iter().enumerate() {
-            if block.is_torch() {
+            if block.is_light_source() {
                 let i = index as i32;
                 torches.insert(
                     coord * CHUNK_SIZE
