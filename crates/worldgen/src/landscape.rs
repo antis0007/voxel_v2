@@ -1701,6 +1701,31 @@ pub(super) fn geological_stratum(
     column_height: i32,
     depth: i32,
 ) -> BlockId {
+    if cfg.generator_version < 34 {
+        return geological_stratum_legacy(cfg, p, column_height, depth, None);
+    }
+    // Generator 34 swaps the scattered ores for placed ore bodies.
+    let meters = p.as_vec3() * cfg.voxel_meters();
+    let below = depth as f32 * cfg.voxel_meters();
+    let tect = sample_tectonics_zoomed(meters.x, meters.z, cfg.seed, tectonic_zoom(cfg.generator_version));
+    let rock = geological_stratum_legacy(cfg, p, column_height, depth, Some(tect));
+    let host = if super::ore_geology::is_scattered_ore(rock) {
+        bedrock_v15(meters.x, meters.y, meters.z, cfg.seed, &tect)
+    } else {
+        rock
+    };
+    super::ore_geology::deposit(cfg.seed, &tect, meters, below, host).unwrap_or(host)
+}
+
+/// `tect` lets generator 34 share the tectonic sample it already took; `None`
+/// keeps every older version sampling exactly as before.
+fn geological_stratum_legacy(
+    cfg: &WorldSampleConfig,
+    p: glam::IVec3,
+    column_height: i32,
+    depth: i32,
+    tect: Option<TectonicSample>,
+) -> BlockId {
     let meters = p.as_vec3() * cfg.voxel_meters();
     let below = depth as f32 * cfg.voxel_meters();
     // Generator 15+ rarely reads `vein` (only in volcanic pipes and fault
@@ -1719,12 +1744,14 @@ pub(super) fn geological_stratum(
     let fleck = super::hash3(p.x, p.y, p.z, cfg.seed.wrapping_add(887));
 
     if cfg.generator_version >= 9 {
-        let tect = sample_tectonics_zoomed(
-            meters.x,
-            meters.z,
-            cfg.seed,
-            tectonic_zoom(cfg.generator_version),
-        );
+        let tect = tect.unwrap_or_else(|| {
+            sample_tectonics_zoomed(
+                meters.x,
+                meters.z,
+                cfg.seed,
+                tectonic_zoom(cfg.generator_version),
+            )
+        });
         let dip_coord = meters.x * tect.boundary_normal[0] + meters.z * tect.boundary_normal[1];
         let strike_coord = -meters.x * tect.boundary_normal[1] + meters.z * tect.boundary_normal[0];
 

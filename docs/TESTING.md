@@ -89,3 +89,10 @@ Edit values in the file; if you change a struct, run the ignored
 2. `just run assets/scenarios/<name>.ron` until the checks pass.
 3. `INSTA_UPDATE=always just test headless` to record the snapshot.
 4. Commit both files.
+
+## Seam route
+
+The `seam_route` gate check (policy route `world_meshing`: mesh, horizon, streaming, voxel, worldgen, core) has two halves, both owned by whoever changes those paths.
+
+1. Automated: `just seam-route` runs `crates/worldgen/src/seam_route.rs`. It walks a fixed route of chunk coordinates (deep negative, across the origin, about 96 000 voxels out), at two voxel scales and at generator 33 and current. It checks that each padded halo equals direct `sample_block`, that padded interiors equal `generate`, and that neighbouring padded chunks agree on their overlap.
+2. Captures: the gate demands at least two images, before and after, from the same pose. Run `tools/Review-HorizonContinuity.ps1 -Executable <exe> -Case route -Label <unique> -GeneratorVersion <n>` once per side (default version 25) and attest with `python -I scripts/workflow.py attest seam_route --evidence <capture dir> --note ...`.

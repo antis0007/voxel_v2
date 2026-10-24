@@ -20,12 +20,15 @@ pub mod habitats_region;
 #[cfg(test)]
 mod gen_golden;
 #[cfg(test)]
+mod seam_route;
+#[cfg(test)]
 mod gen_probe;
 #[cfg(test)]
 mod horizon_agreement;
 mod generation_cache;
 pub mod landscape;
 pub mod lore;
+mod ore_geology;
 pub mod prism_sanctum;
 pub mod sites;
 pub mod surface;

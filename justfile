@@ -61,5 +61,10 @@ loc:
     tokei crates --sort code
     git diff --shortstat main ./crates
 
+# Automated half of the seam_route gate check: chunk halos, padded chunks and neighbours agree
+# along a fixed route of negative and far-out chunk coordinates (docs/TESTING.md, Seam route).
+seam-route:
+    {{filter}} cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet seam_route
+
 # The single pre-commit gate: check, clippy, tests, the perf gate, then the LOC report.
 verify: check clippy test bench-check loc

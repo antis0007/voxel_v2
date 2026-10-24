@@ -6,6 +6,7 @@ param(
     [int]$Seconds=45,
     [ValidateRange(0,120)][int]$WarmupSeconds=4,
     [int]$Width=1280,[int]$Height=720,[int]$ViewChunks=4,
+    [ValidateRange(1,64)][int]$GeneratorVersion=25,
     [string]$Camera='0,-120,100,0.4,-0.2',
     [string]$DebugView='', [string]$ExactPatch='',
     [ValidateRange(1,4)][int]$CloudDivisor=3,
@@ -40,7 +41,7 @@ if($Video){
     $reservation=if($DirectVideo){[long](($Seconds+60)*750000+[Math]::Ceiling(($Seconds+60)/10)*1.5*1024*1024+144*1024*1024)}else{[long]([Math]::Ceiling($Seconds/$CaptureInterval)*1.5*1024*1024+160*1024*1024)}
     if($drive.AvailableFreeSpace -lt $reservation){throw "Insufficient room for bounded native recording: reserve=$reservation free=$($drive.AvailableFreeSpace). Increase CaptureInterval or reclaim redundant task outputs."}
 }
-$argsList=@('--benchmark-world=hills','--benchmark-seed=2738958700','--benchmark-generator-version=25','--benchmark-weather=partly',
+$argsList=@('--benchmark-world=hills','--benchmark-seed=2738958700',"--benchmark-generator-version=$GeneratorVersion",'--benchmark-weather=partly',
     "--benchmark-view-chunks=$ViewChunks","--benchmark-width=$Width","--benchmark-height=$Height",
     "--benchmark-terrain-camera=$Camera","--benchmark-warmup=$WarmupSeconds","--benchmark-duration=$Seconds",
     '--benchmark-review-time=0.5','--benchmark-scale=1m','--benchmark-sky-time=12',"--benchmark-cloud-divisor=$CloudDivisor")
