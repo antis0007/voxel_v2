@@ -180,14 +180,16 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     if params.resolve.w > 0.5 {
         // Debug views stay at native resolution and keep their diagnostic
         // colours. Posterizing them would destroy the very values they expose.
-        return vec4<f32>(sample_color(position.xy * texel), 1.0);
+        return vec4<f32>(sample_color(position.xy * texel * max(params.style.x, 0.1)), 1.0);
     }
 
     // The pass renders one output texel per art pixel. Convert that texel to
     // the centre of its scene block; the present pass then upscales it with an
     // exact integer nearest lookup. UI is composited after presentation, so
     // text and HUD remain native-resolution.
-    let scale = max(params.style.x, 1.0);
+    // Art-pixel size in scene texels. Below 1 the scene is smaller than the window
+    // and this pass upsamples it.
+    let scale = max(params.style.x, 0.1);
     let screen_uv = clamp(
         (position.xy + vec2<f32>(0.5)) * scale / scene_size,
         vec2<f32>(0.0),

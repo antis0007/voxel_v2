@@ -26,6 +26,7 @@ mod mesh;
 mod perf;
 mod player;
 mod preferences;
+mod quality;
 mod reference_environment;
 mod render;
 mod sandbox_review;
@@ -332,6 +333,10 @@ fn parse_benchmark_config() -> BenchmarkConfig {
         }
         if let Some(value) = arg.strip_prefix("--benchmark-cloud-divisor=") {
             if let Ok(divisor) = value.parse::<u32>() { render::set_cloud_render_scale(divisor); }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--benchmark-render-scale=") {
+            if let Ok(percent) = value.parse::<u32>() { render::set_scene_scale_percent(percent); }
             continue;
         }
         if let Some(value) = arg.strip_prefix("--benchmark-gpu-mib=") {
@@ -1466,9 +1471,25 @@ fn main() -> Result<()> {
     if low_spec {
         low_spec::apply(&mut preferences.loaded);
     }
+    // The last session ended in a lost graphics device: start gently, and say so.
+    let mut quality_notice_pending: Option<String> = None;
+    if !benchmark_config.enabled && quality::take_gpu_reset() {
+        let p = &mut preferences.loaded;
+        p.view = p.view.min(16);
+        p.lod = p.lod.clamp(2, (p.view - 1).max(2));
+        p.levels = p.levels.min(3);
+        p.clouds = false;
+        p.cloud_scale = 4;
+        p.indirect_lighting = false;
+        p.auto_quality = true;
+        quality_notice_pending = Some(
+            "The graphics driver reset last time, so quality was lowered and clouds are off. Raise it in Settings.".into(),
+        );
+    }
     if !benchmark_config.enabled {
         preferences.loaded.apply_globals();
     }
+    let mut quality_governor = quality::Governor::default();
     let mut preferences_render_applied = false;
     let mut windowed_size = (preferences.loaded.width, preferences.loaded.height);
     let mut combat_audio = audio::Audio::new();
@@ -2196,6 +2217,8 @@ fn main() -> Result<()> {
                                     gpu.set_vsync(terrain_review::option("VOXEL_BENCHMARK_NORMAL_PRESENT")
                                         && preferences.loaded.vsync);
                                     render::set_cloud_adaptive_enabled(false);
+                                    // Benchmark quality must stay fixed across the measured run.
+                                    quality::set_auto_enabled(false);
                                     let (cpu,_)=render::world_residency_budgets_mib();
                                     let gpu_budget=render::gpu_residency_limit_mib();
                                     render::set_world_residency_budgets_mib(benchmark_state.config.cpu_mib.unwrap_or(cpu),benchmark_state.config.gpu_mib.unwrap_or(gpu_budget));
@@ -4093,6 +4116,29 @@ fn main() -> Result<()> {
                             // The day clock moves in whole simulation steps; stations cross
                             // the sky at tens of degrees per second, so those hops read as
                             // jumps. Orbits are drawn at the clock plus the banked remainder.
+                            // Automatic quality: step settings down when frames stay slow.
+                            if let Some(text) = quality_notice_pending.take() {
+                                egui_ui.quality_notice = Some((text, 14.0));
+                            }
+                            if benchmark_config.enabled || spawning || world.is_none() || !focused {
+                                quality_governor.reset_trend();
+                            } else if let Some(mut step) = quality_governor.frame(
+                                display_frame_dt * 1000.0,
+                                display_frame_dt,
+                                matches!(mode, AppMode::Playing),
+                            ) {
+                                let mut view = render_distance_settings();
+                                // A step that changes nothing (already at that setting) is
+                                // skipped at once, so the player never waits for a no-op.
+                                while !step.apply(&mut view) {
+                                    match quality_governor.force_next() {
+                                        Some(next) => step = next,
+                                        None => break,
+                                    }
+                                }
+                                set_render_distance_settings(view);
+                                egui_ui.quality_notice = Some((step.notice().to_string(), 8.0));
+                            }
                             let mut sky_day = day_night;
                             // Orbits run at a fixed pace of their own whenever the day is not
                             // running at its default speed (long day, frozen time); otherwise a
@@ -4213,6 +4259,7 @@ fn main() -> Result<()> {
                                 }
                             if !gpu.device_usable() {
                                 eprintln!("[renderer-fatal] GPU device lost; stopped before resource recreation/publication");
+                                quality::record_gpu_reset(gpu.adapter_summary(), "device lost while rendering");
                                 elwt.exit();return;
                             }
                             if render_result.is_err() && benchmark.as_ref().is_some_and(|b|b.auto_started) {

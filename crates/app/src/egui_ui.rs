@@ -1672,6 +1672,8 @@ pub struct EguiUi {
     /// Independent hotbar slot size multiplier.
     pub hotbar_scale: f32,
     pub persistence_status: Option<String>,
+    /// A short message from automatic quality, with seconds left on screen.
+    pub quality_notice: Option<(String, f32)>,
     /// Sky event banner: (title, line, egui time it appeared).
     pub sky_notice: Option<(&'static str, &'static str, f64)>,
     pub region_status: Option<String>,
@@ -1753,6 +1755,7 @@ impl EguiUi {
             ui_scale: crate::preferences::UI_SCALE_DEFAULT,
             hotbar_scale: 1.0,
             persistence_status: None,
+            quality_notice: None,
             sky_notice: None,
             region_status: None,
             region_error: None,
@@ -1813,7 +1816,40 @@ impl EguiUi {
         front_end::loading(&self.ctx, loading);
     }
 
+    /// The short view: how fast, what is limiting it, and the one thing to try.
     fn build_performance_ui(ui: &mut egui::Ui, perf: &PerfSnapshot) {
+        if !perf.adapter_summary.is_empty() {
+            ui.label(RichText::new(format!("GPU: {}", perf.adapter_summary)).strong());
+        }
+        ui.label(format!(
+            "{:.0} fps Â· {:.1} ms average Â· {:.1} ms at 95% Â· {:.0} fps 1% low",
+            perf.fps_avg, perf.frame_ms_avg, perf.frame_ms_p95, perf.fps_1p_low
+        ));
+        let gpu_ms = perf.render_avg.gpu_pass_total_ms;
+        if perf.render_avg.gpu_timestamps_supported && perf.frame_ms_avg > 0.0 {
+            let gpu_bound = gpu_ms > perf.frame_ms_avg * 0.75;
+            ui.label(format!(
+                "Limited by the {}: GPU {:.1} ms, CPU {:.1} ms per frame.",
+                if gpu_bound { "graphics card" } else { "processor" },
+                gpu_ms,
+                perf.cpu_avg.total_ms
+            ));
+            if gpu_bound && perf.fps_avg < 50.0 {
+                ui.label("Try: Settings â†’ Clouds off, or a lower Quality preset.");
+            }
+        }
+        ui.label(format!(
+            "{}Ã—{} Â· {} terrain triangles Â· {} draw calls",
+            perf.resolution[0],
+            perf.resolution[1],
+            perf.counters_latest.terrain_triangles,
+            perf.render_latest.terrain_draw_calls
+        ));
+        ui.add_space(6.0);
+        ui.collapsing("Full diagnostics", |ui| Self::build_performance_details(ui, perf));
+    }
+
+    fn build_performance_details(ui: &mut egui::Ui, perf: &PerfSnapshot) {
         let history = perf.history.as_slice();
         let has_gpu_timestamps = perf.render_avg.gpu_timestamps_supported;
         let has_weather_history = history
@@ -2466,7 +2502,7 @@ impl EguiUi {
                     .show(ui, |ui| {
                         let button = ui.selectable_label(
                             self.show_debug_performance_panel,
-                            RichText::new("Debug / Performance").strong(),
+                            RichText::new("Performance").strong(),
                         );
                         if button.clicked() {
                             self.show_debug_performance_panel = !self.show_debug_performance_panel;
@@ -2482,7 +2518,7 @@ impl EguiUi {
             );
             let default_height = (content_rect.height() * 0.72).clamp(360.0, 760.0);
 
-            egui::Window::new("Debug / Performance")
+            egui::Window::new("Performance")
                 .id(egui::Id::new("debug_performance_panel"))
                 .default_pos(default_pos)
                 .default_size([460.0, default_height])
@@ -2560,6 +2596,26 @@ impl EguiUi {
             return action;
         }
         if matches!(mode, UiMode::Playing) {
+            let mut notice_expired = false;
+            if let Some((text, left)) = self.quality_notice.as_mut() {
+                *left -= frame_dt;
+                if *left <= 0.0 {
+                    notice_expired = true;
+                } else {
+                    let text = text.clone();
+                    egui::Area::new("quality_notice".into())
+                        .anchor(Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+                        .interactable(false)
+                        .show(&self.ctx, |ui| {
+                            presentation::hud_frame().show(ui, |ui| {
+                                ui.label(text);
+                            });
+                        });
+                }
+            }
+            if notice_expired {
+                self.quality_notice = None;
+            }
             if self.show_hud {
                 let mut status_rect = None;
                 if self.show_debug_performance_panel {

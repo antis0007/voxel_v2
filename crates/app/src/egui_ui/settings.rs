@@ -6,8 +6,8 @@ use crate::render::{AtmosphereMode, RenderDebugView, RenderDistanceSettings};
 
 /// Terrain presets in metres, with chunk floors. Chunks are 32 voxels, so a
 /// metre-only preset collapsed to 4 chunks at 1 m voxels and put 4 m LOD cells
-/// 96 m from the camera. "Performance" now saves frame time on clouds and
-/// bounce lighting instead of turning nearby trees into blocks.
+/// 96 m from the camera. "Fast" saves frame time on clouds and bounce lighting
+/// instead of turning nearby trees into blocks.
 struct TerrainPreset {
     name: &'static str,
     hint: &'static str,
@@ -17,6 +17,8 @@ struct TerrainPreset {
     min_full_chunks: i32,
     lod_levels: u8,
     cloud_scale: u32,
+    clouds: bool,
+    render_scale: u32,
     indirect: bool,
     horizon_m: u32,
 }
@@ -38,14 +40,16 @@ impl TerrainPreset {
 
 const TERRAIN_PRESETS: [TerrainPreset; 3] = [
     TerrainPreset {
-        name: "Performance",
-        hint: "Short view, sharp nearby terrain, cheaper clouds, no bounce lighting.",
+        name: "Fast",
+        hint: "Draws at 70% resolution with a short view and no bounce lighting. Clouds stay on.",
         view_m: 256.0,
         full_detail_m: 128.0,
         min_view_chunks: 8,
         min_full_chunks: 4,
         lod_levels: 2,
         cloud_scale: 4,
+        clouds: true,
+        render_scale: 70,
         indirect: false,
         horizon_m: 4096,
     },
@@ -58,6 +62,8 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
         min_full_chunks: 6,
         lod_levels: 4,
         cloud_scale: 3,
+        clouds: true,
+        render_scale: 100,
         indirect: true,
         horizon_m: 12288,
     },
@@ -70,6 +76,8 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
         min_full_chunks: 8,
         lod_levels: 4,
         cloud_scale: 3,
+        clouds: true,
+        render_scale: 100,
         indirect: true,
         horizon_m: 24576,
     },
@@ -77,125 +85,134 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
 
 pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, voxel_meters: f32) {
     let chunk_meters = 32.0 * voxel_meters;
-    ui.checkbox(&mut state.fxaa_enabled, "Smooth edges (FXAA)");
-    let mut indirect = crate::render::indirect_lighting_enabled();
-    ui.checkbox(&mut indirect, "Diffuse bounce and contact shading")
-        .on_hover_text(
-            "Adds nearby color bounce and soft contact shadows. Disable for more performance.",
-        );
-    crate::render::set_indirect_lighting_enabled(indirect);
-    ui.checkbox(&mut state.vsync, "VSync (match display refresh)");
-    let mut clouds = crate::render::cloud_render_scale();
-    egui::ComboBox::from_label("Cloud detail")
-        .selected_text(match clouds {
-            2 => "Ultra",
-            4 => "Balanced",
-            _ => "High",
-        })
-        .show_ui(ui, |ui| {
-            for (scale, label) in [(2, "Ultra"), (3, "High"), (4, "Balanced")] {
-                ui.selectable_value(&mut clouds, scale, label);
-            }
-        });
-    crate::render::set_cloud_render_scale(clouds);
-    ui.small("High is the default. Cloud images keep at least 360 rows; Ultra ray-marches the most pixels.");
-    ui.label("Terrain detail");
+    ui.label("Quality");
     ui.horizontal_wrapped(|ui| {
         for preset in TERRAIN_PRESETS {
             if ui.button(preset.name).on_hover_text(preset.hint).clicked() {
                 state.settings = preset.settings(chunk_meters);
                 crate::render::set_cloud_render_scale(preset.cloud_scale);
+                crate::render::set_clouds_enabled(preset.clouds);
+                crate::render::set_scene_scale_percent(preset.render_scale);
                 crate::render::set_indirect_lighting_enabled(preset.indirect);
                 crate::render::set_horizon_range_m(preset.horizon_m);
             }
         }
     });
-    // Radii are whole chunks; the sliders work in chunks and label metres so
+    let mut auto = crate::quality::auto_enabled();
+    ui.checkbox(&mut auto, "Lower quality automatically if the game runs slowly")
+        .on_hover_text("Turns settings down one at a time while the frame rate stays low. It never raises them again.");
+    crate::quality::set_auto_enabled(auto);
+    ui.separator();
+    let mut resolution = crate::render::scene_scale_percent();
+    ui.add(
+        egui::Slider::new(&mut resolution, crate::render::MIN_SCENE_SCALE_PERCENT..=100)
+            .suffix("%")
+            .text("Render resolution"),
+    )
+    .on_hover_text("Draws the 3D world smaller and scales it up. Text and menus stay sharp. The best way to gain speed without losing anything.");
+    crate::render::set_scene_scale_percent(resolution);
+    let mut clouds_on = crate::render::clouds_enabled();
+    ui.checkbox(&mut clouds_on, "Clouds");
+    crate::render::set_clouds_enabled(clouds_on);
+    let mut indirect = crate::render::indirect_lighting_enabled();
+    ui.checkbox(&mut indirect, "Bounce lighting and soft shadows");
+    crate::render::set_indirect_lighting_enabled(indirect);
+    ui.checkbox(&mut state.fxaa_enabled, "Smooth edges");
+    ui.checkbox(&mut state.vsync, "VSync");
+    // Radii are whole chunks; the slider works in chunks and labels metres so
     // every stop is a real setting at any voxel scale.
     let s = &mut state.settings;
     ui.add(
         egui::Slider::new(&mut s.view_distance_chunks, 4..=64)
             .custom_formatter(|v, _| format!("{:.0} m", v * chunk_meters as f64))
-            .text("View radius"),
+            .text("View distance"),
     );
     let full_limit = (s.view_distance_chunks - 1).max(2);
     s.lod_start_chunks = s.lod_start_chunks.clamp(2, full_limit);
-    ui.add(
-        egui::Slider::new(&mut s.lod_start_chunks, 2..=full_limit)
-            .custom_formatter(|v, _| format!("{:.0} m", v * chunk_meters as f64))
-            .text("Full detail radius"),
-    )
-    .on_hover_text("Inside this radius terrain and trees are meshed voxel for voxel.");
-    ui.add(egui::Slider::new(&mut s.lod_levels, 1..=4).text("Detail levels"))
-        .on_hover_text(
-            "Beyond full detail, distant terrain uses 2, 4 and 8 voxel cells. \
-             Fewer levels look sharper and cost more triangles.",
+    ui.collapsing("More options", |ui| {
+        let mut clouds = crate::render::cloud_render_scale();
+        ui.add_enabled_ui(clouds_on, |ui| {
+            egui::ComboBox::from_label("Cloud detail")
+                .selected_text(match clouds {
+                    2 => "Ultra",
+                    4 => "Low",
+                    _ => "High",
+                })
+                .show_ui(ui, |ui| {
+                    for (scale, label) in [(2, "Ultra"), (3, "High"), (4, "Low")] {
+                        ui.selectable_value(&mut clouds, scale, label);
+                    }
+                });
+        });
+        crate::render::set_cloud_render_scale(clouds);
+        ui.add(
+            egui::Slider::new(&mut s.lod_start_chunks, 2..=full_limit)
+                .custom_formatter(|v, _| format!("{:.0} m", v * chunk_meters as f64))
+                .text("Sharp detail up to"),
         );
-    let mut range_km = crate::render::horizon_range_m() as f32 / 1000.0;
-    if ui
-        .add(
-            egui::Slider::new(
-                &mut range_km,
-                crate::render::MIN_HORIZON_RANGE_M as f32 / 1000.0
-                    ..=crate::render::MAX_HORIZON_RANGE_M as f32 / 1000.0,
+        ui.add(egui::Slider::new(&mut s.lod_levels, 1..=4).text("Distance detail levels"));
+        let mut range_km = crate::render::horizon_range_m() as f32 / 1000.0;
+        if ui
+            .add(
+                egui::Slider::new(
+                    &mut range_km,
+                    crate::render::MIN_HORIZON_RANGE_M as f32 / 1000.0
+                        ..=crate::render::MAX_HORIZON_RANGE_M as f32 / 1000.0,
+                )
+                .logarithmic(true)
+                .suffix(" km")
+                .text("Far horizon"),
             )
-            .logarithmic(true)
-            .suffix(" km")
-            .text("Distant view"),
-        )
-        .on_hover_text(
-            "How far the low-detail horizon extends past the loaded terrain.              Shorter ranges build and draw far fewer samples and triangles.",
-        )
-        .changed()
-    {
-        crate::render::set_horizon_range_m((range_km * 1000.0).round() as u32);
-    }
-    let side = (2 * s.view_distance_chunks + 1) as usize;
-    let full_side = (2 * s.lod_start_chunks + 1) as usize;
-    ui.small(format!(
-        "{} terrain columns, {} at full detail",
-        side * side,
-        full_side * full_side
-    ));
-    if s.view_distance_chunks > 16 {
-        ui.label("Long distances increase terrain memory and loading cost substantially.");
-    }
-    ui.collapsing("Advanced rendering", |ui| {
-        let (mut cpu, effective_gpu) = crate::render::world_residency_budgets_mib();
-        let mut gpu = crate::render::gpu_residency_limit_mib();
-        let mut automatic = gpu == 0;
-        if ui.checkbox(&mut automatic,"Automatic GPU terrain budget (available VRAM)").changed() {
-            gpu = if automatic {0} else {effective_gpu};
-            crate::render::set_world_residency_budgets_mib(cpu,gpu);
+            .changed()
+        {
+            crate::render::set_horizon_range_m((range_km * 1000.0).round() as u32);
         }
-        let changed_cpu = ui.add(egui::Slider::new(&mut cpu, 32..=2048).logarithmic(true).text("CPU voxel cache (MiB)")).changed();
-        let changed_gpu = !automatic && ui.add(egui::Slider::new(&mut gpu, 64..=crate::render::MAX_GPU_MIB).logarithmic(true).text("GPU terrain limit (MiB)")).changed();
-        if changed_cpu || changed_gpu { crate::render::set_world_residency_budgets_mib(cpu, gpu); }
-        let budget=crate::render::gpu_residency_status();
-        ui.small(format!("Terrain allowance: {} MiB{}. Allocated only as terrain loads.",budget.limit_mib,
-            if budget.automatic {" (automatic)"} else {" (manual limit, constrained by VRAM pressure)"}));
-        if budget.detected {
-            ui.small(format!("VRAM: {} MiB dedicated · OS allowance {} MiB · process {} MiB · terrain ceiling {} MiB{}",
-                budget.dedicated_mib,budget.os_budget_mib,budget.process_usage_mib,budget.ceiling_mib,
-                if budget.live {""} else {" (driver estimate)"}));
-        } else { ui.small("VRAM information unavailable: conservative automatic fallback. A manual limit is available."); }
-        if budget.deferred>0 {
-            ui.colored_label(egui::Color32::from_rgb(235,190,115),format!("{} terrain chunks exceed the current memory allowance. Reduce terrain radius or increase a manual limit; automatic mode already leaves VRAM headroom.",budget.deferred));
-        }
-        ui.small("Near terrain takes priority. CPU includes cached source voxels and water levels held by mesh workers. Generation queues, mesh scratch, edited worlds and other rendering resources are separate.");
-        let mut mesh = crate::render::mesh_budget_mib();
-        if ui.add(egui::Slider::new(&mut mesh,160..=2048).logarithmic(true).text("Mesh heap: workers + results (MiB)")).changed() {crate::render::set_mesh_budget_mib(mesh);}
-        let mut edited = crate::world::regions::edited_budget_mib();
-        if ui.add(egui::Slider::new(&mut edited,16..=1024).logarithmic(true).text("Edited chunk cache target (MiB)")).changed() {crate::world::regions::set_edited_budget_mib(edited);}
-        ui.small("Mesh memory is reserved before construction. Edited chunks are paged only after durable writeback; I/O failures retain unsaved data.");
-        egui::ComboBox::from_label("Atmosphere")
+        egui::ComboBox::from_label("Sky")
             .selected_text(state.atmosphere_mode.label())
             .show_ui(ui, |ui| {
                 for mode in AtmosphereMode::all() {
                     ui.selectable_value(&mut state.atmosphere_mode, mode, mode.label());
                 }
             });
-        egui::ComboBox::from_label("Diagnostics")
+    });
+    ui.collapsing("Developer", |ui| {
+        let (mut cpu, effective_gpu) = crate::render::world_residency_budgets_mib();
+        let mut gpu = crate::render::gpu_residency_limit_mib();
+        let mut automatic = gpu == 0;
+        if ui.checkbox(&mut automatic, "Automatic GPU memory limit").changed() {
+            gpu = if automatic { 0 } else { effective_gpu };
+            crate::render::set_world_residency_budgets_mib(cpu, gpu);
+        }
+        let changed_cpu = ui.add(egui::Slider::new(&mut cpu, 32..=2048).logarithmic(true).text("CPU cache (MiB)")).changed();
+        let changed_gpu = !automatic
+            && ui.add(egui::Slider::new(&mut gpu, 64..=crate::render::MAX_GPU_MIB).logarithmic(true).text("GPU limit (MiB)")).changed();
+        if changed_cpu || changed_gpu {
+            crate::render::set_world_residency_budgets_mib(cpu, gpu);
+        }
+        let budget = crate::render::gpu_residency_status();
+        if budget.detected {
+            ui.small(format!(
+                "Terrain memory limit {} MiB of {} MiB video memory.",
+                budget.limit_mib, budget.dedicated_mib
+            ));
+        } else {
+            ui.small("Video memory size unknown; using a safe default.");
+        }
+        if budget.deferred > 0 {
+            ui.colored_label(
+                egui::Color32::from_rgb(235, 190, 115),
+                format!("{} chunks are waiting for memory. Lower the view distance.", budget.deferred),
+            );
+        }
+        let mut mesh = crate::render::mesh_budget_mib();
+        if ui.add(egui::Slider::new(&mut mesh, 160..=2048).logarithmic(true).text("Mesh memory (MiB)")).changed() {
+            crate::render::set_mesh_budget_mib(mesh);
+        }
+        let mut edited = crate::world::regions::edited_budget_mib();
+        if ui.add(egui::Slider::new(&mut edited, 16..=1024).logarithmic(true).text("Edited chunks (MiB)")).changed() {
+            crate::world::regions::set_edited_budget_mib(edited);
+        }
+        egui::ComboBox::from_label("Debug view")
             .selected_text(state.debug_view.label())
             .show_ui(ui, |ui| {
                 for view in RenderDebugView::all() {
@@ -212,37 +229,15 @@ pub(super) fn environment_settings(
     action: &mut UiAction,
 ) {
     saving_settings(ui);
-    ui.label("Day/Night Controls");
-    ui.separator();
-
-    ui.label(format!("Clock: {}", format_clock(time_state.time_of_day)));
-    ui.add(
-        egui::Slider::new(&mut time_state.time_of_day, 0.0..=1.0)
-            .text("Time of day")
-            .show_value(false),
-    );
-    if ui.button("Dawn").clicked() {
-        time_state.time_of_day = 0.21;
-    }
-    if ui.button("Noon").clicked() {
-        time_state.time_of_day = 0.50;
-    }
+    ui.label(format!("Time: {}", format_clock(time_state.time_of_day)));
+    ui.add(egui::Slider::new(&mut time_state.time_of_day, 0.0..=1.0).show_value(false));
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Golden hour").clicked() {
-            time_state.time_of_day = 0.728;
-        }
-        if ui.button("Sunset").clicked() {
-            time_state.time_of_day = 0.746;
-        }
-        if ui.button("Afterglow").clicked() {
-            time_state.time_of_day = 0.754;
+        for (label, time) in [("Dawn", 0.21), ("Noon", 0.50), ("Dusk", 0.746), ("Midnight", 0.0)] {
+            if ui.button(label).clicked() {
+                time_state.time_of_day = time;
+            }
         }
     });
-    if ui.button("Midnight").clicked() {
-        time_state.time_of_day = 0.00;
-    }
-
-    ui.separator();
     ui.checkbox(&mut time_state.freeze_time, "Freeze time");
     ui.add(
         egui::Slider::new(&mut time_state.day_length_seconds, 20.0..=1800.0)
@@ -252,32 +247,10 @@ pub(super) fn environment_settings(
     ui.separator();
     cloud_controls_ui(ui, time_state, action);
     ui.separator();
-    ui.checkbox(
-        &mut physics_state.enabled,
-        "Water flow and falling sand / gravel",
-    );
-    ui.small("Active water and falling materials continue across the world. Nearby activity gets priority; distant activity shares a fair work budget. Pause cellular physics to build suspended structures.");
-    ui.small(format!(
-        "{} active chunks · {} queued cells · {} updates · {} source loads",
-        physics_state.stats.active_chunks,
-        physics_state.stats.pending_updates,
-        physics_state.stats.applied_updates_last_step,
-        physics_state.stats.inflight_chunks
-    ));
-    ui.small(format!(
-        "Simulation sources: {:.1} / 32 MiB",
-        physics_state.stats.source_bytes as f32 / 1048576.0
-    ));
-    if physics_state.stats.recovering {
-        ui.small("Resuming stored activity in the background…");
-    }
-    if physics_state.stats.writeback_pressure {
-        ui.small(
-            "Simulation is waiting for edited-chunk writeback. Unfinished activity is retained.",
-        );
-    }
+    ui.checkbox(&mut physics_state.enabled, "Flowing water and falling sand")
+        .on_hover_text("Turn off to build suspended structures.");
     if physics_state.stats.source_failed {
-        ui.colored_label(egui::Color32::LIGHT_YELLOW,"Some simulation data is unavailable. Unfinished work is retained and loads will retry.");
+        ui.colored_label(egui::Color32::LIGHT_YELLOW, "Some world data is unavailable; it will retry.");
     }
 }
 

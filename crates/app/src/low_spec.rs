@@ -37,6 +37,7 @@ pub fn apply(p: &mut Preferences) {
         height: 576,
         fullscreen: false,
         cloud_scale: 4,
+        render_scale: 70,
         indirect_lighting: false,
         ..*p
     };

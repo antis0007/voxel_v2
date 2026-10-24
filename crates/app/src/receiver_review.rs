@@ -223,6 +223,13 @@ impl Review {
                 println!("[skyhook-review] port={port:?} tip={tip:?} wait_s={wait:.1} to_next={:.1} lift={lift:.1} pod={pod:?}",hook.next_port_cusp(skyhook::clock(day)));
                 self.report(w,text);
             }
+            "scale-100" | "scale-85" | "scale-70" | "scale-50" => {
+                // Change the render resolution mid-session, as automatic quality does.
+                if let Some(percent)=command.strip_prefix("scale-").and_then(|n|n.parse::<u32>().ok()) {
+                    crate::render::set_scene_scale_percent(percent);
+                }
+                self.report(w,text);
+            }
             "meteor" => {
                 // Park the clock a moment before a streak's peak and look at its head.
                 use world::orbital::{meteors,skyhook};

@@ -4,7 +4,10 @@ pub(super) const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16
 
 pub(super) struct PostProcess {
     pub scene: wgpu::TextureView,
+    /// Scene size: the HDR target and depth are this big.
     size: (u32, u32),
+    /// Window size: the resolve and present passes write at this size.
+    surface_size: (u32, u32),
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -203,7 +206,8 @@ impl PostProcess {
 
         Self {
             scene,
-            size: (config.width.max(1), config.height.max(1)),
+            size: super::scene_dims(config.width, config.height),
+            surface_size: (config.width.max(1), config.height.max(1)),
             format: config.format,
             layout,
             sampler,
@@ -267,8 +271,8 @@ impl PostProcess {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("linear HDR scene before tone mapping"),
             size: wgpu::Extent3d {
-                width: config.width.max(1),
-                height: config.height.max(1),
+                width: super::scene_dims(config.width, config.height).0,
+                height: super::scene_dims(config.width, config.height).1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -283,7 +287,8 @@ impl PostProcess {
 
     pub fn resize(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
         self.scene = Self::target(device, config);
-        self.size = (config.width.max(1), config.height.max(1));
+        self.size = super::scene_dims(config.width, config.height);
+        self.surface_size = (config.width.max(1), config.height.max(1));
         // The low-resolution target is recreated on the next frame at the
         // pixel scale that frame actually uses.
         self.output_tex = None;
@@ -302,8 +307,12 @@ impl PostProcess {
         mut settings: [f32; 28],
     ) {
         let debug = settings[3] > 0.5;
+        // `render_scale` is the art-pixel size in window pixels (1 = off). The scene
+        // may also be smaller than the window; `ratio` is scene / window, so one
+        // output texel covers `art * ratio` scene texels (below 1 means upscaling).
         let render_scale = if debug { 1.0 } else { settings[4].max(1.0) };
-        settings[4] = render_scale;
+        let ratio = self.size.0 as f32 / self.surface_size.0.max(1) as f32;
+        settings[4] = render_scale * ratio;
         queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&settings));
         queue.write_buffer(
             &self.present_params,
@@ -312,8 +321,8 @@ impl PostProcess {
         );
 
         let output_size = (
-            (self.size.0 as f32 / render_scale).round().max(1.0) as u32,
-            (self.size.1 as f32 / render_scale).round().max(1.0) as u32,
+            (self.surface_size.0 as f32 / render_scale).round().max(1.0) as u32,
+            (self.surface_size.1 as f32 / render_scale).round().max(1.0) as u32,
         );
         self.ensure_output(device, output_size);
         let resolved = self.output_view.as_ref().expect("resolve target");

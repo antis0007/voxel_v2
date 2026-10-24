@@ -694,13 +694,55 @@ pub fn set_cloud_render_scale(scale: u32) {
 /// The requested divisor is a quality ceiling, not permission to render a
 /// 180-line cloud image. Keep at least 360 rows so small windows do not turn
 /// every cumulus into a soft blob after the cubic reconstruction.
+///
+/// `width` and `height` are the scene size (see `scene_dims`). The 360-row floor
+/// scales with the render resolution, so a smaller scene gets a proportionally
+/// smaller cloud image and the clouds cost less in step with everything else.
 pub fn effective_cloud_render_scale(width: u32, height: u32) -> u32 {
-    let maximum = (height / 360).min(width / 640).clamp(1, 4);
+    let percent = scene_scale_percent();
+    let fraction = percent as f32 / 100.0;
+    let divisor = |size: u32, floor: f32| {
+        let ratio = size as f32 / (floor * fraction);
+        // At full resolution keep the long-standing whole-number floor exactly.
+        (if percent >= 100 { ratio.floor() } else { ratio.round() }) as u32
+    };
+    let maximum = divisor(height, 360.0).min(divisor(width, 640.0)).clamp(1, 4);
     (cloud_render_scale() + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)).min(maximum)
 }
-/// Divisor request including the governor's bump, used to notice changes.
+/// Divisor request including the governor's bump and the render resolution,
+/// used to notice changes that need the scene targets rebuilt.
 fn cloud_scale_request() -> u32 {
-    cloud_render_scale() * 8 + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)
+    cloud_render_scale() * 8 + CLOUD_AUTO_BUMP.load(Ordering::Relaxed) + scene_scale_percent() * 64
+}
+
+/// Internal render resolution as a percentage of the window. The 3D scene (terrain,
+/// sky, clouds, depth) is drawn at this size and the resolve pass scales it up to
+/// the window; the UI and text stay at native resolution.
+static SCENE_SCALE_PERCENT: AtomicU32 = AtomicU32::new(100);
+pub const MIN_SCENE_SCALE_PERCENT: u32 = 50;
+pub fn scene_scale_percent() -> u32 {
+    SCENE_SCALE_PERCENT.load(Ordering::Relaxed)
+}
+pub fn set_scene_scale_percent(percent: u32) {
+    SCENE_SCALE_PERCENT.store(percent.clamp(MIN_SCENE_SCALE_PERCENT, 100), Ordering::Relaxed);
+}
+/// The window size scaled by the render resolution, never below 320x180 (or the
+/// window itself when that is smaller).
+pub(crate) fn scene_dims(width: u32, height: u32) -> (u32, u32) {
+    let percent = scene_scale_percent().clamp(MIN_SCENE_SCALE_PERCENT, 100);
+    if percent >= 100 {
+        return (width.max(1), height.max(1));
+    }
+    let scaled = |size: u32, floor: u32| ((size * percent + 50) / 100).max(floor.min(size)).max(1);
+    (scaled(width, 320), scaled(height, 180))
+}
+/// A copy of the surface configuration at the scene size.
+pub(crate) fn scene_config(config: &wgpu::SurfaceConfiguration) -> wgpu::SurfaceConfiguration {
+    let (width, height) = scene_dims(config.width, config.height);
+    let mut scene = config.clone();
+    scene.width = width;
+    scene.height = height;
+    scene
 }
 const CLOUD_TEMPORAL_ENABLED: bool = false;
 
@@ -2440,8 +2482,8 @@ impl GpuPendingInit {
                     self.atmosphere_layout.as_ref().unwrap().clone(),
                     self.camera_layout.as_ref().unwrap(),
                     self.camera_bind_group.as_ref().unwrap(),
-                    config.width,
-                    config.height,
+                    scene_dims(config.width, config.height).0,
+                    scene_dims(config.width, config.height).1,
                     &bootstrap.default_lighting,
                     &CloudControls::default(),
                 );
@@ -2907,7 +2949,7 @@ impl GpuPendingInit {
                 );
                 let indirect = indirect::IndirectLighting::new(
                     &bootstrap.device,
-                    &bootstrap.config,
+                    &scene_config(&bootstrap.config),
                     self.camera_layout.as_ref().unwrap(),
                     self.depth.as_ref().unwrap(),
                     &postprocess.scene,
@@ -3166,8 +3208,8 @@ impl Gpu {
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("depth"),
                 size: wgpu::Extent3d {
-                    width: config.width.max(1),
-                    height: config.height.max(1),
+                    width: scene_dims(config.width, config.height).0,
+                    height: scene_dims(config.width, config.height).1,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -3196,9 +3238,17 @@ impl Gpu {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: config.width.div_ceil(effective_cloud_render_scale(config.width, config.height))
+                width: scene_dims(config.width, config.height).0
+                    .div_ceil(effective_cloud_render_scale(
+                        scene_dims(config.width, config.height).0,
+                        scene_dims(config.width, config.height).1,
+                    ))
                     .max(1),
-                height: config.height.div_ceil(effective_cloud_render_scale(config.width, config.height))
+                height: scene_dims(config.width, config.height).1
+                    .div_ceil(effective_cloud_render_scale(
+                        scene_dims(config.width, config.height).0,
+                        scene_dims(config.width, config.height).1,
+                    ))
                     .max(1),
                 depth_or_array_layers: 1,
             },
@@ -3602,13 +3652,13 @@ impl Gpu {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
-        self.atmosphere
-            .resize(&self.queue, self.config.width, self.config.height);
+        let (scene_width, scene_height) = scene_dims(self.config.width, self.config.height);
+        self.atmosphere.resize(&self.queue, scene_width, scene_height);
         self.depth = Self::create_depth(&self.device, &self.config);
         self.postprocess.resize(&self.device, &self.config);
         self.indirect.resize(
             &self.device,
-            &self.config,
+            &scene_config(&self.config),
             &self.depth,
             &self.postprocess.scene,
         );
@@ -4245,8 +4295,12 @@ impl Gpu {
         // silently relabel an older GPU measurement as the current frame.
         let distance = render_distance_settings();
         frame_stats.config_id = [
-            self.config.width, self.config.height,
-            effective_cloud_render_scale(self.config.width, self.config.height),
+            scene_dims(self.config.width, self.config.height).0,
+            scene_dims(self.config.width, self.config.height).1,
+            effective_cloud_render_scale(
+                scene_dims(self.config.width, self.config.height).0,
+                scene_dims(self.config.width, self.config.height).1,
+            ),
             self.current_debug_view.as_u32(), u32::from(paused),
             u32::from(shadow::enabled()), u32::from(indirect_lighting_enabled()),
             distance.view_distance_chunks as u32, distance.lod_start_chunks as u32,
@@ -4479,11 +4533,17 @@ impl Gpu {
         let cloud_start = Instant::now();
         if !paused {
             let cloud_extent = wgpu::Extent3d {
-                width: self.config.width
-                    .div_ceil(effective_cloud_render_scale(self.config.width, self.config.height))
+                width: scene_dims(self.config.width, self.config.height).0
+                    .div_ceil(effective_cloud_render_scale(
+                        scene_dims(self.config.width, self.config.height).0,
+                        scene_dims(self.config.width, self.config.height).1,
+                    ))
                 .max(1),
-                height: self.config.height
-                    .div_ceil(effective_cloud_render_scale(self.config.width, self.config.height))
+                height: scene_dims(self.config.width, self.config.height).1
+                    .div_ceil(effective_cloud_render_scale(
+                        scene_dims(self.config.width, self.config.height).0,
+                        scene_dims(self.config.width, self.config.height).1,
+                    ))
                 .max(1),
                 depth_or_array_layers: 1,
             };

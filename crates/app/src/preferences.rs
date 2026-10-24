@@ -16,6 +16,11 @@ use std::{
 };
 const MAGIC: &[u8; 8] = b"VXPRF008";
 const WORDS: usize = 26 + crate::egui_ui::magic_style::WORDS;
+const CLOUDS_OFF_BIT: u32 = 8;
+/// Bit 9 of the same word: automatic quality switched off (so old files keep it on).
+const AUTO_QUALITY_OFF_BIT: u32 = 9;
+/// Bits 10-17 of the same word: render resolution in percent (0 = unset = 100).
+const RENDER_SCALE_SHIFT: u32 = 10;
 fn path() -> PathBuf {
     storage::save_directory().join("preferences.vxp")
 }
@@ -56,7 +61,13 @@ pub struct Preferences {
     pub fullscreen: bool,
     pub effects_volume: f32,
     pub cloud_scale: u32,
+    /// Stored as bit 8 of the cloud-scale word; older builds clamp that word to Balanced.
+    pub clouds: bool,
     pub indirect_lighting: bool,
+    /// Step settings down on its own when frames run slow.
+    pub auto_quality: bool,
+    /// Internal render resolution as a percentage of the window (50 to 100).
+    pub render_scale: u32,
     /// Menu and HUD zoom on top of the native DPI correction.
     pub ui_scale: f32,
     pub hotbar_scale: f32,
@@ -91,7 +102,10 @@ impl Default for Preferences {
             fullscreen: false,
             effects_volume: 0.65,
             cloud_scale: 3,
+            clouds: true,
             indirect_lighting: true,
+            auto_quality: true,
+            render_scale: 100,
             ui_scale: UI_SCALE_DEFAULT,
             hotbar_scale: 1.0,
             magic: Default::default(),
@@ -122,7 +136,10 @@ impl Preferences {
     pub fn apply_globals(self) {
         crate::audio::set_volume(self.effects_volume);
         render::set_cloud_render_scale(self.cloud_scale);
+        render::set_clouds_enabled(self.clouds);
         render::set_indirect_lighting_enabled(self.indirect_lighting);
+        crate::quality::set_auto_enabled(self.auto_quality);
+        render::set_scene_scale_percent(self.render_scale);
         // The old stock setting kept full blocks for three chunks and then
         // threw the rest away at 256 m. Promote that exact preset once.
         let (view, lod, levels) = if self.view == 16 && self.lod == 3 && self.levels == 3 {
@@ -196,7 +213,10 @@ impl Preferences {
             fullscreen,
             effects_volume: crate::audio::volume(),
             cloud_scale: render::cloud_render_scale(),
+            clouds: render::clouds_enabled(),
             indirect_lighting: render::indirect_lighting_enabled(),
+            auto_quality: crate::quality::auto_enabled(),
+            render_scale: render::scene_scale_percent(),
             ui_scale: ui.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX),
             hotbar_scale: ui.hotbar_scale.clamp(0.7, 1.6),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
@@ -226,7 +246,10 @@ impl Preferences {
             self.height,
             self.fullscreen as u32,
             self.effects_volume.to_bits(),
-            self.cloud_scale,
+            self.cloud_scale
+                | u32::from(!self.clouds) << CLOUDS_OFF_BIT
+                | u32::from(!self.auto_quality) << AUTO_QUALITY_OFF_BIT
+                | self.render_scale.clamp(render::MIN_SCENE_SCALE_PERCENT, 100) << RENDER_SCALE_SHIFT,
             self.indirect_lighting as u32,
             self.ui_scale.to_bits(),
             self.hotbar_scale.to_bits(),
@@ -308,7 +331,14 @@ impl Preferences {
             height: w[19].clamp(480, 4320),
             fullscreen: w[20] != 0,
             effects_volume: effects_volume.clamp(0.0, 1.0),
-            cloud_scale: w.get(22).copied().unwrap_or(3).clamp(2, 4),
+            cloud_scale: w.get(22).map_or(3, |n| n & 0xff).clamp(2, 4),
+            clouds: w.get(22).is_none_or(|n| n >> CLOUDS_OFF_BIT & 1 == 0),
+            auto_quality: w.get(22).is_none_or(|n| n >> AUTO_QUALITY_OFF_BIT & 1 == 0),
+            render_scale: w
+                .get(22)
+                .map(|n| n >> RENDER_SCALE_SHIFT & 0xff)
+                .filter(|p| *p != 0)
+                .map_or(100, |p| p.clamp(render::MIN_SCENE_SCALE_PERCENT, 100)),
             indirect_lighting: w.get(23).is_none_or(|v| *v != 0),
             ui_scale: w
                 .get(24)
@@ -522,6 +552,57 @@ mod tests {
         preferences.ui_scale = 1.0;
         let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
         assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
+    }
+
+    #[test]
+    fn clouds_off_round_trips_beside_the_cloud_scale() {
+        let mut preferences = Preferences::default();
+        preferences.clouds = false;
+        preferences.cloud_scale = 4;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert!(!decoded.clouds);
+        assert_eq!(decoded.cloud_scale, 4);
+        let decoded = Preferences::decode(&Preferences::default().bytes()).expect("decode");
+        assert!(decoded.clouds);
+        assert_eq!(decoded.cloud_scale, 3);
+    }
+
+    #[test]
+    fn render_scale_defaults_to_full_and_round_trips_beside_the_other_flags() {
+        assert_eq!(Preferences::default().render_scale, 100);
+        let mut preferences = Preferences::default();
+        preferences.render_scale = 70;
+        preferences.clouds = false;
+        preferences.auto_quality = false;
+        preferences.cloud_scale = 4;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.render_scale, 70);
+        assert!(!decoded.clouds && !decoded.auto_quality);
+        assert_eq!(decoded.cloud_scale, 4);
+        // An older file has no scale in those bits: it reads as full resolution.
+        let mut old = Preferences::default();
+        old.render_scale = 100;
+        let mut bytes = old.bytes();
+        let word = 8 + 22 * 4;
+        bytes[word..word + 4].copy_from_slice(&3u32.to_le_bytes());
+        let end = bytes.len() - 8;
+        let checksum = hash(&bytes[..end]).to_le_bytes();
+        bytes[end..].copy_from_slice(&checksum);
+        assert_eq!(Preferences::decode(&bytes).expect("decode").render_scale, 100);
+    }
+
+    #[test]
+    fn automatic_quality_defaults_on_and_round_trips_beside_clouds() {
+        assert!(Preferences::default().auto_quality);
+        let mut preferences = Preferences::default();
+        preferences.auto_quality = false;
+        preferences.clouds = false;
+        preferences.cloud_scale = 4;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert!(!decoded.auto_quality && !decoded.clouds);
+        assert_eq!(decoded.cloud_scale, 4);
+        let decoded = Preferences::decode(&Preferences::default().bytes()).expect("decode");
+        assert!(decoded.auto_quality && decoded.clouds);
     }
 
     #[test]
