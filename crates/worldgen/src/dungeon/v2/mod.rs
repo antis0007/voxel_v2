@@ -11,7 +11,9 @@ use super::Building;
 use crate::{BlockId as B, WorldSampleConfig};
 use glam::Vec3;
 
+mod carve;
 mod chasm;
+mod collapse;
 mod dress;
 mod escape;
 mod inhabited;
@@ -26,12 +28,14 @@ mod maze;
 mod outline;
 mod passage;
 mod plan;
+mod ruin;
 mod siting;
 mod starry;
 mod treasure;
 #[cfg(test)]
 mod tests;
 
+pub use collapse::centre as fall_centre;
 pub use job::Job;
 pub use index::Index;
 use index::CORR_BIT;

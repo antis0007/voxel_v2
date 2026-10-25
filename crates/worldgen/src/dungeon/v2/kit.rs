@@ -2,7 +2,7 @@
 //! and corridors. Pure functions of a point in metres; sample points are voxel
 //! centres, so every feature is at least one voxel thick at any scale.
 use super::index::CORR_BIT;
-use super::{Ceiling, Complex, Corr, Kind, LEVEL, Outline, Room, dress, fine, gallery, outline, passage, starry};
+use super::{Ceiling, Complex, Corr, Kind, LEVEL, Outline, Room, carve, collapse, dress, fine, gallery, outline, passage, ruin, starry};
 use crate::{BlockId as B, hash3};
 use glam::Vec3;
 
@@ -31,8 +31,9 @@ pub fn rise(r: &Room) -> f32 {
     }
 }
 
-/// Ceiling height above the floor at a room-local point.
-fn ceiling_at(r: &Room, rx: f32, rz: f32, bay: f32, v: f32) -> f32 {
+/// Ceiling height above the floor at a room-local point; `carved` turns
+/// flat beam ceilings into coffers (generator 52).
+fn ceiling_at(r: &Room, rx: f32, rz: f32, bay: f32, v: f32, carved: bool) -> f32 {
     let (w, d) = (r.w(), r.d());
     let (across, half) = if w <= d { (rx - w * 0.5, w * 0.5) } else { (rz - d * 0.5, d * 0.5) };
     let t = (across.abs() / half).clamp(0.0, 1.0);
@@ -42,6 +43,10 @@ fn ceiling_at(r: &Room, rx: f32, rz: f32, bay: f32, v: f32) -> f32 {
         return r.h + rise(r) * (1.0 - q * q);
     }
     match r.ceiling {
+        Ceiling::Beams if carved && r.kind != Kind::Labyrinth => {
+            let (along, across, wid) = if w <= d { (rz, rx, w) } else { (rx, rz, d) };
+            r.h + carve::coffer(along, across, wid, bay, outline::depth(r, rx, rz), v)
+        }
         Ceiling::Beams => r.h,
         Ceiling::Ribbed => r.h + rise(r) * (1.0 - t * t),
         Ceiling::Corbel => r.h + rise(r) * ((1.0 - t) * 4.0).floor() * 0.25,
@@ -88,6 +93,12 @@ pub fn shell(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     }
     let fy = m.y - r.floor;
     let (rx, rz) = (m.x - r.x0, m.z - r.z0);
+    if c.version >= ruin::VERSION
+        && fy > r.h
+        && let Some(b) = collapse::hole(r, rx, rz, fy, ceiling_at(r, rx, rz, c.job.bay(), v, true), v)
+    {
+        return b;
+    }
     if r.kind == Kind::Orrery
         && (-rx).max(rx - r.w()).max(-rz).max(rz - r.d()) < v
         && let Some(b) = starry::constellation(r, around(r, rx, rz), fy, v)
@@ -135,6 +146,16 @@ pub fn doorway(c: &Complex, m: Vec3) -> bool {
 }
 
 pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
+    let b = room_body(c, r, m, v);
+    let fy = m.y - r.floor;
+    if c.version < ruin::VERSION || fy < -v || fy >= r.h {
+        return b;
+    }
+    let dwall = outline::depth(r, m.x - r.x0, m.z - r.z0);
+    ruin::moss(b, m, v, r.salt, ruin::wet(c, r), dwall, |p| room_body(c, r, p, v))
+}
+
+fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     let (rx, rz, fy) = (m.x - r.x0, m.z - r.z0, m.y - r.floor);
     let (w, d) = (r.w(), r.d());
     let bay = c.job.bay();
@@ -161,13 +182,20 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
         }
         return if fy >= -v { floor_block(c, r, m, v) } else { stone(c, m, v) };
     }
-    let ceil = ceiling_at(r, rx, rz, bay, v);
+    let carved = c.version >= ruin::VERSION;
+    let ceil = ceiling_at(r, rx, rz, bay, v, carved);
     if fy >= ceil {
-        return stone(c, m, v);
+        let fallen = if carved { collapse::hole(r, rx, rz, fy, ceil, v) } else { None };
+        return fallen.unwrap_or_else(|| stone(c, m, v));
     }
     // Ribs on vaults, beams on flat ceilings, one voxel deep, at every bay.
     let along = if w <= d { rz } else { rx };
     let across = if w <= d { rx } else { rz };
+    if carved && r.ceiling == Ceiling::Beams && r.kind != Kind::Labyrinth && fy >= ceil - v && ceil > r.h
+        && carve::rosette(along, across, w.min(d), bay, v)
+    {
+        return c.pal.trim;
+    }
     if fy >= ceil - 0.6 && fy >= r.h - 0.6 {
         match r.ceiling {
             Ceiling::Ribbed | Ceiling::Corbel if near_line(along, bay, v, 0.0) => {
@@ -199,6 +227,15 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     }
     // Piers at every bay, skipping the corners; a sconce on every other one.
     let pd = v.max(0.6);
+    let wall_along = if rx.min(w - rx) < rz.min(d - rz) { rz } else { rx };
+    let span = if rx.min(w - rx) < rz.min(d - rz) { d } else { w };
+    let piered = !r.kind.is_puzzle() && wall_along > 1.5 && wall_along < span - 1.5;
+    if carved && piered && dwall < pd + carve::SPREAD && fy < r.h && near_line(wall_along, bay, v, 0.6 + carve::SPREAD) {
+        let k = (wall_along - v * 0.5).rem_euclid(bay);
+        if let Some(b) = carve::pier(r, c.pal.trim, k.min(bay - k), dwall, fy, v, pd) {
+            return b;
+        }
+    }
     if dwall < pd + v && !r.kind.is_puzzle() && fy < r.h {
         let wall_along = if rx.min(w - rx) < rz.min(d - rz) { rz } else { rx };
         let span = if rx.min(w - rx) < rz.min(d - rz) { d } else { w };
@@ -230,7 +267,26 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     {
         return b;
     }
-    dress::furnish(c, r, rx, rz, fy, v, dwall).unwrap_or(B::Air)
+    let placed = dress::furnish(c, r, rx, rz, fy, v, dwall);
+    if !carved || placed.is_some() {
+        return placed.unwrap_or(B::Air);
+    }
+    let rib = match r.ceiling {
+        Ceiling::Ribbed | Ceiling::Corbel | Ceiling::Beams if near_line(along, bay, v, 0.0) && r.kind != Kind::Labyrinth => {
+            Some((ceil - 0.6).max(r.h - 0.6))
+        }
+        _ => None,
+    };
+    // Distance along the wall to the nearest pier with a sconce.
+    let lamp = if piered && r.kind != Kind::Cells {
+        let k = (wall_along - v * 0.5).rem_euclid(bay * 2.0);
+        k.min(bay * 2.0 - k)
+    } else {
+        f32::INFINITY
+    };
+    ruin::hang(c, r, m, fy, v, dwall, ceil, rib)
+        .or_else(|| ruin::foot(c, r, m, fy, v, dwall, lamp))
+        .unwrap_or(B::Air)
 }
 
 fn floor_block(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
@@ -298,6 +354,17 @@ fn balcony(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32) -> Option<B
 }
 
 pub fn corridor(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
+    let b = corridor_body(c, k, m, v);
+    let fy = m.y - k.floor_at(m.x, m.z);
+    if c.version < ruin::VERSION || fy < -v || fy >= 1.0 {
+        return b;
+    }
+    let across = if k.along_x { m.z - (k.z0 + k.z1) * 0.5 } else { m.x - (k.x0 + k.x1) * 0.5 };
+    let half = if k.along_x { (k.z1 - k.z0) * 0.5 } else { (k.x1 - k.x0) * 0.5 };
+    ruin::moss(b, m, v, c.seed, ruin::job_wet(c.job), half - across.abs(), |p| corridor_body(c, k, p, v))
+}
+
+fn corridor_body(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
     let f = k.floor_at(m.x, m.z);
     let fy = m.y - f;
     if fy < 0.0 {
@@ -350,6 +417,11 @@ pub fn corridor(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
     }
     if c.version >= super::RICH
         && let Some(b) = passage::furnish(c, k, m, along, across, half, fy, v)
+    {
+        return b;
+    }
+    if c.version >= ruin::VERSION
+        && let Some(b) = ruin::passage_vine(c, m, fy, v, half - across.abs(), roof)
     {
         return b;
     }

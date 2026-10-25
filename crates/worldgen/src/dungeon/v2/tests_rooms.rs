@@ -314,7 +314,7 @@ fn galleries_can_be_climbed_to() {
 }
 
 /// Door mouths of a room: where each touching corridor meets the room box.
-fn doors(d: &Complex, r: &Room, v: f32) -> Vec<IVec3> {
+pub(super) fn doors(d: &Complex, r: &Room, v: f32) -> Vec<IVec3> {
     d.corrs
         .iter()
         .filter(|k| k.x1 > r.x0 - 0.1 && k.x0 < r.x1 + 0.1 && k.z1 > r.z0 - 0.1 && k.z0 < r.z1 + 0.1)
