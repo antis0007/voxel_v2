@@ -76,6 +76,34 @@ pub fn choose(version: u32, r: &Room, corrs: &[Corr]) -> u8 {
         .unwrap_or(NO_STAIR)
 }
 
+/// From generator 53 ceiling beams and coffer rosettes stop at the gallery.
+/// A beam one voxel under a 6 m ceiling left a metre over the 4 m deck and the
+/// top step, so the deck could not be climbed to.
+pub const HEADROOM: u32 = 53;
+
+/// Whether a room-local column lies over the deck or its stair.
+pub fn under(c: &Complex, r: &Room, rx: f32, rz: f32) -> bool {
+    if c.version < HEADROOM || !has(c, r) {
+        return false;
+    }
+    let (along, across, len, wid) = frame(r, rx, rz, r.stair);
+    let deep = across.min(wid - across);
+    (along >= 1.0 && along <= len - 1.0) && (deep < DEPTH || (across > wid * 0.5 && deep < DEPTH + STAIR))
+}
+
+/// Whether a room-local point lies in the clear apron along the stair's open
+/// side (generator 53): shelves and pier sconces used to wall off its foot.
+pub fn approach(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32) -> bool {
+    if c.version < HEADROOM || !has(c, r) || !(0.0..3.0).contains(&fy) {
+        return false;
+    }
+    let (along, across, len, wid) = frame(r, rx, rz, r.stair);
+    let deep = wid - across;
+    let deck = DECK.round();
+    across > wid * 0.5 && (DEPTH + STAIR..DEPTH + STAIR + 1.5).contains(&deep)
+        && along >= len - 2.0 - deck && along <= len - 1.0
+}
+
 /// The gallery's blocks at a room-local point, if any.
 pub fn sample(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32) -> Option<B> {
     let stair = if c.version >= super::fine::VERSION { r.stair } else { 0 };
@@ -95,7 +123,10 @@ pub fn sample(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32) -> Optio
             // Steps, and clear headroom over them: no column or shelf stands
             // on a stair.
             let top = ((s1 - along) / v).ceil() * v;
-            return (fy < top.min(deck) + 2.5).then_some(if fy < top.min(deck) { c.pal.trim } else { B::Air });
+            // From generator 53 the stair is clear to the ceiling: a column
+            // over it left 2.5 m, one voxel short of a climb at 1 m.
+            let clear = c.version >= HEADROOM || fy < top.min(deck) + 2.5;
+            return clear.then_some(if fy < top.min(deck) { c.pal.trim } else { B::Air });
         }
         return None;
     }

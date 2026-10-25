@@ -191,12 +191,13 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     // Ribs on vaults, beams on flat ceilings, one voxel deep, at every bay.
     let along = if w <= d { rz } else { rx };
     let across = if w <= d { rx } else { rz };
-    if carved && r.ceiling == Ceiling::Beams && r.kind != Kind::Labyrinth && fy >= ceil - v && ceil > r.h
+    let clear = gallery::under(c, r, rx, rz);
+    if carved && !clear && r.ceiling == Ceiling::Beams && r.kind != Kind::Labyrinth && fy >= ceil - v && ceil > r.h
         && carve::rosette(along, across, w.min(d), bay, v)
     {
         return c.pal.trim;
     }
-    if fy >= ceil - 0.6 && fy >= r.h - 0.6 {
+    if !clear && fy >= ceil - 0.6 && fy >= r.h - 0.6 {
         match r.ceiling {
             Ceiling::Ribbed | Ceiling::Corbel if near_line(along, bay, v, 0.0) => {
                 let boss = if c.version >= fine::VERSION { fine::boss(c, r, across, v) } else { None };
@@ -224,6 +225,9 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
         && let Some(b) = gallery::sample(c, r, rx, rz, fy, v)
     {
         return b;
+    }
+    if gallery::approach(c, r, rx, rz, fy) {
+        return B::Air;
     }
     // Piers at every bay, skipping the corners; a sconce on every other one.
     let pd = v.max(0.6);

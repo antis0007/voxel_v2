@@ -284,11 +284,14 @@ fn dump_passage() {
     }
 }
 
+/// Every gallery of the scan, not the first few: before generator 53 a
+/// ceiling beam over the top step stranded some decks, hidden by an early exit.
 #[test]
 fn galleries_can_be_climbed_to() {
     let mut decks = 0;
     for (seed, scale) in (0u32..60).map(|s| (s, if s % 4 == 3 { VoxelScalePreset::HalfMeter } else { VoxelScalePreset::OneMeter })) {
-        let c = cfg(seed.wrapping_mul(3266489917) ^ 11, scale);
+        let mut c = cfg(seed.wrapping_mul(3266489917) ^ 11, scale);
+        c.generator_version = c.generator_version.max(gallery::HEADROOM);
         for (cell, d) in complexes(&c, 3) {
             if !d.rooms.iter().any(|r| gallery::has(&d, r)) {
                 continue;
@@ -302,12 +305,9 @@ fn galleries_can_be_climbed_to() {
                     let m = (p.as_vec3() + Vec3::splat(0.5)) * grid.v;
                     p.y == deck && m.x > r.x0 && m.x < r.x1 && m.z > r.z0 && m.z < r.z1
                 });
-                assert!(up, "cell {cell:?}: {:?} gallery out of reach at {}", r.kind, grid.v);
+                assert!(up, "seed {seed} cell {cell:?}: {:?} gallery out of reach at {}", r.kind, grid.v);
                 decks += 1;
             }
-        }
-        if decks >= 8 {
-            break;
         }
     }
     assert!(decks >= 8, "only {decks} galleries");
