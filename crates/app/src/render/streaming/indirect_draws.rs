@@ -23,8 +23,18 @@ pub fn set_enabled(enabled: bool) {
 pub fn set_supported(adapter: &wgpu::Adapter, device_features: wgpu::Features) {
     let flags = adapter.get_downlevel_capabilities().flags;
     let supported = flags.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION)
-        && device_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+        && device_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+        && !debug_assert_breaks_multidraw(adapter.get_info().backend);
     SUPPORTED.store(supported, Ordering::Relaxed);
+}
+
+/// Whether debug builds must avoid multi-draw indirect on `backend`.
+///
+/// wgpu-core 27.0.3 `command/render.rs:2851` debug-asserts a wrong stride in the
+/// DX12 indirect-validation batcher when count > 1; release output is correct.
+/// Remove once wgpu is upgraded past it.
+pub(in crate::render) fn debug_assert_breaks_multidraw(backend: wgpu::Backend) -> bool {
+    cfg!(debug_assertions) && backend == wgpu::Backend::Dx12
 }
 
 pub fn active() -> bool {

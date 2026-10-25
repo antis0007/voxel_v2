@@ -146,6 +146,11 @@ fn gpu_draw_offset_first_instance() {
         println!("[draw-offset] adapter lacks INDIRECT_FIRST_INSTANCE; direct path only");
         return;
     }
+    let backend = adapter.get_info().backend;
+    if crate::render::streaming::indirect_draws::debug_assert_breaks_multidraw(backend) {
+        println!("[draw-offset] {backend:?} debug build: wgpu-core debug assert; direct path only");
+        return;
+    }
     let args: Vec<u8> = [1u32, 2]
         .iter()
         .flat_map(|&first_instance| {
