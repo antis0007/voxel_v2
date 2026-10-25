@@ -5,6 +5,7 @@
 use crate::coords::CHUNK_SIZE;
 use glam::IVec3;
 
+pub mod distortion;
 mod edges;
 mod projection;
 pub use edges::{QuarterTurns, Step};
