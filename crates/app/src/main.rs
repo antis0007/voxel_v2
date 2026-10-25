@@ -2633,6 +2633,58 @@ fn main() -> Result<()> {
                                         }
                                         w.set_many(&edits);
                                     }
+                                // VOXEL_REVIEW_FLUIDS=<metres ahead>: a fluids-and-powders test bed
+                                // (yaw 0, looking -z). Left to right: a sand-bed pool that deepens
+                                // from 1 to 4 voxels away from the camera, with boulders on the bed;
+                                // sand, gravel, ash and dirt mounds; a burning log under smoke; steam.
+                                static FLUIDS_PLACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                if let (Some(w), Some(metres)) = (world.as_mut(), std::env::var("VOXEL_REVIEW_FLUIDS").ok().and_then(|v| v.parse::<f32>().ok()))
+                                    && !FLUIDS_PLACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                        let scale = w.voxel_scale.meters();
+                                        let eye = player.eye(w.voxel_scale);
+                                        let cx = eye.x.floor() as i32;
+                                        let cz = (eye.z - metres / scale).floor() as i32;
+                                        let h = w.terrain_height_at(cx, cz);
+                                        let mut edits = Vec::new();
+                                        for x in -14..=14 {
+                                            for z in -5..=5 {
+                                                let p = |y: i32| glam::IVec3::new(cx + x, h + y, cz + z);
+                                                for y in -5..=7 {
+                                                    edits.push((p(y), if y <= 0 { BlockId::Grass } else { BlockId::Air }));
+                                                }
+                                                let mound = 2 - (z.abs() + 1) / 3;
+                                                let pile = match x {
+                                                    -4..=-3 => Some(BlockId::Sand),
+                                                    -1..=0 => Some(BlockId::Gravel),
+                                                    2..=3 => Some(BlockId::Ash),
+                                                    5..=6 => Some(BlockId::Dirt),
+                                                    _ => None,
+                                                };
+                                                if let Some(block) = pile {
+                                                    for y in 1..=mound { edits.push((p(y), block)); }
+                                                }
+                                                if (-14..=-6).contains(&x) && z.abs() <= 4 {
+                                                    let depth = (4 - z).clamp(2, 8) / 2;
+                                                    edits.push((p(-depth), BlockId::Sand));
+                                                    for y in (-depth + 1)..=0 { edits.push((p(y), BlockId::Water)); }
+                                                    if (x == -11 && z == 1) || (x == -8 && z == -2) {
+                                                        edits.push((p(-depth + 1), BlockId::Stone));
+                                                    }
+                                                }
+                                                if (9..=10).contains(&x) && z.abs() <= 1 {
+                                                    edits.push((p(1), BlockId::Log));
+                                                    edits.push((p(2), BlockId::Fire));
+                                                    if z == 0 {
+                                                        for y in 3..=6 { edits.push((p(y), BlockId::Smoke)); }
+                                                    }
+                                                }
+                                                if x == 13 && z.abs() <= 1 {
+                                                    for y in 1..=4 { edits.push((p(y), BlockId::Steam)); }
+                                                }
+                                            }
+                                        }
+                                        w.set_many(&edits);
+                                    }
                                 // VOXEL_REVIEW_WATER=<metres ahead>: a flowing-water test bed
                                 // (yaw 0). Partial levels are written directly because the
                                 // fixed-pose review does not step the water simulation.

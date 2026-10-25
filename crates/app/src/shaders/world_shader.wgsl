@@ -1681,6 +1681,16 @@ fn natural_surface_blended(
             let phase = (ripple_coord.x + ripple_coord.y) * 18.0;
             sand_color *= 1.0 + sin(phase) * 0.028 * ripple_weight * (1.0 - shore_moisture * 0.72);
         }
+        // One-texel grains: value spread, warm grains and rare dark minerals,
+        // each with a small tilt so it catches the light on its own.
+        let grain_weight = surface_detail_weight(fp * PIXEL_RES);
+        if grain_weight > 0.0 {
+            let texel = floor(natural_face_uv(q, normal) * PIXEL_RES);
+            sand_color *= mix(vec3<f32>(1.0), sand_grain_tint(texel), grain_weight);
+            let lean = vec2<f32>(surface_hash(texel + vec2<f32>(3.0, 61.0)),
+                surface_hash(texel + vec2<f32>(47.0, -9.0))) - vec2<f32>(0.5);
+            natural_tilt += natural_tilt_from(normal, lean * 0.07 * grain_weight) * weights.w;
+        }
         color += sand_color * weights.w;
     }
     let modulation = 0.92 + mottle * 0.16 + clumps * 0.06;
@@ -1691,9 +1701,11 @@ fn natural_surface_blended(
 }
 
 fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, footprint: f32) -> vec3<f32> {
-    if kind == 33 {
+    if kind == 33 || kind == 38 {
         let q = (floor(p * cam.world_params.x * PIXEL_RES) + vec3<f32>(0.5)) / PIXEL_RES;
-        return max(gravel_surface(base, q, normal, max(footprint * cam.world_params.x, 0.0)), vec3<f32>(0.002));
+        let fp = max(footprint * cam.world_params.x, 0.0);
+        if kind == 38 { return max(ash_surface(base, q, normal, fp), vec3<f32>(0.002)); }
+        return max(gravel_surface(base, q, normal, fp), vec3<f32>(0.002));
     }
     if kind == 16 {
         // Snapped to texel centres: every noise below is flat inside a texel.
@@ -1774,7 +1786,7 @@ fn ore_inclusion(uv_m: vec2<f32>, footprint_m: f32) -> f32 {
 }
 
 fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, footprint: f32) -> vec3<f32> {
-    if kind==0 || kind==1 || kind==2 || kind==3 || kind==4 || kind==7 || kind==16 || kind==33 { return natural_surface(base,p,normal,kind,footprint); }
+    if kind==0 || kind==1 || kind==2 || kind==3 || kind==4 || kind==7 || kind==16 || kind==33 || kind==38 { return natural_surface(base,p,normal,kind,footprint); }
     if kind==8 {return base;}
     let landscape_p = p.xz * cam.world_params.x;
     var uv = p.xz;
@@ -2201,7 +2213,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     var filtered_slope_variance = 0.0;
     let is_backdrop = terrain_is_backdrop(in.ao_strength);
     let is_natural = kind == 0 || kind == 1 || kind == 2 || kind == 3
-        || kind == 4 || kind == 7 || kind == 16 || kind == 33 || kind == 36;
+        || kind == 4 || kind == 7 || kind == 16 || kind == 33 || kind == 36 || kind == 38;
     let material_scale = max(material_props.y, 0.0625);
     // The held hand and wand are rigid with the camera, but their mesh is
     // rebuilt in world space every frame. World-anchored procedural patterns
@@ -2362,6 +2374,17 @@ fn fs_main(in: VsOut) -> WorldOutput {
         );
         albedo *= 1.0 - cave_amount * (0.10 + (grime - 0.5) * 0.10);
     }
+    // Smoke and steam: billowed masses whose normal is settled here, so the
+    // shared lighting brightens their tops and leaves the underside dim.
+    var gas = GasPuff(n, 1.0, 1.0, 1.0);
+    if kind == 43 || kind == 44 {
+        gas = gas_puff(in.voxel_pos, geometric_normal, scale, light.torch_meta.y, fp_m);
+        n = gas.normal;
+        filtered_slope_variance += 0.004;
+        let under = select(vec3<f32>(0.090, 0.095, 0.110), vec3<f32>(0.34, 0.39, 0.46), kind == 44);
+        let top = select(vec3<f32>(0.30, 0.29, 0.27), vec3<f32>(0.78, 0.79, 0.80), kind == 44);
+        albedo = mix(under, top, smoothstep(0.15, 0.85, gas.shade)) * gas.density;
+    }
     // Lava is a moving thermal surface, not a flat orange sticker. A bounded
     // heat shimmer bends its lighting normal without touching screen space or
     // requiring another pass.
@@ -2500,32 +2523,42 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let refracted = refract(v_inc, refract_n, 0.75);
 
         let turbidity = surface_noise_filtered(p / 340.0, fp / 340.0);
-        let sand_bed = mix(vec3<f32>(0.185, 0.168, 0.108), vec3<f32>(0.105, 0.178, 0.148), turbidity);
-        let turquoise_mid = mix(vec3<f32>(0.06, 0.16, 0.20), vec3<f32>(0.05, 0.14, 0.19), turbidity);
-        let deep_ocean = mix(vec3<f32>(0.020, 0.055, 0.080), vec3<f32>(0.016, 0.045, 0.070), turbidity);
-        let shallow_t = 1.0 - exp(-depth * 0.62);
-        let deep_t = 1.0 - exp(-max(depth - 1.2, 0.0) * 0.18);
-        var water_col = mix(sand_bed, turquoise_mid, shallow_t);
-        water_col = mix(water_col, deep_ocean, deep_t);
         // Resident and distant water share the same optical-depth palette.
         // The former resident-only cyan ramp changed colour with residency.
+        var water_col = water_body_color(depth, turbidity);
 
         if local_water > 0.0 {
             // The mesh supplies the authoritative sampled substrate colour.
-            // Do not paint imaginary ripples/minerals over an edited bottom.
-            let refracted_bed = albedo;
+            // Do not paint imaginary ripples/minerals over an edited bottom;
+            // caustics are light on that bed, not pigment.
+            let bed_xz = world_pos.xz + refracted.xz * (depth / max(-refracted.y, 0.22));
+            let sun_up = terrain_safe_unit3(light.sun_dir_intensity.xyz, vec3<f32>(0.0, 1.0, 0.0)).y;
+            let caustic = water_bed_caustic(bed_xz, t, depth, fp_m)
+                * smoothstep(0.05, 0.30, sun_up) * smoothstep(0.03, 0.16, light.sun_dir_intensity.w)
+                * sky_access * select(1.0, 0.0, water_side);
+            // A submerged bed is wet, so darker than the same block on land.
+            let refracted_bed = albedo * 0.70 * (1.0 + caustic);
 
-            // Physical Beer-Lambert spectral absorption along the refracted ray + solar path.
+            // Beer-Lambert along the refracted view ray plus the solar path down.
             let optical_path = depth * (1.0 / max(-refracted.y, 0.22) + 0.45 / max(light.sun_dir_intensity.y + 0.28, 0.25));
-            let transmission = exp(-vec3<f32>(0.46, 0.24, 0.13) * optical_path);
+            let transmission = exp(-WATER_ABSORB * optical_path);
             water_col = mix(water_col, water_col * (vec3<f32>(1.0) - transmission) + refracted_bed * transmission, local_water);
         }
 
-        // Caustics require submerged receivers; foam requires contact/agitation.
-        // Depth contours alone provide neither. fract(voxel_pos.y) is not a
+        // Foam is lace where the surface meets a solid: the mesher's pinned
+        // corners (bank, wall, step, boulder). Open water carries none, and
+        // depth contours alone are not contact. fract(voxel_pos.y) is not a
         // waterline: it repeated a bright meniscus at every cell boundary.
         water_foam = 0.0;
-        albedo = mix(water_col, vec3<f32>(0.60, 0.66, 0.67), water_foam);
+        if !water_side && !is_far && in.surface.w >= 8.0 && terrain_has_resident_metadata(in.ao_strength) {
+            let contact = clamp((in.surface.w - 8.0 - 4.0 * in.water_optics.x - 0.5 * in.water_optics.y) / 256.0, 0.0, 1.0);
+            // A rain film a few centimetres deep has no surf to throw foam.
+            water_foam = water_shore_foam(world_pos.xz, contact, t, fp_m) * local_water
+                * smoothstep(0.03, 0.10, depth);
+            // Thin edge water transmits mint before the lace starts.
+            water_col = mix(water_col, WATER_MINT_EDGE, smoothstep(0.15, 0.85, contact) * 0.30 * local_water);
+        }
+        albedo = mix(water_col, WATER_FOAM, water_foam);
         roughness = mix(select(0.075, material_tint.w, material_tint.w >= 0.0), 0.48, water_foam);
     }
     albedo *= material_tint.rgb;
@@ -2577,55 +2610,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
     if in.ao_strength < 0.0 && terrain_resident_column_owned(world_pos.xz, horizontal_dist) { discard; }
     let normal_variance = 0.5 * (dot(normal_dx, normal_dx) + dot(normal_dy, normal_dy)) + filtered_slope_variance;
     var fire_heat = 0.0;
-    if kind >= 42 && kind <= 44 {
-        // Stuck to the voxel, not the screen. A screen hash reshuffles the
-        // silhouette every frame and reads as sparkle.
-        let threshold = fract(dot(floor(in.voxel_pos * 6.0), vec3<f32>(0.754877666, 0.569840296, 0.414213562)));
-        // Rounded, feathered puffs suppress the opaque-looking voxel box edges.
-        // World-anchored face coordinates stay continuous across chunk boundaries.
-        let axis = abs(in.normal);
-        let cell = fract(in.voxel_pos) - vec3<f32>(0.5);
-        var uv = cell.xz;
-        if axis.x > axis.y && axis.x > axis.z { uv = cell.zy; }
-        else if axis.z > axis.y { uv = cell.xy; }
-        let radius = length(uv * vec2<f32>(1.0, select(1.0, 0.8, kind == 42)));
-        var feather = 1.0 - smoothstep(0.18, 0.50, radius);
-        if kind == 42 {
-            // Fire is a vertically advected, licking volume rather than a
-            // static orange disc. The noise is anchored in voxel space and
-            // scrolled on the simulation clock; it does not touch derivatives.
-            let t = light.torch_meta.y;
-            let tongue = surface_noise_filtered(
-                vec2<f32>(
-                    dot(in.voxel_pos.xz, vec2<f32>(2.7, 1.9)) + in.voxel_pos.y * 0.37,
-                    in.voxel_pos.y * 4.6 - t * 2.25,
-                ),
-                footprint * 3.4,
-            );
-            let flare = surface_noise_filtered(
-                in.voxel_pos.xz * 5.3 + vec2<f32>(t * 0.8, -t * 1.1),
-                footprint * 5.3,
-            );
-            let core = 1.0 - smoothstep(0.06, 0.46, radius);
-            fire_heat = clamp(core * (1.05 + (flare - 0.5) * 0.36)
-                + (tongue - 0.5) * 0.42, 0.0, 1.0);
-            feather = 1.0 - smoothstep(
-                0.12,
-                0.50,
-                radius + (tongue - 0.5) * 0.22 + (flare - 0.5) * 0.10,
-            );
-            if threshold > 0.78 * feather { discard; }
-        } else {
-            // Smoke and steam drift as rounded puffs; the silhouette breathes
-            // slowly instead of being one fixed circle per voxel face.
-            let drift = surface_noise_filtered(
-                in.voxel_pos.xz * 1.9 + vec2<f32>(light.torch_meta.y * 0.17, -light.torch_meta.y * 0.11),
-                footprint * 1.9,
-            );
-            feather = 1.0 - smoothstep(0.16, 0.50, radius + (drift - 0.5) * 0.20);
-            if threshold > 0.34 * feather { discard; }
-        }
+    if kind == 42 {
+        // Pixel fire: every 5 cm texel of the face carries its own heat, from
+        // tongues scrolled up the face and a 10 Hz crackle, both pure functions
+        // of world position and the clock. Cool texels are empty, so the
+        // silhouette is a pixel edge that licks upward.
+        fire_heat = pixel_fire_heat(in.voxel_pos, geometric_normal, scale, light.torch_meta.y, fp_m);
+        if fire_heat < 0.20 { discard; }
     }
+    if (kind == 43 || kind == 44) && gas.coverage < 0.5 { discard; }
     // Translucent glow pieces (wand head, spell motes, glyphs) are not clipped
     // here. This used to discard fragments whose position inside the *world*
     // voxel cell was far from the cell centre. That suits a voxel-sized puff
@@ -2689,8 +2682,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
         return debug_surface_output(vec4<f32>(select(color, vec3<f32>(0.9, 0.4, 0.1), in.ao_strength < -1.5), 1.0));
     }
     if debug_mode == 19 {
-        // Known families are 0..37, 40..44, 47..56. Unsupported keys are magenta.
-        let supported = kind <= 37 || (kind >= 40 && kind <= 60);
+        // Known families are 0..38, 40..44, 47..56. Unsupported keys are magenta.
+        let supported = kind <= 38 || (kind >= 40 && kind <= 60);
         let id_color = 0.15 + 0.75 * fract(f32(kind + 1) * vec3<f32>(0.618034, 0.381966, 0.236068));
         return debug_surface_output(vec4<f32>(select(vec3<f32>(1.0, 0.0, 1.0), id_color, supported), 1.0));
     }
@@ -2932,16 +2925,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
         }
     }
     if kind == 42 {
-        // Black-body ramp: deep orange edges, orange body and a small warm
-        // core. Keeping the ramp in HDR preserves dark contrast between flame
-        // cells. The body keeps little green: at 0.31 with a full white core,
-        // the hottest voxels summed to near-white and read as pale salmon.
+        // HDR so bloom carries the core; the edge stays a dim red so flame
+        // pixels keep contrast against each other.
         let heat2 = fire_heat * fire_heat;
-        emissive += fire_ramp(fire_heat) * 3.1 * fire_exposure;
+        emissive += pixel_fire_ramp(fire_heat) * (1.6 + 4.2 * heat2) * fire_exposure;
         albedo = mix(vec3<f32>(0.16, 0.028, 0.004), vec3<f32>(0.95, 0.36, 0.05), heat2);
     }
-    if kind == 43 { emissive += albedo * 0.10 * fire_exposure; }
-    if kind == 44 { emissive += albedo * 0.18 * fire_exposure; }
+    // A faint self-glow keeps gas readable at night; the lit top comes from the sun.
+    if kind == 43 { emissive += albedo * 0.05 * fire_exposure; }
+    if kind == 44 { emissive += albedo * 0.10 * fire_exposure; }
     // Mithril remains a reflective metal; its restrained ribbons supply magic.
     // Crystal shine comes from the shared sun/torch BRDF, not emissive flashes.
     if kind == 52 || kind == 53 {
@@ -3065,8 +3057,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // solar planes against cooler sky-lit planes, as in the landscape studies.
     // Local lamps and emissive colour keep their authored spectra.
     let botanical = select(select(0.0, 0.45, is_natural && in.terrain_weights.x > 0.5), 1.0, foliage);
-    let sun_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(1.10, 1.025, 0.76), botanical);
-    let fill_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(0.77, 0.91, 1.07), botanical);
+    // Loose powders take a cool lavender shadow side (sand, gravel, ash; earth
+    // at reduced strength), warm in direct light.
+    let powder = select(select(select(0.0, 0.55, kind == 2 || (is_natural && in.terrain_weights.y > 0.5)),
+        1.0, kind == 33 || kind == 38 || (is_natural && in.terrain_weights.w > 0.5)), 0.0, is_backdrop);
+    let sun_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(1.10, 1.025, 0.76), botanical)
+        * mix(vec3<f32>(1.0), vec3<f32>(1.03, 1.0, 0.95), powder);
+    let fill_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(0.77, 0.91, 1.07), botanical)
+        * mix(vec3<f32>(1.0), vec3<f32>(0.90, 0.89, 1.12), powder);
     var lit = albedo * (
         diffuse_energy * cave_fill + (torch_diffuse + torch_fill) * fire_exposure)
         + fill_albedo * diffuse_energy * (ambient + sun_fill + moon_fill) * sky_access
@@ -3201,7 +3199,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // Sky radiance already follows time of day. Dimming it again made
         // night water read as black cutout shadows against illuminated banks.
         // No reflection floor or cap: Schlick approaches one at grazing angles.
-        lit = mix(lit, reflection * sky_access, clamp(fresnel, 0.0, 1.0));
+        // A reflection reads 15-25% darker than its source; the screen-space
+        // trace in indirect_gather.wgsl applies the same factor to scene hits.
+        lit = mix(lit, reflection * (WATER_REFLECTION_GAIN * sky_access), clamp(fresnel, 0.0, 1.0));
         lit += direct_specular * (1.0 - water_foam * 0.65);
         // Sun glint restored from main: a tight core and a broad sheen on top of
         // the GGX highlight and the texel glitter below.

@@ -33,7 +33,8 @@ fn water_reflection(uv:vec2<f32>,receiver:vec4<f32>)->vec4<f32>{
    if error<max(0.45,scene_depth*0.006) && hit_receiver.a>=0.0 {
     let border=min(min(hit.x,hit.y),min(1.0-hit.x,1.0-hit.y));
     let confidence=smoothstep(0.0,0.08,border)*(1.0-smoothstep(260.0,375.0,hi));
-    let hit_color=textureSampleLevel(scene_tex,linear_sampler,hit,0.0).rgb;
+    // Same 0.8 as WATER_REFLECTION_GAIN: a reflection is darker than its source.
+    let hit_color=textureSampleLevel(scene_tex,linear_sampler,hit,0.0).rgb*0.8;
     let source=textureSampleLevel(scene_tex,linear_sampler,uv,0.0).rgb;
     let weight=clamp(-receiver.a,0.025,0.92)*receiver.z*confidence;
     return vec4<f32>((hit_color-source)*weight,1.0);
