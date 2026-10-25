@@ -2,6 +2,7 @@
 //! Chunk residency and terrain work are owned by render/streaming.rs.
 
 mod capture;
+mod frame_pacer;
 pub mod coverage;
 pub(crate) fn flush_review_captures() {
     if !capture::flush(std::time::Duration::from_secs(2)) {
@@ -290,8 +291,9 @@ struct GpuProfilerSlot {
 
 // One callback per device, installed before any optional profiler resources.
 // A false flag means no loss has been reported, not a GPU-completion fence.
-fn acquire_surface_frame(surface:&wgpu::Surface<'_>,lost:&AtomicBool)->Result<wgpu::SurfaceTexture,wgpu::SurfaceError> {
+fn acquire_surface_frame(surface:&wgpu::Surface<'_>,lost:&AtomicBool,pacer:&frame_pacer::FramePacer,device:&wgpu::Device)->Result<wgpu::SurfaceTexture,wgpu::SurfaceError> {
     if lost.load(Ordering::Acquire) {return Err(wgpu::SurfaceError::Lost);}
+    pacer.wait_before_acquire(device);
     let result=surface.get_current_texture();
     if let Err(error)=&result {
         static FAILURES:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
@@ -301,12 +303,22 @@ fn acquire_surface_frame(surface:&wgpu::Surface<'_>,lost:&AtomicBool)->Result<wg
     result
 }
 
+/// First device-loss report of the process, kept for the crash log: stderr is
+/// not visible in normal play.
+static DEVICE_LOSS_REPORT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// wgpu's reason and message for the device loss, if one was reported.
+pub fn device_loss_report() -> Option<&'static str> {
+    DEVICE_LOSS_REPORT.get().map(String::as_str)
+}
+
 fn install_device_loss_signal(device: &wgpu::Device) -> Arc<AtomicBool> {
     let lost = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&lost);
     device.set_device_lost_callback(move |reason, message| {
         if !signal.swap(true, Ordering::AcqRel) {
             eprintln!("[device-lost] reason={reason:?} message={message}");
+            let _ = DEVICE_LOSS_REPORT.set(format!("{reason:?}: {message}"));
         }
     });
     lost
@@ -1184,6 +1196,7 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     device_lost: Arc<AtomicBool>,
+    frame_pacer: frame_pacer::FramePacer,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     adapter_summary: String,
@@ -1543,6 +1556,7 @@ pub struct GpuBootstrap {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     device_lost: Arc<AtomicBool>,
+    frame_pacer: frame_pacer::FramePacer,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     adapter_summary: String,
@@ -1729,6 +1743,7 @@ impl GpuBootstrap {
             device,
             queue,
             device_lost,
+            frame_pacer: frame_pacer::FramePacer::new(config.desired_maximum_frame_latency),
             config,
             size,
             adapter_summary,
@@ -1782,7 +1797,7 @@ impl GpuBootstrap {
             u32,
         ),
     {
-        let frame = acquire_surface_frame(&self.surface,&self.device_lost)?;
+        let frame = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1830,7 +1845,8 @@ impl GpuBootstrap {
             self.config.height,
         );
 
-        self.queue.submit(Some(encoder.finish()));
+        let submission = self.queue.submit(Some(encoder.finish()));
+        self.frame_pacer.submitted(submission);
         frame.present();
         Ok(())
     }
@@ -3024,6 +3040,7 @@ impl GpuPendingInit {
                     device: bootstrap.device,
                     queue: bootstrap.queue,
                     device_lost: bootstrap.device_lost,
+                    frame_pacer: bootstrap.frame_pacer,
                     config: bootstrap.config,
                     size: bootstrap.size,
                     adapter_summary: bootstrap.adapter_summary,
@@ -4203,7 +4220,7 @@ impl Gpu {
             frame_id: self.render_frame_id,
             ..Default::default()
         };
-        let frame = acquire_surface_frame(&self.surface,&self.device_lost)?;
+        let frame = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -4262,7 +4279,8 @@ impl Gpu {
             }
             capture::PendingCapture::encode(&self.device, &mut encoder, &frame.texture, &self.config, path)
         });
-        self.queue.submit(Some(encoder.finish()));
+        let submission = self.queue.submit(Some(encoder.finish()));
+        self.frame_pacer.submitted(submission);
         if let Some(mut capture)=capture { capture.map(); self.pending_captures.push(capture); }
         frame.present();
         Ok(())
@@ -4324,7 +4342,7 @@ impl Gpu {
         }
 
         let acquire_start = Instant::now();
-        let frame = acquire_surface_frame(&self.surface,&self.device_lost)?;
+        let frame = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device)?;
         let mut frame_stats = RenderFrameStats::default();
         self.render_frame_id = self.render_frame_id.wrapping_add(1);
         frame_stats.frame_id = self.render_frame_id;
@@ -4357,7 +4375,7 @@ impl Gpu {
             drop(frame);
             self.resize(PhysicalSize::new(surface_size.width, surface_size.height));
             let reacquire_start = Instant::now();
-            let reacquired = acquire_surface_frame(&self.surface,&self.device_lost)?;
+            let reacquired = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device)?;
             frame_stats.surface_acquire_ms += reacquire_start.elapsed().as_secs_f32() * 1000.0;
             reacquired
         } else {
@@ -4976,8 +4994,10 @@ impl Gpu {
                     .resolve_results(&mut encoder, slot_index, gpu_query_count);
             }
 
+        frame_pacer::debug_stall(&self.device, &mut encoder, frame_stats.frame_id);
         let submit_start = Instant::now();
-        self.queue.submit(Some(encoder.finish()));
+        let submission = self.queue.submit(Some(encoder.finish()));
+        self.frame_pacer.submitted(submission);
         if let Some(slot_index) = gpu_timestamp_slot
             && let Some(profiler) = self.gpu_profiler.as_mut() {
                 profiler.mark_submitted(slot_index, gpu_query_count, gpu_pass_queries,

@@ -4382,7 +4382,7 @@ fn main() -> Result<()> {
                                 }
                             if !gpu.device_usable() {
                                 eprintln!("[renderer-fatal] GPU device lost; stopped before resource recreation/publication");
-                                quality::record_gpu_reset(gpu.adapter_summary(), "device lost while rendering");
+                                quality::record_gpu_reset(gpu.adapter_summary(), render::device_loss_report().unwrap_or("device lost while rendering"));
                                 elwt.exit();return;
                             }
                             if render_result.is_err() && benchmark.as_ref().is_some_and(|b|b.auto_started) {
