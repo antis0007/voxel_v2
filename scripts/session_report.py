@@ -82,6 +82,13 @@ def bench_lines():
     return lines or ["  no benches"]
 
 
+def worktree_summary():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import worktrees
+
+    return worktrees.summary()
+
+
 def main():
     base = sys.argv[1] if len(sys.argv) > 1 else git("merge-base", "HEAD", "main").strip()
     started = int(git("log", "-1", "--format=%ct", base).strip())
@@ -93,6 +100,7 @@ def main():
     print(f"  #[test] fns:   {t0} -> {t1} ({t1 - t0:+d})")
     print(f"  scenarios:     {s0} -> {s1} ({s1 - s0:+d})")
     print(f"  wall time:     {(time.time() - started) / 3600:.1f} h since {base[:10]}")
+    print(f"  worktrees:     {worktree_summary()}")
     print("benches (last run vs baseline):")
     print("\n".join(bench_lines()))
 

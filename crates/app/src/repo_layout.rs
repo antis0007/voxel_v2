@@ -13,10 +13,8 @@ mod tests {
         ".gitattributes",
         ".gitignore",
         "CLAUDE.md",
-        "RTK.md",
         "Cargo.toml",
         "Cargo.lock",
-        "build.rs",
         "justfile",
         "rust-toolchain.toml",
     ];
@@ -60,6 +58,18 @@ mod tests {
              launchers, zips and exes out of the repo. If an entry is a real project \
              file, add it to ROOT_FILES or ROOT_DIRS in src/repo_layout.rs."
         );
+    }
+
+    /// Root dirs that hold user data or tool scratch stay gitignored.
+    #[test]
+    fn untracked_root_dirs_are_gitignored() {
+        let ignore = fs::read_to_string(repo_root().join(".gitignore")).expect("read .gitignore");
+        let lines: Vec<&str> = ignore.lines().map(str::trim).collect();
+        let unignored: Vec<&str> = ["saves", "downloads", "target", ".code-advisor", ".superpowers"]
+            .into_iter()
+            .filter(|dir| !lines.iter().any(|line| line.trim_end_matches('/') == *dir))
+            .collect();
+        assert!(unignored.is_empty(), "root dirs {unignored:?} must be listed in .gitignore (saves hold world data)");
     }
 
     #[test]

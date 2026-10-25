@@ -52,6 +52,10 @@ bench-save name="":
 session-report base="":
     python -I scripts/session_report.py {{base}}
 
+# Linked worktrees and why each is kept; `just worktrees remove` drops the clean, idle, saved ones.
+worktrees action="report":
+    python -I scripts/worktrees.py {{action}}
+
 # Free disk: delete the dev, release and release-fast build outputs. Review
 # evidence under target/ (captures, perf logs) and bench history are kept.
 clean:
