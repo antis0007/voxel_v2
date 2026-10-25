@@ -42,7 +42,7 @@ pub mod shadow;
 
 use anyhow::{Context, Result};
 use glam::{IVec3, Mat4, Vec3, Vec4};
-use origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform};
+use origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform, RenderOrigin};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
@@ -816,6 +816,10 @@ struct CameraUniform {
     /// value means "no override"; zero means no resident mesh is published.
     coverage: [f32; 4],
     resident_coverage: coverage::ResidentCoverage,
+    /// xyz: `RenderOrigin` in voxels, the frame chunk vertices are drawn in.
+    render_origin: [i32; 4],
+    /// xyz: eye minus the render origin in metres, less the view matrix residual.
+    eye_from_origin: [f32; 4],
 }
 
 #[repr(C)]
@@ -1199,6 +1203,8 @@ pub struct Gpu {
     chunk_indirect: streaming::indirect_draws::IndirectDraws,
     /// Per-chunk draw transforms shared by the main pass and every shadow cascade.
     draw_offsets: DrawOffsets,
+    /// Frame chunk vertices are drawn in; `None` until the first camera upload.
+    render_origin: Option<RenderOrigin>,
     horizon_detail: horizon::detail::Gpu,
     world_surface_bind_group: wgpu::BindGroup,
     cloud_texture_layout: wgpu::BindGroupLayout,
@@ -2020,6 +2026,8 @@ impl GpuPendingInit {
                         scene_seed: [0; 4],
                         coverage: [-1.0, 0.0, 0.0, 0.0],
                         resident_coverage: coverage::ResidentCoverage::default(),
+                        render_origin: [0; 4],
+                        eye_from_origin: [0.0; 4],
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
@@ -3047,6 +3055,7 @@ impl GpuPendingInit {
                     shadow_renderer: self.shadow_renderer.take().unwrap(),
                     chunk_indirect: Default::default(),
                     draw_offsets: Default::default(),
+                    render_origin: None,
                     horizon_detail: self.horizon_detail.take().unwrap(),
                     world_surface_bind_group: self.world_surface_bind_group.take().unwrap(),
 
@@ -3873,6 +3882,12 @@ impl Gpu {
         });
         let eye = precise_eye.as_vec3();
         let residual = (precise_eye - eye.as_dvec3()).as_vec3();
+        let eye_voxels = precise_eye / f64::from(world_scale);
+        let render_origin = RenderOrigin::follow(self.render_origin, eye_voxels);
+        self.render_origin = Some(render_origin);
+        // The view matrix already translates by -residual, so the shader's eye
+        // term leaves it out; otherwise origin-frame vertices would subtract it twice.
+        let eye_from_origin = render_origin.eye_from_origin(eye_voxels) * world_scale - residual;
         let cur_forward = forward.normalize();
         // Callers supply a conventional 0 = near, 1 = far projection. The scene is
         // drawn reverse-Z into a 32-bit float depth buffer: 24-bit forward-Z gave
@@ -3966,6 +3981,8 @@ impl Gpu {
                     self.last_camera_pos.z,
                     self.horizon.visibility(),
                 ],
+                render_origin: render_origin.voxel.extend(0).to_array(),
+                eye_from_origin: eye_from_origin.extend(0.0).to_array(),
             }),
         );
 
@@ -4443,9 +4460,15 @@ impl Gpu {
                 .shadow_renderer
                 .apply_update_if_needed(&self.queue, chunk_cache.shadow_caster_revision);
 
-        // Phase 0 draws every chunk in absolute coordinates: all transforms are zero.
-        let chunk_transform = |_: IVec3| DrawTransform::IDENTITY;
-        self.draw_offsets.begin_frame(DrawTransform::IDENTITY);
+        // The main pass draws in the render-origin frame; the shadow pass reads
+        // the twin table, which keeps today's absolute frame.
+        let origin = self.render_origin.unwrap_or(RenderOrigin { voxel: IVec3::ZERO });
+        let chunk_transform = |c: IVec3| DrawTransform { offset: origin.chunk_offset(c), ..DrawTransform::IDENTITY };
+        let absolute_twin = |c: IVec3| DrawTransform {
+            offset: (c * CHUNK_SIZE).as_vec3().extend(0.0).to_array(),
+            ..DrawTransform::IDENTITY
+        };
+        self.draw_offsets.begin_frame(DrawTransform { offset: origin.absolute_offset(), ..DrawTransform::IDENTITY });
         if redraw_shadow_map {
             self.shadow_renderer.build_cascade_draw_lists(chunk_cache, self.horizon.mesh.as_ref());
             self.shadow_renderer.prepare_draws(
@@ -4454,25 +4477,26 @@ impl Gpu {
                 chunk_cache,
                 &mut self.draw_offsets,
                 chunk_transform,
+                absolute_twin,
             );
         }
         // Main-pass slots and indirect arguments are taken before the upload; the
         // offset table must be complete before any pass binds it.
         let multidraw = !paused && streaming::indirect_draws::active();
         for key in draw_list.iter() {
-            self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
+            self.draw_offsets.slot_with_twin(key.coord, || chunk_transform(key.coord), || absolute_twin(key.coord));
         }
         let multidraw_counts = if multidraw {
             let offsets = &mut self.draw_offsets;
             let coords = draw_list.iter().map(|k| k.coord);
             self.chunk_indirect.prepare(&self.device, &self.queue, chunk_cache, coords, |c| {
-                offsets.slot(c, || chunk_transform(c))
+                offsets.slot_with_twin(c, || chunk_transform(c), || absolute_twin(c))
             })
         } else {
             (0, 0)
         };
         self.draw_offsets.upload(&self.device, &self.queue);
-        if redraw_shadow_map && let Some(draw_offsets) = self.draw_offsets.buffer() {
+        if redraw_shadow_map && let Some(draw_offsets) = self.draw_offsets.twin_buffer() {
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {

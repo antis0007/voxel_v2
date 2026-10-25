@@ -2,7 +2,9 @@
 //! invalid destination buffer after an allocation/validation failure.
 use super::arena::{ArenaLease, MeshArena};
 use super::{ChunkGpuMesh, ChunkKey};
-use crate::mesh::ChunkMesh;
+use crate::mesh::{ChunkMesh, Vertex3};
+use engine_core::CHUNK_SIZE;
+use glam::IVec3;
 use std::{
     future::Future,
     pin::Pin,
@@ -30,6 +32,21 @@ pub(super) fn supported(device: &wgpu::Device, mesh: &ChunkMesh) -> Result<(), S
     }
     Ok(())
 }
+/// Writes `vertices` as bytes, positions relative to `chunk`'s minimum corner.
+///
+/// Mesh positions lie within a chunk of `chunk * CHUNK_SIZE`, so the f32
+/// subtraction is exact and the GPU never stores an absolute coordinate.
+pub(super) fn localize_into(dst: &mut [u8], vertices: &[Vertex3], chunk: IVec3) {
+    debug_assert_eq!(dst.len(), std::mem::size_of_val(vertices));
+    let base = (chunk * CHUNK_SIZE).as_vec3();
+    for (out, vertex) in dst.chunks_exact_mut(std::mem::size_of::<Vertex3>()).zip(vertices) {
+        let local = Vertex3 {
+            pos: [vertex.pos[0] - base.x, vertex.pos[1] - base.y, vertex.pos[2] - base.z],
+            ..*vertex
+        };
+        out.copy_from_slice(bytemuck::bytes_of(&local));
+    }
+}
 pub(super) fn start(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -49,9 +66,10 @@ pub(super) fn start(
     device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let push_ms = started.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
     let mut phases = [[0.0f64; 4]; 2];
-    let mut write = |slot: usize, label: &str, buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]|
+    let mut write = |slot: usize, label: &str, buffer: &wgpu::Buffer, offset: u64, len: usize,
+                     fill: &mut dyn FnMut(&mut [u8])|
      -> Result<(), String> {
-        let Some(size) = wgpu::BufferSize::new(bytes.len() as u64) else {
+        let Some(size) = wgpu::BufferSize::new(len as u64) else {
             return Ok(());
         };
         let phase = trace.then(Instant::now);
@@ -64,7 +82,8 @@ pub(super) fn start(
             ));
         };
         let phase = trace.then(Instant::now);
-        staging.copy_from_slice(bytes);
+        // Fill the staging view in place: no intermediate copy of the mesh.
+        fill(&mut staging[..]);
         if let Some(t) = phase { phases[slot][2] += t.elapsed().as_secs_f64() * 1000.0; }
         let phase = trace.then(Instant::now);
         drop(staging);
@@ -78,8 +97,12 @@ pub(super) fn start(
                 let (vertices, indices) = arena
                     .buffers(range.page)
                     .ok_or_else(|| format!("Chunk mesh arena page {} is missing", range.page))?;
-                write(0, "chunk vertex upload", vertices, range.vertex_offset, bytemuck::cast_slice(&mesh.vertices))?;
-                write(1, "chunk index upload", indices, range.index_offset, bytemuck::cast_slice(&mesh.indices))?;
+                write(0, "chunk vertex upload", vertices, range.vertex_offset,
+                    std::mem::size_of_val(mesh.vertices.as_slice()),
+                    &mut |dst| localize_into(dst, &mesh.vertices, key.coord))?;
+                write(1, "chunk index upload", indices, range.index_offset,
+                    std::mem::size_of_val(mesh.indices.as_slice()),
+                    &mut |dst| dst.copy_from_slice(bytemuck::cast_slice(&mesh.indices)))?;
             }
             // A published mesh with indices but no storage would draw nothing: a hole.
             None if !mesh.indices.is_empty() => return Err("Chunk mesh has no arena range".into()),
@@ -121,4 +144,21 @@ pub(super) fn start(
         }
     }
     (result, check)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localize_into_subtracts_chunk_origin_exactly() {
+        let v = |p: [f32; 3]| Vertex3 { pos: p, color: [0.1; 3], normal: [0.0, 1.0, 0.0], surface: [1.0, 2.0, 3.0, 4.0], ao_strength: 0.5 };
+        let src = [v([-96.0, 0.5, 1_000_032.0]), v([-64.0, 33.0, 1_000_000.25])];
+        let mut dst = vec![0u8; std::mem::size_of_val(&src)];
+        localize_into(&mut dst, &src, IVec3::new(-3, 0, 31_250));
+        let out: &[Vertex3] = bytemuck::cast_slice(&dst);
+        assert_eq!(out[0].pos, [0.0, 0.5, 32.0]);
+        assert_eq!(out[1].pos, [32.0, 33.0, 0.25]);
+        assert_eq!(out[1].surface, src[1].surface);
+    }
 }

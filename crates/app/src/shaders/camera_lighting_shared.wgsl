@@ -21,6 +21,10 @@ struct Camera {
     // w: strict GPU-published resident disc radius; zero means no complete disc.
     coverage : vec4<f32>,
     resident_coverage: ResidentCoverage,
+    // xyz: render origin in voxels; chunk vertices are drawn relative to it.
+    render_origin: vec4<i32>,
+    // xyz: eye minus the render origin in metres, less the view matrix residual.
+    eye_from_origin: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cam : Camera;

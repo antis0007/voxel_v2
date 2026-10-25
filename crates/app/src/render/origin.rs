@@ -80,29 +80,52 @@ const _: [(); 32] = [(); std::mem::size_of::<DrawTransform>()];
 /// The main pass and every shadow cascade take slots from the same table, so a
 /// chunk drawn by several passes reads one transform. A draw selects its slot
 /// through `first_instance`.
+///
+/// A twin table in the same slot order keeps the shadow pass in absolute
+/// coordinates until it moves to the origin frame (plan Task 4 deletes it).
 #[derive(Default)]
 pub struct DrawOffsets {
     transforms: Vec<DrawTransform>,
+    twins: Vec<DrawTransform>,
     slots: HashMap<IVec3, u32>,
     buffer: Option<wgpu::Buffer>,
+    twin_buffer: Option<wgpu::Buffer>,
     capacity: usize,
 }
 
 impl DrawOffsets {
     /// Clears the table and puts `absolute` in `ABSOLUTE_SLOT`.
+    ///
+    /// The twin's `ABSOLUTE_SLOT` is the zero offset: absolute vertices stay absolute.
     pub fn begin_frame(&mut self, absolute: DrawTransform) {
         self.transforms.clear();
+        self.twins.clear();
         self.slots.clear();
         self.transforms.push(absolute);
+        self.twins.push(DrawTransform::IDENTITY);
     }
 
     /// Returns `chunk`'s slot, computing its transform on first use this frame.
+    ///
+    /// A slot first taken here gets a zero twin; passes that read the twin
+    /// take their slots with `slot_with_twin`.
     pub fn slot(&mut self, chunk: IVec3, transform: impl FnOnce() -> DrawTransform) -> u32 {
+        self.slot_with_twin(chunk, transform, || DrawTransform::IDENTITY)
+    }
+
+    /// Returns `chunk`'s slot, computing both tables' transforms on first use.
+    pub fn slot_with_twin(
+        &mut self,
+        chunk: IVec3,
+        primary: impl FnOnce() -> DrawTransform,
+        twin: impl FnOnce() -> DrawTransform,
+    ) -> u32 {
         if let Some(&slot) = self.slots.get(&chunk) {
             return slot;
         }
         let slot = self.transforms.len() as u32;
-        self.transforms.push(transform());
+        self.transforms.push(primary());
+        self.twins.push(twin());
         self.slots.insert(chunk, slot);
         slot
     }
@@ -116,17 +139,24 @@ impl DrawOffsets {
         if self.transforms.is_empty() {
             return;
         }
-        if self.buffer.is_none() || self.transforms.len() > self.capacity {
+        if self.buffer.is_none() || self.twin_buffer.is_none() || self.transforms.len() > self.capacity {
             self.capacity = self.transforms.len().next_power_of_two().max(4096);
-            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("draw offsets"),
-                size: (self.capacity * std::mem::size_of::<DrawTransform>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
+            let table = |label| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: (self.capacity * std::mem::size_of::<DrawTransform>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            self.buffer = Some(table("draw offsets"));
+            self.twin_buffer = Some(table("draw offsets absolute twin"));
         }
         if let Some(buffer) = &self.buffer {
             queue.write_buffer(buffer, 0, bytemuck::cast_slice(&self.transforms));
+        }
+        if let Some(buffer) = &self.twin_buffer {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&self.twins));
         }
     }
 
@@ -134,11 +164,20 @@ impl DrawOffsets {
     pub fn buffer(&self) -> Option<&wgpu::Buffer> {
         self.buffer.as_ref()
     }
+
+    /// The uploaded twin table, bound at vertex slot 1 by the shadow pass.
+    pub fn twin_buffer(&self) -> Option<&wgpu::Buffer> {
+        self.twin_buffer.as_ref()
+    }
 }
 
 #[cfg(test)]
 #[path = "origin_gpu_tests.rs"]
 mod origin_gpu_tests;
+
+#[cfg(test)]
+#[path = "origin_far_chunk_gpu_tests.rs"]
+mod origin_far_chunk_gpu_tests;
 
 #[cfg(test)]
 mod tests {
@@ -179,6 +218,18 @@ mod tests {
         assert_eq!(d.slot(IVec3::new(1, 0, 0), || panic!("recomputed")), 1);
         d.begin_frame(DrawTransform::IDENTITY);
         assert_eq!(d.slot(IVec3::new(-1, 0, 0), || DrawTransform::IDENTITY), 1);
+    }
+
+    #[test]
+    fn draw_offsets_twin_shares_slot_order() {
+        let at = |x: f32| DrawTransform { offset: [x, 0.0, 0.0, 0.0], ..DrawTransform::IDENTITY };
+        let mut d = DrawOffsets::default();
+        d.begin_frame(at(-4096.0));
+        assert_eq!(d.slot_with_twin(IVec3::X, || at(1.0), || at(32.0)), 1);
+        assert_eq!(d.slot_with_twin(IVec3::X, || panic!("recomputed"), || panic!("recomputed")), 1);
+        assert_eq!(d.slot(IVec3::NEG_X, || at(-1.0)), 2);
+        assert_eq!(d.transforms, [at(-4096.0), at(1.0), at(-1.0)]);
+        assert_eq!(d.twins, [DrawTransform::IDENTITY, at(32.0), DrawTransform::IDENTITY]);
     }
 
     #[test]

@@ -553,7 +553,8 @@ impl ShadowRenderer {
     /// Takes draw-offset slots for this frame's cascade lists.
     ///
     /// Also writes indirect arguments when multi-draw is active. Call after
-    /// `build_cascade_draw_lists` and before `offsets` is uploaded.
+    /// `build_cascade_draw_lists` and before `offsets` is uploaded. The shadow
+    /// pass reads `twin`'s table; `transform` fills the shared main table.
     pub fn prepare_draws(
         &mut self,
         device: &wgpu::Device,
@@ -561,6 +562,7 @@ impl ShadowRenderer {
         cache: &ChunkCache,
         offsets: &mut DrawOffsets,
         transform: impl Fn(glam::IVec3) -> DrawTransform,
+        twin: impl Fn(glam::IVec3) -> DrawTransform,
     ) {
         self.multidraw = super::streaming::indirect_draws::active();
         for i in 0..CASCADE_COUNT {
@@ -568,10 +570,11 @@ impl ShadowRenderer {
                 continue;
             }
             self.draw_slots[i].clear();
-            self.draw_slots[i].extend(self.draw_lists[i].iter().map(|&c| offsets.slot(c, || transform(c))));
+            let mut slot_of = |c| offsets.slot_with_twin(c, || transform(c), || twin(c));
+            self.draw_slots[i].extend(self.draw_lists[i].iter().map(|&c| slot_of(c)));
             if self.multidraw {
                 let coords = self.draw_lists[i].iter().copied();
-                self.indirect[i].prepare(device, queue, cache, coords, |c| offsets.slot(c, || transform(c)));
+                self.indirect[i].prepare(device, queue, cache, coords, slot_of);
             }
         }
     }
