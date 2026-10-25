@@ -1,4 +1,5 @@
 use super::*;
+use crate::cube_sphere::MAX_HALF;
 use glam::IVec2;
 use std::collections::BTreeSet;
 
@@ -33,6 +34,17 @@ fn all_boundary_cells(g: FaceGrid) -> impl Iterator<Item = (FaceCell, Step)> {
 /// The destination-face step pointing opposite to `step` carried through `turn`.
 fn reverse_in_destination(step: Step, turn: QuarterTurns) -> Step {
     step_from_delta(-turn.apply(step.delta()))
+}
+
+/// The same heading after crossing an edge with `turn`, in destination-face axes.
+fn carry(step: Step, turn: QuarterTurns) -> Step {
+    step_from_delta(turn.apply(step.delta()))
+}
+
+/// Steps `first`, then `second` re-expressed in the destination face's axes.
+fn two_steps(g: FaceGrid, at: FaceCell, first: Step, second: Step) -> FaceCell {
+    let (mid, turn) = g.step_cell(at, first);
+    g.step_cell(mid, carry(second, turn)).0
 }
 
 fn edge_cell(g: FaceGrid, face: Face, s: Step) -> FaceCell {
@@ -70,7 +82,7 @@ fn stepping_off_an_edge_and_back_is_identity() {
         let back_step = reverse_in_destination(step, turn);
         let (home, turn_back) = g.step_cell(there, back_step);
         assert_eq!(home, start);
-        assert_eq!(turn.compose(turn_back), QuarterTurns(0));
+        assert_eq!(turn.compose(turn_back), QuarterTurns::IDENTITY);
     }
 }
 
@@ -109,21 +121,63 @@ fn corner_has_valence_three() {
 }
 
 #[test]
+fn corner_two_step_orders_land_on_different_faces() {
+    let g = FaceGrid::new(64).unwrap();
+    let h = g.half();
+    for face in Face::ALL {
+        for (x, z) in [(h - 1, h - 1), (h - 1, -h), (-h, h - 1), (-h, -h)] {
+            let corner = FaceCell { face, cell: IVec3::new(x, 0, z) };
+            let su = if x > 0 { Step::PosU } else { Step::NegU };
+            let sv = if z > 0 { Step::PosV } else { Step::NegV };
+            let (via_u, via_v) = (g.step_cell(corner, su).0.face, g.step_cell(corner, sv).0.face);
+            let (uv, vu) = (two_steps(g, corner, su, sv), two_steps(g, corner, sv, su));
+            // Each order ends on the face the other order's first step entered.
+            assert_eq!(uv.face, via_v, "{face:?} {x} {z}");
+            assert_eq!(vu.face, via_u, "{face:?} {x} {z}");
+            assert_ne!(uv.face, vu.face, "{face:?} {x} {z}");
+            assert_ne!(uv, vu, "{face:?} {x} {z}");
+        }
+    }
+}
+
+#[test]
+fn belt_walk_returns_home() {
+    let g = FaceGrid::new(64).unwrap();
+    let starts = [
+        (Face::PosY, IVec3::new(3, 2, -5), Step::PosU),
+        (Face::NegX, IVec3::new(-17, 0, 40), Step::PosV),
+        (Face::PosZ, IVec3::new(63, 9, 63), Step::NegU),
+        (Face::NegY, IVec3::new(-64, -3, -64), Step::NegV),
+        (Face::NegZ, IVec3::new(10, 0, -1), Step::PosU),
+    ];
+    for (face, cell, first) in starts {
+        let start = FaceCell { face, cell };
+        let (mut at, mut step, mut turned) = (start, first, QuarterTurns::IDENTITY);
+        let mut faces = BTreeSet::from([face]);
+        // The belt is four faces of 2H cells each.
+        for _ in 0..8 * g.half() {
+            let (next, turn) = g.step_cell(at, step);
+            step = carry(step, turn);
+            turned = turned.compose(turn);
+            faces.insert(next.face);
+            at = next;
+        }
+        assert_eq!(at, start, "{start:?} {first:?}");
+        assert_eq!(step, first, "{start:?} {first:?}");
+        assert_eq!(turned, QuarterTurns::IDENTITY, "{start:?} {first:?}");
+        assert_eq!(faces.len(), 4, "{start:?} {first:?}");
+    }
+}
+
+#[test]
 fn cell_and_doubled_centre_agree_with_cube_point() {
     let g = FaceGrid::new(64).unwrap();
-    let two_h = 2 * g.half();
     for (start, step) in all_boundary_cells(g) {
         let (there, _) = g.step_cell(start, step);
         let (n_a, n_b) = (start.face.basis().n, there.face.basis().n);
-        let p = doubled(g, start);
-        let p2 = doubled(g, there);
-        // Folding about the shared edge moves P by its distance to that edge along both normals.
-        let d = two_h - p.dot(n_b);
-        assert_eq!(d, 1, "{start:?} {step:?}");
-        let folded = p + d * n_b + d * n_a;
-        assert_eq!((folded - p2).abs().max_element(), 2, "{start:?} {step:?}");
-        assert_eq!(p2.dot(n_b), two_h, "{start:?} {step:?}");
-        assert_eq!(p2.abs().max_element(), two_h, "{start:?} {step:?}");
+        // A doubled unit is half a cell: the centre moves one unit out along
+        // the new normal and one unit down the old one.
+        assert_eq!(doubled(g, there), doubled(g, start) + n_b - n_a, "{start:?} {step:?}");
     }
 }
 
@@ -137,6 +191,22 @@ fn large_face_and_height_are_preserved() {
 }
 
 #[test]
+fn largest_grid_steps_without_overflow() {
+    let half = MAX_HALF - MAX_HALF % CHUNK_SIZE;
+    let g = FaceGrid::new(half).unwrap();
+    for (start, step) in [
+        (IVec3::new(half - 1, 0, half - 1), Step::PosU),
+        (IVec3::new(-half, 0, -half), Step::NegV),
+    ] {
+        let at = FaceCell { face: Face::PosY, cell: start };
+        let (to, _) = g.step_cell(at, step);
+        assert_ne!(to.face, at.face);
+        assert!(g.contains(to.cell));
+        assert_eq!(doubled(g, to), doubled(g, at) + to.face.basis().n - at.face.basis().n);
+    }
+}
+
+#[test]
 fn steps_inside_a_face_are_plain_unit_moves() {
     let g = FaceGrid::new(64).unwrap();
     let at = FaceCell { face: Face::PosX, cell: IVec3::new(5, 9, -3) };
@@ -144,15 +214,30 @@ fn steps_inside_a_face_are_plain_unit_moves() {
         let (to, turn) = g.step_cell(at, s);
         let d = s.delta();
         assert_eq!(to, FaceCell { face: Face::PosX, cell: at.cell + IVec3::new(d.x, 0, d.y) });
-        assert_eq!(turn, QuarterTurns(0));
+        assert_eq!(turn, QuarterTurns::IDENTITY);
     }
 }
 
 #[test]
 fn quarter_turns_rotate_u_toward_v_and_compose_mod_four() {
-    assert_eq!(QuarterTurns(1).apply(IVec2::X), IVec2::Y);
-    assert_eq!(QuarterTurns(2).apply(IVec2::new(3, -1)), IVec2::new(-3, 1));
-    assert_eq!(QuarterTurns(3).compose(QuarterTurns(2)), QuarterTurns(1));
+    let q = QuarterTurns::new;
+    assert_eq!(q(1).apply(IVec2::X), IVec2::Y);
+    assert_eq!(q(2).apply(IVec2::new(3, -1)), IVec2::new(-3, 1));
+    assert_eq!(q(3).compose(q(2)), q(1));
+}
+
+#[test]
+fn quarter_turns_reduce_mod_four_and_invert() {
+    for k in 0..8u8 {
+        assert_eq!(QuarterTurns::new(k).get(), k % 4);
+    }
+    assert_eq!(QuarterTurns::new(4), QuarterTurns::new(0));
+    assert_eq!(QuarterTurns::new(0), QuarterTurns::IDENTITY);
+    for k in 0..4u8 {
+        let t = QuarterTurns::new(k);
+        assert_eq!(t.compose(t.inverse()), QuarterTurns::IDENTITY, "{t:?}");
+        assert_eq!(t.inverse().compose(t), QuarterTurns::IDENTITY, "{t:?}");
+    }
 }
 
 #[test]

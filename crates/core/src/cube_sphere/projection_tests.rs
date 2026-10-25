@@ -67,6 +67,20 @@ fn face_pick_on_edges_and_corners_is_deterministic() {
 }
 
 #[test]
+fn tiny_and_huge_directions_match_the_unit_direction() {
+    let (unit, scales) = (DVec3::new(1.0, 1.0, 0.0).normalize(), [1e-200, 1e200]);
+    for p in ALL {
+        let (face, s, t) = p.from_sphere(unit);
+        for scale in scales {
+            let (f2, s2, t2) = p.from_sphere(DVec3::new(scale, scale, 0.0));
+            assert_eq!(f2, face, "{p:?} {scale}");
+            assert!(s2.is_finite() && t2.is_finite(), "{p:?} {scale}: {s2} {t2}");
+            assert!((s2 - s).abs() < 1e-12 && (t2 - t).abs() < 1e-12, "{p:?} {scale}: {s2} {t2}");
+        }
+    }
+}
+
+#[test]
 fn analytic_tangents_match_central_differences() {
     let h = 1e-6;
     for p in ALL {
@@ -132,9 +146,13 @@ fn local_frame_is_orthonormal_right_handed_and_radial() {
                     assert!(a.dot(b).abs() < 1e-12);
                 }
                 assert!((m.determinant() - 1.0).abs() < 1e-12, "{p:?} {f:?} {s} {t}");
-                // East follows +s and north follows +t, as u and v do on the face.
+                // East is along d dir / ds. North is on the +t side but only
+                // within 30 degrees of d dir / dt, which is not perpendicular to ds.
                 let (ds, dt) = p.tangents(f, s, t);
-                assert!(east.dot(ds) > 0.0 && north.dot(dt) > 0.0, "{p:?} {f:?} {s} {t}");
+                assert!((east - ds.normalize()).length() < 1e-12, "{p:?} {f:?} {s} {t}");
+                assert!(north.dot(dt) > 0.0, "{p:?} {f:?} {s} {t}");
+                let off = angle(north, dt).to_degrees();
+                assert!(off < 30.0 + 1e-6, "{p:?} {f:?} {s} {t}: {off}");
             }
         }
     }

@@ -29,19 +29,38 @@ impl Step {
 
 /// Rotation carrying source-face tangent directions onto the destination face.
 ///
-/// `QuarterTurns(k).apply((du, dv))` turns `k` quarter turns from `+u` toward `+v`.
+/// `apply` turns a `(du, dv)` direction `k` quarter turns from `+u` toward `+v`,
+/// one turn being `(du, dv) -> (-dv, du)`. The count is always in `0..=3`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct QuarterTurns(pub u8);
+pub struct QuarterTurns(u8);
 
 impl QuarterTurns {
+    /// The rotation that changes nothing.
+    pub const IDENTITY: QuarterTurns = QuarterTurns(0);
+
+    /// Returns `k` quarter turns, reduced modulo 4.
+    pub const fn new(k: u8) -> QuarterTurns {
+        QuarterTurns(k % 4)
+    }
+
+    /// Returns the number of quarter turns, in `0..=3`.
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
     /// Rotates a source-face direction into destination-face axes.
     pub fn apply(self, d: IVec2) -> IVec2 {
-        (0..self.0 % 4).fold(d, |d, _| IVec2::new(-d.y, d.x))
+        (0..self.0).fold(d, |d, _| IVec2::new(-d.y, d.x))
     }
 
     /// Returns the rotation of `self` followed by `other`.
     pub fn compose(self, other: QuarterTurns) -> QuarterTurns {
-        QuarterTurns((self.0 % 4 + other.0 % 4) % 4)
+        QuarterTurns((self.0 + other.0) % 4)
+    }
+
+    /// Returns the rotation that undoes `self`.
+    pub fn inverse(self) -> QuarterTurns {
+        QuarterTurns((4 - self.0) % 4)
     }
 }
 
@@ -49,7 +68,7 @@ impl FaceGrid {
     /// Moves one cell, crossing onto the neighbour face at an edge.
     ///
     /// Height `y` never changes. Inputs outside the grid are a caller error
-    /// and come back unchanged with `QuarterTurns(0)`.
+    /// and come back unchanged with `QuarterTurns::IDENTITY`.
     pub fn step_cell(self, at: FaceCell, step: Step) -> (FaceCell, QuarterTurns) {
         step_on(self.half, at, step)
     }
@@ -63,7 +82,7 @@ impl FaceGrid {
 /// Steps on a square grid of half extent `half`, whatever its unit.
 fn step_on(half: i32, at: FaceCell, step: Step) -> (FaceCell, QuarterTurns) {
     let grid = FaceGrid { half };
-    let unchanged = (at, QuarterTurns(0));
+    let unchanged = (at, QuarterTurns::IDENTITY);
     if !grid.contains(at.cell) {
         debug_assert!(false, "step from {at:?} outside half {half}");
         return unchanged;
@@ -71,7 +90,7 @@ fn step_on(half: i32, at: FaceCell, step: Step) -> (FaceCell, QuarterTurns) {
     let d = step.delta();
     let moved = at.cell + IVec3::new(d.x, 0, d.y);
     if grid.contains(moved) {
-        return (FaceCell { face: at.face, cell: moved }, QuarterTurns(0));
+        return (FaceCell { face: at.face, cell: moved }, QuarterTurns::IDENTITY);
     }
     let a = at.face.basis();
     // The outward tangent at the edge is the neighbour face's normal.
@@ -95,10 +114,10 @@ fn step_on(half: i32, at: FaceCell, step: Step) -> (FaceCell, QuarterTurns) {
         IVec2::new(f.dot(b.u), f.dot(b.v))
     };
     let turn = match on_b(a.u) {
-        IVec2::X => QuarterTurns(0),
-        IVec2::Y => QuarterTurns(1),
-        IVec2::NEG_X => QuarterTurns(2),
-        _ => QuarterTurns(3),
+        IVec2::X => QuarterTurns::IDENTITY,
+        IVec2::Y => QuarterTurns::new(1),
+        IVec2::NEG_X => QuarterTurns::new(2),
+        _ => QuarterTurns::new(3),
     };
     // Every face basis has u x v == -n, so the fold is a proper rotation in (u, v).
     debug_assert_eq!(turn.apply(IVec2::Y), on_b(a.v));

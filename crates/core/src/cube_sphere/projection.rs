@@ -49,7 +49,8 @@ impl Projection {
         let (s, t) = match self {
             Projection::Gnomonic => (a, b),
             Projection::Tangent => (a.atan() / FRAC_PI_4, b.atan() / FRAC_PI_4),
-            Projection::Spherified => spherified_inverse(face, dir.normalize(), a, b),
+            // Scaling by `dn` first keeps the length finite for tiny and huge `dir`.
+            Projection::Spherified => spherified_inverse(face, (dir / dn).normalize(), a, b),
         };
         (face, s.clamp(-1.0, 1.0), t.clamp(-1.0, 1.0))
     }
@@ -93,11 +94,15 @@ pub fn pick_face(dir: DVec3) -> Face {
 
 /// Returns the surface frame with columns `(east, up, north)`.
 ///
-/// `up` equals `to_sphere` bit for bit, `east` follows `+s`, and the frame has
-/// determinant +1 like the face basis `(u, n, v)`, so `north` follows `+t`.
+/// `up` equals `to_sphere` bit for bit and `east` is the unit vector along
+/// `d dir / ds`. `north` completes a right-handed frame (determinant +1, like
+/// the face basis `(u, n, v)`) on the `+t` side of `east`. It is not along
+/// `d dir / dt`: the two differ by up to about 30 degrees near cube corners,
+/// where the tangents are 60 or 120 degrees apart.
 pub fn local_frame(p: Projection, face: Face, s: f64, t: f64) -> DMat3 {
     let up = p.to_sphere(face, s, t);
     let (ds, _) = p.tangents(face, s, t);
+    // `ds` is already perpendicular to `up`; the projection absorbs rounding.
     let east = (ds - up * up.dot(ds)).normalize();
     // det(east, up, east x up) = |east|^2 = 1, the same handedness as u x n == v.
     let north = east.cross(up);

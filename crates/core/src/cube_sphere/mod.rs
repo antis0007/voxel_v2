@@ -70,10 +70,16 @@ pub struct FaceGrid {
     half: i32,
 }
 
+/// Largest half extent whose doubled coordinates fit in `i32`.
+///
+/// Edge stepping doubles coordinates and adds one, so `2 * half + 1` must fit.
+pub const MAX_HALF: i32 = i32::MAX / 2;
+
 impl FaceGrid {
-    /// Builds a grid of `2 * half_cells` per side; `None` unless chunk-aligned.
+    /// Builds a grid of `2 * half_cells` per side; `None` unless aligned and `<= MAX_HALF`.
     pub fn new(half_cells: i32) -> Option<FaceGrid> {
-        (half_cells > 0 && half_cells % CHUNK_SIZE == 0).then_some(FaceGrid { half: half_cells })
+        let valid = half_cells > 0 && half_cells <= MAX_HALF && half_cells % CHUNK_SIZE == 0;
+        valid.then_some(FaceGrid { half: half_cells })
     }
 
     /// Returns the half edge length in cells.
@@ -113,10 +119,21 @@ mod tests {
     }
 
     #[test]
+    fn face_grid_rejects_half_above_max_half() {
+        let largest = MAX_HALF - MAX_HALF % CHUNK_SIZE;
+        assert!(FaceGrid::new(largest).is_some());
+        // 2^30 is chunk-aligned, but its doubled coordinate 2^31 overflows i32.
+        assert_eq!(MAX_HALF + 1, 1 << 30);
+        assert!(FaceGrid::new(MAX_HALF + 1).is_none());
+        assert!(FaceGrid::new(i32::MAX - i32::MAX % CHUNK_SIZE).is_none());
+    }
+
+    #[test]
     fn face_grid_rejects_half_not_multiple_of_chunk() {
         assert!(FaceGrid::new(16_000).is_some());
         assert!(FaceGrid::new(16_001).is_none());
         assert!(FaceGrid::new(0).is_none());
+        assert!(FaceGrid::new(-32).is_none());
         let g = FaceGrid::new(64).unwrap();
         assert!(g.contains(IVec3::new(-64, 999, 63)));
         assert!(!g.contains(IVec3::new(64, 0, 0)));
