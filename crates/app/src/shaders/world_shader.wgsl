@@ -796,10 +796,11 @@ fn pcf_shadow(uv: vec2<f32>, proj_z: f32, bias: f32, radius: f32, cascade_idx: i
     return clamp(sum, 0.0, 1.0);
 }
 
-fn sample_sun_shadow(world_pos: vec3<f32>, linear_depth: f32, ndotl: f32, world_dx: vec3<f32>, world_dy: vec3<f32>) -> f32 {
+// `receiver` is in render-origin metres, the frame of every cascade matrix.
+fn sample_sun_shadow(receiver: vec3<f32>, linear_depth: f32, ndotl: f32, world_dx: vec3<f32>, world_dy: vec3<f32>) -> f32 {
     let shadow_range = max(shadow.cascades[4].far_plane, 1e-4);
     let range_fade = smoothstep(shadow_range * 0.78, shadow_range,
-        distance(world_pos, cam.camera_pos.xyz));
+        distance(receiver, cam.eye_from_origin.xyz));
     if range_fade >= 1.0 { return 1.0; }
 
     var first_cascade = 4;
@@ -818,7 +819,7 @@ fn sample_sun_shadow(world_pos: vec3<f32>, linear_depth: f32, ndotl: f32, world_
     var visibility = 1.0;
     for (var i = first_cascade; i < 5; i = i + 1) {
         let c = shadow.cascades[i];
-        let shadow_pos = c.light_view_proj * vec4<f32>(world_pos, 1.0);
+        let shadow_pos = c.light_view_proj * vec4<f32>(receiver, 1.0);
         if shadow_pos.w <= 1e-6 { continue; }
         let proj = shadow_pos.xyz / shadow_pos.w;
         let uv = proj.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
@@ -2807,7 +2808,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
     if cam.scene_seed.w == 0u && (sun_shadow_strength > 0.0 || debug_mode == 11) {
         // Real resident, exact fallback, and procedural receivers share CSM
         // wherever it has coverage; N.L already handles unlit slope orientations.
-        shadow_visibility = sample_sun_shadow(world_pos, linear_depth,
+        // Origin-frame receiver: eye_from_origin plus relative_pos is exact
+        // near the eye, where absolute f32 metres lose centimetres far from spawn.
+        shadow_visibility = sample_sun_shadow(cam.eye_from_origin.xyz + relative_pos, linear_depth,
             clamp(dot(geometric_normal, sun_dir), 0.0, 1.0), world_dx, world_dy);
         // Distant ranges as casters: the cascades end within a few hundred
         // metres, the detail map reaches the far plane. Skipped where the

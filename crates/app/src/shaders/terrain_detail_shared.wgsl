@@ -1,9 +1,6 @@
 // Opaque tuft blades: physical height above the root is stored in surface.y.
 // At most 4 cm displacement; roots stay fixed. Color/depth and shadow compose
 // this exact function. Placement membership and stationary pebbles never move.
-fn tuft_wind_position(p: vec3<f32>, height_m: f32, scale: f32, time: f32, wind: vec2<f32>) -> vec3<f32> {
-    return p + tuft_wind_offset(p, height_m, scale, time, wind);
-}
 // Displacement only, in voxels; the phase reads the absolute position `p`.
 fn tuft_wind_offset(p: vec3<f32>, height_m: f32, scale: f32, time: f32, wind: vec2<f32>) -> vec3<f32> {
     let speed = length(wind);

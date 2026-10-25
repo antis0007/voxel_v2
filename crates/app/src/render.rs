@@ -1256,7 +1256,7 @@ pub struct Gpu {
     current_debug_view: RenderDebugView,
     last_camera_pos: Vec3,
     last_camera_residual: Vec3,
-    last_inv_view_proj: Mat4,
+    last_cascade_view: shadow::CascadeView,
     last_rotation_view_proj: Mat4,
     last_camera_forward: Vec3,
     last_world_scale: f32,
@@ -3108,7 +3108,7 @@ impl GpuPendingInit {
                     current_debug_view: RenderDebugView::None,
                     last_camera_pos: Vec3::ZERO,
                     last_camera_residual: Vec3::ZERO,
-                    last_inv_view_proj: Mat4::IDENTITY,
+                    last_cascade_view: shadow::CascadeView::IDENTITY,
                     last_rotation_view_proj: Mat4::IDENTITY,
                     last_camera_forward: Vec3::NEG_Z,
                     last_world_scale: 1.0,
@@ -3897,6 +3897,13 @@ impl Gpu {
             * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)
             * Mat4::from_translation(-residual);
         let standard_inv_view_proj = Mat4::from_translation(eye) * standard_view_proj.inverse();
+        // Cascades fit around the precise eye; f32 absolute corners lose
+        // centimetres far from spawn.
+        let cascade_view = shadow::CascadeView {
+            inv_view_proj: (projection * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)).inverse(),
+            eye_m: precise_eye,
+            origin: render_origin,
+        };
         let projection = REVERSE_Z * projection;
         let rotation_view_proj = REVERSE_Z * standard_view_proj;
         // REVERSE_Z is its own inverse, so the reversed inverse needs no second inversion.
@@ -3996,14 +4003,14 @@ impl Gpu {
 
         self.last_camera_pos = eye;
         self.last_camera_residual = residual;
-        self.last_inv_view_proj = standard_inv_view_proj;
+        self.last_cascade_view = cascade_view;
         self.last_rotation_view_proj = rotation_view_proj;
         self.last_camera_forward = cur_forward;
         self.last_world_scale = world_scale;
 
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
-            standard_inv_view_proj,
+            cascade_view,
             0.05 * world_scale,
             world_scale,
         );
@@ -4087,7 +4094,7 @@ impl Gpu {
 
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
-            self.last_inv_view_proj,
+            self.last_cascade_view,
             0.05 * self.last_world_scale,
             self.last_world_scale,
         );
@@ -4460,14 +4467,9 @@ impl Gpu {
                 .shadow_renderer
                 .apply_update_if_needed(&self.queue, chunk_cache.shadow_caster_revision);
 
-        // The main pass draws in the render-origin frame; the shadow pass reads
-        // the twin table, which keeps today's absolute frame.
+        // The main pass and every shadow cascade draw in the render-origin frame.
         let origin = self.render_origin.unwrap_or(RenderOrigin { voxel: IVec3::ZERO });
         let chunk_transform = |c: IVec3| DrawTransform { offset: origin.chunk_offset(c), ..DrawTransform::IDENTITY };
-        let absolute_twin = |c: IVec3| DrawTransform {
-            offset: (c * CHUNK_SIZE).as_vec3().extend(0.0).to_array(),
-            ..DrawTransform::IDENTITY
-        };
         self.draw_offsets.begin_frame(DrawTransform { offset: origin.absolute_offset(), ..DrawTransform::IDENTITY });
         if redraw_shadow_map {
             self.shadow_renderer.build_cascade_draw_lists(chunk_cache, self.horizon.mesh.as_ref());
@@ -4477,26 +4479,25 @@ impl Gpu {
                 chunk_cache,
                 &mut self.draw_offsets,
                 chunk_transform,
-                absolute_twin,
             );
         }
         // Main-pass slots and indirect arguments are taken before the upload; the
         // offset table must be complete before any pass binds it.
         let multidraw = !paused && streaming::indirect_draws::active();
         for key in draw_list.iter() {
-            self.draw_offsets.slot_with_twin(key.coord, || chunk_transform(key.coord), || absolute_twin(key.coord));
+            self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
         }
         let multidraw_counts = if multidraw {
             let offsets = &mut self.draw_offsets;
             let coords = draw_list.iter().map(|k| k.coord);
             self.chunk_indirect.prepare(&self.device, &self.queue, chunk_cache, coords, |c| {
-                offsets.slot_with_twin(c, || chunk_transform(c), || absolute_twin(c))
+                offsets.slot(c, || chunk_transform(c))
             })
         } else {
             (0, 0)
         };
         self.draw_offsets.upload(&self.device, &self.queue);
-        if redraw_shadow_map && let Some(draw_offsets) = self.draw_offsets.twin_buffer() {
+        if redraw_shadow_map && let Some(draw_offsets) = self.draw_offsets.buffer() {
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {

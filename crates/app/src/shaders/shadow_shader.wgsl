@@ -10,6 +10,8 @@ struct ShadowGenUniform {
     time: f32,
     wind: vec2<f32>,
     resident_coverage: ShadowResidentCoverage,
+    // Voxel origin of light_view_proj (render/origin.rs RenderOrigin).
+    render_origin: vec4<i32>,
 };
 
 @group(0) @binding(0) var<uniform> gen: ShadowGenUniform;
@@ -31,10 +33,15 @@ struct ShadowVertex {
 
 @vertex
 fn vs_main(in: VsIn) -> ShadowVertex {
-    var p = in.pos + in.draw_offset.xyz;
+    // Origin-frame voxels; the light matrix maps origin-frame metres.
+    let local = in.pos + in.draw_offset.xyz;
+    // Ownership keys on absolute columns: rebuilding them from the integer
+    // origin returns horizon vertices to their exact absolute values.
+    let absolute = vec3<f32>(gen.render_origin.xyz) + local;
+    var p = local;
     var out: ShadowVertex;
     out.parent = select(0u, 1u, in.ao_strength < 0.0);
-    out.world_xz = p.xz * gen.world_scale;
+    out.world_xz = absolute.xz * gen.world_scale;
     let kind = u32(round(max(in.surface.z, 0.0))) % 64u;
     if kind == 8u {
         // Water still receives terrain/canopy shadows in the colour pass.
@@ -48,9 +55,10 @@ fn vs_main(in: VsIn) -> ShadowVertex {
             out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
             return out;
         }
-        p = tuft_wind_position(p, in.surface.y, gen.world_scale, gen.time, gen.wind);
+        let sway = tuft_wind_offset(absolute, in.surface.y, gen.world_scale, gen.time, gen.wind);
+        p = local + sway;
+        out.world_xz = (absolute + sway).xz * gen.world_scale;
     }
-    out.world_xz = p.xz * gen.world_scale;
     out.clip = gen.light_view_proj * vec4<f32>(p * gen.world_scale, 1.0);
     return out;
 }
