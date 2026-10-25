@@ -6,7 +6,9 @@ use crate::coords::CHUNK_SIZE;
 use glam::IVec3;
 
 mod edges;
+mod projection;
 pub use edges::{QuarterTurns, Step};
+pub use projection::{Projection, local_frame, pick_face};
 
 /// One of the six cube faces, named by its outward normal.
 #[derive(
