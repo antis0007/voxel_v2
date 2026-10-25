@@ -326,6 +326,8 @@ pub mod terrain_family {
     pub const CAPPED_TURF: u32 = 36;
     /// Warm emissive fungus gills (Amberroot grove); also a local light source.
     pub const AMBER_GILL: u32 = 37;
+    /// Loose ash: fine grey powder. Family 0 would paint it as climate turf.
+    pub const ASH: u32 = 38;
 }
 
 impl BlockId {
@@ -412,6 +414,7 @@ impl BlockId {
             Self::Fire => 42,
             Self::Smoke => 43,
             Self::Steam => 44,
+            Self::Ash => terrain_family::ASH,
             Self::Grass => 1,
             Self::Dirt | Self::Mud | Self::Clay => 2,
             Self::Stone | Self::Basalt => 3,

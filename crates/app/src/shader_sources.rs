@@ -14,7 +14,7 @@ const SHADER_INPUTS: &[(&str,&str)] = shader_inputs![
     "shaders/atmosphere_runtime_shared.wgsl", "shaders/atmosphere_shared.wgsl", "shaders/atmosphere_lut_generation.wgsl", "shaders/sky_probe.wgsl",
     "shaders/cloud_shared.wgsl", "shaders/cloud_morphology.wgsl", "shaders/weather_volume.wgsl",
     "shaders/underwater_shared.wgsl", "shaders/mood_shared.wgsl", "shaders/terrain_detail_shared.wgsl",
-    "shaders/enchantment_shared.wgsl", "shaders/terrain_surface.wgsl", "shaders/world_shader.wgsl", "shaders/local_mist_shared.wgsl",
+    "shaders/enchantment_shared.wgsl", "shaders/terrain_surface.wgsl", "shaders/fluid_surface_shared.wgsl", "shaders/world_shader.wgsl", "shaders/local_mist_shared.wgsl",
     "shaders/cloud_shader.wgsl", "shaders/cloud_composite.wgsl", "shaders/sky_shader.wgsl",
     "shaders/cloud_temporal.wgsl", "shaders/cloud_weather_sampling.wgsl", "shaders/outline_shader.wgsl",
     "shaders/shadow_shader.wgsl", "shaders/ui_shader.wgsl", "shaders/postprocess.wgsl",
@@ -61,7 +61,7 @@ const WEATHER_VOLUME_WGSL: &str = include_str!("shaders/weather_volume.wgsl");
 const UNDERWATER_WGSL: &str = include_str!("shaders/underwater_shared.wgsl");
 const MOOD_WGSL: &str = include_str!("shaders/mood_shared.wgsl");
 
-const WORLD_SHADER_BODY: &str = concat!(include_str!("shaders/terrain_detail_shared.wgsl"), "\n", include_str!("shaders/enchantment_shared.wgsl"), "\n", include_str!("shaders/terrain_surface.wgsl"), "\n", include_str!("shaders/world_shader.wgsl"));
+const WORLD_SHADER_BODY: &str = concat!(include_str!("shaders/terrain_detail_shared.wgsl"), "\n", include_str!("shaders/enchantment_shared.wgsl"), "\n", include_str!("shaders/terrain_surface.wgsl"), "\n", include_str!("shaders/fluid_surface_shared.wgsl"), "\n", include_str!("shaders/world_shader.wgsl"));
 const LOCAL_MIST_WGSL: &str = include_str!("shaders/local_mist_shared.wgsl");
 const CLOUD_SHADER_BODY: &str = include_str!("shaders/cloud_shader.wgsl");
 const CLOUD_COMPOSITE_SHADER_BODY: &str = include_str!("shaders/cloud_composite.wgsl");
