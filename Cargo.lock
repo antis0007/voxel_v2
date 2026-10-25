@@ -791,6 +791,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_chip"
+version = "0.1.0"
+dependencies = [
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "engine_content"
 version = "0.1.0"
 dependencies = [

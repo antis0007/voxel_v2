@@ -1,0 +1,15 @@
+# Player-designed microcontrollers: the verified module registry, the floorplan
+# and wires a player edits, the bounded router, the design checks and
+# characterisation, firmware tasks and the event-driven runtime a machine runs.
+# Pure data and functions; the app owns installation, power and persistence.
+[package]
+name = "engine_chip"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12.2"
+
+[lints]
+workspace = true
