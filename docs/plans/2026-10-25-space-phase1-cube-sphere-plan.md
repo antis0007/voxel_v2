@@ -212,7 +212,7 @@ fn round_trip_is_exact_to_1e12_everywhere_including_edges() {
         assert!((d.length() - 1.0).abs() < 1e-14);
         let (f2, s2, t2) = p.from_sphere(d);
         let d2 = p.to_sphere(f2, s2, t2);
-        assert!(d.angle_between(d2) < 1e-12, "{p:?} {f:?} {s} {t}");
+        assert!(d.cross(d2).length().atan2(d.dot(d2)) < 1e-12, "{p:?} {f:?} {s} {t}"); // atan2: acos cannot resolve angles below ~1.5e-8
         if s.abs() < 1.0 && t.abs() < 1.0 {
             assert_eq!(f2, f);
             assert!((s - s2).abs() < 1e-12 && (t - t2).abs() < 1e-12);
