@@ -15,6 +15,9 @@ pub enum Phase {
     /// Power-on reset after supply returned; outputs off until it ends.
     Booting,
     Running,
+    /// Supply dropped while running and no watchdog restarted the core:
+    /// outputs off and no wakes until the part is reset.
+    Hung,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +34,9 @@ pub struct State {
     pub debt_nj: u64,
     accounted: u64,
     pub wakes: u64,
+    /// The supply failed while the core ran; set until power returns.
+    #[serde(default)]
+    pub latched: bool,
 }
 
 impl State {
@@ -46,6 +52,7 @@ impl State {
             debt_nj: 0,
             accounted: now,
             wakes: 0,
+            latched: false,
         }
     }
 
@@ -63,10 +70,18 @@ impl State {
             self.debt_nj += model.idle_nw * elapsed / u64::from(TICK_HZ);
         }
         if !powered {
+            self.latched |= self.phase == Phase::Running && !model.recovers;
             self.phase = Phase::Unpowered;
             self.output = false;
             self.pending = None;
             // Check again on the next wake period; supply return is noticed then.
+            self.next_wake = now + u64::from(model.wake_ticks);
+            return;
+        }
+        if self.phase == Phase::Hung || (self.phase == Phase::Unpowered && self.latched) {
+            self.phase = Phase::Hung;
+            self.latched = false;
+            self.output = false;
             self.next_wake = now + u64::from(model.wake_ticks);
             return;
         }
@@ -98,6 +113,15 @@ impl State {
         // A wake missed while unpowered or booting is not replayed.
         let next = self.next_wake + u64::from(model.wake_ticks);
         self.next_wake = if next <= now { now + u64::from(model.wake_ticks) } else { next };
+    }
+
+    /// Power-cycle the core by hand: it boots on the next service.
+    pub fn reset(&mut self, now: u64) {
+        self.phase = Phase::Unpowered;
+        self.latched = false;
+        self.output = false;
+        self.pending = None;
+        self.next_wake = now;
     }
 
     /// Nothing to read yet (the owner's networks are being rebuilt): apply a

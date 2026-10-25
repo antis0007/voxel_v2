@@ -11,6 +11,14 @@ filter := "python -I scripts/filter.py --"
 check crate="":
     {{filter}} cargo check -q --all-targets --message-format=short
 
+# Validate authored tooltip copy without launching the game or running tests.
+lint-descriptions file="assets/descriptions.ron":
+    cargo run --offline --quiet -p engine_content --example validate_descriptions -- "{{file}}"
+
+# Report player-visible text that breaks crates/app/src/egui_ui/UI_RULES.md.
+lint-ui:
+    python -I scripts/ui_text_lint.py
+
 # dead_code stays a warning until the P4 dead-code pass lands (docs/PLAN.md);
 # every other warning is an error.
 clippy crate="":

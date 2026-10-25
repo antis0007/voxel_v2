@@ -100,17 +100,19 @@ fn item_cell(
     }
     let resp = resp.on_hover_ui(|ui| {
         ui.label(RichText::new(item.name()).color(PAPER).size(12.5));
-        ui.label(RichText::new(item.category()).color(JADE).size(11.0).italics());
-        ui.label(
-            RichText::new(format!("Carried: {}", amount_text(stock_of(survival, item))))
-                .size(11.0)
-                .color(MUTED),
-        );
-        ui.label(RichText::new("Click: recipes · Right-click: uses").size(11.0).color(MUTED));
+        super::description_copy::item(ui, item);
+        if ui.input(|i| i.modifiers.shift) {
+            ui.label(RichText::new(format!("Carried {}x", amount_text(stock_of(survival, item))))
+                .size(11.0).color(MUTED));
+        }
     });
-    if resp.clicked() {
+    let (recipes, uses) = ui.input(|i| (
+        resp.hovered() && !ui.ctx().wants_keyboard_input() && i.key_pressed(egui::Key::R),
+        resp.hovered() && !ui.ctx().wants_keyboard_input() && i.key_pressed(egui::Key::U),
+    ));
+    if resp.clicked() || recipes {
         *nav = Some(Nav::Recipes(item));
-    } else if resp.secondary_clicked() {
+    } else if resp.secondary_clicked() || uses {
         *nav = Some(Nav::Uses(item));
     }
     resp
@@ -158,11 +160,11 @@ fn recipe_card(
                             .all(|&(it, n)| survival.count_item(it) >= n);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let tip = if !reachable {
-                            "Needs the 3×3 grid: press F at a workbench, then E."
+                            "Workbench Required"
                         } else if craftable {
-                            "Move the ingredients into the crafting grid"
+                            "Ingredient Transfer"
                         } else {
-                            "Missing ingredients"
+                            "Missing Ingredients"
                         };
                         if ui
                             .add_enabled(craftable, egui::Button::new("+").small())
@@ -212,9 +214,6 @@ fn recipe_card(
                     chip(ui, "Multiblock", AMBER);
                 }
             });
-            if !e.note.is_empty() {
-                ui.label(RichText::new(e.note).size(11.0).color(MUTED));
-            }
         });
     staged
 }
@@ -317,17 +316,12 @@ pub(super) fn draw(ui: &mut egui::Ui, survival: &mut SurvivalInventory, bench: b
         .available_height()
         .min(ui.ctx().content_rect().height() - 250.0)
         .max(180.0);
-    ui.horizontal_top(|ui| {
-        // Left: every known item, filtered.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        // Right: item panel. Search remains anchored beneath its scroll area.
         ui.vertical(|ui| {
             ui.set_width(list_w);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("ITEMS").size(11.0).color(AMBER));
-                ui.add(
-                    egui::TextEdit::singleline(&mut query)
-                        .hint_text("Search (@ for station)")
-                        .desired_width(list_w - 50.0),
-                );
             });
             let q = query.trim().to_lowercase();
             let px = 30.0;
@@ -369,23 +363,16 @@ pub(super) fn draw(ui: &mut egui::Ui, survival: &mut SurvivalInventory, bench: b
                         }
                     });
                 });
-            ui.label(
-                RichText::new("Click: recipes · Right-click: uses · R / U over any inventory slot")
-                    .size(11.0)
-                    .color(MUTED),
-            );
+            ui.add(egui::TextEdit::singleline(&mut query)
+                .hint_text("Search")
+                .desired_width(list_w));
         });
         ui.separator();
         // Right: the selected item.
         ui.vertical(|ui| {
             let Some(item) = selected else {
                 ui.add_space(20.0);
-                ui.label(RichText::new("Pick an item to see how it is made and used.").color(MUTED));
-                ui.label(
-                    RichText::new("The Tree tab expands a target into every step and the raw materials you still need.")
-                        .size(11.0)
-                        .color(MUTED),
-                );
+                ui.label(RichText::new("Recipes").color(MUTED));
                 return;
             };
             ui.horizontal(|ui| {
@@ -469,16 +456,16 @@ pub(super) fn draw(ui: &mut egui::Ui, survival: &mut SurvivalInventory, bench: b
                         let plan = index::plan(item, amount as f32, &mut stock, &choices);
                         let (seconds, energy) = plan.totals();
                         ui.horizontal_wrapped(|ui| {
-                            chip(ui, &format!("{:.0} s of station time", seconds), PAPER);
+                            chip(ui, &format!("{seconds:.0}s"), PAPER);
                             if energy > 0.0 {
                                 chip(ui, &power::fmt_energy(energy as f64), AMBER);
                             }
                         });
                         let missing = plan.missing();
                         if missing.is_empty() {
-                            ui.label(RichText::new("Everything needed is in your pack.").size(11.0).color(JADE));
+                            ui.label(RichText::new("Materials Ready").size(11.0).color(JADE));
                         } else {
-                            ui.label(RichText::new("STILL TO GATHER").size(11.0).color(DANGER));
+                            ui.label(RichText::new("Missing Materials").size(11.0).color(DANGER));
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                                 for (i, n) in &missing {

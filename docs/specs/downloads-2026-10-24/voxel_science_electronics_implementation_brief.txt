@@ -1,0 +1,655 @@
+SCIENCE, ELECTRONICS AND SEMICONDUCTOR MANUFACTURING
+Design and implementation brief for the Rust + raw-wgpu voxel game
+22 October 2026
+
+PURPOSE
+
+Build a substantial, coherent science and automation system inside the existing standalone game. The inspirations are the industrial construction of Immersive Engineering, the readable machine workflows of Thermal Expansion, and the interconnected processing of Mekanism. Keep the game's own identity: players discover materials, manufacture useful components, build circuits, and use those circuits to improve their factories, exploration tools and magical machinery.
+
+The central loop is:
+obtain materials -> measure a limitation -> choose a process -> manufacture a component -> build a useful circuit -> improve the next production batch.
+
+The user's latest constraint is fundamental: ABSTRACT TIMING FOR GAMEPLAY AND EDUCATION. Teach connections, cause and effect, material transformations, energy, operating conditions and control logic. Players should not need nanosecond timing calculations, precise countdown clicks or realistic semiconductor fabrication waiting periods.
+
+This document is a proposed architecture and an implementation prompt. It does not claim that the game repository has been inspected or that these changes have been implemented. When applying it to the actual repository, first inspect its conventions and current changes, then implement the first complete playable phase. Expand only after that phase works and is understandable.
+
+1. NONNEGOTIABLE DESIGN RULES
+
+- Rust and raw wgpu. Do not introduce Bevy or move authoritative simulation into rendering.
+- Preserve one accounting system for delivered electrical energy, stored energy, losses, process work and production. Every abstraction must connect through that accounting.
+- Keep electrical relationships meaningful: voltage, current, resistance, capacitance, stored energy, return paths and component limits.
+- Make ordinary controls condition-driven. A player can say "enable when tank is low" or "transfer after this stage completes" without building a clock.
+- Model fabrication as short, readable operations with useful choices. The game duration is authored for pacing and is not presented as a real manufacturing duration.
+- Provide good presets. Understanding a process once should enable dependable automation.
+- Treat semiconductor history as a graph of useful capabilities and optional working experiments. Avoid compulsory reenactment of every obsolete production method.
+- Use shared process machinery, typed data and a small set of meaningful simulation models. Do not build a universal physics framework or a different bespoke engine for every machine.
+- Explain failures through measurements and visible consequences. Avoid unexplained quality dice and repetitive maintenance as the main difficulty.
+- Support both explorers and industrial players. Salvage can provide an early component or a different route; basic factory progress must also have a manufacturing path.
+- Label authored gameplay models and fictional magitech effects accurately. Do not teach a balancing abstraction as a literal scientific law.
+
+2. THREE LEVELS OF SIMULATION
+
+A. Factory machines
+Expose a few electrical and utility ports, a process state, a thermal state where useful, and a bounded input/output inventory. Use averaged electrical behavior and authored process models. Their fictional internal millions of transistors do not become circuit entities.
+
+B. Player-built electrical circuits
+Resolve terminal voltages, currents, resistance, sources, supported semiconductor devices and stored charge. Solve DC operating points and only the transients needed for observable storage, control or fault outcomes.
+
+C. Digital chips and controllers
+Execute functional logic and state changes when relevant inputs or process events change. Represent energy per operation, idle consumption, voltage range, drive capability and capacity. Avoid simulating a chip's individual transistors or requiring high-frequency clock design.
+
+These are different levels of detail within one world. They are not three independent energy systems. An electrical port, a process operation and a stored-energy device must agree about what energy was supplied and used.
+
+Use a small explicit component-model enum initially. Add a new model when a demonstrated gameplay feature needs a behavior that existing models cannot express. Do not create a general scripting language for arbitrary differential equations.
+
+3. TIME: THE DEFAULT EXPERIENCE
+
+NORMAL PLAY
+- Circuits visibly settle after a connection or control change.
+- Charge, voltage and useful energy remain inspectable.
+- Digital controls respond to conditions, item arrivals, measurements and batch events.
+- Recipes show stage, limiting condition, materials and energy per batch.
+- Animation lengths make operations readable. They do not change simulation results.
+- Presets handle treatment duration, switching details and routine sequencing.
+- A stable circuit can sleep until something relevant changes.
+
+Sleeping means reusing the operating-point solution, not suspending energy accounting. Continue integrating cached power over authoritative simulation time, advancing fuel use and process work, and scheduling storage, thermal or control thresholds that invalidate the cached solution.
+
+INSPECTION
+- Offer "show current", "show voltage", "show stored energy" and "explain this result".
+- A recent charging/discharging trace can be replayed slowly, with its simulated-time axis labeled.
+- An isolated laboratory copy can pause, advance to the next event, or jump to an appropriate settled state.
+- A preview experiment cannot export charge, items or process progress into the live factory.
+- If the actual world is paused and stepped, all connected production, source and storage systems advance consistently.
+
+SCIENTIFICALLY MEANINGFUL SEQUENCES
+Preserve process order. Cleaning before a sensitive operation and annealing after an appropriate implant are different from arbitrary waiting.
+Represent duration-dependent treatment with a preset or treatment budget that has a clear result. For example, a diffusion profile setting can select a modeled junction-depth category. The machine executes the treatment; the player does not time a click.
+
+ACCOUNTING
+Use one authoritative elapsed simulation time for live-world power and energy:
+E_used = integral(P_input dt).
+
+A recipe can declare work units and an energy cost per work unit. Useful delivered energy advances work subject to material availability, process conditions and machine capacity:
+delta_work <= useful_energy / energy_per_work_unit.
+
+Separate useful processing energy, standby demand, storage changes and losses. A machine can consume standby power while waiting if that behavior is explicitly modeled and explained.
+
+If a complete operation costs 10 kJ, shortening its cosmetic animation must not reduce that cost. If its allowed input power is 5 kW, it cannot consume 10 kJ instantaneously without an accounted internal buffer. Batches per gameplay minute are a pacing choice; real fabrication schedules are not implied.
+
+4. WORLD ELECTRICAL CONNECTIONS
+
+Every power device needs a physical supply and return connection. A convenient factory cable block can contain two insulated conductors, letting the player place one cable while preserving the closed circuit. Bench wiring can expose individual conductors.
+
+A numerical reference node only defines where zero volts is measured. It does not create an invisible physical return connection.
+
+Maintain a graph of stable terminal IDs, junctions and component edges.
+- Merge truly ideal connected wires into nodes.
+- Keep finite-resistance cables as resistive edges.
+- Combine untapped series cable segments where useful, retaining enough mapping to display local voltage, current and heat.
+- Rebuild affected connected components after topology edits. Union-find alone is not a deletion algorithm.
+- Preserve component identity across graph rebuilds; a capacitor's state must not be keyed by a temporary solver-node index.
+- Handle connections across chunk boundaries as part of the same electrical system.
+
+For an educational cable approximation:
+R = resistivity * length / conductor_area
+voltage_drop = current * resistance
+power_loss = current^2 * resistance.
+
+Cable products should have current ratings, insulation voltage, resistance and a modeled thermal envelope. A simple kilowatt tier can remain a compatibility limit during migration, but it is not a complete cable model.
+
+Players should be able to understand why:
+- a long narrow wire drops more voltage;
+- parallel branches divide current according to their loads;
+- higher transmission voltage can reduce current and resistive loss for a given delivered power;
+- a short circuit differs from a machine requesting its normal power.
+
+Keep ordinary construction convenient: sensible cable routing, clear terminal polarity, quick connectors and automatic paired conductors. Do not require manually placing two long cable runs for every ordinary machine.
+
+5. COMPONENT MODELS AND MACHINE LOADS
+
+Start with these models:
+
+- Current-limited source: nominal voltage, output impedance or droop, current limit, optional power limit.
+- Battery: stored energy/state of charge, a simple open-circuit voltage curve, internal resistance and shared port limits.
+- Resistor/heater: resistance, optional temperature dependence, thermal capacity.
+- Switch/contact: open leakage where needed, finite on-resistance, explicit control.
+- Lamp: a simple supported load curve and a clear brightness result.
+- Capacitor: capacitance, signed stored voltage/charge, equivalent series resistance, leakage and voltage rating.
+- DC/DC converter: input/output voltage range, regulation, efficiency, current limits and startup/undervoltage behavior.
+- Diode: compact bounded current-voltage model.
+- Transistor switch: a small supported piecewise/compact model with finite on-resistance, thresholds and ratings.
+- Sensor/comparator: a meaningful measured quantity and a clear threshold/hysteresis output.
+- Digital macrodevice: defined logic/state behavior, supply requirements, finite output drive and accounted energy.
+
+Different machine classes should respond differently to electrical conditions.
+
+A heater approximately follows P = V^2/R. A regulated electronic load approximately follows I = P/V inside its operating range. A motor may use a compact idle/load/startup model, adding mechanical detail only when torque or stalls create useful play. Do not give every machine the same flat-power behavior.
+
+Regulated constant-power loads can demand more current as voltage falls. Provide current limits, undervoltage shutdown and restart hysteresis; never evaluate unbounded P/V near zero. This behavior has a real basis, but detailed converter stability analysis is outside ordinary gameplay. [R3]
+
+Model the existing DC "transformer" as a DC/DC converter assembly. A conventional passive transformer relies on changing magnetic flux; a complete isolated DC/DC converter includes switching stages. Represent those internals with an averaged model. [R4]
+
+For a converter:
+P_out <= efficiency * P_in.
+Losses enter the appropriate heat accounting. Coupled input/output ports must share one authoritative transaction or a conservatively coupled solve. Do not deliver this step's output against a stale unlimited input budget.
+
+For thermal gameplay, a lumped model is usually enough:
+thermal_capacity * dT/dt = heating - cooling - process_heat_demand.
+
+Use a few interacting thermal bodies only when they affect player decisions. Do not solve a world-sized heat equation for every machine panel.
+
+6. CAPACITORS: TWO USEFUL PRODUCTS
+
+BARE CIRCUIT CAPACITOR
+Keep the physical relationships:
+Q = C * V
+E = 0.5 * C * V^2
+I = C * dV/dt.
+For a constant-capacitance model these give a coherent relationship between stored charge, voltage and energy. [R2]
+
+Use it for a visible RC experiment, signal smoothing, maintaining a small controller supply, or a supported pulse/control circuit. Instruments should automatically explain the resulting behavior.
+
+For a known simple RC circuit:
+Vc(t) = Vs + (Vc(0) - Vs) * exp(-t/(R*C)).
+Evaluate that solution directly where its assumptions apply. An arbitrary branched or nonlinear circuit does not inherit this one-resistor formula.
+
+REGULATED CAPACITOR BANK
+This block contains capacitors plus a converter/controller. Its external output can remain regulated as its internal capacitor voltage falls. Display:
+- capacitance;
+- internal voltage;
+- usable energy above the minimum internal operating voltage;
+- input/output voltage and current limits;
+- charge/discharge losses;
+- the operation or interruption it can support.
+
+Usable ideal energy between two voltages is:
+E_usable = 0.5 * C * (V_high^2 - V_low^2).
+
+Calculated example: supplying a 1 kJ energy burst while falling from 48 V to 40 V needs at least 2.84 F before losses. This is a calculation from the chosen example, not a recommended balance value. The bank still needs sufficient discharge current and converter capability.
+
+This supports a simple player question: "Can this bank supply the extra energy for one operation?" The engine handles the duration.
+
+CAPACITOR SAFEGUARDS
+- Do not make a bare capacitor maintain constant voltage through discharge.
+- Do not make a small capacitor supply arbitrary factory energy.
+- Do not slow its live discharge while keeping unchanged volts, farads and watts.
+- Replays and virtual experiments can stretch time visually.
+- Use finite connection resistance or a controlled bank interface to handle inrush.
+- Preserve stored state during save/load, mining and placement according to one ownership rule.
+- Moving a charged device transfers its state; it must not leave a charged world object and create a charged item.
+- Do not change capacitance while retaining a voltage in a way that creates free energy. Initially require a safe modeled discharge/reconfiguration operation.
+- Distinguish physical losses from numerical error in diagnostics.
+
+Capacitor families can later offer meaningful choices: ceramic, film, electrolytic and supercapacitor products with different supported ratings, leakage and series resistance. A supercapacitor is not explained as an ordinary flat plate magically providing enormous capacitance. Detailed material mechanisms can be optional codex content.
+
+7. THE CIRCUIT SOLVER: SMALL, BOUNDED, HEADLESS
+
+Implement electrical simulation as ordinary Rust logic independent of wgpu and UI.
+
+For a resistor/source network, nodal analysis is sufficient. Modified nodal analysis accommodates voltage sources and other required branch-current unknowns. Sandia's Xyce formulation is a suitable reference for this mathematical approach. [R1]
+
+Start with linear DC circuits, then supported RC transients. General MNA matrices are not guaranteed symmetric positive definite; do not choose a solver that assumes they are.
+
+For a linear RC network, a backward-Euler step can be written:
+(G + C/h) * v_next = source_next + (C/h) * v_previous.
+Here C is the assembled nodal capacitance matrix, not one component's value. Ideal voltage sources require the additional MNA equations. [R1]
+
+This is an implementation option, not a player-facing requirement. Backward Euler can damp behavior at coarse timesteps. Check accuracy for the supported teaching examples instead of treating numerical stability as proof of correctness.
+
+Scheduling policy:
+1. No changing storage/input: solve the operating point and sleep when valid.
+2. Slow factory storage: update on the common world simulation clock.
+3. A known simple transient: use its analytic solution or next-threshold event.
+4. A transition can cause a visible fault/control change: account for that event before advancing past it.
+5. Fast internal behavior without a relevant gameplay consequence: use a documented averaged device model.
+
+Cache topology ordering and matrix structure. Reuse numeric factorization only while coefficients remain the same. Solve independent islands on CPU workers if measured workloads justify it.
+
+Add bounded nonlinear iteration only for supported devices that need it. On nonconvergence, do not commit invented voltages or energy. Retain a valid state, retry appropriately and report a useful diagnostic.
+
+Do not make unrestricted SPICE, high-frequency transistor switching, signal-integrity analysis or a custom sparse-solver research project prerequisites for the first playable factory. Use trusted reference solvers offline to check selected circuits if helpful.
+
+8. BUILD CIRCUITS IN THE WORLD AND REUSE THEM
+
+Support three construction scales:
+- World blocks for cables, relays, contactors, capacitor banks and large power equipment.
+- A compact board surface for resistors, capacitors, diodes, transistors, sensors, logic and connectors.
+- Packaged boards/chips that can be manufactured and installed in machine control slots.
+
+Start with schematic placement on a board and visible in-world terminals. A small board does not require voxelizing silicon features at nanometer resolution.
+
+A packaged board must preserve its function and limits. Known digital designs may compile to a functional macrodevice. An arbitrary analog board must retain an equivalent supported circuit model; do not replace it with a generic "controller + efficiency" bonus.
+
+Digital automation should support:
+- comparison and hysteresis;
+- AND, OR, NOT and useful predicates;
+- explicit latches/state;
+- counters driven by items or batches;
+- small condition-based sequences;
+- input and output diagnostics.
+
+Evaluate combinational dependencies deterministically. Stateful blocks define where memory lives. Diagnose unsupported combinational feedback and bound event processing. Do not accidentally turn a feedback loop into an infinite update queue.
+
+Default automation should not require a clock, pulse-width tuning, propagation-delay management or setup/hold calculations.
+
+Examples:
+- Enable the biomass burner when stored energy is low, unless feedstock is below the cultivator reserve.
+- Start a second machine only when voltage headroom is sufficient.
+- Route a wafer to cleaning after a process stage succeeds.
+- Divert a lot to inspection when a measurement exceeds its allowed range.
+- Disable heating when the temperature sensor exceeds its chosen setpoint.
+
+9. MANUFACTURING AS SHARED PROCESS CAPABILITIES
+
+Separate five concepts:
+
+Machine definition
+- operation capabilities;
+- working envelope;
+- tooling/modules;
+- ports and inventory;
+- capacity and efficiency;
+- electrical/utility model;
+- presentation and UI.
+
+Process plan
+- ordered operations and allowed alternatives;
+- required capability at each operation;
+- material inputs, outputs and waste;
+- work and energy requirements;
+- condition windows;
+- quality updates and measurements.
+
+Batch state
+- material or product identity;
+- amount;
+- current process stage and unfinished work;
+- relevant composition/quality;
+- stable lot identity;
+- bounded provenance and diagnostic history.
+
+Utility state
+- delivered electricity;
+- thermal conditions;
+- appropriate fluid/gas supply;
+- cooling, vacuum or environmental condition where relevant.
+
+Control state
+- chosen preset and setpoints;
+- routing;
+- interlocks;
+- board/controller behavior.
+
+Use explicit operation kinds such as HeatTreat, Separate, GrowCrystal, Deposit, Pattern, Etch, Dope, Inspect and Package. Each needs a clear implementation and declared limits. Configuration files select validated capabilities and coefficients; they do not inject arbitrary simulator code.
+
+Start with standard machine families that remain visually and mechanically distinct. Shared internals do not imply a single universal box with fifty unrelated menus.
+
+10. SEMICONDUCTOR HISTORY AS A CAPABILITY GRAPH
+
+Use the following content chapters. They overlap and have alternate entry points.
+
+1. Electrical workshop
+Wire, insulation, contacts, resistors, capacitors, coils and relays. Optional tube experiments use glassworking and vacuum equipment. Mechanical/manual controls bootstrap production before chips exist.
+
+2. Crystal and discrete-device experiments
+Crystal detectors, point-contact devices, germanium junction/alloy routes and selected diffusion routes. Rewards are useful diodes, transistor switches, amplifiers and sensors. Historic experiments are optional functioning exhibits.
+
+3. Repeatable silicon processing
+Crystal quality, wafer preparation, oxide protection, selective doping and contacts. Product improvements concern supported ratings, leakage and consistency.
+
+4. Integrated circuits
+Patterned device regions and interconnect. Offer bipolar and MOS families as distinct implementations for appropriate analog and logic applications.
+
+5. CMOS control and memory
+Complementary devices, compact logic, counters, memory and controller components. Preserve idle and switching energy; CMOS is not a zero-power material.
+
+6. Production engineering
+Improve alignment, film control, doping/annealing, cleanliness, planarization and packaging. Scaling a good established route is a valid strategy.
+
+7. Specialty devices
+Power electronics, photovoltaics, optical devices and sensors. Appropriate SiC/GaN, compound-semiconductor and MEMS branches can provide application-specific capabilities. No material is universally superior at every task.
+
+8. Advanced integration
+Optional advanced device architectures, patterning and packaging. Provide meaningful density/efficiency/capacity benefits where useful. Advanced lithography should not invalidate all mature processes.
+
+Historical anchors for the codex:
+- Hoerni demonstrated the planar process in 1959. [R5]
+- Atalla and Kahng achieved successful insulated-gate devices in 1959; the MOS demonstration milestone is 1960. [R6]
+- Sah and Wanlass presented complementary MOS in 1963. [R7]
+
+Keep manufacturing process, device architecture and circuit family separate. Planar processing, MOSFET structure and CMOS logic describe different things.
+
+Provide working historical exhibits: detector, relay controller, tube amplifier, early transistor, planar transistor, bipolar logic and CMOS instrument. Let players compare their measured behavior.
+
+11. SEMICONDUCTOR PROCESS ROUTES
+
+The broad silicon route is:
+material refining -> sufficiently pure feedstock -> single-crystal substrate -> wafer preparation -> repeated device/layer operations -> interconnect/passivation -> test -> packaging.
+
+Some stages can initially be supplied by salvage, purchased/prepared feedstock or an existing upstream process. Do not require every upstream refinery before the first electronics lesson.
+
+Shared equipment families:
+- purification and separation;
+- crystal growth;
+- wafer slicing/preparation;
+- thermal processing;
+- film deposition;
+- resist/patterning;
+- etching/stripping/cleaning;
+- optional implantation;
+- interconnect/planarization;
+- inspection and packaging.
+
+Represent real alternatives where they create a decision:
+- CZ and float-zone crystal growth are different substrate routes; float-zone avoids the quartz crucible and can provide low-oxygen material. Wafer preparation includes multiple mechanical/chemical finishing steps. [R8]
+- Thermal diffusion and ion implantation are distinct doping routes; appropriate annealing repairs implantation damage and affects the resulting material. [R10]
+- Contact/projection and later lithography capabilities have different supported feature/alignment envelopes.
+- PVD, CVD and ALD modules have different authored film/process capabilities. Do not present them as universal interchangeable tier upgrades.
+- Wet/dry etching and interconnect routes should differ in compatible material, geometry or recovery requirements.
+- Distinguish fabrication operations from film functions: oxidation grows oxide; deposition adds a film; films may serve as conductors, dielectrics, masks or passivation, sometimes with overlapping roles.
+
+For a first planar-device recipe, show the meaningful sequence:
+prepare/clean -> form or deposit the required layer -> coat/pattern/develop resist -> etch or selectively treat exposed regions -> remove/clean when required -> repeat appropriate layers -> contact/interconnect -> inspect/package.
+
+Lithography patterns resist; subsequent processing uses or transfers that pattern. One exposure does not produce an entire finished transistor. Patterning involves multiple process families. [R9, R13]
+
+Strip photoresist before incompatible high-temperature treatments. Where the selected route requires it, transfer the resist pattern into a suitable oxide or nitride mask before diffusion or other thermal processing. Each authored route must specify compatible masks and the correct strip/clean order.
+
+Use a magnified, annotated cross-section to show what each operation changed. False-color doping and layer views must be labeled as visualization.
+
+Keep short presets for treatment dose and profiles. Offer one to three meaningful settings per operation before exposing advanced controls. Process windows should explain a result:
+"Pattern resolved; alignment is insufficient for this design. Use a larger layout or improve alignment capability."
+
+12. LOT DATA, QUALITY AND FINISHED COMPONENTS
+
+A practical lot record might contain:
+WaferLot {
+  lot_id,
+  substrate_spec,
+  design_id,
+  process_plan_id,
+  current_step,
+  wafer_count,
+  work_in_progress,
+  quality_state,
+  recent_measurements
+}
+
+Use typed quality fields only when the chosen route uses them:
+- unwanted contamination;
+- defect category/density;
+- relevant layer thickness and uniformity;
+- alignment error;
+- intended dopant type/profile category;
+- accumulated treatment budget.
+
+Intentional doping is not the same as contamination. Higher purity does not mean removing the dopants needed for the design.
+
+Avoid one inventory item for every microscopic intermediate. A lot can remain the same carrier record while its stage and material state change.
+
+Use deterministic process windows as the default teaching model. If statistical yield is included later, seed it by stable lot identity and make causes/expectations visible. Save/reload cannot reroll a bad lot into a good one.
+
+Finished parts need meaningful specifications:
+- capacitance/resistance or supported on-resistance;
+- voltage/current/temperature ratings;
+- leakage and relevant loss;
+- operating range;
+- functional behavior;
+- manufacturing/test grade.
+
+Derive these from authored, calibrated approximations. This is not atomistic semiconductor simulation.
+
+For chips, separate:
+A. logical function or validated circuit design;
+B. technology/process implementation;
+C. package and tested operating limits.
+
+The same controller function can be built using different implementations. Those choices affect size, supported I/O, energy, supply requirements and capacity.
+
+A simplified CMOS power model can separate idle leakage from switching demand. TI documents the relationship between capacitance, supply voltage and switching activity. For ordinary play, represent it as idle watts plus joules per useful logical operation; the player need not manage real clock frequency. [R11]
+
+Do not automatically convert arbitrary player-drawn mask pixels into a physically valid chip. Begin with verified device/layout templates and a board editor. Freeform semiconductor design is a separate, optional educational feature with explicit supported structures.
+
+13. MULTIPLE SCIENCES THROUGH THE SAME FACTORY
+
+Add a domain when it connects at least two useful activities or offers a distinct experiment.
+
+Materials/metallurgy
+Conductor choice, insulation, alloy properties, material separation and crystal quality feed both machinery and electronics.
+
+Chemistry
+A finite authored reaction library supports useful acids/bases, gases, deposition inputs, cleaning, batteries and recycling. Track declared material flows and relevant composition. Add substances because their properties create a production decision.
+
+Electrochemistry
+Battery families, electrolysis and plating connect chemistry, electrical consumption and material recovery.
+
+Thermodynamics
+Heating, cooling, insulation and heat recovery affect useful production. Use a small thermal model and clear operating windows.
+
+Optics
+Lighting, photodiodes, lenses and exposure capabilities connect factory measurement to exploration tools.
+
+Mechanics and vacuum
+Pumps, valves, mechanical work and chamber conditions support both ordinary industry and fabrication. Default controllers handle routine timing.
+
+Biology
+Biomass, fermentation or selected cultivation chemistry can provide renewable inputs and useful sensors. Model only the state variables needed by the authored process.
+
+Environmental science
+Waste streams, water quality and resource recovery can create understandable local consequences and alternative routes. Do not make every factory produce an unavoidable maintenance chore.
+
+Magitech
+Treat mana/astral inputs as explicit fictional resources. A transducer declares its input, electrical output, loss and authored conversion rule. Effects may change process capability, but their energy and material transactions must remain visible. Label the fictional rule separately from real scientific explanations.
+
+Reaction records should identify stoichiometry and losses where modeled. Validate the supported mass/material balance. Process enthalpy and conversion efficiency can be approximated, with their model status stated. Do not attempt an unrestricted "mix any elements and derive all chemistry" engine.
+
+14. TEACH THROUGH INSTRUMENTS
+
+The essential UI is part of the feature, not late polish.
+
+Electrical inspector
+Show terminal voltage, current direction/magnitude, useful power, stored energy and the active limit. Explain "open return", "current limited", "undervoltage" or "output disabled".
+
+Network overlay
+Show voltage domains, conductor paths and bottlenecks. Use labels/shapes as well as color. Cosmetic current motion represents direction/magnitude; it must not imply realistic electron travel speed.
+
+Bench
+Offer safe presets, known component values, compare-before/after, and automatic traces. Provide optional equations behind an expandable explanation.
+
+Process panel
+Show current material state, next operation, required conditions, energy per batch, throughput and the cause of blocked progress. Let players save and copy proven settings.
+
+Wafer viewer
+Show a readable cross-section, selected process layers and measured defects or misalignment. The player should see what changed after each operation.
+
+Production statistics
+Extend the existing production screen with energy per useful product, loss, yield and the active bottleneck. Distinguish stored-energy changes from generation and consumption.
+
+Learning should be demonstrated by improvement: the player makes a prediction, changes one thing, and sees the corresponding measurement.
+
+15. INTEGRATION WITH THE REPORTED EXISTING GAME
+
+Treat these as reported starting points to verify:
+- battery I/O settings and shared per-device rate limits;
+- induction matrix shared storage;
+- cable tiers and line upgrade;
+- the existing "transformer";
+- biomass burner, assembler and production statistics;
+- save format previously reported as version 21.
+
+Do not assume the repository is still at that version or that earlier files remain unchanged.
+
+Migration requirements:
+- Keep old worlds loadable according to the current save policy.
+- Give existing devices compatible default electrical profiles.
+- Preserve battery/matrix shared limits across all their ports.
+- Keep energy ownership separate from a multiblock's temporary mesh or selected port.
+- Upgrade the reported mining behavior so stored energy is preserved in an owned item/storage record or explicitly and visibly discharged once. Do not silently erase or duplicate it.
+- Provide a gradual path from legacy kilowatt transport limits to voltage/current-aware cables.
+- Initially keep existing tier-connection rules if changing them would break worlds; document their compatibility role.
+- Apply only one energy debit per consumer when connecting the new electrical solve to the old power system.
+- Extend existing assembler/pipe/statistics mechanisms instead of building duplicate logistics systems.
+- Keep changes scoped around concurrent work. Do not overwrite another session's terrain edits.
+
+A previously reported terrain timing test failure is not evidence about this new feature. Establish the actual baseline before attributing failures. Do not weaken its threshold merely to make the suite green.
+
+16. IMPLEMENTATION PHASES
+
+PHASE A: READABLE DC WORKSHOP
+Deliver:
+- supply and return paths;
+- current-limited source, resistor/heater, switch and lamp;
+- cable resistance and a meter;
+- condition-based enable controls;
+- saved device identity/state.
+
+Acceptance:
+The player builds a working circuit, creates an open return or overloaded line, reads a useful explanation, and fixes it. Voltage/current calculations match selected analytical examples.
+
+PHASE B: CAPACITORS AND USEFUL MACHINE POWER
+Deliver:
+- bare RC demonstration;
+- regulated capacitor bank;
+- stored-state persistence;
+- averaged DC/DC converter;
+- shared device limits;
+- one existing machine using actual delivered energy.
+
+Acceptance:
+A bank supplies a documented energy deficit within its limits. Empty or undersized banks fail intelligibly. The player can solve a brief supply problem without setting a timer. Mining, replacement, reload and port duplication do not create energy.
+
+PHASE C: THE FIRST FACTORY THAT IMPROVES ITSELF
+Deliver one compact discrete-device route and one functional control board.
+Include the supported diode/transistor and sensor/control models, plus the minimal process and thermal state needed by the chosen example.
+Use prepared semiconductor feedstock if a complete upstream chemistry chain is not ready.
+The route has a few meaningful operations, inspection and packaging.
+The board controls a furnace, pump or sorter through clear conditions.
+The improved control visibly changes a relevant outcome of the next batch.
+
+Acceptance:
+A new player can make the first device, understand its specification, use it, and explain what improved. No advanced chip is required to build the only machine that can make that chip.
+
+PHASE D: SHARED PROCESS INFRASTRUCTURE
+Expand the existing process foundation with only the fluid/gas, thermal, lot and recipe capabilities required for selected additional routes.
+Add material recovery and the useful process statistics.
+Expand upstream supply as playable production choices.
+
+Acceptance:
+At least two products reuse the same machinery/capabilities while requiring different meaningful process decisions.
+
+PHASE E: PLANAR DEVICES AND FUNCTIONAL ICs
+Deliver verified templates for a small collection of comparators, logic, counters and controllers.
+Add the corresponding planar/multi-layer route, wafer viewer and packaging/testing.
+Keep digital operation condition-driven.
+
+Acceptance:
+Players manufacture functional electronics that replace or compact their own working controls, with measurable specification tradeoffs.
+
+PHASE F: HISTORICAL AND SPECIALTY EXPANSION
+Add historical experiments, alternate routes, power devices, optical sensors, more materials and advanced integration as new combinations of established systems.
+
+Acceptance:
+Each addition introduces a useful application, a real alternative or a new scientific relationship. Cut additions that only extend an ingredient ladder.
+
+Do not attempt all six phases in one enormous change. Each phase must leave the game playable and the existing factory intact.
+
+17. EFFICIENT RUST/WGPU ORGANIZATION
+
+Adapt to the existing repository. The following are conceptual ownership boundaries, not claims about current files:
+
+electrical/
+  topology, component_models, operating_point, storage, diagnostics
+process/
+  capabilities, plans, batch_state, material_balance
+control/
+  signals, logic, stateful_devices, controllers
+science_content/
+  validated materials, process definitions, component specifications
+presentation/
+  inspectors, overlays, wafer views, machine visuals
+persistence/
+  stable identities, versioned component/process state, migrations
+
+Use SI values internally where the model claims physical units. Explicit wrappers or strongly named fields reduce accidental kW/W and kWh/J confusion. Use f64 for numerical electrical calculations; convert to render-friendly data only at presentation boundaries.
+
+The renderer consumes snapshots. Cosmetic animations, visible chunks and GPU frame rate cannot decide authoritative production, circuit state or energy flow.
+
+Use finite inventories and compact batch records. Schedule active components and relevant events. Stop repeatedly scanning every machine for unchanged conditions.
+
+For inactive regions, choose a coherent pause or coarse-simulation policy for each connected system. Do not leave a supply running while an offscreen connected consumer/storage device is frozen. Materialize detailed state consistently when a player returns.
+
+Do not promise a machine count or tick rate without measurements from representative factories. Profile topology edits, large resistive networks, changing loads, batch automation and save/load separately.
+
+18. VERIFICATION AND DELIVERY
+
+Use meaningful checks around physical behavior and persistent ownership:
+- resistor series/parallel networks;
+- a known RC charging/discharging response;
+- current conservation and voltage equations;
+- capacitor energy and converter losses;
+- current-limited shorts and conflicting connections;
+- regulated-load undervoltage behavior;
+- shared battery/matrix limits;
+- charge ownership across mining, placement and save/load;
+- process material/energy balance;
+- deterministic event-driven controls;
+- topology changes and chunk boundaries;
+- representative active/idle factory performance.
+
+Numerical energy residuals need a defined tolerance and diagnostics. Do not hide all numerical error by calling it physical heat.
+
+Visually inspect the electrical overlays, board interaction, process panels and at least one complete production chain. Passing tests alone does not demonstrate that the player can understand the system.
+
+Report:
+1. What was implemented and what remains a proposal.
+2. The playable learning loop.
+3. Physical relationships preserved.
+4. Timing and process abstractions used.
+5. Migration behavior and unresolved baseline failures.
+6. Measured performance and its test conditions.
+7. The next smallest expansion that adds meaningful play.
+
+PRIMARY REFERENCES
+
+These references ground the electrical and manufacturing facts. Machine balance values, the chapter grouping, process summaries and implementation decisions in this document are design proposals.
+
+[R1] Sandia National Laboratories, Xyce Mathematical Formulation.
+https://xyce.sandia.gov/files/xyce/Xyce_Math_Formulation.pdf
+
+[R2] OpenStax, University Physics Volume 2, Energy Stored in a Capacitor.
+https://openstax.org/books/university-physics-volume-2/pages/8-3-energy-stored-in-a-capacitor
+
+[R3] Texas Instruments, constant-power load and input-filter behavior.
+https://www.ti.com/document-viewer/lit/html/SSZT993/GUID-8C378DA9-6731-471A-A0AC-A1DBFEB15F28
+
+[R4] Texas Instruments, Power Through the Isolation Barrier.
+https://www.ti.com/lit/slyy182
+
+[R5] Computer History Museum, Invention of the Planar Manufacturing Process.
+https://www.computerhistory.org/siliconengine/invention-of-the-planar-manufacturing-process/
+
+[R6] Computer History Museum, MOS Transistor Demonstrated.
+https://www.computerhistory.org/siliconengine/metal-oxide-semiconductor-mos-transistor-demonstrated/
+
+[R7] Computer History Museum, Complementary MOS Circuit Configuration.
+https://www.computerhistory.org/siliconengine/complementary-mos-circuit-configuration-is-invented/
+
+[R8] SUMCO, Production Processes.
+https://www.sumcosi.com/english/products/process/
+
+[R9] Lam Research, Patterning Solutions.
+https://www.lamresearch.com/products/our-solutions/patterning-solutions/
+
+[R10] Applied Materials, Materials Modification.
+https://www.appliedmaterials.com/eu/en/semiconductor/products/modify.html
+
+[R11] Texas Instruments, CMOS Power Consumption and Cpd Calculation.
+https://www.ti.com/lit/an/scaa035b/scaa035b.pdf
+
+[R12] ASML, How Microchips Are Made.
+https://www.asml.com/en/technology/all-about-microchips/how-microchips-are-made
+
+[R13] Lam Research, What Is Dry Resist? (especially the lithography and photoresist glossary).
+https://newsroom.lamresearch.com/what-is-dry-resist-semi-101
+

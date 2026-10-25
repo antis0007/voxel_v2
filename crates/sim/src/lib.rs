@@ -5,6 +5,7 @@
 //! blocks, driven only by the packed material table. `pinned` holds every definition that fixes
 //! the result. See docs/adr/0007-bricks-and-scale.md and docs/adr/0008-ca-determinism.md.
 mod anchors;
+pub mod environment;
 mod cell;
 mod kernel;
 mod offload;

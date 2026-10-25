@@ -1,0 +1,929 @@
+CLAUDE CODE — PAINTERLY LANDSCAPE AND WORLD VISUAL OVERHAUL
+Screenshot-grounded critique, art direction and production implementation specification
+October 23, 2026
+
+USE AND SCOPE
+
+Use this file together with the two supplied current game screenshots and 13 accompanying visual references. It complements voxel_biome_implementation_plan.txt and claude_voxel_architecture_master_prompt.txt; it does not replace their gameplay, persistence or architectural requirements. This document prioritizes the visible gap between the current landscape and the supplied art, rather than adding more named biomes or another broad engine framework.
+
+Two current game screenshots were directly inspected for this document: image(20261024-040732).png (shoreline) and image(20261024-041222).png (dungeon hall). Previous architecture/biome artwork supplies additional context, but this document does not invent observations from unavailable gameplay captures. A still image supports visual critique; it does not establish frame time, temporal stability, exact shader algorithms, fluid behavior, LOD correctness or source-code causes. Inspect those in the actual repository and running game.
+
+All implementation choices below are proposed until checked against the code. All dimensions, scene counts and tuning ranges are starting targets to validate against existing movement, voxel resolution, hardware and content. Filenames identify the references; authorship/source claims in filenames are not treated as verified.
+
+BEGIN IMPLEMENTATION PROMPT
+
+Implement a substantial visual overhaul of my existing Rust + WGPU voxel game, with no Bevy migration. Use the supplied screenshots as the before-state and the supplied landscape/architecture images as artistic guidance. Preserve voxel identity, editability, gameplay, save compatibility and measured performance. Read repository instructions and inspect real code before modifying systems.
+
+The goal is a coherent artistic world with expressive trees, layered landscape forms, believable banks and water, deliberate color/value grouping, atmospheric depth, and architecture that belongs in its setting. The target is not simply stronger bloom, more fog, increased saturation, a canvas overlay or a higher object count. Improve the underlying scene design and rendering together.
+
+Do the implementation, capture real engine output, compare it critically, and iterate. Do not stop at writing another plan. Do not claim visual success from compilation or synthetic concept images. If the game cannot run in the available environment, complete the available implementation/checks and explicitly mark visual validation as pending.
+
+CONTENTS
+01. Current screenshot: observations, limits and priorities
+02. Reference ledger: thirteen visual sources
+03. Shared artistic language and distinct scene treatments
+04. Diagnostic baseline and renderer truth checks
+05. Redesign the exact shoreline shown in the screenshot
+06. Terrain forms, mountains and geographic composition
+07. Tree anatomy, crowns, age and silhouette
+08. Forest stands, edges, canopy and ecological structure
+09. Understory, flowers, grass and close ground detail
+10. Rocks, banks, soil, weathering and surface depth
+11. Palette, materials and spatial color variation
+12. Lighting, value grouping and reflected-light impression
+13. Clouds, sky composition and weather
+14. Atmosphere, mist and depth separation
+15. Water appearance, reflection and shoreline integration
+16. Shadows, occlusion and temporal stability
+17. Architecture, ruins and vegetation integration
+18. Seasons and specialized visual treatments
+19. Composition in a freely explorable procedural world
+20. Wand, effects and consistency with the environment
+21. Ownership, streaming, edits and implementation boundaries
+22. Performance and quality scaling
+23. Required visual specimens and comparison views
+24. Dependency-ordered implementation packages
+25. Verification, visual review and regression fixtures
+26. Final delivery and immediate execution instructions
+
+01. CURRENT SCREENSHOT: OBSERVATIONS, LIMITS AND PRIORITIES
+
+The screenshot shows a broad water foreground, a curving pale sandy shore, green rising land, a visible stand of trees, distant pointed landforms, a busy cloud field and a large angular wand in the lower right. There are tree shadows and reflections; the scene is not unlit or reflection-free. Preserve the useful baseline of readable terrain, water, sky and first-person interaction.
+
+O1 — Trees have simple, similarly scaled visible crown masses and slender exposed trunks.
+The visible trees read as assemblies of large boxy leaf clumps rather than distinct species, ages and branching habits. Crown edges, trunk-to-crown relationships and canopy density do not yet carry the individuality found in the references. This is an observation about this view, not proof that the entire game contains only one tree type.
+Priority: very high. Improve tree construction and stand composition before multiplying leaf density.
+
+O2 — The visible forest floor and shore-side grass are broad, relatively uniform areas.
+There is little visible transition among grass, litter, roots, shrubs, damp ground and shade. The effect is a collection of trees placed on a green surface, rather than a forest with an edge, interior and ground ecology.
+Priority: very high. Add coherent vegetation/soil patches and canopy-dependent ground treatment, while keeping clear traversal space.
+
+O3 — The beach is a large pale band with limited material and structural variety in the view.
+Several parallel stepped edges near the center-right draw attention as repeated contour ledges. Voxel steps are not inherently a defect, but long similar exposed tiers can read as generation contours rather than a convincing bank.
+Priority: high. Introduce intentional coves, bank profiles, wet margins, gravel/rock interruptions and topsoil transitions. Keep the voxel form; improve why and where steps appear.
+
+O4 — Foreground water becomes strongly cyan and visually soft compared with the geometric world.
+This may be a legitimate depth/lighting choice, but the view provides few visible bottom, bank or material cues explaining the shift. Broad color variation dominates the foreground without an equally strong sense of what the water covers.
+Priority: high. Inspect the actual water model and make color, depth, roughness and shore relationship coherent. Do not simply remove all turquoise from the game.
+
+O5 — Reflections reproduce the simple shoreline/tree forms and appear coarse in this still.
+The screenshot cannot reveal whether that appearance comes from source geometry, reflection resolution, surface normals, temporal reconstruction or another technique. More expensive reflections will not repair weak tree silhouettes.
+Priority: high for diagnosis; fix geometry and water integration before replacing reflection algorithms.
+
+O6 — Clouds have much more small-scale visual activity than the landscape.
+Bright billowy forms and streaked/striped-looking upper coverage occupy substantial visual attention. The mismatch between elaborate sky and simple land makes the environment feel assembled from different art treatments.
+Priority: high. Reduce competing cloud frequencies, establish larger cloud groups and openings, and coordinate sky light with land values. Check whether upper streaking is an intended cloud layer or a rendering artifact before changing it.
+
+O7 — Ground and canopy are mostly bright middle/light greens in this view.
+There are visible shadows, but broad woodland light/shade structure is weak relative to the references. A deeper canopy mass, controlled sunlit clearings and more distinct ground materials would create form without globally darkening the image.
+Priority: high. Diagnose lighting and material values together; do not assume missing GI is the sole cause.
+
+O8 — The distant left landforms read as a sequence of relatively small pointed peaks.
+The view lacks a strongly connected ridge/valley hierarchy comparable to the landscape references. The pale peaks nearer the center are another separate mass. A still image cannot establish whether their near/far geometry matches.
+Priority: high. Improve directional landform structure and long-range composition, then test transitions in motion.
+
+O9 — The water foreground is open, but currently has limited compositional payoff.
+Quiet open water is valuable and appears in several references. It should frame a purposeful opposite bank, grove, island, ruin or mountain shape. Adding random props everywhere would destroy its usefulness.
+Priority: high. Preserve calm space while giving the shore and distant mass a focal relationship.
+
+O10 — A thin near-vertical streak appears in the sky left of center.
+Its source is unknown: effect, beacon, debug element or artifact. Inspect it. Preserve a purposeful gameplay signal if that is what it is; remove it from reference captures only if it is debug/unintended. Do not label it a confirmed rendering bug from this image alone.
+Priority: diagnostic, not an excuse for unrelated rendering work.
+
+O11 — The wand is a large, relatively detailed angular form with bright small particles.
+Its voxel treatment can be part of the game's identity, but it currently carries more fine geometric articulation than much of the background. Improve environment hierarchy before redesigning the weapon. Evaluate whether idle particles unnecessarily compete with scenic views.
+Priority: secondary after terrain/vegetation/light coherence.
+
+O12 — Temporal and technical issues are unverified here.
+Do not infer exact FPS, shadow crawl, SSR use, missing temporal AA, chunk stalls, physical realism or unseen interiors. Collect evidence in the running game and record observed causes separately from hypotheses.
+
+SECOND SCREENSHOT — DUNGEON HALL
+
+D1 — Existing light sources are visible and illuminate parts of the side walls.
+This is not a wholly unlit scene. The problem is the distribution of readable light: broad floor/ceiling regions and the distant route remain very dark while small side pools and the wand are comparatively bright. Do not diagnose absent lighting from a screenshot that visibly has it.
+Priority: very high. Improve spatial readability and contrast allocation while preserving the intended dark atmosphere.
+
+D2 — Stone-like walls use conspicuous irregular mottled patches.
+In this view, high-contrast patches compete with architectural planes and suggest camouflage more than clear masonry, worn plaster or coherent rock. The underlying implementation is unknown: texture, material noise or lighting may contribute.
+Priority: very high. Isolate albedo versus illumination, then replace unsupported mottling with lower-contrast coherent material variation and recognizable construction detail.
+
+D3 — Most surfaces share a brown/ochre/gold range.
+Walls, raised sides, trim, ceiling elements and the weapon have limited material/value separation. This collapses the room into one warm treatment. Warm lighting is legitimate; the reference interior still distinguishes stone, wood, light openings, vegetation and shadow.
+Priority: high. Separate structural stone, finish, metal accent, floor and light color without applying a universal blue wash.
+
+D4 — The architecture reads predominantly as a rectangular enclosure with large straight bands and supports.
+There is some rhythm and stepped overhead structure, but the visible hall lacks the differentiated column bases/capitals, ceiling system, opening depth and layered adjoining spaces of the interior reference.
+Priority: very high. Improve actual 3D structure and spatial sequence; do not merely add more wall patterns.
+
+D5 — Raised lateral edges strongly channel the central view.
+They can be functional design elements, but their repeated, relatively plain faces dominate the lower sides. The screenshot does not establish whether they are walkable platforms, barriers or part of the encounter layout.
+Priority: high. Inspect their purpose. Add credible stairs/openings and differentiated structural treatment where gameplay allows; do not remove intended combat boundaries without checking the encounter.
+
+D6 — Gold-like small marks occur on several surfaces, while the side light arrangements repeat.
+The material/function of these marks is not established. Their repetition does not yet communicate a clear construction or ritual/mechanical purpose in the still.
+Priority: medium/high. Retain meaningful signs/inlays, reduce indiscriminate speckling and make repeated lights vary by room function rather than uniform decoration.
+
+D7 — The far doorway is dark, and the main floor has weak visible segmentation.
+The direction of travel is inferable from perspective, but floor edges, material, depth and the doorway threshold need more useful information. Strong darkness around small creatures can help silhouette but also obscure their ground relationship.
+Priority: very high. Light the threshold and essential floor planes, add coherent paving/contact cues, and validate encounter readability during movement.
+
+D8 — Several creatures/objects and the wand share the central combat view.
+Their forms are relatively simple and one creature appears elevated; the image cannot determine whether this is intended flying/jumping or a placement issue. The purple effect provides a distinct accent, but entity categories, silhouettes and contact/height cues need in-engine review.
+Priority: medium for this environment task. Improve readable separation from floor/walls and assess enemy silhouettes separately; do not assume floating is a bug or undertake an unrelated AI rewrite.
+
+D9 — The upper room is so dark that ceiling composition is difficult to evaluate.
+This can conceal both defects and existing detail. Use neutral diagnostic captures to inspect it, then restore an intentional low-light treatment. A screenshot-only exposure increase is not the final solution.
+Priority: high. Establish real overhead form, reflected/ambient impression and selected light accents tied to the room's purpose.
+
+The dungeon adds a parallel early milestone: a complete, readable interior lighting/material/architecture repair. Keep the outdoor overhaul and this interior repair in the same art language, but do not use one global brightness/color setting to solve both.
+
+Priority order for the visible gap:
+1. Tree/forest structure and ground-to-bank transitions.
+2. Large light/value/color grouping and calmer sky hierarchy.
+3. Terrain/ridge composition and shore shape.
+4. Water depth/reflection/material coherence.
+5. Architectural focal elements and detailed environmental storytelling.
+6. Fine ornament, particles and optional painterly rendering refinements.
+Some implementation work can share a milestone, but the review order stays form first, then light/material, then small detail.
+
+02. REFERENCE LEDGER: THIRTEEN VISUAL SOURCES
+
+A01 — 440438038578522254.jpg
+Observed: an enormous pale carved facade with an ornate upper opening, relatively quiet wall surfaces, a dark small doorway, an adjacent tree, patterned foliage shadows and tiny people. Warm pale stone is animated by delicate shadow and subtle green staining.
+Transfer: scale through people/door size; broad calm material fields; high-detail concentration around openings; tree/architecture interaction; delicate projected foliage shadows.
+Implementation implication: one pale courtyard/ruin wall must receive convincing nearby canopy shadows and have actual recessed openings. Do not model every tiny carved mark before the wall/tree/light relationship works.
+
+A02 — Hubert Robert (1733-1808), Fantaisie Égyptienne.jpg
+Observed: huge pyramidal masses, a slender obelisk, tiny figures, a low distant line of trees and turbulent grouped clouds. Monumental silhouettes are readable within a restrained green-gray/warm-stone palette.
+Transfer: monumental versus human scale; dominant simple forms; storm illumination; low horizon accents; large cloud grouping.
+Implementation implication: use a sparse monument scene to validate scale and cloud/light hierarchy. Do not import its exact sky colors as a permanent world-wide filter.
+
+A03 — 467178161332390460.jpg
+Observed: a sequence of deep masonry arches, broken upper walls, warm stone, dark interior layers, blue-white sky and encroaching green vegetation. The repeated openings lead the eye through depth.
+Transfer: nested framing; real wall thickness; ordered damage; varied but coherent masonry; plants at joints, bases and broken surfaces.
+Implementation implication: build a walkable ruined arcade with multiple depth layers and a lit destination. Small noisy rock textures cannot substitute for thick arches and shadowed recesses.
+
+A04 — 491807221801205561.jpg
+Observed: a long interior with repeated columns and ceiling structure, tall bright side openings, decayed walls, partial platforms, plants, scattered objects and figures. Warm dark structure surrounds pools of incoming light.
+Transfer: readable dim interiors; rhythmic columns; side lighting; ruin history; a balance of open circulation and clutter.
+Implementation implication: create one interior whose light works at normal player exposure, with usable floors, stairs and functional/storytelling objects. Do not interpret darkness as an excuse for unlit black rooms.
+
+A05 — pearly gates.jpg
+Observed: a geometric green gateway, upright narrow trees, rounded plant forms, a luminous opening and calm water with strong reflections. The design is intentionally formal and surreal.
+Transfer: shaped planting, symmetry with variation, clear negative space, dark reflective water and one strong light accent.
+Implementation implication: a rare designed garden/sanctuary can use sculptural/topiary-like vegetation. Do not apply its rigid geometry to all natural forests. The luminous opening can be a bright view or a mechanism; a portal is not implied unless implemented.
+
+A06 — Ambleside, 1786 WC with Pen and Ink over Graphite on Laid Paper Traditional Farmhouse Landscape Print Wall Art by Francis Towne Sold by Art_Com - Walmart.jpg
+Observed: layered mountain and hill contours, woodland bands, open fields, a few tall foreground trees, small pale buildings and broad gentle color washes. Thin linework separates selected forms without overwhelming them.
+Transfer: connected landforms; large-scale patch composition; quiet open farmland; pale buildings as accents; decreasing distant contrast.
+Implementation implication: improve ridge/valley shapes and woodland placement before surface complexity. The painted contour lines do not mandate a universal black outline shader.
+
+A07 — Idyllic Landscape Paintings by Artist Tomás Sánchez Render Nature's Meditative Qualities.jpg
+Observed: a dense isolated wooded mass rises from still water. Tall narrow trunks, a broad connected canopy, darker enclosed vegetation, a sparse bare-branched foreground tree and softer distant woodland create a strong silhouette and reflection.
+Transfer: forest as a coherent mass; canopy and trunk differentiation; vertical rhythm; dominant isolated shape; calm water and atmospheric separation.
+Implementation implication: one grove/island should read as an organized volume from the opposite shore, while remaining a navigable ecological space inside. Do not make every stand a perfect cylinder or copy the painting's impossible-density impression literally.
+
+A08 — Incredible Gustav Klimt Art Set - Inspired Landscapes in 25K! Set of 5 Digital Download, Brilliant Red - Etsy Australia.jpg
+Observed: highly stylized red circular flower/canopy forms, long vertical red stems, dense floral patterns, dark trees, a pond and a yellow building. The image is intentionally ornamental and flattened; the filename is not verified attribution.
+Transfer: a restricted complementary palette; deliberate repetition and rhythm; ornamental flowering masses; warm architecture as a destination.
+Implementation implication: use this for a rare flowering garden/biome variant with coherent three-dimensional flowers and hanging stems. Do not turn all trees into camera-facing red discs or place unrelated polka dots on ordinary terrain.
+
+A09 — Beer with a Painter Tom Uttech.jpg
+Observed: a framed woodland scene with tall sparse trunks, layered mossy boulders, rusty vegetation, dark forest depth, small animal/bird forms and strong water reflections. The physical frame is outside the environmental target.
+Transfer: rock/plant/trunk interdependence; age and seasonal contrast; reflective dark water; fine ecological accents subordinate to large forms.
+Implementation implication: a rocky pond edge should have coherent geological blocks, moss cover, roots and openings. Do not generate every visible animal mark as a fully simulated creature.
+
+A10 — Neil Gavin Welliver (american, 1929 2005) Little.jpg
+Observed: a snowy open wetland/woodland with bare branching trees, scattered conifers, grass/shrub tufts protruding through snow and blue-gray cast shadows. Snow forms broad connected light regions.
+Transfer: winter as changed ground cover and plant structure, not a white tint; varied tree life states; shadow shape; clear negative space.
+Implementation implication: test snow placement, leaf-off silhouettes and exposed vegetation patches. Snow must respect slopes and meaningful existing geometry.
+
+A11 — Landscapes — Charles Weed.jpg
+Observed: a heavily textured image of misty woodland with a large leaning foreground trunk, softer upright trunks behind, subdued cool colors and very low distant contrast.
+Transfer: trunk character; depth separation; restrained palette; selective detail concentrated nearby.
+Implementation implication: use as a mist/depth test. The surface brush/canvas texture is not a requirement for a screen overlay, and heavy blur cannot hide bad distant geometry.
+
+A12 — S U S P I R I A.jpg
+Observed: a detailed woodland image with a huge rough irregular foreground trunk, moss/lichen-like patches, arching branches, a green canopy and a dense blue-flowered ground layer. Fine near detail sits within recognizable trunk and ground masses.
+Transfer: old-tree anatomy; close bark/vegetation interaction; a coherent flower carpet; bright deeper woodland separated from darker foreground.
+Implementation implication: build one exceptional old tree and a flower-ground patch at player scale. Do not solve this with millions of independent high-cost leaves or flowers.
+
+A13 — 440015826113010468.jpg
+Observed: a curving canal or pond edge, a small arched bridge with delicate railing, warm autumn trees, still dark reflections and scattered floating leaves. The bridge connects into a surrounding path and wooded bank.
+Transfer: intimate water composition; architectural scale; curved retained banks; autumn material grouping; reflection as a major part of the scene.
+Implementation implication: create a walkable bridge/canal garden with correct water/retaining-wall intersection, readable approach and subtle floating litter. Do not add a frame or source watermark to the game.
+
+03. SHARED ARTISTIC LANGUAGE AND DISTINCT SCENE TREATMENTS
+
+Choose a shared world language: expressive detailed voxel forms, broad coherent material masses, selective fine detail, readable light, and atmosphere tied to space. The references differ widely; preserve their useful relationships without forcing one uniform yellow/green grade over every scene.
+
+Common rules:
+- Large shapes establish identity before small texture.
+- Detail is concentrated around subjects, edges, joints and meaningful ecological transitions.
+- Quiet regions are intentional: water, snow, sky openings, fields, wall shafts and shadowed interior masses.
+- Foreground, middle distance and background differ in contrast and detail without becoming separate unrelated render styles.
+- Vegetation has growth structure, age and ecological placement.
+- Water belongs to banks and terrain rather than looking like a colored sheet laid over the world.
+- Architecture and plants interact through scale, support, moisture, shade and access.
+- Colors vary in related patches and materials, not independently per voxel.
+- Voxel edges remain visible and deliberate; detail resolution is applied where it matters.
+
+Maintain several coherent treatments:
+Pastoral: pale greens, warm small buildings, broad fields, soft distant mountain layers.
+Old-growth: deep canopy, warm/cool light pockets, dark trunks, connected understory, selective flower accents.
+Rocky wetland: moss green, gray stone, rusty vegetation, dark reflections, sparse trunks.
+Winter: broad off-white snow, cool shadows, dark exposed branches and restrained evergreen accents.
+Ruin/courtyard: pale/warm stone, deep openings, green growth and patterned light.
+Formal enchanted garden: controlled shapes, ornamental red/gold accents or a green reflective gate, used locally.
+
+Do not confuse painterly with blurry. The close tree, stone stair and foreground ground layer need sharp understandable form. Simplify distant detail and group values while retaining important silhouettes.
+
+04. DIAGNOSTIC BASELINE AND RENDERER TRUTH CHECKS
+
+Before tuning art, inspect whether the rendering pipeline is displaying material and light values correctly. Visual symptoms do not identify a unique code cause.
+
+Check actual implementation for:
+- Correct color-space treatment of color textures and data textures.
+- Lighting accumulation in the intended working space and a single intended output transform.
+- Tone mapping/exposure order and whether any content is transformed twice.
+- Normal orientation/scale, particularly for foliage, terrain LODs and water.
+- Material roughness/metalness/emission interpretation.
+- Sun/sky/shadow consistency and excessive ambient terms.
+- Fog applied consistently to opaque and transparent content.
+- Reflection source, resolution, fallback and confidence behavior.
+- Water depth/shore calculations and large-coordinate precision.
+- Debug effects or unintended beams, including the visible vertical streak.
+
+Do not assume any check is broken. If correct, record that and move on. Do not rewrite a working renderer because the scene needs better assets and composition.
+
+Baseline captures:
+Use the original screenshot location if it can be reproduced, plus normal-player walking views along that shore. Record seed, position, direction, FOV, time, weather, exposure mode, resolution, graphics settings and build revision. Capture neutral daylight and the ordinary gameplay settings separately.
+
+Baseline debug views:
+Albedo/material IDs, normals, direct light, ambient/indirect contribution if separable, shadow factor, fog contribution, water depth and reflection contribution where available. Add small focused debug modes if absent and useful; avoid a large new inspection framework.
+
+Measurement:
+Record CPU/GPU/frame-time distributions and memory on available hardware. Do not infer poor performance from the screenshot. Establish cold and warm traversal routes so later improvements can be judged fairly.
+
+05. REDESIGN THE EXACT SHORELINE SHOWN IN THE SCREENSHOT
+
+Keep a comparable broad-water/curving-shore view as the primary before/after specimen. Do not declare success by moving the camera to an unrelated cinematic location.
+
+Proposed composition:
+- Preserve a substantial quiet water foreground.
+- Turn the opposite shore into several related sections: a shallow sandy cove, a low darker bank, a small rock/root projection and a sheltered planted margin.
+- Group the visible woodland into stands of different age/crown structure, with one stronger old-tree or grove silhouette.
+- Open a grassy glade/path between selected stands so the bank is not a continuous wall of leaves.
+- Connect distant peaks into one readable ridge/valley system with a dominant mass and subordinate shoulders.
+- Add a modest distant architectural accent only after the land itself works: a pale ruined arcade, small bridge or rural building, compatible with the existing architecture plan.
+- Reduce competing cloud detail above the focal area and retain a meaningful sky opening.
+
+Initial terrain changes:
+Vary shoreline curvature at two or three scales. Broad coves/headlands establish shape; medium bank changes support ecology; small erosion/stone details enrich contact. Avoid high-frequency wrinkling along every meter. Preserve broad shallow shelves where suitable, but interrupt repeated exposed stair-like contours with meaningful bank geometry, sediment and vegetation.
+
+Make bank sections different for a reason:
+A protected cove collects sand/finer sediment. An exposed rocky point reveals stone and roots. A low wet margin supports reeds and sedges. A raised grassy bank has an undercut or soil edge where appropriate. These are proposed art/geographic rules, not a demand for real-time erosion simulation.
+
+Near-shore detail:
+Place a few substantial readable rocks, root forms and plant clusters rather than a carpet of tiny pebbles. Keep wet/dry transitions aligned to actual water level. Add shallow-bottom cues where the water model and visibility support them. Do not scatter debris evenly across open sand.
+
+Woodland behind the bank:
+Use a structured edge with shrubs/saplings, occasional exposed trunks and canopy gaps. Behind it, let crowns merge into deeper stands. A few large irregular trees provide identity; many smaller subordinate forms establish scale. Keep walking access and player build space.
+
+Landmark choice:
+Use one modest anchor for the first shoreline pass. A small pale arcade or arched bridge can connect the landscape and architecture references. Do not install a giant castle simply to distract from weak trees and water.
+
+Validation:
+Capture the original view, approach the shore, walk along it, enter the trees and return to the water. The same features must remain convincing from each position. A bank designed only as a thin scenic strip fails.
+
+06. TERRAIN FORMS, MOUNTAINS AND GEOGRAPHIC COMPOSITION
+
+A06's landscape succeeds because hills and mountains form connected layers. The current visible distant peaks need a stronger relationship than isolated local maxima.
+
+Generation priorities:
+1. Plan a small number of dominant ridges, basins and drainage paths.
+2. Give ridges direction, varying crest elevation and subordinate spurs.
+3. Carve valleys with coherent cross-sections and downstream relationships.
+4. Place woodland, fields, scree and rock exposure according to those forms.
+5. Add bounded local surface detail after the silhouette and access work.
+
+Do not replace broad landforms with more octaves of noise. More frequency creates a busier version of the same weak shape. Use existing macro terrain systems if available; add only the missing directional controls.
+
+Scale hierarchy:
+Dominant mountain or distant hill mass; secondary shoulders/valleys; nearer woodland/hills; local banks and rocks. Avoid making all peaks similarly sized or every ridge equally sharp. In a pastoral scene, softer broad landforms may be more appropriate than dramatic alpine spikes.
+
+Color/coverage follows form:
+Forest belts can emphasize slope changes. Exposed rock can reveal ridge structure. Snow, where relevant, gathers on compatible surfaces. Do not paint uniform green over all slopes and then depend entirely on shadows to make geography legible.
+
+Distant geometry:
+Use the same planned landforms for far and near representations. Verify shared boundaries, normals/material summaries and edited coverage. A beautiful distant ridge that becomes a different hill on approach fails. Do not hide the mismatch with a stronger fog wall.
+
+Ground-level terrain:
+Add modest rises, hollows, root banks, rock shelves and paths that create local views. Keep movement comfortable under the actual player controller. Detailed terrain should not produce constant jumping over ankle-high collision obstacles.
+
+World editing:
+All generated terrain remains compatible with excavation/building. Preserve edits and refresh dependent geometry. Art masks must not repaint a player-built floor as grass or respawn rocks in a cleared path.
+
+07. TREE ANATOMY, CROWNS, AGE AND SILHOUETTE
+
+The largest visual return is likely to come from replacing generic visible crown/trunk relationships with a small set of convincing tree families. Verify this through a controlled specimen comparison.
+
+Tree definition:
+Species/archetype; age/size class; trunk path and taper; major branch hierarchy; crown envelope; leaf distribution; root/base form; dead/damaged regions; bark/material parameters; interaction identity and bounds.
+
+Start with a restrained useful set:
+- Broad old deciduous tree with buttress/base variation and large branching crown.
+- Tall straight woodland tree with high canopy and narrow trunk rhythm.
+- Irregular conifer with tiered/asymmetric branches.
+- Sparse dead/leaf-off tree with readable branching structure.
+- Young/suppressed tree and sapling variants.
+- One ornamental flowering variant for a localized designed garden.
+Do not create dozens of nominal species that share one silhouette.
+
+Trunk construction:
+Use a few meaningful bends, gradual taper and strong branch junctions. A mature tree base should connect to terrain with roots, flare or a stable trunk foot. Avoid perfectly straight equal-width sticks for every mature tree. Keep species differences: not every tree needs exaggerated gnarled fantasy roots.
+
+Branch hierarchy:
+Build large limbs first, then selected smaller branches. Preserve taper and attachment angles. Do not independently scatter branch cylinders with no growth relationship. Fine twigs are needed selectively: leaf-off silhouettes and hero foreground trees, not every distant crown.
+
+Crown construction:
+Define several connected lobes with gaps, varied density and species-specific shape. Large foliage clumps can remain voxelized, but avoid equal cuboids stacked around one axis. Use a broad outer silhouette, smaller irregularities and partial gaps revealing the branch system. Evaluate crown shape in silhouette before surface color.
+
+Leaf/foliage representation:
+Choose from existing voxel volumes, compact meshes or instanced clusters according to the engine's supported art/interaction model. Do not enforce expensive physical simulation of every leaf. Do not silently replace the game's solid voxel identity with photographic billboards. Decorative foliage may use cheaper geometry if it preserves the intended appearance and interaction rules.
+
+Age variation:
+Young trees have smaller/lower crowns and thinner branches. Mature trees have broader occupied volume. Old trees can lean, split, lose limbs and reveal cavities. Suppressed trees should show limited crowns beneath larger neighbors. Random uniform scale alone cannot express these relationships.
+
+Damage and season:
+Remove connected portions or alter growth structure, not random independent leaf voxels everywhere. A dead tree should have a recognizable branching skeleton. Seasonal leaf-off state must reveal enough branches to avoid becoming a bare pole.
+
+Hero tree specimen, A12/A11:
+Create one large irregular trunk with major scars, moss/lichen patches, readable roots and an arching limb. Inspect at arm's length, from below, across a clearing and at middle distance. Detail bark near the camera without letting random albedo obscure trunk volume.
+
+Wind:
+Use the current animation path or a small coherent extension. Movement should be anchored to plant structure, with trunk/major branches moving less than leaves. Avoid identical phase on every tree or whole solid trunks swaying like grass. Important collision-bearing branches should not visibly move far away from their collision unless the system supports that movement.
+
+LOD:
+Retain crown coverage, dominant branch shape and tree height before small leaf detail. Preserve the canopy's shadow mass. A forest must not abruptly become a sparse collection of bare trunks when leaf detail is culled.
+
+08. FOREST STANDS, EDGES, CANOPY AND ECOLOGICAL STRUCTURE
+
+Generate woodland as patches and relationships, not a uniform scatter of independently placed trees.
+
+Stand descriptor:
+Dominant family, secondary family, age mixture, density envelope, canopy height range, moisture/soil suitability, clearing pattern, disturbance/damage class and understory profile. Keep this as compact authoring data rather than a full ecosystem simulation.
+
+Placement order:
+1. Reserve routes, water edges, building clearances and meaningful open spaces.
+2. Place a few structural/hero trees in compatible terrain.
+3. Fill canopy stands with subordinate mature trees, respecting spacing and competition cues.
+4. Add younger/suppressed trees where light and space support them.
+5. Add shrubs/understory patches and fallen wood.
+6. Add ground cover and small accents according to local conditions.
+
+Forest edge:
+Create a gradual ecological transition where appropriate: meadow, grass/flower patches, shrubs/saplings, exposed larger trunks, connected canopy. Some edges can be abrupt because of water, rock or clearing; make that boundary legible. Avoid a straight line of identical trees along a biome edge.
+
+Forest interior:
+Use trunk spacing, canopy openings and understory suppression to form navigable rooms. Dense canopy does not require dense ankle-high obstacles everywhere. Include pockets of shade, sunlit clearings, fallen-log crossings and quiet ground.
+
+A07 grove/island:
+Build one compact stand whose crowns read as a coherent elevated mass. Place tall trunks and a sparse bare tree along selected edges. Give the island/shore sufficient width and real interior space. Preserve the reflection silhouette without copying the painted mass into an impossible opaque wall of leaves.
+
+Ecological relationships:
+Roots grip banks and rocks; moss collects in suitable places; fallen trees alter local vegetation; canopy shade changes ground cover. A small number of these relationships makes a scene much richer than independent random assets.
+
+Spacing/determinism:
+Use stable placement cells/feature identities and a bounded neighbor query. Cross-chunk trees share one owner and one crown/root plan. Reject overlaps based on stable rules so generation order does not change which tree wins.
+
+Avoid rigid recipes everywhere:
+Some places should have widely spaced trunks, others connected canopy, others scrub or open wet ground. The goal is legible habitat variation, not replacing one uniform forest with one more elaborate uniform forest.
+
+09. UNDERSTORY, FLOWERS, GRASS AND CLOSE GROUND DETAIL
+
+Ground detail should describe habitat and guide attention. It must not become a uniform expensive carpet.
+
+Ground layers:
+Soil/rock base; surface litter/moss/grass coverage; larger herb/shrub patches; small accents. Use meaningful variation between layers. Forest floor, meadow, wet bank and maintained courtyard require different mixtures.
+
+A12 blue-flower woodland:
+Create a broad related flower-ground patch with irregular density, visible leaf masses, small flowers and occasional bare/root areas. The blue accent should read as a coherent layer from a distance, not evenly distributed individual bright pixels. Retain paths and sightlines.
+
+A08 ornamental garden:
+Use several flower sizes and clustered red/gold/cream accents around water and architecture. Preserve the strong palette locally. Avoid importing the reference's flat decorative circles as screen-facing overlays in an otherwise volumetric world. Build actual flower/leaf forms suitable to the game's style.
+
+Grasses:
+Vary clump shape, height and orientation by habitat. Keep large color patches stable across many instances. Fade or simplify very small blades at distance. Do not animate all clumps in unison. Tall plants can conceal hazards only intentionally; important pickups/routes remain readable.
+
+Litter:
+Place leaves and small fragments in depressions, sheltered edges and near source trees. Avoid evenly distributing the same litter density across sand, stone floors and open water. Floating leaves belong in calm water pockets, with bounded count/lifetime and no unnecessary gameplay entities.
+
+Trampling/player edits:
+If the game supports vegetation removal or terrain changes, update derived ground cover. Do not regrow decorative grass through player floors or machines on reload. A complete soil compaction simulation is not required; authoritative cleared/occupied masks can be sufficient.
+
+Representation policy:
+Structural/harvestable organisms have stable authoritative state. Fine noninteractive ground accents can be instanced and derived. Keep collision off for decorative blades unless a mechanic requires it. The player should not snag on every tiny plant.
+
+10. ROCKS, BANKS, SOIL, WEATHERING AND SURFACE DEPTH
+
+Rocks need a larger-scale geological pattern before surface noise. A09's boulders read as distinct masses with shared material and moss relationships.
+
+Rock families:
+Choose a few appropriate forms: fractured slab, rounded/eroded boulder, layered outcrop and talus fragments. Align fracture/layer direction within a local formation. Do not use the same smooth blob scaled randomly for every rock.
+
+Placement:
+Embed rocks into terrain, place fallen fragments below relevant cliffs, and expose larger masses at bank bends or slopes. Avoid floating stones and uniform pebble spacing. Several partly buried rocks can suggest a continuous underlying formation.
+
+Bank cross-sections:
+Differentiate soil/roots above water, wet material near waterline and submerged substrate. Maintain real geometry for larger undercuts/steps. Small color/roughness variation is useful but cannot replace the bank silhouette.
+
+Surface wear:
+Use coherent patches controlled by moisture, shelter, exposure, cracks and vegetation. Reduce arbitrary high-contrast mottling, especially in the dungeon. A stone wall and a natural rock face need different pattern scales and construction cues.
+
+Close versus far detail:
+At close range show selected cracks, joints and edge wear. At distance preserve large light/material groups. Fade fine detail that produces shimmer. Do not keep every tiny crack at full contrast in the horizon.
+
+Soil transitions:
+Grass does not stop at a perfect color boundary everywhere. Mix exposed soil, roots, stones and partial cover at habitat edges. Keep changes tied to geometry and water, not independent random texture splats.
+
+Dungeon floor/stone:
+Use coherent paving or a deliberate rough-rock treatment according to room purpose. Show major seams/level changes and worn route areas. Keep decoration subordinate to readable floor planes. Gold-like speckles must have a specific material/design reason, not compensate for a dark floor.
+
+11. PALETTE, MATERIALS AND SPATIAL COLOR VARIATION
+
+Use a small palette family per habitat/room, with coordinated variation within each material. Do not generate a random independent hue for each voxel face or leaf cluster.
+
+Three scales of variation:
+Macro: biome/stand/rock formation/material age patches.
+Meso: tree crown lobes, soil patches, stone groups and wall bays.
+Micro: restrained local grain, chips, leaf differences and joints.
+Macro and meso variation should carry most of the image. Micro variation enriches proximity and fades with distance.
+
+Outdoor palette direction:
+The screenshot's large bright-green areas can be diversified into muted grass greens, deeper canopy greens, warmer sunlit growth, gray-brown soil/wood and sparse flower accents. Do not desaturate everything equally. Sunlit leaves and focal flowers may remain vivid because nearby areas are restrained.
+
+Water palette direction:
+Allow clearer/turquoise shallows where supported by substrate and lighting, darker vegetated pools, cooler open-water reflections and warm reflected architecture. Avoid a universal cyan gradient driven only by distance from the camera.
+
+Interior palette direction:
+Separate pale or warm structural stone, darker aged timber/metal, worn floor material, controlled gold accents and light-source color. The supplied dungeon can remain warm overall while gaining material/value separation. Do not recolor every shadow blue as a shortcut.
+
+Material truth:
+Inspect actual material parameters before tuning. Stone, plaster, foliage, metal and water should respond differently to light. Avoid making everything equally matte or glossy. Art variants can share gameplay properties; no need for dozens of new physics materials merely to change tint.
+
+Painterly appearance:
+Use controlled shape, color grouping and detail selection. A universal oil-paint postprocess or canvas texture is optional experimentation only after the world already works. It must not smear UI, thin geometry, enemies or interaction cues, and is not a required milestone.
+
+Reference adaptation:
+A06's washes, A08's ornament and A11's impasto cannot all be copied literally into one renderer. Extract broad color/form relationships and apply a consistent voxel material language. Preserve local scene identity through content and lighting, not incompatible render modes.
+
+12. LIGHTING, VALUE GROUPING AND REFLECTED-LIGHT IMPRESSION
+
+Improve the relationship among surfaces, light sources and exposure. More light everywhere will flatten the scene; less light everywhere will hide it.
+
+Outdoor light hierarchy:
+- Sunlit clearings and selected canopy planes establish the brightest broad masses.
+- Canopy interiors and foreground trunks establish deeper but readable masses.
+- Distant woodland/hills integrate with atmosphere and have less local contrast.
+- Small highlights and emissive accents remain sparse.
+Use geometry and actual light/shadow behavior to achieve this before color grading.
+
+Canopy light:
+A forest should cast a coherent large shade mass plus selected smaller patterns. A01's foliage shadow pattern is useful for a close courtyard specimen; it is not a requirement to render every leaf shadow across kilometers. Preserve broad canopy coverage at middle/far distances and selected branch/leaf detail nearby.
+
+Reflected light:
+The paintings often show dark surfaces with subtle neighboring color/light influence. Audit the existing ambient/indirect system. If a full indirect-light solution is unavailable, use a modest, occlusion-aware approximation consistent with the engine and scene. Do not flood enclosed rooms with unoccluded outdoor skylight or light through solid walls. Label approximation honestly; do not claim physical GI without implementing it.
+
+Interior source hierarchy:
+1. Structural light: real windows, shafts, openings, lamps or existing sources that explain the main room volumes.
+2. Navigation light: doorway thresholds, stair/ledge cues and selected floor regions.
+3. Focal light: mechanism, altar, encounter objective or other important destination.
+4. Accent light: candles, inlays, particles and small decoration.
+The current dungeon overemphasizes isolated side pools and the bright held object relative to whole-room readability. Rebalance those roles.
+
+Dungeon repair sequence:
+- Freeze exposure and inspect albedo/normals/direct/ambient contributions.
+- Temporarily use neutral diagnostic illumination to reveal real geometry.
+- Establish a coherent floor/wall/ceiling material hierarchy.
+- Add or reposition justified light sources/openings to reveal large forms.
+- Ensure the far doorway has a readable threshold/reveal.
+- Add restrained lower-level fill from the actual available lighting method.
+- Restore dark recesses and focal contrast while preserving combat/navigation information.
+- Test with and without the wand's visual effects or any player-carried light.
+
+Do not assume the wand currently emits gameplay light just because it is bright. Verify whether it is emissive-only, has a local light or is lit by the scene. Avoid tuning the environment solely around one equipment item.
+
+Color temperature:
+Warm candles can coexist with cooler weak daylight from an actual shaft/window. In a fully underground chamber, use material/value separation and appropriate sources instead of unexplained bright blue skylight. Make the lighting fit the room's physical context.
+
+Exposure:
+Use fixed exposure for comparison and normal gameplay exposure for usability. Prevent a bright candle/wand particle from making the rest of the hall collapse into black. Prevent looking at darkness from turning every dungeon into flat daylight. Inspect histogram/adaptation behavior if supported; do not add a new exposure system without evidence that the current one is the problem.
+
+Emissive versus illumination:
+Visible glow does not automatically illuminate neighboring geometry. Keep this distinction explicit for candles, runes and particles. Select bounded contributing lights with stable importance/hysteresis. Prioritize gameplay-relevant sources over tiny decorative motes.
+
+13. CLOUDS, SKY COMPOSITION AND WEATHER
+
+The shoreline screenshot's sky currently competes strongly with the land. Improve its hierarchy rather than simply making clouds more realistic or more numerous.
+
+Cloud structure:
+Use broad weather masses, a smaller number of primary cloud groups, secondary edges and restrained fine detail. Separate layers by purpose/height and ensure their motion/frequency do not create distracting interference. Preserve patches of quieter sky around important silhouettes.
+
+Investigate upper streaking:
+Capture cloud-layer/debug views and movement. Determine whether the streaked/striped appearance comes from intentional high cloud, sampling, repetition, projection, lighting or temporal behavior. Fix a confirmed artifact at its cause. If it is valid cloud structure, tune its frequency/contrast to match the environment.
+
+Lighting:
+Cloud brightness, sun direction and ground illumination should agree. Avoid brilliant white clouds above a uniformly bright green world with no broad light/shade structure. Cloud shadows, where supported, should be large coherent patches that enrich valleys and canopy rather than noisy crawling terrain patterns.
+
+A02 storm study:
+Use a separate weather specimen with larger dark masses and a controlled bright opening. Keep the monument/terrain readable. Do not globally replace all skies with an oppressive storm palette.
+
+A06 pastoral study:
+Use a calmer sky and softer distant light so terrain bands carry the scene. Negative space in the sky is part of the composition.
+
+Performance:
+Preserve or simplify the current cloud renderer until profiling justifies more. A new expensive volumetric cloud system is not a prerequisite for artistic coherence. If existing clouds already dominate GPU cost, improve their composition and reduce unnecessary detail first.
+
+14. ATMOSPHERE, MIST AND DEPTH SEPARATION
+
+Depth should come from geometry, value/color grouping, occlusion and atmosphere together.
+
+Use three practical layers in the initial specimens:
+Near: sharp readable trunks, banks, architecture and local materials.
+Middle: coherent tree/rock/building masses with enough detail to identify them.
+Far: reduced local contrast and detail, with retained major silhouettes and consistent atmospheric color.
+These are perceptual goals, not three hard distance bands or fog planes.
+
+Local mist:
+Place mist in damp hollows, water edges and shaded forest pockets where appropriate. Use the existing fog path with spatial/height masks before introducing a new volumetric subsystem. A11 is a useful stress test for subtle separation; do not hide all trees in a uniform opaque gray layer.
+
+Physical/spatial consistency:
+View rays through different depths of mist should behave coherently. Camera position alone must not abruptly tint the whole screen at a biome boundary. Terrain, foliage, water and architecture should receive compatible atmosphere treatment.
+
+Indoor/outdoor separation:
+Do not apply open-world distance haze through solid walls into a dungeon. Indoor dust/haze can be local and subtle, especially around real shafts of light, but must not obscure enemies or serve as a bandage for missing ambient/readability.
+
+Far mountains:
+Atmosphere softens texture/contrast; it does not erase the ridge shape or replace it with a flat color cutout. Verify appearance under clear and hazy conditions and during approach.
+
+Atmosphere transitions:
+Blend continuous parameters or region contributions smoothly with vertical context. Maintain a valid baseline on lower quality settings. If mist is disabled, terrain/vegetation composition must still make sense.
+
+15. WATER APPEARANCE, REFLECTION AND SHORELINE INTEGRATION
+
+Use the references to distinguish water situations instead of assigning every body the same shader settings.
+
+Open lake/shore specimen:
+Moderate wind variation, clear bank geometry, plausible shallow/deep differences and broad sky reflection. Keep enough surface variation to avoid a flat sheet without making every pixel sparkle.
+
+A07/A09 woodland pool:
+Darker reflected canopy/trunks, calm broad surface, restrained ripples and partial bottom visibility only where appropriate. The water can be dark because it reflects dark surroundings, not because it is painted black everywhere.
+
+A05 formal garden:
+Stable large reflected forms and one bright opening, with subtle imperfection. Reflection is a major composition element but the gate/plant shapes must remain readable without perfect mirror quality.
+
+A13 autumn canal:
+A curving dark reflective waterway, warm tree reflections, correctly intersecting retaining walls, a bridge shadow/reflection and sparse floating leaves. Edge continuity matters more than maximum wave complexity.
+
+Diagnose current water:
+Inspect depth-to-substrate, material absorption/color settings, Fresnel/reflection behavior, normals, roughness, exposure and fog. The visible cyan foreground may arise from several causes. Change only after identifying what drives it.
+
+Reflection hierarchy:
+First improve reflected source geometry and materials. Then verify reflection resolution/stability and offscreen fallback. The source images do not justify requiring expensive planar reflections everywhere. Select a technique compatible with the renderer and test failure cases. If screen-dependent reflections are used, prevent abrupt missing objects from dominating the scene; if another method is used, evaluate its actual limitations.
+
+Waves:
+Use coherent scales and speed. Small sheltered pools should not have ocean-like ripples; large exposed water need not be perfectly still. Avoid excessive high-frequency normal detail that turns reflections into visual noise. Scale/fade fine waves with distance if needed for stability.
+
+Shore contacts:
+Wetness, foam, sediment and plants must follow actual edges/state. Foam belongs near flow/impact conditions, not a mandatory white outline around every rock. Retaining walls need a clear waterline and no detached reflection halos.
+
+Shallow-bottom cues:
+Where water is transparent enough, show substrate slope, stones, plants and directional light changes. Do not add fake bottom features that float independently from terrain or remain after excavation. Avoid transparent water making every lake look ankle-deep.
+
+Simulation boundary:
+Rendering improvements do not require a new global fluid simulation. Reuse authoritative water/reservoir state. Cosmetic water must not contradict flooding, collision or supported player edits. A drained chamber/changed bank must update rendering and gameplay coherently.
+
+16. SHADOWS, OCCLUSION AND TEMPORAL STABILITY
+
+The screenshot already contains shadows. Inspect their quality and distribution instead of assuming they are absent.
+
+Required shadow cases:
+Old tree on a pale wall; canopy over ground; small bridge over water; a ruined arch; columned interior with side light; foreground creature on dungeon floor; far woodland stand.
+
+What to inspect:
+Detached shadows, acne/striping, excessive bias, light leaking through thin geometry, poor contact under roots/columns, noisy foliage edges, unstable LOD shadow coverage and shadow popping as the camera turns.
+
+Contact shading:
+Use existing AO/contact methods conservatively. Roots, stones and columns should feel grounded, but every voxel seam need not be black. Avoid using AO as a substitute for large-scale canopy/room lighting. Prevent decorative material noise from being mistaken for contact shadows.
+
+Tree shadow detail:
+Near hero trees can produce recognizable branch/leaf patterns. Middle/far stands should retain broad canopy shadow mass. Do not maintain subpixel leaf shadows at all distances if they shimmer or consume excessive cost.
+
+Dungeon contact/height cues:
+Grounded creatures and props need coherent contact cues. Flying/jumping entities should visibly separate from the floor in a way consistent with animation and light. Do not force all elevated entities onto the ground merely because a screenshot looks ambiguous.
+
+Temporal review:
+Walk, turn, approach and revisit. Compare cloud motion, foliage wind, reflection stability, distant edge shimmer, exposure changes and LOD transitions. Do not judge fine-detail improvements solely from a still image.
+
+Antialiasing:
+Audit the existing method and identify actual unstable frequencies. Simplify/fade excessive fine detail where appropriate before adding a new temporal reconstruction system. Any new technique must respect transparent foliage/water, particles, camera cuts and edited geometry.
+
+17. ARCHITECTURE, RUINS AND VEGETATION INTEGRATION
+
+Use the prior architecture master prompt for broad families and builders. This task adds close visual integration and directly addresses the supplied dungeon.
+
+Outdoor architecture:
+A01 needs a convincing wall/tree/shadow relationship; A03 needs layered arches and growth; A13 needs a bridge/canal/bank relationship. These are complete spatial compositions, not isolated prefabs dropped onto flat ground.
+
+Pale wall specimen:
+A substantial wall with true recessed doors/windows, selected cornice/carving detail, restrained weathering and a nearby irregular tree. Concentrate fine detail around important edges. Let large quiet surfaces catch coherent light and foliage shadows. Tiny figures/ordinary doors or equivalent familiar objects establish scale.
+
+Ruined arcade:
+Build an intact ancestor, then coherent damage. Keep several arches aligned through depth, a walkable path, broken upper sections, material-consistent rubble and vegetation at suitable joints/bases. Differentiate warm outer stone, cool shaded recesses and bright distant sky. Do not paint dark arch silhouettes on a solid wall.
+
+Dedicated dungeon overhaul, based on image(20261024-041222).png:
+A. Establish room purpose and layout from actual code/content. Identify the main route, enemy roles, side-platform function and destination before changing geometry.
+B. Replace weak large-form repetition with a coherent structural system: articulated piers/columns, meaningful bases/capitals or brackets, a believable ceiling/beam/vault arrangement and deeper entrance framing. Choose the appropriate family; do not force classical ornament into every industrial or rough cave room.
+C. Break the single long box into a readable sequence using depth: near structural frame, central encounter space, side recesses or usable galleries, and a framed destination. Preserve combat clearance.
+D. Give the raised side elements a purpose: platform, processional edge, service gallery or encounter barrier. Where accessible, add real stairs/landings and suitable railing/parapet treatment. Do not leave long featureless waist-high strips purely as visual filler.
+E. Replace high-contrast camouflage-like wall patches with coherent stone/plaster/masonry/rock treatment. Use broad age variation and selected construction joints rather than random contrast across every face.
+F. Separate floor, structural wall, trim, ceiling and metal accents. Keep the room warm where intended but allow neutral/paler stone and darker differentiated timber/metal to create hierarchy.
+G. Light the path, far threshold, important supports and selected overhead forms. Keep dark recesses, not a uniformly black ceiling/floor. Use existing source/ambient systems with proper occlusion.
+H. Rework repeated candles/inlays around room purpose. A few strong source groups and meaningful accents are preferable to identical luminous decoration at every bay.
+I. Add restrained habitation/ruin evidence: repaired wall section, fallen capital/beam, service ladder, root intrusion or functional mechanism. Select details that tell one coherent story and preserve movement.
+J. Validate enemy silhouettes against floor/walls. Reserve visual contrast for attacks/targets and keep particles from obscuring recognition. Environment art must improve play, not become combat camouflage.
+K. Inspect under ordinary player equipment, not only the screenshot's glowing-looking wand. Capture neutral diagnosis and final intended darkness separately.
+
+Columned interior reference A04:
+Transfer repeated vertical supports, visible upper structure, side light, readable dimness and layered partial walls. Do not literally copy its exact figures, theatrical staging or clutter density. The game needs walkable routes, useful space and readable enemies.
+
+Detailed wear:
+Tie cracks, stains, moss and plaster loss to construction and exposure. Preserve material strata when players dig. Plants growing through floors need suitable openings; roots cannot phase through every solid wall without an explicit growth/destruction mechanic.
+
+18. SEASONS AND SPECIALIZED VISUAL TREATMENTS
+
+Seasonal art should change form/cover and light relationships, not only tint textures.
+
+Winter, A10:
+Broad connected snow cover, exposed grasses/shrubs, bare tree skeletons, selected evergreen crowns and cool cast shadows. Accumulation should respect slope and shelter. Distinguish thin cosmetic snow from thick collision-affecting snow. Keep paths and hazards readable. Do not implement a global real-time snow simulation merely for this specimen if a stable seasonal mask suffices.
+
+Autumn, A13/A09:
+Related warm leaf masses, some bare branches, retained green/dark evergreen anchors, fallen leaves in sheltered ground/water pockets and darker exposed wood. Avoid turning every tree uniformly orange at once unless intentionally stylized. Species and exposure can vary onset within controlled art rules.
+
+Mist, A11:
+Low-contrast distant trunks, a strong irregular foreground tree and restrained cool colors. Preserve close bark/roots and route information. The scene must still read as a real forest when mist is reduced.
+
+Ornamental red garden, A08:
+Localize saturated flowers and repeated stem forms. Use dark structure and quieter ground/sky to make red accents effective. Keep three-dimensional silhouettes and coherent light. A special garden should feel intentionally cultivated or magically shaped, distinct from ordinary woodland.
+
+Formal reflective sanctuary, A05:
+Use controlled planting shapes, a clean aperture and dark calm water. Maintain real access and honest geometry. Do not require the rest of the world to share its symmetry.
+
+19. COMPOSITION IN A FREELY EXPLORABLE PROCEDURAL WORLD
+
+The references are fixed compositions; the game is not. Translate their relationships into spatial structure that supports many views.
+
+Use local composition descriptors:
+Primary mass/landmark, secondary framing masses, open-space shape, route/reveal zones, height layers, palette family and limits on detail density. Keep the system small and tied to existing region/site planning.
+
+Examples:
+A wooded island seen across open water; a leaning tree framing a path; several ruin arches framing a brighter exit; a bridge at a canal bend; a pale building beyond flowering trees; a mountain shoulder visible through a forest opening.
+
+View opportunities:
+Sample plausible paths/shoreline points and ordinary camera heights, not a single perfect editor camera. Evaluate obstruction and access. A reveal should work over a small area and remain interesting if the player approaches from the side.
+
+Negative space:
+Reserve open water, clearings, sky gaps and quiet wall/ground surfaces. Do not fill every reserved area with decorative clutter after composition is established. Negative space supports both aesthetics and navigation/building.
+
+World consistency:
+Visibility reservations must not make unnatural empty circles around every landmark. Let slope, paths, roots, water or existing construction explain clearances. Preserve player ability to alter the composition through building and excavation.
+
+Authored versus procedural:
+Begin with authored arrangements using production assets/rules to prove the target. Then generalize the successful constraints into generation. Do not attempt to tune a fully random world into a masterpiece solely by changing global density sliders.
+
+20. WAND, EFFECTS AND CONSISTENCY WITH THE ENVIRONMENT
+
+The wand's angular construction is compatible with a detailed voxel world. It does not require a full redesign to solve the landscape problem.
+
+Inspect its screen occupancy, material separation, idle effects and lighting relative to the environment. Retain readable gameplay feedback. If idle particles continuously dominate scenic views, reduce their rate/brightness or concentrate them around active use, according to actual mechanic requirements.
+
+Do not hide the weapon for all final captures. Produce both clean environment comparisons and ordinary gameplay views with the wand, entities and effects present. The final art must work during play.
+
+Dungeon effects:
+The purple accent can help differentiate magic, but it needs a clear readable role. Avoid adding more colors/particles merely to break up the brown room. Improve structure and materials first, then reserve effects for meaningful actions/states.
+
+Entity appearance:
+The screenshot's creatures merit a separate silhouette/material review, but this environment task should first improve their contrast, grounding and scale cues. Do not claim a full creature/boss overhaul without implementing and testing it. If environmental changes expose a model-quality limitation, report it clearly as remaining work.
+
+21. OWNERSHIP, STREAMING, EDITS AND IMPLEMENTATION BOUNDARIES
+
+Reuse the existing architecture. Introduce only the data needed to express improved art and maintain consistency.
+
+Suggested responsibilities:
+Landscape/stand profile: ecological and composition parameters, palettes and asset families.
+Tree/feature plan: stable identity, shape/archetype, bounds, material/season state and interaction anchors.
+Site/room plan: actual structural geometry, routes, sources and important focal objects.
+Authoritative world state: solids, edits, removed/harvested objects, mechanism/water state and supported simulation.
+Derived presentation: meshes, instances, shadows, local light selection, atmosphere samples and far proxies.
+
+Do not create a second decorative terrain/forest system that ignores edits. Removing a tree must remove its relevant foliage, collision, shadows and distant representation. Clearing a bank or building a floor must invalidate derived ground cover. Changed water/room geometry must update affected presentation.
+
+Deterministic placement:
+Use stable keys and separate random streams for structural versus cosmetic choices. Adding flower variants must not relocate mountains or room entrances. Use canonical ownership for cross-chunk trees, structures and water features.
+
+Job publication:
+Generation/meshing/proxy jobs capture source revisions. Reject completed output if the world changed while the job ran. Bound queues and cancel obsolete jobs after rapid travel or major edits. Never resurrect a felled tree or demolished wall with stale output.
+
+Coverage:
+Keep a valid representation while new detail loads. Preserve edited non-heightfield features with suitable geometry/proxies. Do not expose holes by discarding the far representation before the near one exists.
+
+Detail transitions:
+Trees simplify fine leaves before canopy mass. Architecture simplifies ornament before openings/roof silhouette. Terrain simplifies microdetail before ridge form. Ground cover density reduces without turning forest soil into unrelated bright lawn at a fixed radius.
+
+Save/version behavior:
+Retain generator/content version identity and existing edit semantics. Do not silently regenerate player worlds with incompatible terrain or vegetation. Establish a compatibility/migration strategy before shipping changes that alter saved feature identities.
+
+Scope boundaries:
+This work does not require a new ECS, physics engine, global fluid solver, world-wide ecosystem simulation, path tracer or general material graph system. Add focused missing capabilities only when a demonstrated visual/gameplay requirement needs them. Report approximations honestly.
+
+22. PERFORMANCE AND QUALITY SCALING
+
+Measure actual costs rather than equating more detail with better quality. The user's RTX 4090 can support substantial graphics work, but CPU generation, upload spikes, memory and temporal quality remain critical. Report only hardware that was actually tested.
+
+Baseline and target:
+Use the project's agreed frame-rate target. A 60 fps frame interval is 16.67 ms; a 120 fps interval is 8.33 ms. The overhaul receives measured headroom within the whole frame, not the entire budget. Do not promise either rate without running the relevant scene.
+
+Record:
+CPU/GPU timing where available; frame-time p50/p95/p99; generation/meshing latency; upload volume/spikes; job queues; peak resident memory; visible instances/geometry; light/shadow counts; and transparency/overdraw where tools permit. Record resolution, settings, seed, route, build and hardware.
+
+Efficiency priorities:
+- Better tree silhouettes and coherent stands can improve appearance before increasing total foliage.
+- Patch-based ground detail allows dense-looking areas with controlled density elsewhere.
+- Static roots/rocks/architecture remain static until actual interaction requires simulation.
+- Decorative motes/leaf litter use bounded counts and lifetimes.
+- Local lights are selected by relevance with stable thresholds.
+- Fine material/foliage detail simplifies by projected importance.
+- Region planning and expensive environmental queries are cached or sampled at suitable scales.
+- Chunk jobs do not redo global forest/hydrology searches per voxel.
+
+Quality tiers:
+Preserve terrain/canopy/architecture silhouettes, major light relationships, navigation, enemy cues and authoritative state. Reduce tiny foliage, decorative particles, secondary shadows, reflection detail and minor material complexity first. Test low settings deliberately: a beautiful high preset that becomes unreadable on low is incomplete.
+
+Do not use resolution reduction to hide geometry/material problems. Do not quietly weaken collision or simulation consistency to meet a screenshot benchmark. Optimize demonstrated bottlenecks and report tradeoffs.
+
+23. REQUIRED VISUAL SPECIMENS AND COMPARISON VIEWS
+
+V01 — Original shoreline rebuild
+Use image(20261024-040732).png as the before-state. Reproduce a comparable view and a walking route. Improve woodland structure, shore cross-sections, ground transitions, water cues, distant ridge hierarchy and sky grouping. Keep open water rather than filling it with unrelated spectacle.
+
+V02 — Original dungeon rebuild
+Use image(20261024-041222).png as the before-state. Reproduce the encounter view and walkthrough. Show the repaired floor/ceiling readability, structural articulation, material separation, destination threshold and entity visibility. Keep intended darkness and mechanics.
+
+V03 — Old tree and flower woodland
+Use A12/A11 for trunk character, ground cover and depth. Include one hero tree, a connected but variable ground layer, readable route and bright/dark spatial structure. Inspect near bark, roots, crown silhouette and moving views.
+
+V04 — Meditative wooded water mass
+Use A07 for a grove/island, connected canopy, tall trunks, open water and atmospheric separation. Validate from across water and from inside the stand. It must not be a hollow scenic shell.
+
+V05 — Rocky wet woodland
+Use A09 for rocks, moss, sparse trunks and dark water. Show believable rock embedding, roots, vegetation layers and restrained ecological accents.
+
+V06 — Pastoral valley
+Use A06 for connected ridges, woodland bands, open fields and small pale architecture. Terrain composition must work without dense detail or a heavy sky effect.
+
+V07 — Pale courtyard and ruined arcade
+Use A01/A03 for wall/tree shadows, deep openings, ordered ruin and plant integration. Include actual circulation and a clear destination.
+
+V08 — Columned interior
+Use A04 to validate readable low light, structural rhythm, side openings and interior history. Can share systems with V02 but must demonstrate the desired architectural/light relationship rather than remain the same plain box with brighter lamps.
+
+V09 — Autumn bridge canal
+Use A13 for intimate water composition, bridge integration, curved banks, warm foliage and reflections. Verify walking/under-bridge views and water contacts.
+
+V10 — Winter wetland
+Use A10 for snow coverage, exposed plants, leaf-off branches and cool shadows. Implement through current seasonal support or a scoped art fixture; do not claim world-wide seasonal simulation unless present.
+
+V11 — Formal reflective garden
+Use A05 for a controlled gateway/planting/water composition. Make the opening and route coherent. Keep this formal design local.
+
+V12 — Ornamental flowering garden
+Use A08 for a local restrained red/gold/green composition with volumetric plant forms and an architectural destination. It is a specialized treatment, not the default forest shader.
+
+V13 — Monument and storm-light study
+Use A02 for large silhouette, human-scale cues and grouped storm light. Keep actual weather/terrain systems coherent and avoid a global palette replacement.
+
+Reference comparison rules:
+Capture a reference-inspired view and normal gameplay views. Record camera/FOV and exposure. Review thumbnails/grayscale for shape/value, then close materials, then motion. A matching screenshot composition does not establish a good explorable scene by itself.
+
+Use actual engine images only as implementation evidence. Do not present generated art, offline paintovers or edited screenshots as proof of achieved rendering. Those can be concept aids only if clearly labeled and separately requested/created.
+
+24. DEPENDENCY-ORDERED IMPLEMENTATION PACKAGES
+
+P0 — Audit and reproducible baselines
+Inspect code/instructions and reproduce both screenshot contexts where possible. Verify render-space/material/lighting assumptions. Capture debug views and performance. Identify causes with evidence rather than guessing from symptoms.
+Gate: real source map and reproducible comparison fixtures; then continue implementing.
+
+P1 — Material/light calibration and interior readability repair
+Correct confirmed pipeline faults, if any. Establish neutral material tests. Repair the dungeon's floor/threshold/ceiling readability and reduce excessive wall mottling while preserving encounter layout. Validate held-item/particle influence and gameplay exposure.
+Gate: a coherent readable hall under normal settings, not merely an overexposed screenshot. Structural upgrades continue in P5.
+
+P2 — Hero tree and stand laboratory
+Build/repair several meaningful tree forms, including old broadleaf, tall woodland, conifer and dead/leaf-off variants. Validate crown/trunk hierarchy, roots, canopy gaps, wind and LOD. Add coherent ground-cover patches.
+Gate: individual trees and a small stand outperform the baseline in silhouette and player-scale inspection without an unexplained performance spike.
+
+P3 — Shoreline/terrain composition
+Rebuild the original shore using improved stands, meaningful bank sections, soil/grass transitions and connected distant landforms. Preserve open water and practical traversal/building space.
+Gate: the same view and its walking route have a clear large/medium/small hierarchy before additional atmospheric effects.
+
+P4 — Water, sky and atmosphere integration
+Tune/fix the actual reflection/depth/fog/cloud pipeline where evidence warrants. Establish calmer sky hierarchy, coherent water cues and depth layers. Keep source geometry and light relationship central.
+Gate: stable moving scene with credible shoreline contacts and no dependence on heavy bloom/fog.
+
+P5 — Architecture/ruin and full dungeon spatial repair
+Apply the architectural master prompt selectively to the existing hall and outdoor focal sites. Add meaningful supports, ceiling system, openings, route depth and coherent wear. Complete courtyard/arcade/columned-interior specimens.
+Gate: actual geometry, navigation, lighting and material improvements; no empty shells or unchanged box rooms disguised by decoration.
+
+P6 — Expanded landscape specimens
+Complete wooded-water, rocky wetland and pastoral specimens using the established systems. Generalize successful placement rules, not a new framework per scene.
+Gate: distinct artistic identities sharing one coherent voxel/render language.
+
+P7 — Seasonal and designed-garden treatments
+Complete autumn canal, winter, formal reflective garden, ornamental flowering garden and storm monument studies. Reuse existing season/weather support or state exact fixture limitations.
+Gate: treatments remain local/coherent and work from normal player viewpoints.
+
+P8 — Streaming, edit and performance consolidation
+Verify all derived forms after harvesting, excavation, demolition, water changes where supported, rapid travel and reload. Fix stale output, mismatched proxies and queue/upload spikes. Test quality tiers.
+Gate: agreed budgets and persistent world consistency, with documented measurements.
+
+P9 — Final reference review
+Review both original screenshot comparisons and all reference mappings. Fix highest-impact remaining mismatches, starting with silhouette/value/space before microdetail. Report incomplete work explicitly.
+Gate: no unverified claim of visual approval, performance or full scope completion.
+
+Do not stop after P0 or P1 and describe the overhaul as finished. If work spans sessions, preserve a concise checkpoint with actual files, completed packages, failed gates and next actions. Do not replace implementation time with repeated long planning documents.
+
+25. VERIFICATION, VISUAL REVIEW AND REGRESSION FIXTURES
+
+Visual checklist for V01 shoreline:
+- Tree families are recognizable by silhouette, not just tint.
+- The woodland has edge, interior, age variation and clearings.
+- Ground cover changes coherently with water/canopy/terrain.
+- Shoreline sections have distinct plausible cross-sections.
+- Water color/reflection/depth cues relate to geometry and surroundings.
+- Distant landforms read as connected geography.
+- Clouds support rather than overwhelm the landscape.
+- The same quality holds from the shore and inside the woodland.
+
+Visual checklist for V02 dungeon:
+- Floor, walls, ceiling and route threshold are distinguishable.
+- Important surfaces no longer read as arbitrary camouflage.
+- Structural geometry explains room volume and rhythm.
+- Warm light remains atmospheric without collapsing all materials together.
+- Enemies, effects and interactables remain readable during combat.
+- Side-platform/barrier purpose and routes are coherent.
+- Overhead/far areas are intentionally dark or visible, not accidentally missing in black.
+- Intended darkness works under ordinary player gear and exposure.
+
+Technical fixtures:
+T01. Same seed/version and different chunk request order preserve structural features.
+T02. Cross-chunk trees, roots, buildings and water edges have consistent identities/boundaries.
+T03. Felling a tree updates foliage, collision, relevant shadows and far proxy after the defined update interval.
+T04. Ground cover does not regenerate through a player floor or cleared route.
+T05. Editing a bank updates terrain/water presentation without stale seams, within supported water semantics.
+T06. Demolishing a lit architectural component removes the source/derived illumination appropriately.
+T07. A pending mesh/proxy job cannot restore a removed feature.
+T08. Save/load preserves edits, object removals and mechanism states.
+T09. Indoor atmosphere/ambient does not visibly leak outdoor conditions through solid walls beyond known supported approximations.
+T10. Low/high quality tiers preserve important shape and gameplay cues.
+T11. Cold/warm travel, rapid turns and teleports keep queues/memory bounded.
+T12. Wind/reflection/shadow/cloud/LOD motion does not introduce unacceptable shimmer, popping or exposure instability.
+T13. Tree/ruin/ground detail does not obstruct required movement or alter collision without intentional gameplay changes.
+T14. Season/variant changes retain persistent edits and feature identity.
+
+Performance comparisons:
+Use identical routes/settings where possible. Record p50/p95/p99, hardware and capture duration. Repeat baselines enough to identify noise before treating tiny differences as improvements/regressions. Do not invent percentages or quote FPS from a static screenshot.
+
+Review method:
+First compare low-detail silhouettes and grayscale values. Next compare material grouping and depth. Then inspect near detail and movement. Finally assess effects and embellishment. Reject a result that is only more detailed/noisy without clearer form.
+
+Manual review matters:
+Automated tests can verify determinism, clearance, state and bounded work. They cannot establish that a tree has character or a scene matches the references artistically. Require actual inspected captures and state specific remaining shortcomings.
+
+26. FINAL DELIVERY AND IMMEDIATE EXECUTION INSTRUCTIONS
+
+Deliver:
+- Integrated code/content changes, with real source locations and concise explanations.
+- Reference mappings to implemented specimens.
+- Reproducible seed/camera/time/weather/settings for both original-scene comparisons.
+- Actual engine captures and moving walkthroughs where the environment permits.
+- Focused automated/integration test results and measured performance evidence.
+- Save/stream/edit behavior and supported quality-tier results.
+- A plain list of incomplete packages, unverified visual claims and remaining defects.
+
+Do not overwrite unrelated work. Follow repository workflow for changes and commits. Do not infer authorization to publish a release or deploy an external service from this visual implementation request.
+
+Start by examining both screenshots and the reference images, then the code that actually produced the visible geometry/materials/light. Establish baselines. Repair confirmed technical faults and the most damaging dungeon-readability problems. Build the hero-tree/stand specimen. Reconstruct the original shoreline with coherent geography, bank ecology and light grouping. Integrate water/sky/atmosphere after those forms work. Carry the same art language into the dungeon, ruins, seasonal landscapes and designed gardens.
+
+The desired result is unmistakable in normal gameplay: the shore feels like a place with geography and ecology; trees have age and structure; water belongs to its banks; distant land has connected form; architecture has depth and history; and darkness remains readable. Preserve the voxel character while giving the world the deliberate shapes, restrained palettes, rich local detail and spatial relationships that make these references compelling.
+
+END IMPLEMENTATION PROMPT

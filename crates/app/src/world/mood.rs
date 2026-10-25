@@ -40,14 +40,8 @@ impl SkyEvent {
 
     pub fn announcement(self) -> &'static str {
         match self {
-            Self::MeteorShower => "Stars are falling.",
-            Self::Aurora => "Green fire curtains the northern sky.",
-            Self::BloodMoon => "The moon has turned the colour of rust.",
-            Self::PearlFog => "A pearl-white fog rolls over the land.",
-            Self::Rainbow => "A rainbow stands against the weather.",
-            Self::GoldenHaze => "The air thickens with gold.",
-            Self::Emberglow => "The horizon smoulders.",
-            Self::VioletHour => "The sky deepens to violet.",
+            Self::MeteorShower => "Meteor shower",
+            _ => "",
         }
     }
 }

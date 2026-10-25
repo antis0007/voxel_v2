@@ -1,14 +1,17 @@
-//! Sparse metre-scale surface detail. Ownership follows the supporting voxel;
+//! Clustered metre-scale surface plants and stones. Ownership follows the supporting voxel;
 //! no moving random seeds, chunk-edge offsets, collision edits or texture sheets.
 use super::{ChunkMesh, GeneratedChunk, Vertex3};
 use crate::world::BlockId as B;
 use glam::{IVec3, Vec3};
 use std::sync::atomic::{AtomicBool, Ordering};
+mod flower;
+mod stone;
 pub(super) struct Detail {
     p: Vec3,
     hash: u32,
     grass: bool,
     color: [f32; 3],
+    flower: bool,
 }
 pub(super) struct DetailPlan {
     items: Vec<Detail>,
@@ -26,11 +29,11 @@ fn hash(p: IVec3) -> u32 {
 const TUFT_KIND: f32 = crate::material::terrain_family::TUFT as f32;
 const STONE_KIND: f32 = crate::material::terrain_family::PEBBLE as f32;
 /// Blades per tuft and the per-item mesh reservation they need.
-const BLADES: u32 = 6;
-/// Smooth 0..1 field over blocks (bilinear hashes on a `PATCH_BLOCKS` lattice)
+const BLADES: u32 = 5;
+/// Smooth 0..1 field in metres (bilinear hashes on a `PATCH_METRES` lattice)
 /// that gathers tufts into loose patches with open gaps between them. Pure
 /// function of world column, so chunk reloads and remeshes keep placement.
-const PATCH_METRES: f32 = 5.0;
+const PATCH_METRES: f32 = 9.0;
 #[cfg(test)]
 fn patch_field(x: i32, z: i32) -> f32 {
     patch_field_metres(x as f32, z as f32)
@@ -82,7 +85,9 @@ impl DetailPlan {
                         // Loose patches: sparse in the gaps, about twice the
                         // old density at a patch heart. Mean stays near 1x.
                         let patch = patch_field_metres(p.x as f32 * scale, p.z as f32 * scale);
-                        (threshold as f32 * (0.15 + 2.2 * patch * patch)) as u32
+                        // Dense connected clumps with genuinely open gaps,
+                        // rather than isolated pins evenly dotted over lawn.
+                        (scale * scale * 65535.0 * (0.06 + 4.8 * patch.powi(3))) as u32
                     } else {
                         threshold
                     };
@@ -109,7 +114,11 @@ impl DetailPlan {
                         // tuft base sits in the ground texture. Tips lighten
                         // in `append`; a few tufts go dry at the tips.
                         let v = ((h >> 8) & 255) as f32 / 255.0;
-                        color = [0.105 + v * 0.02, 0.190 + v * 0.03, 0.060];
+                        // Vertex colours are sRGB; the terrain palette is
+                        // linear reflectance. Match its muted olive/sage range
+                        // after decoding, rather than decoding a linear swatch
+                        // again and producing dark, saturated green spikes.
+                        color = [0.30 + v * 0.035, 0.355 + v * 0.040, 0.245 + v * 0.025];
                     } else {
                         color = [color[0] * 0.96, color[1] * 0.97, color[2] * 0.98];
                     }
@@ -118,23 +127,27 @@ impl DetailPlan {
                         hash: h,
                         grass,
                         color,
+                        flower: grass && patch_field_metres(p.x as f32 * scale + 37.0,
+                            p.z as f32 * scale - 19.0) > 0.56 && (h >> 18).is_multiple_of(3),
                     });
                 }
             }
         }
         // Hash priority distributes the bounded budget over the whole chunk.
         items.sort_unstable_by_key(|d| d.hash);
-        items.truncate(384);
+        items.truncate(768);
         Some(Self { items })
     }
     pub fn empty(&self) -> bool {
         self.items.is_empty()
     }
     pub fn vertices(&self) -> usize {
-        self.items.len() * (BLADES as usize * 4).max(20)
+        self.items.iter().map(|d| if d.grass { BLADES as usize * 6
+            + if d.flower { flower::VERTICES } else { 0 } } else { stone::VERTICES }).sum()
     }
     pub fn indices(&self) -> usize {
-        self.items.len() * (BLADES as usize * 12).max(60)
+        self.items.iter().map(|d| if d.grass { BLADES as usize * 24
+            + if d.flower { flower::INDICES } else { 0 } } else { stone::INDICES }).sum()
     }
     pub fn append(&self, chunk: &GeneratedChunk, mesh: &mut ChunkMesh, lod: u8) {
         if lod > 1 {
@@ -142,107 +155,61 @@ impl DetailPlan {
         }
         let scale = chunk.voxel_meters;
         for d in &self.items {
-            let size = (0.065 + (d.hash & 255) as f32 / 255.0 * 0.10) / scale;
+            let size = if d.grass {
+                (0.16 + (d.hash & 255) as f32 / 255.0 * 0.12) / scale
+            } else { (0.065 + (d.hash & 255) as f32 / 255.0 * 0.10) / scale };
             if d.grass {
                 let dry_tuft = (d.hash >> 20) % 5 == 0;
+                // Broad, low rosettes interrupt the upright sedge silhouettes.
+                // Reuse the same blade budget, support and stable placement.
+                let broadleaf = (d.hash >> 22).is_multiple_of(4);
                 for blade in 0..BLADES {
                     let a = blade as f32 * 2.39996 + (d.hash % 100) as f32 * 0.0628;
                     let lateral = Vec3::new(a.cos(), 0.0, a.sin());
                     let variation = ((d.hash.rotate_left(blade * 5) >> 24) & 255) as f32 / 255.0;
-                    let height = size * (1.1 + variation * 1.5);
-                    let lean = lateral * size * (0.20 + variation * 0.45);
+                    let height = size * if broadleaf { 0.45 + variation * 0.45 }
+                        else { 1.1 + variation * 1.5 };
+                    let lean = lateral * size * if broadleaf { 0.65 + variation * 0.7 }
+                        else { 0.20 + variation * 0.45 };
                     // Blades fan out from one root clump; base 2-4 cm wide.
-                    let p = d.p + lateral * size * 0.22;
+                    let p = d.p + lateral * size * 0.65;
                     let across = Vec3::new(-a.sin(), 0.0, a.cos());
-                    let half = size * (0.20 + variation * 0.08);
+                    let half = size * if broadleaf { 0.48 + variation * 0.18 }
+                        else { 0.20 + variation * 0.08 };
                     let points = [
-                        p - across * half,
-                        p + across * half,
-                        p + lean + Vec3::Y * height + across * half * 0.18,
-                        p + lean + Vec3::Y * height - across * half * 0.18,
+                        p - across * half * 0.45,
+                        p + across * half * 0.45,
+                        p + lean * 0.3 + Vec3::Y * height * 0.62 - across * half,
+                        p + lean * 0.3 + Vec3::Y * height * 0.62 + across * half,
+                        p + lean * 1.9 + Vec3::Y * height * 0.92 - across * half * 0.06,
+                        p + lean * 1.9 + Vec3::Y * height * 0.92 + across * half * 0.06,
                     ];
-                    let normal = (lateral * 0.35 + Vec3::Y).normalize();
                     let tip = if dry_tuft && variation > 0.45 {
-                        [d.color[0] * 3.1, d.color[1] * 1.75, d.color[2] * 1.4]
+                        [d.color[0] * 1.48, d.color[1] * 1.28, d.color[2] * 0.98]
                     } else {
-                        [d.color[0] * 1.45, d.color[1] * 1.55, d.color[2] * 1.3]
+                        [d.color[0] * 1.18, d.color[1] * 1.16, d.color[2] * 1.07]
                     };
                     let base = mesh.vertices.len() as u32;
                     for (i, p) in points.into_iter().enumerate() {
+                        let t = (i / 2) as f32 * 0.5;
+                        let normal = (lateral * (1.0 - t * 0.45) + Vec3::Y * (0.25 + t * 0.55)).normalize();
                         mesh.vertices.push(Vertex3 {
                             pos: p.to_array(),
-                            color: if i < 2 { d.color } else { tip },
+                            color: std::array::from_fn(|c| d.color[c] + (tip[c] - d.color[c]) * t),
                             normal: normal.to_array(),
-                            surface: [0.95, if i < 2 { 0.0 } else { height * scale }, TUFT_KIND, 0.0],
-                            ao_strength: 0.85,
+                            surface: [0.95, (p.y - d.p.y) * scale, TUFT_KIND, 0.0],
+                            ao_strength: 0.62 + t * 0.32,
                         });
                     }
-                    mesh.indices.extend([
-                        base,
-                        base + 1,
-                        base + 2,
-                        base,
-                        base + 2,
-                        base + 3,
-                        base + 2,
-                        base + 1,
-                        base,
-                        base + 3,
-                        base + 2,
-                        base,
-                    ]);
+                    for row in 0..2 {
+                        let b = base + row * 2;
+                        mesh.indices.extend([b,b+1,b+2,b+1,b+3,b+2,
+                            b+2,b+1,b,b+2,b+3,b+1]);
+                    }
                 }
+                if d.flower { flower::append(mesh, d, scale); }
             } else {
-                // Two irregular rings and a broad cap replace the identical
-                // four-sided pyramids. Eleven shared vertices / 45 indices
-                // remain inside the existing 20 / 60 per-item reservation.
-                let base = mesh.vertices.len() as u32;
-                let rotation = (d.hash >> 16) as f32 * (std::f32::consts::TAU / 65536.0);
-                let height = 0.16 + ((d.hash >> 8) & 255) as f32 / 255.0 * 0.18;
-                for ring in 0..2 {
-                    for i in 0..5 {
-                        let a = rotation + i as f32 * std::f32::consts::TAU / 5.0;
-                        let variation = (d.hash.rotate_left(i * 5) & 255) as f32 / 255.0;
-                        let radial = Vec3::new(a.cos(), 0.0, a.sin() * 0.72);
-                        let radius = (0.72 + variation * 0.28) * if ring == 0 { 0.8 } else { 0.43 };
-                        let y = if ring == 0 {
-                            -0.012 / scale
-                        } else {
-                            size * height * (0.8 + variation * 0.2)
-                        };
-                        let p = d.p + radial * size * radius + Vec3::Y * y;
-                        let normal =
-                            (radial + Vec3::Y * if ring == 0 { 0.45 } else { 1.8 }).normalize();
-                        mesh.vertices.push(Vertex3 {
-                            pos: p.to_array(),
-                            color: d.color,
-                            normal: normal.to_array(),
-                            surface: [0.93, 0.03, STONE_KIND, 0.0],
-                            ao_strength: 0.9,
-                        });
-                    }
-                }
-                mesh.vertices.push(Vertex3 {
-                    pos: (d.p + Vec3::Y * size * height).to_array(),
-                    color: d.color,
-                    normal: Vec3::Y.to_array(),
-                    surface: [0.93, 0.03, STONE_KIND, 0.0],
-                    ao_strength: 0.9,
-                });
-                for i in 0..5 {
-                    let next = (i + 1) % 5;
-                    mesh.indices.extend([
-                        base + i,
-                        base + i + 5,
-                        base + next,
-                        base + next,
-                        base + i + 5,
-                        base + next + 5,
-                        base + 10,
-                        base + next + 5,
-                        base + i + 5,
-                    ]);
-                }
+                stone::append(mesh, d, scale, size);
             }
         }
     }

@@ -1,0 +1,28 @@
+// Rates accelerate development/work accumulation, never material quantities.
+(
+    model: 1,
+    biological_rate: 120,
+    erosion_rate: 60,
+    evaporation_um_s: 1,
+    organic_inputs: [
+        (material: Leaves, dry_mg_m3: 1600000, nutrient_per_mille: 25),
+        (material: PineLeaves, dry_mg_m3: 1280000, nutrient_per_mille: 25),
+        (material: Bush, dry_mg_m3: 1600000, nutrient_per_mille: 25),
+    ],
+    substrates: [
+        (material: Grass, law: (porosity_per_mille: 400, retention_per_mille: 600, infiltration_um_s: 250, drainage_um_s: 4, erosion_resistance_kj_kg: 10, density_kg_m3: 1500)),
+        (material: Dirt, law: (porosity_per_mille: 400, retention_per_mille: 600, infiltration_um_s: 250, drainage_um_s: 4, erosion_resistance_kj_kg: 10, density_kg_m3: 1500)),
+        (material: SnowGrass, law: (porosity_per_mille: 400, retention_per_mille: 600, infiltration_um_s: 250, drainage_um_s: 4, erosion_resistance_kj_kg: 10, density_kg_m3: 1500)),
+        (material: Sand, law: (porosity_per_mille: 350, retention_per_mille: 150, infiltration_um_s: 1200, drainage_um_s: 40, erosion_resistance_kj_kg: 2, density_kg_m3: 1600)),
+        (material: Gravel, law: (porosity_per_mille: 300, retention_per_mille: 50, infiltration_um_s: 2000, drainage_um_s: 80, erosion_resistance_kj_kg: 8, density_kg_m3: 1800)),
+        (material: Clay, law: (porosity_per_mille: 500, retention_per_mille: 850, infiltration_um_s: 5, drainage_um_s: 1, erosion_resistance_kj_kg: 80, density_kg_m3: 1300)),
+        (material: Mud, law: (porosity_per_mille: 550, retention_per_mille: 850, infiltration_um_s: 40, drainage_um_s: 2, erosion_resistance_kj_kg: 4, density_kg_m3: 1100)),
+    ],
+    species: [
+        (id: 1, name: "Meadow grass", cover: Grass, moisture_min: 160, moisture_max: 750, temperature_min_c: -3, temperature_max_c: 35, shade_tolerance: 180, growth_mg_m2_s: 12, water_ul_per_mg: 400, mature_mg_m2: 240000, root_resistance_kj_kg: 30),
+        (id: 2, name: "Wetland groundcover", cover: Grass, moisture_min: 600, moisture_max: 1000, temperature_min_c: 2, temperature_max_c: 38, shade_tolerance: 450, growth_mg_m2_s: 18, water_ul_per_mg: 650, mature_mg_m2: 380000, root_resistance_kj_kg: 40),
+        (id: 3, name: "Woodland groundcover", cover: Grass, moisture_min: 300, moisture_max: 850, temperature_min_c: 0, temperature_max_c: 28, shade_tolerance: 900, growth_mg_m2_s: 8, water_ul_per_mg: 300, mature_mg_m2: 180000, root_resistance_kj_kg: 20),
+        (id: 4, name: "Dryland grass", cover: Grass, moisture_min: 40, moisture_max: 450, temperature_min_c: 5, temperature_max_c: 48, shade_tolerance: 100, growth_mg_m2_s: 4, water_ul_per_mg: 130, mature_mg_m2: 90000, root_resistance_kj_kg: 18),
+        (id: 5, name: "Cold meadow grass", cover: SnowGrass, moisture_min: 120, moisture_max: 650, temperature_min_c: -10, temperature_max_c: 15, shade_tolerance: 240, growth_mg_m2_s: 3, water_ul_per_mg: 160, mature_mg_m2: 100000, root_resistance_kj_kg: 25),
+    ],
+)

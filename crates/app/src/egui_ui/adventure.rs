@@ -297,28 +297,26 @@ fn draw_armor_row(ui: &mut egui::Ui, width: f32, armor_points: u32) {
 }
 
 /// One instrument: a fixed mana field, cast-cost marker and recharge rail.
-fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, _time: f32) {
-    let eval = wands::evaluate_cast_block(
-        view.wand,
-        view.rare_spells,
-        view.discoveries,
-        view.rank,
-        &view.loadout,
-        view.loadout.cursor,
-    );
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 18.0), egui::Sense::hover());
+fn mana_and_timers(
+    ui: &mut egui::Ui,
+    width: f32,
+    view: &View,
+    maximum: f32,
+    eval: &wands::CastBlockEval,
+) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), egui::Sense::hover());
     let p = ui.painter();
     let rect = super::grimoire::snap(rect);
     icons::frame(p, rect, false);
     let gauge = rect.shrink(2.0);
-    let mana_bar = Rect::from_min_size(gauge.min, vec2(gauge.width(), 12.0));
+    let mana_bar = Rect::from_min_size(gauge.min, vec2(gauge.width(), 15.0));
     let low = view.mana < eval.mana_cost || view.mana_flash > 0.0;
     let color = if low { style::DANGER } else { style::MANA };
     let fill = (mana_bar.width() * (view.mana / maximum).clamp(0.0, 1.0)).floor();
     p.rect_filled(
-        Rect::from_min_size(mana_bar.min, vec2(fill, 12.0)),
+        Rect::from_min_size(mana_bar.min, vec2(fill, 15.0)),
         0,
-        color.gamma_multiply(0.7),
+        color.gamma_multiply(0.28),
     );
     p.rect_filled(Rect::from_min_size(mana_bar.min, vec2(fill, 1.0)), 0, color);
     if eval.mana_cost > 0.0 {
@@ -334,28 +332,30 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, _ti
             },
         );
     }
-    let text = format!("MP {:.0}/{maximum:.0}", view.mana.max(0.0));
+    let text = format!("Mana {:.0}/{maximum:.0}", view.mana.max(0.0));
     p.text(
         mana_bar.left_top() + vec2(3.0, 1.0),
         Align2::LEFT_TOP,
         text,
-        FontId::proportional(10.0),
-        if low { style::DANGER } else { style::PAPER },
+        FontId::proportional(11.0),
+        style::PAPER,
     );
     let recharging = view.recharge_total > 0.01 && view.cooldown <= view.recharge_total + 0.01;
-    let state = if view.cooldown <= 0.0 {
-        String::new()
+    let state = if view.cooldown > 0.0 {
+        format!("{:.1} s", view.cooldown)
+    } else if eval.actions.is_empty() {
+        "Empty".to_owned()
     } else {
-        format!("{}{:.1}s", if recharging { "R" } else { "" }, view.cooldown)
+        format!("{} / cast", crate::world::adventure::spell_defs::card::amount(eval.mana_cost))
     };
     p.text(
         mana_bar.right_top() - vec2(3.0, -1.0),
         Align2::RIGHT_TOP,
         state,
-        FontId::proportional(10.0),
+        FontId::proportional(11.0),
         if low { style::DANGER } else { style::PAPER },
     );
-    let rail = Rect::from_min_size(gauge.min + vec2(0.0, 14.0), vec2(gauge.width(), 1.0));
+    let rail = Rect::from_min_size(gauge.min + vec2(0.0, 18.0), vec2(gauge.width(), 2.0));
     p.rect_filled(rail, 0, super::grimoire::SILVER_DARK);
     if view.cooldown > 0.0 {
         let total = if recharging {
@@ -369,7 +369,7 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, _ti
                 rail.min,
                 vec2(
                     (rail.width() * (view.cooldown / total).clamp(0.0, 1.0)).floor(),
-                    1.0,
+                    2.0,
                 ),
             ),
             0,
@@ -385,7 +385,7 @@ fn mana_and_timers(ui: &mut egui::Ui, width: f32, view: &View, maximum: f32, _ti
     });
 }
 
-fn spell_deck(ui: &mut egui::Ui, view: &View, width: f32, maximum: f32, time: f32) {
+fn spell_deck(ui: &mut egui::Ui, view: &View, width: f32, maximum: f32) {
     let cap = wands::capacity(view.wand);
     let eval = wands::evaluate_cast_block(
         view.wand,
@@ -397,7 +397,8 @@ fn spell_deck(ui: &mut egui::Ui, view: &View, width: f32, maximum: f32, time: f3
     );
     let mut slots = Vec::with_capacity(cap);
     let mana_width = width - (cap as f32 * 20.0 - 2.0) - 4.0;
-    let inline_mana = mana_width >= 78.0;
+    // Both numbers must fit; narrow wands place the gauge underneath the deck.
+    let inline_mana = mana_width >= 154.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(super::grimoire::GAP, 2.0);
         for index in 0..cap {
@@ -437,45 +438,35 @@ fn spell_deck(ui: &mut egui::Ui, view: &View, width: f32, maximum: f32, time: f3
         }
         if inline_mana {
             ui.add_space(2.0);
-            mana_and_timers(ui, mana_width, view, maximum, time);
+            mana_and_timers(ui, mana_width, view, maximum, &eval);
         }
     });
     super::wands::paint_cast_block_brackets(ui.painter(), &slots, &eval);
     if !inline_mana {
-        mana_and_timers(ui, width, view, maximum, time);
+        mana_and_timers(ui, width, view, maximum, &eval);
     }
-    let (r, _) = ui.allocate_exact_size(vec2(width, 10.0), egui::Sense::hover());
-    // Dark backing so the name and binding hint stay legible over grass and trees.
+    let name = eval.actions.first().map_or("Empty wand", |action| spell_name(action.spell));
+    let (r, response) = ui.allocate_exact_size(vec2(width, 16.0), egui::Sense::hover());
+    // The name follows the evaluated next cast, including leading modifiers.
+    // Clip its lane rather than painting over the controls on narrow displays.
     ui.painter()
-        .rect_filled(r.expand2(vec2(3.0, 1.0)), 0, Color32::from_black_alpha(120));
-    ui.painter().text(
-        r.left_top() + vec2(1.0, 1.0),
-        Align2::LEFT_TOP,
-        spell_name(view.spell),
+        .rect_filled(r, 0, Color32::from_rgba_unmultiplied(29, 31, 34, 230));
+    let hint = ui.painter().layout_no_wrap(
+        crate::player::spell_binding_hint().to_owned(),
         FontId::proportional(10.0),
-        style::INK,
+        style::MUTED,
     );
-    ui.painter().text(
-        r.left_top(),
+    let hint_pos = egui::pos2(r.right() - hint.size().x - 3.0, r.top() + 2.0);
+    let name_rect = Rect::from_min_max(r.min, egui::pos2(hint_pos.x - 6.0, r.bottom()));
+    ui.painter().with_clip_rect(name_rect.intersect(ui.clip_rect())).text(
+        r.left_top() + vec2(3.0, 1.0),
         Align2::LEFT_TOP,
-        spell_name(view.spell),
-        FontId::proportional(10.0),
+        name,
+        FontId::proportional(12.0),
         style::PAPER,
     );
-    ui.painter().text(
-        r.right_top() + vec2(1.0, 1.0),
-        Align2::RIGHT_TOP,
-        crate::player::spell_binding_hint(),
-        FontId::proportional(10.0),
-        style::INK,
-    );
-    ui.painter().text(
-        r.right_top(),
-        Align2::RIGHT_TOP,
-        crate::player::spell_binding_hint(),
-        FontId::proportional(10.0),
-        super::grimoire::SILVER,
-    );
+    ui.painter().galley(hint_pos, hint, style::MUTED);
+    response.on_hover_text(name);
 }
 
 /// Positions health on the left and hunger on the right above the centered hotbar (Minecraft-style),
@@ -558,7 +549,19 @@ pub(super) fn hud(
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
             ui.spacing_mut().interact_size.y = 9.0;
 
-            if view.ward > 0.0 && view.ward_hits > 0 {
+            if view.resonance.active && ui.input(|i| i.modifiers.alt) {
+                let run = &view.resonance;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("Pressure {} / 5  ·  {}x", run.pressure(), run.salvage))
+                        .monospace().size(12.0).color(style::AMBER));
+                    if run.pending > 0 {
+                        let glow = 0.80 + (time * 3.0).sin() * 0.20;
+                        ui.label(egui::RichText::new("Upgrade Available")
+                            .size(12.0).color(style::MANA.gamma_multiply(glow)));
+                    }
+                });
+            }
+            if view.ward > 0.0 && view.ward_hits > 0 && ui.input(|i| i.modifiers.alt) {
                 ui.label(
                     egui::RichText::new(format!(
                         "WARD {}  {:.0}s",
@@ -575,17 +578,17 @@ pub(super) fn hud(
                     if armor_points > 0 {
                         draw_armor_row(ui, (bar_width * 0.46).floor(), armor_points);
                     }
-                    if let Some(sp) = view.respawn_point {
+                    if let Some(sp) = view.respawn_point.filter(|_| ui.input(|i| i.modifiers.alt)) {
                         let lbl = ui.add(
                             egui::Label::new(
-                                egui::RichText::new("✦ Sanctum Bound")
+                                egui::RichText::new("Respawn set")
                                     .size(11.0)
                                     .color(style::JADE),
                             )
                             .sense(egui::Sense::hover()),
                         );
                         lbl.on_hover_text(format!(
-                            "Respawn attuned to Sanctum reliquary at ({:.0}, {:.0}, {:.0})",
+                            "Respawn point: {:.0}, {:.0}, {:.0}",
                             sp.x, sp.y, sp.z
                         ));
                     }
@@ -645,7 +648,7 @@ pub(super) fn hud(
             }
         });
     let mut bounds = result.response.rect;
-    if view.wand > 0 {
+    if view.wand > 0 && (view.cooldown > 0.0 || ctx.input(|i| i.modifiers.alt)) {
         let slots_width = wands::capacity(view.wand) as f32 * 20.0 - 2.0;
         let width = bar_width.max(slots_width + 84.0).min(available).floor();
         let wand = egui::Area::new("wand_instrument".into())
@@ -658,14 +661,16 @@ pub(super) fn hud(
                 ui.set_width(width);
                 ui.spacing_mut().interact_size.y = 9.0;
                 ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                spell_deck(ui, view, width, max_mana, time);
+                spell_deck(ui, view, width, max_mana);
             });
         bounds = bounds.union(wand.response.rect);
     }
     super::relics::reward(ctx, view);
     super::relics::encounter(ctx, view);
-    super::relics::site_modifier(ctx, view);
-    draw_compass(ctx, yaw, view.quest.as_ref());
+    if ctx.input(|i| i.modifiers.alt) {
+        super::relics::site_modifier(ctx, view);
+        draw_compass(ctx, yaw, view.quest.as_ref());
+    }
     combat_feedback(ctx, view, yaw);
     bounds
 }
@@ -689,10 +694,23 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
     p.rect_filled(bar, 0, Color32::from_rgba_unmultiplied(18, 21, 25, 180));
     super::grimoire::binding(&p, bar, false);
 
+    // The heading readout owns a separate inset compartment. Rotating labels
+    // and destination markers never paint over it or outside the binding.
+    let readout = Rect::from_min_max(
+        bar.right_top() + vec2(-36.0, 4.0),
+        bar.right_bottom() + vec2(-4.0, -4.0),
+    );
+    let ribbon = Rect::from_min_max(
+        bar.left_top() + vec2(4.0, 3.0),
+        egui::pos2(readout.left() - 4.0, bar.bottom() - 3.0),
+    );
+    let ticks = p.with_clip_rect(ribbon);
+    p.rect_filled(readout, 0, super::grimoire::RECESS);
+
     let heading = yaw.to_degrees().rem_euclid(360.0);
     let span = 104.0;
-    let half = bar.width() * 0.5;
-    let x_for = |relative: f32| bar.center().x + relative / span * half;
+    let half = ribbon.width() * 0.5 - 12.0;
+    let x_for = |relative: f32| ribbon.center().x + relative / span * half;
     let wrap = |angle: f32| {
         let mut a = angle.rem_euclid(360.0);
         if a > 180.0 {
@@ -708,7 +726,7 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
         }
         let x = x_for(relative);
         let major = degree % 45 == 0;
-        p.line_segment(
+        ticks.line_segment(
             [
                 egui::pos2(x, bar.top() + if major { 5.0 } else { 8.0 }),
                 egui::pos2(x, bar.top() + if major { 13.0 } else { 11.0 }),
@@ -726,13 +744,13 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
                 270 => "W",
                 _ => "NW",
             };
-            p.text(
+            ticks.text(
                 egui::pos2(x, bar.top() + 15.0),
                 Align2::CENTER_TOP,
                 label,
-                FontId::monospace(if degree % 90 == 0 { 11.0 } else { 8.5 }),
+                FontId::proportional(if degree % 90 == 0 { 12.0 } else { 10.0 }),
                 if degree == 0 {
-                    Color32::from_rgb(236, 186, 102)
+                    style::AMBER
                 } else {
                     style::PAPER
                 },
@@ -741,15 +759,15 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
     }
 
     p.text(
-        egui::pos2(bar.right() + 6.0, bar.center().y),
-        Align2::LEFT_CENTER,
+        readout.center(),
+        Align2::CENTER_CENTER,
         format!("{:03}°", heading.round() as i32 % 360),
         FontId::monospace(10.0),
-        style::MUTED,
+        style::PAPER,
     );
 
     // Fixed heading caret. The world rotates under it; the HUD stays legible.
-    let center = egui::pos2(bar.center().x, bar.top() + 2.0);
+    let center = egui::pos2(ribbon.center().x, bar.top() + 2.0);
     p.add(egui::Shape::convex_polygon(
         vec![center, center + vec2(-4.0, -6.0), center + vec2(4.0, -6.0)],
         style::AMBER,
@@ -766,12 +784,12 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
             _ => style::JADE,
         };
         let marker = egui::pos2(x, bar.center().y - 3.0);
-        p.circle_filled(
+        ticks.circle_filled(
             marker,
             8.0,
             Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 55),
         );
-        p.add(egui::Shape::convex_polygon(
+        ticks.add(egui::Shape::convex_polygon(
             vec![
                 marker + vec2(0.0, -6.0),
                 marker + vec2(5.0, 0.0),
@@ -788,7 +806,7 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
                 marker + vec2(-9.0, 0.0)
             };
             let wing = if relative > 0.0 { -1.0 } else { 1.0 };
-            p.add(egui::Shape::convex_polygon(
+            ticks.add(egui::Shape::convex_polygon(
                 vec![
                     tip,
                     tip + vec2(6.0 * wing, -5.0),
@@ -805,12 +823,23 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
         } else {
             String::new()
         };
-        p.text(
-            egui::pos2(x, bar.bottom() + 3.0),
-            Align2::CENTER_TOP,
+        let caption = p.layout_no_wrap(
             format!("{}  {:.0} m{}", target.label, target.distance_m, height),
-            FontId::monospace(10.0),
-            color,
+            FontId::proportional(11.0),
+            style::PAPER,
+        );
+        // Keep the destination stable while turning, on a readable fieldbook
+        // strip rather than unbacked text drifting across bright terrain.
+        let ribbon = Rect::from_center_size(
+            egui::pos2(bar.center().x, bar.bottom() + 12.0),
+            vec2((caption.size().x + 16.0).min(content.width() - 16.0), 18.0),
+        );
+        p.rect_filled(ribbon, 0, Color32::from_rgba_unmultiplied(29, 31, 34, 230));
+        p.rect_filled(Rect::from_min_size(ribbon.min, vec2(2.0, ribbon.height())), 0, color);
+        p.with_clip_rect(ribbon.shrink2(vec2(6.0, 0.0))).galley(
+            ribbon.center() - caption.size() * 0.5,
+            caption,
+            style::PAPER,
         );
     }
 }

@@ -347,6 +347,11 @@ impl Residency {
                 )
             })
     }
+    /// Immutable authoritative source for a bounded derived geometry query.
+    pub fn chunk_data<'a>(&'a self, world: &'a World, c: IVec3) -> Option<&'a ChunkData> {
+        world.chunks.get(&c).map(|c| &**c).or_else(|| self.entries.get(&c)
+            .filter(|e| e.version == Self::version(world, c)).map(|e| &*e.data.chunk))
+    }
     pub fn prepare(&mut self, world: &mut World, positions: &[IVec3]) -> bool {
         let mut incoming = 0;
         for (i, &p) in positions.iter().enumerate() {

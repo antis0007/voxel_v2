@@ -1,8 +1,8 @@
-# Game design: proposal (session 1 deliverable)
+# Game design: evolving proposal
 
-Status: **proposal, not approved.** Nothing here is implemented, and no file under `assets/` is created by this document. The tech and magic trees are drafts in `docs/game/drafts/` (ADR 0014 row 15). Conflicts with the engine plan are in `docs/adr/0014-spec-v2-reconciliation.md`. Engine systems this design depends on, and the milestone each one lands in, are in `docs/ENGINE_CORE.md`.
+Status: **proposed long-range design with existing systems listed below.** This document does not create assets or establish implementation acceptance. The tech and magic trees are drafts in `docs/game/drafts/` (ADR 0014 row 15). Conflicts with the engine plan are in `docs/adr/0014-spec-v2-reconciliation.md`. Engine dependencies are in `docs/ENGINE_CORE.md`; current sequencing and visual integration are in `docs/plans/2026-10-24-engine-and-world-refinement.md`.
 
-Source: `ENGINE_CORE_PROMPT_v2.md`, sections I, IV, V, VI and VII. The feature matrix is `docs/research/MOD_FEATURE_MATRIX.md`. The design promise and discipline ladders in the North Star design document (understand it, build it, carry it) stay the vision document; where its ladders overlap the paths below, this document governs.
+Source: `docs/specs/ENGINE_CORE_PROMPT_v2.md`, sections I, IV, V, VI and VII. The feature matrix is `docs/research/MOD_FEATURE_MATRIX.md`. `docs/MASTER_PLAN.md` reconciles this proposal with the later game bible and mod addendum, including the Work, early Primer, shared VM, civilizations and claim assignments. The North Star document retains its interaction design; the later bible governs conflicts in cosmology and progression. Dated counts below are an earlier inventory, not current acceptance evidence.
 
 ---
 
@@ -53,6 +53,10 @@ Survival needs (health, hunger, thirst, temperature, oxygen, darkness exposure) 
 
 Explore, gather, craft or cast, build and automate, discover deeper layers, biomes and secrets, unlock tiers, repeat at a larger scale.
 
+First integrated target: the **Flooded Observatory** from the existing North Star design. Arrive through a readable wooded shoreline, enter a usable ruin, inspect a blocked/flooded route, and reach the same objective by a physical intervention, a machine, or a spell. Observe the consequence, obtain a useful reward, then save, leave and return. Start with supported mechanics; finite pressure, oxygen fire and structural collapse remain future gates until their real substrate exists. This is a proposed acceptance slice, not a claim that the scenario is built.
+
+Keep three decisions coupled: what the player learns, what physical state changes, and what geometry/light/sound communicates that change. Both disciplines expose common effects with their own costs: magic supplies portable intervention, machinery sustained throughput. Reuse the current wand, factory, enemy and reward paths while migrating their writers incrementally.
+
 ## 4. Player
 
 - **Body:** capsule with inventory: nine hotbar slots, 27 backpack slots, armour, accessories, backpack upgrades.
@@ -82,6 +86,8 @@ Each is a separate world with a portal body, a worldgen configuration and physic
 Villages, temples, mineshafts, dungeons, strongholds, ancient factories (tech lore), wizard towers (magic lore), ruined labs (education lore), boss lairs. Loot tables are RON.
 
 Bosses are physics challenges: an iron golem built of bodies, a liquid hydra, a storm elemental of gas and charge. Each needs the environment manipulated to defeat.
+
+The architectural and painterly references refine this target: coherent rooflines, real arches/openings, supported waterfronts, multi-route interiors and distinct cultural palettes. Build one complete site before expanding to cities. Extend `crates/worldgen/src/architecture.rs`, `sites.rs` and the existing dungeon plans; share their resolved state with collision, navigation, lighting and far proxies. Low settings may simplify ornament, but must retain routes, openings, enemy cues and landmark silhouettes. Reference-image fidelity is unreviewed: the supplied text describes images that were not attached to this request.
 
 ## 6. Paths and capability milestones
 
@@ -180,7 +186,7 @@ Accuracy: each lesson cites the constant it uses. Lesson text is reviewed before
 
 The full matrix is `docs/research/MOD_FEATURE_MATRIX.md`. Each feature is classified as data-only, small code, or new system, and assigned to one of the spec milestones M1–M7 (ENGINE_CORE §11).
 
-The spec's minimum list (VII) is adopted as the starting set. Data-only items (smelting, brewing, cooking, rust, obsidian, concrete, dyes, glass, charcoal, fermentation, crystal growth, moss and mushroom spread, coral, ice physics, honey and slime stickiness, soul sand viscosity, magma heat, bone meal growth) need no engine change once the reaction table exists.
+The spec's minimum list (VII) is the candidate content backlog. A "data-only" cost is conditional on its substrate: reaction rows can express transformations after the required fields/conditions exist, but tree growth needs geometry updates, sticky materials need contact rules, and brewing/cooking need containers and interactions. Before moving a matrix row into a milestone, name its existing loader, executor, player feedback and persistence path. Missing any of those makes it code plus data, not a free content addition.
 
 ## 17. Open decisions for approval
 

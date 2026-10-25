@@ -1,0 +1,248 @@
+HORIZON TERRAIN REVISION
+=======================
+
+Purpose and scope
+-----------------
+
+This revision changes the supplied src/render/horizon.rs. It fixes defects in
+the horizon heightfield's own ring interfaces, sampling-cache identity and
+asynchronous build/publication lifecycle. It does not implement the separate
+resident-to-horizon transition, per-sample residency coverage, distant shadow
+pass, water refraction or temporal terrain/water resolve.
+
+Only horizon.rs was supplied. Its six sibling modules, the resident mesher,
+terrain generator implementations, renderer and project manifest were not
+available. The validation fixture compiles and executes the actual revised
+module with real glam and explicitly labeled mocks for those missing APIs.
+That verifies the tested module behavior. It is not a full engine build,
+in-engine screenshot review or measurement of the GPU terrain pass.
+
+Install horizon.rs at src/render/horizon.rs in the existing project. The patch
+is against the supplied attachment, with the same repository-relative path.
+Keep the existing sibling modules. Do not install any validation mocks in the
+engine. Apply the patch only after checking it against the current repository,
+because changes made since the supplied attachment may need merging.
+
+1. The horizon rings share actual triangle edges
+-----------------------------------------------
+
+The old builder copied only height at coarse ring boundaries, generated
+triangles and normals, and then moved odd fine boundary vertices. This left
+normals describing geometry that was no longer present. Fine edge segments
+also met an unsplit coarse edge, creating T-junctions.
+
+The new builder uses four ordered phases:
+
+1) Allocate all seven 193 x 193 vertex grids in their existing order. Give each
+   coincident lattice knot a canonical vertex owner, and copy the owner's full
+   attributes into grid aliases. Position, color, material key and surface
+   parameters now have one source at the shared endpoints.
+2) Place each odd fine outer-boundary height on the chord joining its two even
+   endpoints. Do this before selecting diagonals or accumulating normals.
+3) Split the adjacent coarse triangle through the existing fine midpoint.
+   Both sides refer to identical vertex indices along the complete interface.
+   Preserve the midpoint's material identity instead of averaging a material ID.
+4) Accumulate area-weighted normals from the final triangles at their canonical
+   vertices. Normalize once and copy the result to the grid aliases.
+
+The inserted midpoint is on the parent edge, so subdivision does not change
+the parent triangle plane. Water or vegetation code that evaluates height from
+the original two parent triangles can still use diagonal_a_to_d. Interpolated
+normals and materials are intentionally improved by the explicit subdivision;
+the missing appenders should still be inspected in the full project.
+
+This is a stitch between horizon rings. It is not a proof that the finest
+horizon ring matches resident voxel faces. The shader's resident/horizon sink
+and radial discard must only be retired after the resident boundary and its
+coverage are implemented together.
+
+2. Cache identity includes preview spacing
+-----------------------------------------
+
+The existing Samples type is preserved. Its u8 now records the actual sampling
+mode: 0 for distant_surface at spacing through 32 m; 1 for a 64 m preview; 2 for
+a 128 m preview; and 3 for a 256 m preview. A previous-build cache entry is
+reused only when its tag exactly matches the requested mode.
+
+Previously every preview used tag 1, and the <= comparison could accept a
+256 m preview for a later 64 m request. Recentring could consequently change
+terrain according to the cache's history. Exact tag matching removes that
+source of nondeterminism. Within one build, the first and finest sample owns
+shared coordinates. Returning to an unchanged center still reuses its cache.
+
+This change does not make distant_surface and preview_surface_lod describe
+identical terrain. That requires their source implementations. A unified
+height/material hierarchy should be built from the same generator and edit
+snapshot as resident geometry. Its identity must include world/configuration,
+source revision, integer anchor and any filter footprint affecting the result.
+Terrain edits must invalidate affected samples, their normal/filter halos and
+the necessary hierarchy ancestors.
+
+3. Publication is separate from observation and scheduling
+---------------------------------------------------------
+
+BuildTarget captures center, visible-edit fingerprint, owning snapshot, eye
+and hidden radius. Horizon tracks desired, active and published targets
+separately. Every stored fingerprint retains the snapshot whose Arc identities
+it describes. GPU upload uses the active target's captured center; a result
+cannot acquire a different center from a later camera observation.
+
+Only a completed upload publishes its mesh, cache and target metadata together.
+An oversized page or disconnected worker preserves the last published mesh
+and makes the failed target retryable after a two-second cooldown. A different
+desired target is not suppressed by that failure. Ordinary updates for edits
+at the same published center retain the existing two-second rebuild throttle.
+
+World/configuration changes and excessive distance from a build's center are
+checked before receiving or advancing its result. Obsolete work is canceled,
+and its receiver/upload metadata is discarded. Its thread handle remains
+tracked until the worker finishes. New work starts only after that handle has
+been reaped, so one Horizon instance has at most one active or draining CPU
+builder. Repeated teleports cannot accumulate detached replacement threads.
+The render update does not wait for live build work to finish.
+
+Camera/revision checks continue while a worker is busy. They are throttled to
+500 ms for ordinary movement/revision changes, with immediate checks on a new
+center. Revision changes with an unchanged visible fingerprint do not cancel
+useful work. Relevant changes become a desired follow-up, allowing a coherent
+captured snapshot to finish even while the world continues changing.
+
+That last policy is eventual consistency. This file alone cannot make a newly
+dug hole authoritative in every frame while an older backdrop is drawable.
+Immediate edit masking or an exact edited proxy must come from the renderer's
+coverage path. Equality also assumes visible_fingerprint distinguishes any
+eye-dependent edit selection that changes edits::apply output. The missing
+helper needs to be reviewed against that contract.
+
+Reveal state is updated after all mesh decisions. Clearing a mesh also clears
+its reveal value, and visibility() returns zero when mesh is absent. A world
+switch or teleport therefore cannot report an exposed backdrop without a mesh.
+
+Cancellation checks cover the loops in this file and bracket water, vegetation,
+batching and packing. Helpers without cancellation parameters can still delay
+the replacement. The existing Upload advance/finish interface has no recoverable
+error result, so device loss and internal upload errors remain its responsibility.
+The 64 MiB cap limits an individual buffer; it does not bound total mesh memory.
+
+4. Range and numeric behavior
+----------------------------
+
+The old 17,000 m cutoff has been replaced by a horizontal cell/radius test tied
+to FAR_PLANE, with a cell of margin. Existing rings remain 4, 8, 16, 32, 64, 128
+and 256 m. This restores geometry that was removed before the declared
+24,576 m far plane. It also increases triangle count; measure the real pass.
+
+The mesh still has a finite domain centered on the last built center. A 512 m
+center lattice permits a freshly built center to differ from the eye by up to
+256 m on each horizontal axis, and a retained older mesh can be farther away.
+The existing outer square cannot cover a complete 24,576 m circle around every
+such eye. Extending the domain, recentering coverage, or coordinating the final
+fade with a conservative center-offset margin remains renderer integration.
+The new cutoff is not a guarantee of complete visible streaming coverage.
+
+Center snapping now checks integer multiplication. Grid axes are checked for
+finite positions, the supported i32 sample domain, strict ordering and loss of
+more than half the intended spacing in the actual f32 coordinates. Invalid
+camera/scale input or a collapsed grid is rejected rather than emitted as bad
+geometry. Face-normal cross products use metre-space edge differences, avoiding
+quadratic growth/shrinkage from voxel units. Nonfinite or inverted faces fail
+the build. These guards do not replace a large-world origin strategy.
+
+5. Remaining renderer work, in dependency order
+----------------------------------------------
+
+Resident boundary and coverage
+
+Extract the actual drawable resident boundary during meshing and connect it to
+a retained exact or suitably simplified voxel proxy. Join that proxy to the
+heightfield only where the boundary is representable by a single surface.
+Caves, portals, overhangs, stacked surfaces and edited structures need volumetric
+geometry or an explicit exclusion backed by another drawable representation.
+Removing a heightfield tile without its replacement simply creates another hole.
+
+Drive fallback suppression from the meshes and GPU resources that are actually
+published for drawing. Distance, a requested chunk, or a completed CPU mesh is
+not sufficient evidence of coverage. Publish the resident mesh, transition,
+proxy coverage and generation identifiers coherently. Preserve a usable
+representation through upload failures and cancellations. Only then remove the
+shader sink and radius-based ownership rule, including world_params.w * 0.78.
+Keep exact edited fallback (ao_strength < -1.5) authoritative in that handoff.
+
+Shared terrain hierarchy
+
+Derive height, material coverage and normals from one source with explicit
+filtering. Keep geometric approximation error and min/max height bounds separate
+from the representative height. Copying one boundary row cannot repair divergent
+slopes and materials throughout neighboring tiles. A block mesher's flat faces
+also have different normals from a smooth heightfield; define the transition's
+shading intentionally using the actual resident boundary.
+
+Far shadow casters
+
+Fit far-cascade caster coverage to terrain that can shadow the visible receiver
+region, including offscreen terrain along the light direction. Render an actual
+coarse terrain caster or a validated hierarchical visibility representation.
+Do not draw every cell at its maximum height: that bound can invent occlusion
+across valleys. Coordinate shadow geometry generations with visible terrain,
+retain overlap at cascade borders, and test low solar elevations. A face-normal
+test cannot establish visibility of a distant light source.
+
+Water and temporal rendering
+
+Evaluate shared-edge water displacement from common world coordinates and time,
+with a consistent LOD transition for displacement amplitude/frequency. Matching
+mesh edge positions must receive the same displacement. Scene-color/depth
+refraction needs actual scene inputs and depth/thickness rejection. Preserve
+the existing sky reflection on screen-space misses.
+
+Terrain/water history requires previous and current transforms plus previous
+and current displaced water positions. Mesh replacement and edit generations
+must invalidate inappropriate history. Temporal resolve should account for
+disocclusion, depth/normal disagreement, water motion, exposure changes and fast
+camera movement. Cloud history by itself cannot stabilize terrain highlights.
+
+6. Measure before expanding the shading workload
+------------------------------------------------
+
+The attached validation records CPU geometry properties and lifecycle behavior.
+It does not report the GPU terrain pass, shadow pass, frame time or real flight
+performance. CPU build_ms logging in horizon.rs is not a substitute for those
+measurements.
+
+In the full engine, use GPU timestamps around resident terrain, horizon terrain,
+each shadow cascade, water and any temporal pass. Record frame-time percentiles,
+upload bytes, missing coverage, resident/proxy generations, build queue state
+and mesh age separately. Run a repeatable camera path at the same resolution,
+view distance, world seed and quality settings, with both warm and deliberately
+constrained streaming. Compare against the current integrated shader.
+
+Use the requested flight cases: sunrise/dusk across ridges and cascade borders;
+rain with moving cloud shadows; fast travel across residency; water crossing
+multiple chunk sizes; and a fresh edit followed by departure and return. Include
+a teleport during a build/upload and an intentionally failed upload. Inspect
+silhouettes, normals, material transitions, hole coverage, shadow continuity,
+water edges and temporal recovery. Profile the increased far coverage before
+adding a temporal or more expensive lighting pass.
+
+Files needed to complete this work in the engine
+-----------------------------------------------
+
+Provide the repository or, at minimum, the resident mesher/LOD code, chunk
+streaming and GPU publication code, horizon_edits.rs, horizon_batches.rs,
+horizon_pages.rs, horizon_upload.rs, horizon_vegetation.rs, horizon_water.rs,
+distant_surface and preview_surface_lod implementations, the render/shadow
+passes, shader include/uniform definitions and Cargo.toml/Cargo.lock. Those
+sources make the remaining transitions concrete and allow a real engine build.
+
+Primary design references
+-------------------------
+
+Geometry clipmaps and transition regions:
+https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-2-terrain-rendering-using-gpu-based-geometry
+
+Cascaded shadow map fitting and cascade considerations:
+https://learn.microsoft.com/en-us/windows/win32/dxtecharts/cascaded-shadow-maps
+
+Transvoxel is for compatible sampled scalar-field isosurfaces at differing
+resolutions; it is not a drop-in bridge from greedy cubic faces to a heightfield:
+https://transvoxel.org/

@@ -797,7 +797,7 @@ fn sample_cirrus_density(
     // zoom blur. Shorter, patchier mares' tails keep the wind direction
     // without drawing radial streaks across the whole dome.
     let fallstreak = sin(perp_wind * 0.004 + along_wind * 0.0008) * 18.0;
-    let stretched_xz = (along_wind * 0.36 + fallstreak) * wind + perp_wind * side;
+    let stretched_xz = (along_wind * 0.65 + fallstreak) * wind + perp_wind * side;
 
     let h_frac = remap01(eff_y, base_y, top_y);
 
@@ -832,15 +832,19 @@ fn sample_cirrus_density(
     // Very thin vertical profile for ice-crystal sheets (top_soft=0.05 vs 0.20 for cumulus).
     let height_shape = density_height_profile(eff_y, base_y, top_y, 0.08, 0.05);
     let density_ctl  = mix(0.45, 1.35, authored_cloud_density());
-    let fiber        = s1 * 0.50 + s2 * 0.25 + mix(0.5, s3, fine_keep) * 0.25;
-    let effective_cirrus_amt = cirrus_amt * height_shape;
+    let fiber        = s1 * 0.72 + s2 * 0.20 + mix(0.5, s3, fine_keep) * 0.08;
+    // Keep ice sheets in their own weather banks. A faint layer everywhere
+    // still accumulates into bright radial streaks on long horizon rays.
+    let ice_bank = smoothstep(0.46, 0.82, weather.coverage)
+        * smoothstep(0.48, 0.82, cirrus_amt);
+    let effective_cirrus_amt = cirrus_amt * height_shape * ice_bank;
     let thresh = mix(0.46, 0.24, cirrus_amt);
     // Break the fibres into mares' tails of different lengths instead of one
     // continuous sheet across the dome.
     let tail = weather_bank_noise(vec2<f32>(along_wind * 0.00055, perp_wind * 0.0016));
 
-    return smoothstep(thresh, thresh + 0.16, fiber) * effective_cirrus_amt * density_ctl * 0.90
-        * smoothstep(0.18, 0.62, tail * 0.75 + fiber * 0.25);
+    return smoothstep(thresh, thresh + 0.16, fiber) * effective_cirrus_amt * density_ctl * 0.18
+        * smoothstep(0.32, 0.68, tail * 0.85 + fiber * 0.15);
 }
 
 fn sample_mid_density(
@@ -864,8 +868,12 @@ fn sample_mid_density(
     let as_bias = authored_altostratus() * (0.55 + weather.humidity * 0.45)
                 + (1.0 - weather.convection) * 0.10;
     let mid_bias_sum = max(ac_bias + as_bias, 1e-4);
-    let ac_amt = weather.mid_amount * ac_bias / mid_bias_sum;
-    let as_amt = weather.mid_amount * as_bias / mid_bias_sum;
+    // Fair-weather middle cloud is a secondary layer: a few broad flocks,
+    // not a second busy ceiling behind every low cloud. Storm decks retain
+    // their authored water content. View and light rays share this sampler.
+    let mid_weight = mix(0.12, 1.0, smoothstep(0.65, 0.95, weather.coverage));
+    let ac_amt = weather.mid_amount * ac_bias / mid_bias_sum * mid_weight;
+    let as_amt = weather.mid_amount * as_bias / mid_bias_sum * mid_weight;
     if ac_amt + as_amt <= 0.001 { return 0.0; }
 
     let mid_lod = clamp(
@@ -899,9 +907,9 @@ fn sample_mid_density(
     var ac_body = smoothstep(ac_thresh, ac_thresh + 0.13, ac_base);
     // Two clump scales, so altocumulus arrives as flocks of different sizes
     // with clear sky between them instead of one repeating texture.
-    let flock = weather_bank_noise(advected_xz / mix(980.0, 340.0, weather.convection));
-    let morsel = weather_bank_noise(advected_xz / 150.0 + vec2<f32>(9.2, -4.4));
-    let flock_mask = smoothstep(0.30, 0.66, flock * 0.62 + morsel * 0.38 + ac_amt * 0.20);
+    let flock = weather_bank_noise(advected_xz / mix(1700.0, 900.0, weather.convection));
+    let morsel = weather_bank_noise(advected_xz / 380.0 + vec2<f32>(9.2, -4.4));
+    let flock_mask = smoothstep(0.38, 0.70, flock * 0.85 + morsel * 0.15 + ac_amt * 0.20);
     ac_body *= flock_mask;
 
     let fine_keep = 1.0 - smoothstep(10.0, 28.0, sample_footprint_m);
@@ -1347,6 +1355,9 @@ fn march_layer_core(
         let dist_fade_base  = 1.0 - smoothstep(0.55, 1.0, abs_dist);
         let elev_blend_dist = smoothstep(0.40, 0.80, abs_dist);
         let dist_fade       = dist_fade_base * mix(1.0, horizon_elev_fade_precomp, elev_blend_dist);
+        // Distance only increases along this ray. Once the existing fade is
+        // exactly zero, all remaining density and shadow queries are discarded.
+        if dist_fade_base <= 0.0 { break; }
 
         // Stratify the full interval rather than moving a fixed pair of Gauss
         // taps together. The latter leaves correlated gaps which show up as
@@ -1610,7 +1621,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     // Clouds occupy independent atmospheric altitudes above the voxel terrain.
-    let unclamped_max_dist = 16000.0;
+    let unclamped_max_dist = CLOUD_MAX_DISTANCE_M;
     let scene_dist = scene_depth_distance(in.ndc, dir);
     let terrain_fade = terrain_streaming_fade(scene_dist * length(dir.xz));
     // Solid mountains keep their depth until the surface itself has dissolved

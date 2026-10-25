@@ -4,7 +4,8 @@
 use crate::characterize::Model;
 use crate::compile::{COMPILER_VERSION, compile};
 use crate::design::Design;
-use crate::fab::Provenance;
+use crate::fab::{Grade, MaskSet, Provenance};
+use crate::lot::WaferLot;
 use crate::registry::Registry;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +50,8 @@ pub struct Package {
     pub serial: u32,
     pub revision: u32,
     pub provenance: Provenance,
+    #[serde(default)]
+    pub grade: Grade,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,9 +68,16 @@ pub struct Library {
     pub revisions: Vec<Revision>,
     /// Packaged parts not installed in any machine.
     pub stock: Vec<Package>,
+    /// Mask sets, one per fabricated revision, reused by every lot.
+    #[serde(default)]
+    pub masks: Vec<MaskSet>,
+    #[serde(default)]
+    pub lots: Vec<WaferLot>,
     next_project: u32,
     next_revision: u32,
-    next_serial: u32,
+    pub(crate) next_serial: u32,
+    #[serde(default)]
+    pub(crate) next_lot: u32,
     /// Changes whenever a library is created or loaded, so views can tell a
     /// different library apart from an edited one.
     #[serde(skip)]
@@ -147,7 +157,7 @@ impl Library {
         self.revision(revision)?;
         self.next_serial += 1;
         let serial = self.next_serial;
-        self.stock.push(Package { serial, revision, provenance });
+        self.stock.push(Package { serial, revision, provenance, grade: Grade::A });
         Some(serial)
     }
 
@@ -179,6 +189,11 @@ impl Library {
         for (i, p) in self.stock.iter().enumerate() {
             if self.revision(p.revision).is_none() || p.serial > self.next_serial || self.stock[..i].iter().any(|q| q.serial == p.serial) {
                 return Err(format!("package {} is invalid or duplicated", p.serial));
+            }
+        }
+        for l in &self.lots {
+            if self.revision(l.revision).is_none() || !self.masks.iter().any(|m| m.id == l.mask_set) || l.id > self.next_lot {
+                return Err(format!("lot {} has no revision or mask set", l.id));
             }
         }
         Ok(())

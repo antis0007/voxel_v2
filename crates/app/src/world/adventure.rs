@@ -28,8 +28,8 @@ pub use hart::{install_review as install_hart_review, observe_review as observe_
 pub mod discovery;
 pub mod spell_defs;
 pub use spell_defs::{
-    Class, spell_available, spell_base_damage, spell_base_speed, spell_cast_delay_delta,
-    spell_class, spell_color, spell_cooldown, spell_cost, spell_flavor, spell_hint, spell_hit_damage,
+    Class, spell_available, spell_base_speed, spell_cast_delay_delta,
+    spell_class, spell_color, spell_cooldown, spell_cost, spell_hint, spell_hit_damage,
     spell_kind_tag, spell_name, spell_recharge_delta, spell_spread_delta,
 };
 pub(crate) mod growth;
@@ -38,6 +38,7 @@ mod quest;
 mod rare_magic;
 pub mod reliquaries;
 mod rewards;
+pub mod resonance;
 mod spells;
 mod arcana;
 pub mod status;
@@ -59,8 +60,7 @@ const MELEE_SWEEP_MAX: f32 = 1.4;
 const MAX_RECORDS: usize = 4096;
 pub fn wand_recipe(tier: u32) -> &'static [(usize, u32)] {
     match tier {
-        0 => &[(6, 64), (5, 64), (4, 128)],
-        1 => &[(15, 128), (18, 128), (16, 64)],
+        0 | 1 => &[(6, 64), (5, 64), (4, 128)],
         _ => &[(17, 128), (18, 256), (14, 128)],
     }
 }
@@ -236,6 +236,10 @@ pub struct Enemy {
     engine: engine::State,
     glass: glassweaver::State,
 }
+
+#[cfg(test)]
+#[path = "adventure/model_material_tests.rs"]
+mod model_material_tests;
 impl Enemy {
     pub(crate) fn preparing_stamp(&self)->bool {
         self.kind==matron::KIND && self.matron.run.as_ref().is_some_and(|r|r.kind==matron::Action::Stamp && r.phase()==action::Phase::Prepare)
@@ -332,7 +336,7 @@ impl Enemy {
             0.75
         }
     }
-    fn center(&self) -> Vec3 {
+    pub(crate) fn center(&self) -> Vec3 {
         let height = if self.kind == 8 {
             1.65
         } else if is_boss(self.kind) {
@@ -376,6 +380,9 @@ impl Enemy {
         } else {
             enemy_presentation::fallback(self, m, time, wind, hit);
         }
+        // Body animation ends here; UI markers keep a stable size and position
+        // instead of squashing, recoiling and turning with the enemy's torso.
+        enemy_presentation::pose(self, m, mark, time, wind);
         if self.tell > 0.0 {
             let c = self.center() + Vec3::Y * 0.7;
             let vertices = [Vec3::new(0.0, 0.15, 0.0), Vec3::new(-0.13, -0.10, 0.0), Vec3::new(0.13, -0.10, 0.0)];
@@ -407,18 +414,6 @@ impl Enemy {
                 0.25,
             );
         }
-        let crouch = if brawler(self.kind) { wind * 0.17 } else { 0.0 };
-        m.scale_since(
-            mark,
-            self.pos,
-            Vec3::new(1.0 + crouch * 0.4, 1.0 - crouch, 1.0),
-        );
-        m.rotate_since(
-            mark,
-            self.pos,
-            Quat::from_rotation_x(-wind * 0.10 + self.flash * 0.9),
-        );
-        m.rotate_since(mark, self.pos, Quat::from_rotation_y(self.yaw));
         enemy_presentation::threat(self, m, wind);
         // Affix motes orbit the body in the affix colour; a ward shows as a
         // faint bubble that thins as it is broken.
@@ -537,6 +532,7 @@ impl View {
 
 #[derive(Clone, Default)]
 pub struct View {
+    pub resonance: resonance::State,
     /// Spells the player has found; unfound spells show as locked.
     pub spell_log: discovery::SpellLog,
     pub health: f32,
@@ -575,6 +571,9 @@ pub struct View {
     pub discoveries: u32,
     pub sigils: u32,
     pub heart_restored: bool,
+    pub workshop_returned: bool,
+    pub workshop_available: bool,
+    pub workshop_cleared: bool,
     pub route: String,
     /// Active site modifier (name, one-line description) for the HUD.
     pub site_modifier: Option<(&'static str, &'static str)>,
@@ -588,6 +587,7 @@ pub struct View {
     pub last_death_pos: Option<Vec3>,
 }
 pub struct Adventure {
+    pub resonance: resonance::State,
     pub health: f32,
     pub mana: f32,
     pub wand: u32,
@@ -685,6 +685,7 @@ pub struct Adventure {
 impl Default for Adventure {
     fn default() -> Self {
         Self {
+            resonance: resonance::State::default(),
             health: 100.0,
             mana: 100.0,
             wand: 0,
@@ -833,6 +834,7 @@ impl Adventure {
     }
     pub fn view(&self) -> View {
         View {
+            resonance: self.resonance,
             health: self.health,
             mana: self.mana,
             wand: self.wand,
@@ -868,6 +870,9 @@ impl Adventure {
             spell_log: self.spell_log,
             sigils: self.sigils,
             heart_restored: self.heart_restored(),
+            workshop_returned: super::workshop::returned(self),
+            workshop_available: false,
+            workshop_cleared: super::workshop::cleared(self),
             route: self.route.clone(),
             site_modifier: modifiers::hud(self.site_modifier),
             quest: None,
@@ -936,6 +941,7 @@ impl Adventure {
         }
     }
     fn damage(&mut self, amount: f32, direction: Vec3) {
+        let amount = amount * self.resonance.incoming();
         if self.invulnerable <= 0.0 {
             let blocked = self.ward > 0.0 && self.ward_hits > 0;
             if blocked {
@@ -1129,7 +1135,9 @@ impl Adventure {
         if self.combo_time == 0.0 && !strike_now && self.melee_cd == 0.0 {
             self.combo = 0;
         }
-        self.mana = (self.mana + dt * (8.0 + rank as f32 * 1.5) * wand_items::charge_scale(&self.loadout)).min(self.max_mana());
+        self.resonance_tick(player.pos * scale, dt);
+        self.mana = (self.mana + dt * ((8.0 + rank as f32 * 1.5) * wand_items::charge_scale(&self.loadout)
+            + self.resonance.stacks(4) * 1.5)).min(self.max_mana());
         // Hunger drains slowly; adequate food restores health only when safe.
         world.inventory.tick(dt);
         let armor_reduction = world.inventory.armor_reduction();
@@ -1251,19 +1259,13 @@ impl Adventure {
                         && !shatter
                         && forward.dot(Vec3::new(-e.yaw.sin(), 0.0, -e.yaw.cos())) < -0.3)
                         || (!shatter && (tollkeeper::guarded(e, forward) || engine::guarded(e, forward)));
-                    let base = match self.weapon {
-                        1 => 22.0,
-                        2 => 32.0,
-                        3 => 38.0,
-                        4 => 28.0,
-                        5 => 44.0,
-                        _ => 14.0,
-                    };
+                    let base = super::inventory::weapon_damage(self.weapon);
                     let damage = (if finisher { base * 1.7 } else { base }
                         + rank as f32 * 3.0
                         + if shatter { 18.0 } else { 0.0 }
                         + if self.tool_mods & 16 != 0 { 4.0 } else { 0.0 })
                         * tinkering::head_multiplier(self.tool_head)
+                        * (1.0 + self.resonance.stacks(0) * 0.08)
                         * if self.tool_mods & 1 != 0 { 1.08 } else { 1.0 };
                     e.health -= damage * if e.encounter.exposed > 0.0 { 1.25 } else { 1.0 }
                         * if shield { 0.35 } else if e.kind == 8 { hart::damage_taken(e) } else { 1.0 };
@@ -1771,7 +1773,7 @@ impl Adventure {
                         };
                 }
                 if shot.mods.gravity != 0.0 {
-                    shot.velocity.y -= dt * 14.0 * shot.mods.gravity;
+                    shot.velocity.y -= dt * wands::card_rules::GRAVITY_ACCELERATION * shot.mods.gravity;
                 }
                 if shot.mods.timer > 0.0 && shot.payload.is_some() {
                     shot.mods.timer -= dt;
@@ -2044,13 +2046,16 @@ impl Adventure {
                     dealt *= Adventure::arcana_hit_mul(&shot.mods, e);
                     let crit = shot.mods.crit && wands::crit_roll(self.time, e.slot);
                     if crit {
-                        dealt *= 2.5;
+                        dealt *= wands::card_rules::CRITICAL_MULTIPLIER;
                         crit_at = Some(e.center());
                     }
                     let mut element_stagger = 0.0;
                     if let Some(element) = shot.mods.element {
                         let reaction = e.status.apply(element, e.affixes);
                         dealt *= reaction.damage_mul;
+                        if reaction.name.is_some() {
+                            dealt *= 1.0 + self.resonance.stacks(1) * 0.20;
+                        }
                         element_stagger = reaction.stagger;
                         if reaction.chill > 0.0 {
                             e.slow = e.slow.max(reaction.chill);
@@ -2059,14 +2064,14 @@ impl Adventure {
                     }
                     e.hurt(dealt);
                     if shot.mods.mana_leech {
-                        self.mana = (self.mana + 4.0).min(100.0 + rank as f32 * 15.0);
+                        self.mana = (self.mana + wands::card_rules::MANA_LEECH).min(100.0 + rank as f32 * 15.0);
                     }
                     if shot.mods.siphon {
-                        self.health = (self.health + 4.0).min(100.0 + rank as f32 * 20.0);
+                        self.health = (self.health + wands::card_rules::SIPHON_HEALTH).min(100.0 + rank as f32 * 20.0);
                     }
                     if shot.mods.blood {
                         let dealt = (base_dmg + rank as f32 * 4.0) * shot.mods.damage_mul;
-                        self.health = (self.health + dealt * 0.25).min(100.0 + rank as f32 * 20.0);
+                        self.health = (self.health + dealt * wands::card_rules::BLOOD_SIPHON_FRACTION).min(100.0 + rank as f32 * 20.0);
                     }
                     e.flash = 0.16;
                     e.stagger = (if shatter { 0.65_f32 } else { 0.24 }).max(element_stagger);
@@ -2129,8 +2134,8 @@ impl Adventure {
                     self.spawn_voxel_burst(shot.pos, spell_color(62), 16, 4.5, 0.035);
                     let element = shot.mods.element;
                     for e in &mut self.enemies {
-                        if e.health > 0.0 && (e.center() - shot.pos).length() < 2.0 {
-                            e.hurt(11.0 * shot.mods.damage_mul * e.affixes.damage_taken());
+                        if e.health > 0.0 && (e.center() - shot.pos).length() < wands::card_rules::SHRAPNEL_RADIUS {
+                            e.hurt(wands::card_rules::SHRAPNEL_DAMAGE * shot.mods.damage_mul * e.affixes.damage_taken());
                             if let Some(el) = element {
                                 let r = e.status.apply(el, e.affixes);
                                 if r.chill > 0.0 {
@@ -2228,11 +2233,11 @@ impl Adventure {
                     // Three weak sparks fan back out of the impact. They carry
                     // default mods, so a fork can never fork again.
                     let back = -shot.velocity.normalize_or_zero();
-                    for a in [-0.9_f32, 0.0, 0.9] {
+                    for a in wands::card_rules::FORK_ANGLES {
                         let d = (Quat::from_axis_angle(Vec3::Y, a) * back + Vec3::Y * 0.35)
                             .normalize_or_zero();
                         let mods = wands::ShotMods {
-                            damage_mul: 0.45,
+                            damage_mul: wands::card_rules::FORK_DAMAGE,
                             life_mul: 0.5,
                             ..Default::default()
                         };
@@ -2287,7 +2292,7 @@ impl Adventure {
                         .sandbox
                         .apply_radial_impulse(shot.pos, 3.4, 5.5, scale);
                     if self.terrain_blasts.len() < 4 {
-                        self.terrain_blasts.push_back((shot.pos, 2.0));
+                        self.terrain_blasts.push_back((shot.pos, wands::card_rules::RESONANT_CRATER));
                     }
                     let distance = (eye - shot.pos).length();
                     if distance < 3.0 {
@@ -2358,6 +2363,7 @@ impl Adventure {
         self.tick_particles(world, dt);
         modifiers::reap(&mut self.enemies);
         let mut death_blasts: Vec<Vec3> = Vec::new();
+        let mut resonance_kills = Vec::new();
         // Spells found this frame: (salt, where). Applied after the loop, which
         // borrows the enemy list.
         let mut finds: Vec<(u32, Vec3, bool)> = Vec::new();
@@ -2380,6 +2386,7 @@ impl Adventure {
                     self.tollkeepers.remove(&e.site);
                 }
                 *mask |= 1 << e.slot;
+                resonance_kills.push(e.center());
                 world.habitats.release(e.pos, 0, if is_boss(e.kind) { 80 } else { 8 });
                 if e.affixes.has(status::Affix::Volatile) {
                     death_blasts.push(e.center());
@@ -2418,7 +2425,7 @@ impl Adventure {
                         .say("Steel sword recovered from the warden. Equip it in Gear.");
                 }
                 if is_boss(e.kind) {
-                    world.expedition.say("The guardian has fallen. Return to the reliquary and claim its relic with F.");
+                    world.expedition.say("Guardian defeated. F  Claim relic at the reliquary");
                 }
                 if let Some(recipe) = e.encounter.recipe {
                     for &(item, amount) in encounters::RECIPES[recipe].loot {
@@ -2487,6 +2494,9 @@ impl Adventure {
         }
         self.enemies
             .retain(|e| e.health > 0.0 && (e.habitat.is_some() || (e.pos - feet).length() < 90.0) && e.pos.y > -256.0);
+        // Echo victims remain until the next death pass, so their normal loot
+        // and persistent victory records settle exactly once.
+        self.resonance_kills(world, &resonance_kills);
         for e in &mut self.effects {
             e.life -= dt;
         }
@@ -2505,6 +2515,8 @@ impl Adventure {
         self.splashes
             .retain(|splash| splash.age < splash.life && splash.life.is_finite());
         if self.health <= 0.0 {
+            let lost_resonance = self.resonance.active.then_some(self.resonance.salvage);
+            self.resonance.end();
             self.last_death_pos = Some(feet);
             let spawn_m = self
                 .respawn_point
@@ -2536,14 +2548,17 @@ impl Adventure {
             let death_dist = (feet - spawn_m).length();
             if self.respawn_point.is_some() {
                 world.expedition.say(format!(
-                    "Revived at your attuned Sanctum reliquary ({:.0} m from where you fell). Supplies retained.",
+                    "Respawned at the reliquary. Death location: {:.0} m away. Items kept.",
                     death_dist
                 ));
             } else {
                 world.expedition.say(format!(
-                    "Returned to the inland clearing ({:.0} m from where you fell). Supplies retained; attune a Sanctum reliquary to bind your respawn.",
+                    "Respawned at the clearing. Death location: {:.0} m away. Items kept.",
                     death_dist
                 ));
+            }
+            if let Some(lost) = lost_resonance {
+                world.expedition.message.push_str(&format!(" Resonance ended: {lost} unbanked salvage lost; calibration kept."));
             }
         }
         self.refresh_focus(world, player.eye(world.voxel_scale) * scale, forward);
@@ -2769,7 +2784,7 @@ pub fn tick(
     if world.adventure.rank() > old_rank {
         world.adventure.health = world.adventure.max_health();
         world.adventure.mana = world.adventure.max_mana();
-        world.expedition.say("Matron farm mastered. A reliable paid harvesting cycle counts toward mastery like an expedition victory.");
+        world.expedition.say("Matron breeding unlocked.");
     }
     // Reactivate the saved individual. An obstructed body waits; construction is
     // never erased and health/material state is never reset on re-entry.
@@ -2861,17 +2876,6 @@ mod flavor_tests {
         (0..=MAX_SPELL_ID)
             .filter(|id| *id != wands::EMPTY && spell_name(*id) != "Unknown spell")
             .collect()
-    }
-
-    #[test]
-    fn every_named_spell_has_its_own_flavor_line() {
-        let generic = spell_flavor(9999);
-        let mut seen = std::collections::HashSet::new();
-        for id in defined() {
-            let line = spell_flavor(id);
-            assert_ne!(line, generic, "spell {id} ({}) has no flavor", spell_name(id));
-            assert!(seen.insert(line), "spell {id} repeats another line");
-        }
     }
 
     #[test]

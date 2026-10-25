@@ -3,6 +3,7 @@ use super::{BlockId, IVec3, TreeProfile, WorldSampleConfig, hash2, hash3, landsc
 use glam::Vec3Swizzles;
 
 mod forms;
+mod woodland;
 pub(crate) use forms::TreeForm;
 
 pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
@@ -115,6 +116,7 @@ fn profile_from_landscape(cfg: &WorldSampleConfig, tree: &mut TreeProfile, clima
         if cfg.generator_version >= 33 {
             forms::choose(cfg, tree, &climate, age, species, individual_form);
         }
+        if cfg.generator_version >= 45 { woodland::profile(cfg, tree, age); }
         return;
     }
     if tree.conifer {
@@ -166,6 +168,7 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     let height = tree.trunk_h as f32 * scale;
     let radius = tree.canopy_radius as f32 * scale;
     let crown_h = tree.canopy_height as f32 * scale;
+    if woodland::applies(cfg, &tree) { return woodland::block(cfg, &tree, p); }
     // Bound every lobe and limb before doing branch work, including lean.
     if q.y <= 0.0 || q.y > height + crown_h || q.x.abs().max(q.z.abs()) > radius * 1.55 + 1.0 {
         return BlockId::Air;
@@ -322,6 +325,7 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     use glam::Vec2;
     let scale = cfg.voxel_meters();
     let radius = tree.canopy_radius as f32 * scale;
+    if woodland::applies(cfg, tree) { return radius * 1.35 + scale; }
     // `block()` offsets the crown by the lean in metres, not voxels.
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
     let lean = Vec2::new(tree.lean_x as f32, tree.lean_z as f32) * (0.3 + age * 0.45);
@@ -365,6 +369,7 @@ pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     let scale = cfg.voxel_meters();
     let height = tree.trunk_h as f32 * scale;
     let crown_h = tree.canopy_height as f32 * scale;
+    if woodland::applies(cfg, tree) { return height + crown_h + scale; }
     if let Some(top) = forms::crown_top(cfg, tree, height, crown_h) {
         return top;
     }

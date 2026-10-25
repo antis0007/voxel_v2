@@ -29,11 +29,12 @@ pub(super) fn build(mesh:&mut Model,w:&World,day:&DayNightCycle,viewer:Vec3) {
         let at=pivot+Vec3::new(angle.cos()*1.28,0.36,angle.sin()*1.28);
         mesh.cuboid(at,Vec3::splat(if r.level>=5 {0.09} else {0.05}),Quat::IDENTITY,color,0.6);
     }
-    if let Some(site)=r.target.and_then(|cell|orbital::site(w.seed,cell)) {
+    if let Some(target)=orbital::radio::orbital_target(w,day) {
+        mesh.rotate_since(bowl,pivot,Quat::from_rotation_arc(Vec3::Y,(target-pivot).normalize()));
+    } else if let Some(site)=r.target.and_then(|cell|orbital::site(w.seed,cell)) {
         let height=orbital::hold_height(&w.sample_config(),&w.orbital,site);
         let target=Vec3::new(site.x+650.0,height+orbital::UPPER_ANCHORAGE_OFFSET_M,site.z+260.0);
         mesh.rotate_since(bowl,pivot,Quat::from_rotation_arc(Vec3::Y,(target-pivot).normalize()));
     }
-    let _=day; // All moving geometry follows the saved target, never render time.
     for v in &mut mesh.vertices[mark..] {if v.surface[2]!=62.0 {v.surface[1]=2.0;}}
 }

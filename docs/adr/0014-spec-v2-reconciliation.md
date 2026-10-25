@@ -4,7 +4,7 @@ Date: 2026-10-23. Status: proposed, awaiting approval (session 1 of the v2 spec 
 
 The v2 mission specification (`ENGINE_CORE_PROMPT_v2.md`) is the long-range vision. `docs/ENGINE_CORE.md` and `docs/GAME_DESIGN.md` turn it into a plan and **supersede `docs/PLAN2.md`** as the roadmap. PLAN2's decisions D1–D7 carry over unchanged, and its open phases (A6–F) are folded into milestones M1–M7 (ENGINE_CORE §11). This ADR records every place where the spec, PLAN2 and the code disagree, and says which side governs.
 
-Rule until approval: no code changes follow from the spec. `CLAUDE.md` keeps describing the code as it is.
+Original session-1 boundary: no code changes followed from that planning task. The 2026-10-24 request explicitly continues refinement and bounded implementation; ADR 0017 and the dated execution plan track that work without treating all proposed migrations as approved or completed. `CLAUDE.md` keeps describing implemented behavior.
 
 ## Conflicts and resolutions
 
@@ -28,6 +28,6 @@ Rule until approval: no code changes follow from the spec. `CLAUDE.md` keeps des
 
 ## Consequences
 
-- Nothing in `ENGINE_CORE.md` is implemented until this ADR is accepted. Its sessions are proposals.
+- The long-range sessions remain proposals. Bounded existing-system improvements authorized by the current request have their own implementation/evidence status; they do not implicitly approve the remaining roadmap.
 - `CLAUDE.md` invariants are not edited for spec targets. They change with the code.
 - Rows 1 and 3 each need a follow-up ADR before the session that touches them starts.

@@ -1,0 +1,249 @@
+WORLD SHADER UPGRADE — INTEGRATION AND DESIGN NOTES
+2026-10-19
+
+DELIVERABLE
+===========
+world_shader.wgsl is the complete revised shader body. Replace the supplied
+world_shader.wgsl body at its existing location and assemble it with the same
+real shared WGSL declarations and functions that your renderer already uses.
+The package also includes an exact unified diff, the original body, and small
+reproducible validation fixtures. Do not install the validation stubs in the
+application: they are deliberately simplified substitutes for missing includes.
+
+The upload is a shader body, not a complete standalone WGSL module. Camera,
+lighting, shadow bindings, atmosphere, cloud-layer and underwater functions
+are referenced but not declared in it. No renderer source, terrain meshes,
+screenshots, videos, actual shared includes, or GPU timings were provided.
+
+This revision fixes demonstrated shader faults and introduces more consistent
+material and lighting approximations. It is not a certification of flawless
+landscape rendering. It has not been integrated or viewed in the actual game.
+
+COMPATIBILITY AND MATERIAL CALIBRATION
+=====================================
+- Vertex attributes remain locations 0–4 with the supplied formats. No new
+  texture, sampler, uniform buffer, storage buffer, or bind group is required.
+- vs_main and fs_main keep their names; both color and receiver outputs remain.
+  Main-camera depth remains reverse-Z. Shadow comparisons retain the original
+  forward-Z direction. The renderer must keep its corresponding depth states.
+- VsOut location 1 now carries camera-relative position instead of absolute
+  world position. Both stages in this file were updated together. New internal
+  location 9 carries four interpolated material-coverage weights. The stage
+  interface totals 10 locations and 31 scalar components. These are internal
+  varyings, not additional host vertex attributes.
+- Base vertex colors are assumed sRGB, matching the original pow(color, 2.2).
+  The exact sRGB transfer is now applied per vertex, before interpolation.
+  Lighting and both render targets remain linear HDR. Do not tone-map or
+  gamma-encode this pass; the shared HDR resolve owns that transformation.
+- Material tints retain their existing multiplicative interpretation. Natural
+  climate fields use actual voxel/world coordinates, so changing material
+  texture scale no longer moves beaches, snow altitude, or climate. The
+  material scale still affects manufactured surfaces. A separate natural
+  microtexture-scale control would need an explicit additional convention.
+- Material reflectance now uses the conventional dielectric parameter mapping
+  F0 = 0.16 * reflectance^2: reflectance 0.5 yields F0 0.04. The original used
+  reflectance as an additional empirical gain, so existing presets may need
+  recalibration. If your host already stores physical F0, change dielectric_f0
+  to vec3<f32>(reflectance), rather than applying the squared mapping twice.
+- Existing metal families 47–51 use albedo as conductor F0 and suppress diffuse.
+  Water uses F0 0.0204. Water receiver alpha remains negative, but its magnitude
+  now agrees with water Fresnel and foam. Check that the reflection resolve
+  replaces/blends its sky fallback rather than adding the same reflection twice.
+- Removing empirical specular multipliers intentionally changes appearance.
+  Compare using the actual exposure, sky, light intensities and materials.
+  The shader cannot determine their intended calibration from this attachment.
+
+DISTANT TERRAIN AND MATERIAL CHANGES
+===================================
+1. Stable detail across distance and resolution
+
+The original far_shade selected wavelengths from floor(log2(footprint)), but
+its adjacent octaves used different random offsets. A smooth blend within
+one octave therefore still jumped when the octave index changed. The revision
+uses fixed 48 m and 12 m world-space relief fields. Their amplitudes diminish
+as they become unresolved; the pattern itself never changes frequency or phase
+in response to camera distance. The same field shades resident natural terrain
+and its distant approximation.
+
+The screen footprint is the largest singular value of the surface derivative
+matrix. It covers diagonal/sheared pixel stretch that the original maximum of
+two derivative lengths could underestimate. Noise uses smooth quintic
+reconstruction with a matching analytic gradient. Relief is applied within the
+normal's tangent plane so a cliff is not bent toward world up.
+
+Grain, clumps, mottling, scree, bedding, snow-drift variation, sand ripples,
+foliage and several manufactured-material patterns now attenuate toward
+representative means. This follows procedural octave-clamping practice [1].
+It is conservative minification, not an exact convolution of every nonlinear
+material mask. In particular, the snow and geological masks remain authored
+approximations; noise does not reconstruct actual erosion or concavity.
+
+2. Shared material coverage
+
+The vertex stage decodes the existing packed material key into turf, soil,
+rock and sand coverage weights. Those weights interpolate across triangles;
+material IDs do not. The fragment stage evaluates climate once, then combines
+only the contributing material responses. Resident natural materials use the
+same evaluator. Unknown/noncovered far materials retain authored base color.
+Kind 16 keeps its resident special treatment and falls back to authored color
+in the distant mesh; matching every other custom material would require more
+coverage channels or a renderer-provided material representation.
+
+This removes the old forced grass treatment and fixed 42% cover blend for
+ordinary distant terrain. It also removes the sudden foliage palette branch
+at a 0.5 m pixel footprint, which mistakenly treated wood as canopy. Geometric
+normals control slope-dependent material coverage; relief normals only change
+lighting afterward. Actual near/far geometric normals still must agree where
+the mesher intends a seamless transition.
+
+3. Correct geometry classes
+
+Procedural backdrop uses -1.5 < ao_strength < 0. Exact edited fallback uses
+ao_strength < -1.5. Exact fallback is no longer sunk/discarded as a procedural
+heightfield, and it receives the same real cascaded shadows as resident mesh.
+Only the solid terrain proxy receives the existing compatibility underlap;
+water and foliage proxies are no longer lowered with it.
+
+The resident/proxy radial coverage contract and the broad underlap are still
+present because the supplied interface has no actual residency mask or parent
+height data. Removing their assumptions safely requires the mesh/streaming
+implementation. Values exactly at -1.5 were not assigned a new meaning.
+
+LIGHTING, SHADOWS, WATER AND ATMOSPHERE
+======================================
+The specular BRDF now uses GGX with height-correlated Smith visibility and
+Schlick Fresnel, with perceptual roughness remapping [2]. Diffuse and specular
+share the same finalized material state. The shader no longer separately
+suppresses reflection with (1-roughness)^2. Geometric normal variance and an
+explicit approximate allowance for filtered-away slopes widen the specular
+lobe before it becomes unstable. This is not a measured slope distribution.
+
+Metals receive a bounded sky-environment approximation. A real prefiltered
+environment, BRDF integration LUT and scene reflections remain renderer work;
+one reflected sky lookup is not full physically accurate image-based lighting.
+Existing authored local-light attenuation is retained, and local lights still
+lack shadow maps. Existing atmospheric and artistic fill terms also remain
+approximations rather than a full global-illumination solution.
+
+Shadow sampling uses explicit-level comparison, receiver-plane depth
+correction, full filter-footprint border checks, and smooth cascade/projection
+coverage. It can continue through every eligible coarser cascade, rather than
+trying only one. This follows established CSM filtering considerations [3].
+Orthographic light matrices with homogeneous w=1 are required. Missing casters,
+light-space depth coverage and texel-stable cascade positioning must be fixed
+in the renderer. The same pass cannot reconstruct their missing information.
+
+The cloud field represents low/mid/high layer optical depths, not RGB spectra.
+Its accumulated depth is nonnegative, cloud attenuation fades continuously
+near the horizon, and moon lighting samples the moon's projection. Clip levels
+with zero weight no longer issue their four manual bilinear texture loads.
+
+Distant water no longer inherits the land roughness floor of 0.62. Filtered
+wave/bed/foam detail and a smooth fade of resident-only optics reduce the
+material handoff. Water now has one direct GGX reflection contribution,
+Fresnel-weighted environment reflection and body lighting. Duplicate glint
+lobes and a shadow-independent sunlight floor are removed. Vertical reflection
+azimuths are safely normalized. Water scattering follows solar intensity.
+
+The existing wave shape, bathymetry encoding, refraction, caustics and shoreline
+models remain approximations. They do not become a full fluid simulation or
+screen-space refraction merely because the BRDF is improved. Matching near/far
+water depths and mesh edges still requires coherent terrain data. The existing
+vertex wave attenuation also needs shared edge sampling across unequal mesh
+sizes if those edges can coincide while displaced.
+
+Atmosphere is composed directly as L = S + T*L_surface, where shared RGB is
+in-scattered radiance and shared alpha is transmittance. The original code
+strongly implies this contract; confirm it in aerial_perspective and local_mist.
+The revision avoids division by tiny extinction and compositing cloud opacity
+through that unstable recovered color. Cloud fog has a separate source term.
+Legacy height fog integrates a capped exponential density along the ray,
+including horizontal and layer-crossing rays. The extra kilometre haze and
+terrain-only post-fog night grade are removed so they do not alter sky radiance
+a second time. Streaming fade remains a separate outer-coverage approximation.
+
+Check whether atmosphere_color includes explicit sun/moon disks. If it does,
+exclude those disks from specular environment evaluation or account for their
+energy consistently with analytic direct lighting. Shared fog/cloud passes must
+also establish a single owner for each medium; otherwise duplicate integration
+can remain outside this shader. The homogeneous cloud-layer fog here cannot
+recover actual cloud density or scattering order along an arbitrary view ray.
+
+VALIDATION COMPLETED
+====================
+Final shader SHA256:
+522d91af96a9cc031dc8b28cf543688e266675a6d34b822b10c297c427c16481
+
+- Native wgpu/Naga module validation and render-pipeline creation: PASS.
+- Dawn/Tint strict WGSL and derivative uniformity: PASS, zero diagnostics.
+- Full vertex/fragment synthetic render and HDR/receiver readback: 16/16 PASS.
+- Actual WGSL compute tests with independent numerical oracles: 100/100 PASS.
+
+The original inner-residency exact-fallback fixture rendered 0 pixels; the
+revision renders all 4,096 expected pixels. Across the same 15 former octave
+boundaries, small footprint changes produced original normal-vector differences
+of 0.0324–0.3539. The revised maximum is about 0.000001277. The original horizontal
+inside-cloud test returned zero instead of 1,000 m; the revised intersection
+matches the analytic path. Dense quadrature independently verifies the new
+height integral. The numerical tests also cover safe normalization, sRGB
+transfer points, SVD footprints and finite/nonnegative GGX edge cases.
+
+Native wgpu accepted the original shader. Tint found two strict-portability
+problems: multiplied hash operands lacked required XOR parentheses, and implicit
+shadow comparisons occurred in nonuniform control flow. The revision passes
+both validators. Negative controls verify that Tint rejects divergent dpdx.
+
+Rendering and compute used llvmpipe/OpenGL software execution. The fixtures use
+clearly labeled inferred shared declarations and substitute atmosphere/cloud/
+underwater functions. Passing these checks establishes neither real host ABI
+compatibility nor in-engine scene quality. The fixture images are flat test
+planes, not before/after landscape beauty screenshots. The package includes
+reports and reproduction tools; there is no RTX 4090 benchmark or performance
+claim. Read validation/VALIDATION_NOTES.txt for exact scope and commands.
+
+PERFORMANCE AND REMAINING ENGINE WORK
+=====================================
+The shader skips fully filtered noise and zero-weight weather clip levels.
+Material coverage shares one climate evaluation. Shadow filtering normally
+performs nine comparisons, often eighteen in transition regions, with up to
+thirty-six at coincident projection-edge transitions. Full GGX, extra sky
+reflection lookup and broader shadow receiver coverage can add work. Measure
+GPU pass timestamps in the actual renderer before choosing quality settings.
+
+To reach a dependable distant-terrain result, prioritize:
+
+1. Matching parent/child boundary geometry and normals with an explicit morph
+   or stitch, using a shared terrain source. Geometry clipmaps demonstrate
+   coordinated geometric transitions [4]; arbitrary depth sinking cannot
+   guarantee identical silhouettes.
+2. Actual residency coverage: every visible sample needs a resident mesh or a
+   valid proxy while chunks load. Edited regions, caves and overhangs need
+   explicit proxy exclusion or a representation that contains their geometry.
+3. Consistent distant material coverage, heights and low-frequency normals from
+   the same terrain data, including edits. Consider a mipmapped terrain cache
+   with material weights and normal/slope variance when shader evaluation cost
+   or remaining nonlinear minification artifacts justify it.
+4. Distant shadow casters/horizon occlusion, stabilized CSM placement and valid
+   caster depth bounds. Verify dawn/dusk, cascade edges, moving clouds and terrain
+   that extends beyond the last cascade.
+5. The actual HDR/atmosphere/water resolve and temporal antialiasing: verify
+   motion vectors for deformed water, disocclusion, camera cuts, exposure changes,
+   grazing views, wet terrain and residency changes during fast flight.
+
+The files needed for that next integration pass are the shared WGSL include
+assembly, camera/light/shadow declarations, terrain/LOD mesher, residency/streaming
+selection, shadow-caster setup, and final HDR/atmosphere/water resolve, together
+with a short moving-camera capture showing the current defects.
+
+PRIMARY REFERENCES
+==================
+[1] PBRT, procedural noise and frequency clamping:
+https://www.pbr-book.org/3ed-2018/Texture/Noise
+[2] Filament, GGX, correlated visibility and reflectance conventions:
+https://google.github.io/filament/main/filament.html
+[3] Microsoft, cascaded shadow filtering and projection requirements:
+https://learn.microsoft.com/en-us/windows/win32/dxtecharts/cascaded-shadow-maps
+[4] GPU Gems 2, terrain rendering with geometry clipmaps:
+https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-2-terrain-rendering-using-gpu-based-geometry
+[5] WGSL language, texture comparison and derivative uniformity:
+https://www.w3.org/TR/WGSL/

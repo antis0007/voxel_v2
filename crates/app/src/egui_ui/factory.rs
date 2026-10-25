@@ -150,19 +150,10 @@ pub(super) fn container_panel(
 ) {
     ui.set_width(360.0);
     ui.set_max_width(360.0);
-    let (title, blurb) = match node.mode {
-        1 => (
-            "Chest",
-            "27 slots. Left click takes a stack. Right click puts a stack in. Shift right-click takes the compartment.",
-        ),
-        2 => (
-            "Barrel",
-            "One item, in bulk. The first thing you put in locks it until it is empty.",
-        ),
-        _ => (
-            "Crate",
-            "Logistics crate. Filter it, then let the bus pipe in and pipe out.",
-        ),
+    let title = match node.mode {
+        1 => "Chest",
+        2 => "Barrel",
+        _ => "Crate",
     };
     ui.label(RichText::new(title).size(20.0).color(icons::PAPER));
     ui.horizontal(|ui| {
@@ -199,14 +190,6 @@ pub(super) fn container_panel(
             }
         }
     });
-    let (hint, _) = ui.allocate_exact_size(vec2(360.0, 28.0), Sense::hover());
-    ui.painter().with_clip_rect(hint).text(
-        hint.left_top(),
-        Align2::LEFT_TOP,
-        blurb,
-        FontId::proportional(11.0),
-        icons::PAPER,
-    );
     if node.mode == 2 {
         let locked = node
             .filter
@@ -247,7 +230,7 @@ pub(super) fn container_panel(
                 );
                 let label = locked
                     .map(|i| format!("{}  {}", NAMES[i], stack_text(count)))
-                    .unwrap_or_else(|| "Empty barrel".to_string());
+                    .unwrap_or_else(|| "Empty".to_string());
                 let (line, _) = ui.allocate_exact_size(vec2(220.0, 16.0), Sense::hover());
                 ui.painter().with_clip_rect(line).text(
                     line.left_center(),
@@ -265,7 +248,7 @@ pub(super) fn container_panel(
         _ => (5, 20),
     };
     resource_grid(ui, node.mode, pos, columns, cells, node, action);
-    ui.label(RichText::new(node.status).color(icons::GOLD));
+    ui.label(RichText::new(status_label(node.status)).color(icons::GOLD));
 }
 
 fn pipe_panel(
@@ -276,7 +259,7 @@ fn pipe_panel(
 ) {
     ui.set_width(420.0);
     ui.set_max_width(420.0);
-    ui.label(RichText::new("Item pipe").size(20.0).color(icons::PAPER));
+    ui.label(RichText::new("Item Pipe").size(20.0).color(icons::PAPER));
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         for (mode, label) in ["Pipe in", "Pipe out", "Distribute"].into_iter().enumerate() {
@@ -320,20 +303,6 @@ fn pipe_panel(
             }
         }
     });
-    let blurb = node
-        .kind
-        .modes()
-        .get(node.mode as usize)
-        .copied()
-        .unwrap_or("Item pipe");
-    let (hint, _) = ui.allocate_exact_size(vec2(420.0, 32.0), Sense::hover());
-    ui.painter().with_clip_rect(hint).text(
-        hint.left_top(),
-        Align2::LEFT_TOP,
-        blurb,
-        FontId::proportional(11.0),
-        icons::PAPER,
-    );
     if node.mode != 0 {
         ui.label(RichText::new("FILTER").size(11.0).color(icons::GOLD));
         egui::Grid::new(("pipe-filter", pos))
@@ -368,69 +337,29 @@ fn pipe_panel(
                 }
             });
     }
-    ui.label(RichText::new(node.status).color(icons::GOLD));
+    ui.label(RichText::new(status_label(node.status)).color(icons::GOLD));
 }
 fn detail(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Generator => {
-            "Combustion: 16 kW from coke (800 kJ per item), coal (400 kJ), bio-ethanol or creosote. Arcane pile: 64 kW from arcane cores, hot, needs piped coolant water."
-        }
-        Kind::Bioreactor => "Digests fungal biomass at 32 kW. Cultivators supply renewable fuel.",
-        Kind::Crusher => "1 ore → 2 dust. 4 s at 8 kW (32 kJ per batch).",
-        Kind::Furnace => "Dust mode: 1 dust → 1 ingot, 3 s at 6 kW. Ore mode: 1 ore → 1 ingot, 5 s.",
-        Kind::Feeder => {
-            "Load supplies, then export through copper item pipes. A filter selects the exported resource."
-        }
-        Kind::Storage => {
-            "Crate, chest or barrel. Pipe in fills it. Pipe out pulls from it. A distributor evens stock between containers on the line."
-        }
-        Kind::Pipe => {
-            "Pipe in pushes outputs onward. Pipe out pulls from the neighbour. Distributor splits stock across chests, crates and barrels."
-        }
-        Kind::Cable => {
-            "Teal power transport. Connect a continuous path from a generator to consumers."
-        }
-        Kind::AlloyKiln => {
-            "Choose bronze or steel. Bronze opens components; steel opens advanced tools and extraction."
-        }
-        Kind::Fabricator => {
-            "Salvage circuits to build your first fabricator. Then manufacture circuits (copper + tin + crystal, 16 kW), coils, cores, or wild essence (crystal + biomass, 24 kW). Each crystal process takes 12 s; cores take 7 s."
-        }
-        Kind::Cultivator => {
-            "Grow biomass with a reusable culture and lumen fibre, turn biomass into fibre, or ferment it into bio-ethanol (Forestry-style liquid fuel)."
-        }
-        Kind::MiningDrill => {
-            "Excavates a 3 × 3 metre shaft, 24 metres down. Requires power. Ore enters its output; waste rock is removed. Stops for players, structures, fluids and full output. Operates within 64 metres."
-        }
-        Kind::Pump => {
-            "Place directly above water. Powered intake removes real water beneath its footprint. Stores up to 16 m³. Operates within 64 metres."
-        }
-        Kind::FluidPipe => {
-            "Blue water transport. Pump → pipes → washer or tank. Water is conserved; paused machines block transfer."
-        }
-        Kind::Tank => {
-            "Buffers 16 m³ of water. Pumps fill tanks; tanks supply washers through fluid pipes. Does not need power."
-        }
-        Kind::Washer => {
-            "1 ore + 250 L water → 3 dust. 6 s at 12 kW (72 kJ). Smelt dust for triple ore yield. Stops safely when water, power or output space runs out."
-        }
-        Kind::Battery => {
-            "Stores grid energy: 1 kWh at 4 kW (lead-acid), 4 kWh at 16 kW (nickel-iron), 16 kWh at 64 kW (resonant cell). Covers shortfalls, banks surplus, or feeds your mana in Mana font mode."
-        }
-        Kind::CokeOven => {
-            "Railcraft-style coke oven door. Set it in the middle of one wall of a 3 × 3 × 3 shell of 26 coke oven bricks. Bakes 1 coal → 1 coke + 0.25 creosote in 10 s at ~1000 °C. No power."
-        }
-        Kind::BlastFurnace => {
-            "Blast furnace tuyere. Set it in the middle of a wall, second course up, of a 3 wide × 4 tall × 3 deep shell of 35 blast bricks. Burns coke to 1500 °C: 2 iron ore → 3 iron, or 2 iron → 2 steel. No power."
-        }
-        Kind::InductionCasing => "Induction matrix wall. A hollow box of casing, 3 to 9 metres a side, with ports in its walls.",
-        Kind::InductionPort => "Induction matrix port. Input mode charges the matrix from its cable; Output mode discharges into it.",
-        Kind::InductionCell => "Inside an induction matrix: 64 kWh of storage.",
-        Kind::InductionProvider => "Inside an induction matrix: 256 kW of transfer rate.",
-        Kind::Transformer => "Bridges two cable networks or cable tiers: 64 kW, 512 kW, then 4 MW.",
-        Kind::Assembler => "Factorio-style assembling machine. Pick a recipe; it crafts from piped ingredients at 5 kW, 2 s per craft.",
-        Kind::CokeBrick => "Coke oven shell brick. 26 make a coke oven around a door.",
-        Kind::BlastBrick => "Refractory blast furnace brick. 35 make a blast furnace around a tuyere.",
+    kind.name()
+}
+
+/// Shared presentation names; simulation status strings remain unchanged.
+pub(super) fn status_label(status: &str) -> &str {
+    match status {
+        "Needs cable / power" => "No Power",
+        "Output blocked" => "Output Full",
+        "Tank full" => "Tank Full",
+        "Waiting for world data" | "Waiting for excavation" => "Waiting",
+        "Excavation unavailable" => "Blocked",
+        "Intake clogged: clear sediment or relocate pump" => "Intake Blocked",
+        "Intake dry" => "No Water",
+        "Stand clear of shaft" => "Shaft Occupied",
+        "Assembly in shaft" | "Obstruction in shaft" => "Shaft Blocked",
+        "Bedrock reached" => "Bedrock",
+        "Shaft complete" => "Complete",
+        "Processing" => "Working",
+        "Held by controller" => "Held",
+        other => other,
     }
 }
 fn affordable(inventory: &Expedition, cost: &[(usize, u32)]) -> bool {
@@ -516,7 +445,7 @@ fn smelter_panel(
                 .fill(icons::TEAL),
         );
         ui.small(format!(
-            "Recipe: {} → {}. Item pipes deliver the finished ingots.",
+            "Recipe: {} → {}. Item Pipes deliver the finished ingots.",
             NAMES[recipe.inputs[0].0], NAMES[recipe.output.0]
         ));
     } else {
@@ -601,14 +530,14 @@ fn smelter_panel(
     ui.horizontal_wrapped(|ui| {
         if ui
             .button("Load ore")
-            .on_hover_text("Load all matching ore/dust from your pack")
+            .on_hover_text("Input Transfer")
             .clicked()
         {
             *action = UiAction::Factory(Action::Load(pos));
         }
         if ui
             .button("Unload")
-            .on_hover_text("Return all input and output ingots to your pack")
+            .on_hover_text("Output Transfer")
             .clicked()
         {
             *action = UiAction::Factory(Action::Collect(pos));
@@ -797,7 +726,7 @@ fn battery_panel(
         ui.label(RichText::new("I/O LIMIT").size(11.0).color(MUTED));
         if ui
             .add(egui::Slider::new(&mut limit, 1..=max).suffix(" kW"))
-            .on_hover_text("Like a Thermal energy cell: cap how fast this bank charges and discharges")
+            .on_hover_text("Maximum charge and discharge rate")
             .changed()
         {
             *action = UiAction::Factory(Action::SetTarget(pos, if limit >= max { 0 } else { limit }));
@@ -830,7 +759,7 @@ fn generator_panel(
         icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
         ui.vertical(|ui| {
             ui.label(RichText::new(node.kind.name()).size(19.0).color(icons::PAPER));
-            ui.label(RichText::new(node.status).color(if node.status == "Generating" {
+            ui.label(RichText::new(status_label(node.status)).color(if node.status == "Generating" {
                 icons::TEAL
             } else {
                 icons::GOLD
@@ -1064,7 +993,7 @@ fn multiblock_panel(
         });
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Load").on_hover_text("Load matching supplies from your pack").clicked() {
+        if ui.button("Load").on_hover_text("Input Transfer").clicked() {
             *action = UiAction::Factory(Action::Load(pos));
         }
         if ui.button("Unload").clicked() {
@@ -1129,7 +1058,7 @@ fn induction_panel(
     power_section(ui, node, grid);
     ui.label(RichText::new("PORT").size(11.0).color(MUTED));
     mode_picker(ui, pos, node, action);
-    ui.small("Build a hollow box of induction casing, 3 to 9 metres a side, with ports in its walls. Fill the inside with cells (64 kWh each) and providers (256 kW each); empty space is allowed.");
+    ui.small("Hollow casing: 3-9 m per side. Add wall ports, storage cells and providers.");
 }
 
 fn transformer_panel(
@@ -1160,7 +1089,7 @@ fn transformer_panel(
         meter(ui, stored as f32 / cap.max(1) as f32, icons::GOLD, &format!("Buffer {}", power::fmt_joules(stored as f64)));
     }
     power_section(ui, node, grid);
-    ui.small("Touch it with cables of two different tiers (or two separate networks). It carries surplus from one to the deficit of the other, one tick behind.");
+    ui.small("Connect two cable networks to transfer surplus power.");
     ui.horizontal(|ui| {
         if ui.button(if node.enabled { "Open breaker" } else { "Close breaker" }).clicked() {
             *action = UiAction::Factory(Action::Toggle(pos));
@@ -1292,7 +1221,7 @@ fn assembler_panel(
     });
     ui.ctx().data_mut(|d| d.insert_temp(search_id, query));
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Load").on_hover_text("Load ingredients from your pack").clicked() {
+        if ui.button("Load").on_hover_text("Input Transfer").clicked() {
             *action = UiAction::Factory(Action::Load(pos));
         }
         let collect = if node.stock > 0 { format!("Collect {} kits", node.stock) } else { "Unload".to_string() };
@@ -1304,7 +1233,7 @@ fn assembler_panel(
         }
         upgrade_button(ui, pos, node, inventory, action);
     });
-    ui.small("Pipe ingredients in; resource products leave through the pipes. Machine kits stay inside until collected.");
+    ui.small("Pipe ingredients in and products out. Collect machine kits here.");
 }
 
 pub(super) fn draw(
@@ -1329,6 +1258,7 @@ pub(super) fn draw(
             if matches!(node.kind, Kind::Furnace | Kind::AlloyKiln) {
                 smelter_panel(ui, *pos, node, inventory, action);
                 power_section(ui, node, view.focused_grid);
+                super::chip_panel::section(ui, view, *pos, action);
                 return;
             }
             if node.kind == Kind::Battery {
@@ -1353,6 +1283,7 @@ pub(super) fn draw(
             }
             if node.kind.generator() {
                 generator_panel(ui, *pos, node, view.focused_grid, inventory, action);
+                super::chip_panel::section(ui, view, *pos, action);
                 return;
             }
             if matches!(node.kind, Kind::CokeOven | Kind::BlastFurnace) {
@@ -1364,8 +1295,8 @@ pub(super) fn draw(
                     icons::slot(ui, Icon::Machine(node.kind), None, true, detail(node.kind));
                     ui.vertical(|ui| {
                         ui.label(RichText::new(node.kind.name()).size(19.0).color(icons::PAPER));
-                        ui.label(RichText::new(if node.formed { "Part of a formed shell" } else { "Loose brick" }).color(if node.formed { icons::TEAL } else { icons::GOLD }));
-                        ui.small(detail(node.kind));
+                        ui.label(RichText::new(if node.formed { "Structure Complete" } else { "Structure Incomplete" }).color(if node.formed { icons::TEAL } else { icons::GOLD }));
+
                     });
                 });
                 return;
@@ -1374,7 +1305,7 @@ pub(super) fn draw(
                 icons::slot(ui,Icon::Machine(node.kind),None,true,detail(node.kind));
                 ui.vertical(|ui| {
                     ui.label(RichText::new(node.kind.name()).size(20.0).color(icons::PAPER));
-                    ui.label(RichText::new(node.status).color(if node.status=="Processing"||node.status=="Generating" {icons::TEAL}else{icons::GOLD}));
+                    ui.label(RichText::new(status_label(node.status)).color(if node.status=="Processing"||node.status=="Generating" {icons::TEAL}else{icons::GOLD}));
                     if node.kind.powered() {power_section(ui,node,view.focused_grid);}
                     if node.kind==Kind::Generator && node.mode==1 {
                         let heat=node.progress as f32/crate::world::factory::pile::MAX_HEAT as f32;
@@ -1383,6 +1314,9 @@ pub(super) fn draw(
                     if node.kind.water_port() && (node.kind!=Kind::Generator || node.mode==1) {icons::gauge(ui,node.water as f32/8192.0,icons::TEAL,&format!("{:.0} / 16000 L {}",node.water as f32*1000.0/512.0,if node.kind==Kind::Generator {"coolant"} else {"water"}));}
                 });
             });
+            if crate::world::factory::chips::controllable(node.kind) {
+                super::chip_panel::section(ui, view, *pos, action);
+            }
             if let Some(recipe)=node.process() {
                 ui.horizontal_wrapped(|ui| {
                     for &(i,n) in &recipe.inputs {if n>0 {icons::slot(ui,Icon::Resource(i),Some(n),false,NAMES[i]);}}
@@ -1416,11 +1350,11 @@ pub(super) fn draw(
                     });
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("Load").on_hover_text("Load matching supplies from your pack").clicked(){*action=UiAction::Factory(Action::Load(*pos));}
-                    if ui.button("Unload").on_hover_text("Return all input and output items to your pack").clicked(){*action=UiAction::Factory(Action::Collect(*pos));}
+                    if ui.button("Load").on_hover_text("Input Transfer").clicked(){*action=UiAction::Factory(Action::Load(*pos));}
+                    if ui.button("Unload").on_hover_text("Output Transfer").clicked(){*action=UiAction::Factory(Action::Collect(*pos));}
                     if ui.button(if node.enabled {"Pause"}else{"Start"}).clicked(){*action=UiAction::Factory(Action::Toggle(*pos));}
                     if node.kind.water_port() && node.water>0
-                        && ui.button(if node.draining {"Close drain"}else{"Drain water"}).on_hover_text("Pauses the machine and releases stored water into free neighbouring cells. Clear the outlet before dismantling.").clicked(){*action=UiAction::Factory(Action::Drain(*pos));}
+                        && ui.button(if node.draining {"Close drain"}else{"Drain water"}).on_hover_text("Fluid Outlet").clicked(){*action=UiAction::Factory(Action::Drain(*pos));}
                     upgrade_button(ui,*pos,node,inventory,action);
                 });
             }
@@ -1432,7 +1366,7 @@ pub(super) fn draw(
             }
         });
         } else {
-            ui.label("No machine selected. Aim at a machine and press F to inspect it.");
+            ui.label("No Selection");
         }
         return;
     }
@@ -1521,7 +1455,7 @@ pub(super) fn draw(
                     ui.label("Kinetic maul");
                     ingredients(ui, crate::world::adventure::sword_recipe(5), inventory);
                     ui.small(
-                        "Third strike releases a radial impulse that launches loose assemblies.",
+                        "Third hit knocks back loose objects.",
                     );
                     if ui
                         .add_enabled(
@@ -1672,7 +1606,7 @@ pub(super) fn draw(
             });
         }
         if !owns_any {
-            ui.weak("No sword owned. Craft a copper sword from the Crafting tab, or recover a warden's steel blade.");
+            ui.weak("No sword. Craft one or loot a warden.");
         }
         ui.separator();
         if adventure.wand < 3 {

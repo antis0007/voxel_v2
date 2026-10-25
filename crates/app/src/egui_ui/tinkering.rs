@@ -350,6 +350,7 @@ pub(super) fn draw(
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("The Tinker's Forge")
+                .family(egui::FontFamily::Name("PixelAccent".into()))
                 .size(20.0)
                 .color(icons::GOLD)
                 .strong(),
@@ -365,7 +366,7 @@ pub(super) fn draw(
     });
     ui.label(
         RichText::new(
-            "Fit a head, binding and grip, then bolt on modifiers. Fittings follow the equipped melee tier.",
+        "Choose a head, binding, grip and modifiers.",
         )
         .size(11.0)
         .color(presentation::MUTED),
@@ -451,7 +452,6 @@ pub(super) fn draw(
             .size(11.0)
             .color(presentation::AMBER),
     );
-    ui.small("Click a material to fit it. Costs are paid from your pack.");
     if ui.available_width() >= 560.0 {
         ui.columns(3, |columns| {
             for (index, part) in Part::ALL.into_iter().enumerate() {

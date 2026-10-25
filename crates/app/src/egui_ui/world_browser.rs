@@ -113,17 +113,12 @@ fn details(ui: &mut egui::Ui, owner: &mut EguiUi, result: &mut UiAction) {
         heading(
             ui,
             "Select a world",
-            "Choose a saved world to view its details.",
+            "",
         );
         return;
     };
-    caption(ui, "SELECTED WORLD");
     ui.heading(RichText::new(&e.name).size(25.0));
     ui.label(RichText::new(format!("{} · Seed {}", kind(e), e.seed)).weak());
-    ui.label(format!(
-        "{} edited chunks · {} recovery checkpoints",
-        e.chunks, e.checkpoints
-    ));
     ui.label(format!(
         "{} · Last saved {}",
         e.scale.label(),
@@ -143,7 +138,7 @@ fn details(ui: &mut egui::Ui, owner: &mut EguiUi, result: &mut UiAction) {
             if owner.library_loading {
                 "Opening world…"
             } else {
-                "Continue this world"
+                "Play"
             },
             true,
         )
@@ -152,7 +147,6 @@ fn details(ui: &mut egui::Ui, owner: &mut EguiUi, result: &mut UiAction) {
             *result = UiAction::OpenWorld(e.id.clone());
         }
     });
-    ui.small("Opens the newest complete checkpoint for this world. Earlier checkpoints are tried if recovery is needed.");
     if !e.id.starts_with("legacy-") {
         ui.add_space(14.0);
         caption(ui, "WORLD DETAILS");
@@ -189,7 +183,7 @@ fn details(ui: &mut egui::Ui, owner: &mut EguiUi, result: &mut UiAction) {
             };
         }
     } else {
-        ui.small("This is a legacy save. Open and save it once to enable named-world details.");
+        ui.small("Save this world once to rename it.");
     }
 }
 pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
@@ -222,8 +216,8 @@ pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
             ui.vertical_centered(|ui| {
                 ui.set_max_width((ui.available_width()-32.0).clamp(220.0,1080.0));
                 surface().show(ui,|ui| {
-                    caption(ui,"VOXEL WORKSHOP");
-                    heading(ui,"Worlds","Open a saved world or create a new one.");
+                    caption(ui,"MERIDIAN / SAVED WORLDS");
+                    heading(ui,"Worlds","");
                     if !entries.is_empty() { ui.horizontal_wrapped(|ui| {
                         ui.add(egui::TextEdit::singleline(&mut owner.browser.query).hint_text("Search name, landscape or seed").desired_width(270.0));
                         for (sort,label) in [(Sort::Recent,"Recent"),(Sort::Name,"A–Z"),(Sort::Favorites,"Favorites first")] {
@@ -232,8 +226,8 @@ pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
                         if tab(ui,"★ Only favorites",owner.browser.only_favorites).clicked(){owner.browser.only_favorites = !owner.browser.only_favorites;}
                         if ui.small_button("Refresh").clicked(){result=UiAction::RefreshWorlds;}
                     }); }
-                    if owner.library_loading {ui.label(RichText::new("Opening your world… Terrain will be prepared before movement begins.").color(Color32::LIGHT_GREEN));}
-                    else if owner.library_busy {ui.small("Updating your world library…");}
+                    if owner.library_loading {ui.label(RichText::new("Loading world…").color(Color32::LIGHT_GREEN));}
+                    else if owner.library_busy {ui.small("Refreshing…");}
                     if let Some(status)=&owner.library_status {ui.label(status);}
                     if let Some(status)=&owner.persistence_status {ui.label(RichText::new(status).small().weak());}
                     ui.add_space(10.0);
@@ -247,7 +241,7 @@ pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
                     }
                     if matching.is_empty() {
                         ui.add_space(20.0);
-                        ui.label(if entries.is_empty(){"No saved worlds. Create one to start playing."}else{"No worlds match your search."});
+                        ui.label(if entries.is_empty(){"No Worlds"}else{"No Results"});
                         if action(ui,"Create a new world",true).clicked(){owner.home_page=HomePage::Create;}
                     } else {
                         let list=|ui:&mut egui::Ui,owner:&mut EguiUi| {

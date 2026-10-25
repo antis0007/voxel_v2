@@ -207,9 +207,9 @@ pub fn site_shrine(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Shrine> 
         let at = super::site_point(s, Vec3::new(0.0, 0.0, 26.0));
         let x = (at.x / v).floor() * v;
         let z = (at.z / v).floor() * v;
-        let ground = sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z)).height
-            as f32
-            * v;
+        let ground = if cfg.generator_version >= 39 { s.ground } else {
+            sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z)).height as f32 * v
+        };
         Some(Shrine {
             family,
             center: Vec3::new(x, ground, z),
@@ -259,7 +259,26 @@ pub fn shrine(cfg: &WorldSampleConfig, id: IVec3, near: Vec3) -> Option<Shrine> 
 
 /// Surface sampler hook for the region site at `(rx, rz)`.
 pub(super) fn site_block(cfg: &WorldSampleConfig, rx: i32, rz: i32, m: Vec3) -> Option<B> {
-    site_shrine(cfg, rx, rz)?.sample(m)
+    let shrine = site_shrine(cfg, rx, rz)?;
+    let built = shrine.sample(m);
+    if cfg.generator_version < 39 || built.is_some() { return built; }
+    let q = shrine.local_of(m);
+    let dx = (BOUNDS[0] as f32 - q.x).max(q.x - BOUNDS[1] as f32).max(0.0);
+    let dz = (BOUNDS[4] as f32 - q.z).max(q.z - BOUNDS[5] as f32).max(0.0);
+    let distance = dx.hypot(dz);
+    if distance >= 10.0 || q.y < -12.0 || q.y > 18.0 { return None; }
+    let terrain = cfg.world_y(sample_column(cfg, cfg.blocks_for_height(m.x),
+        cfg.blocks_for_height(m.z)).height + 1) - shrine.center.y;
+    let v = cfg.voxel_meters();
+    let top = v + (terrain - v) * crate::smoothstep(0.0, 10.0, distance);
+    if q.y < top && q.y >= terrain - 2.0 {
+        return Some(if distance == 0.0 { B::Cobblestone }
+            else if q.y >= top - v { B::Grass } else { B::Dirt });
+    }
+    if q.y >= top && q.y < if distance == 0.0 { terrain.max(16.0) } else { terrain } {
+        return Some(B::Air);
+    }
+    None
 }
 
 /// Cavern sampler hook. The complex spans `w -10..29` from the chamber centre.

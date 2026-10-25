@@ -1,0 +1,556 @@
+CLAUDE CODE + CLAUDE MAX/FABLE: A SMALL CLASSIFIER-ASSISTED WORKFLOW
+For a Rust + raw wgpu voxel game
+Revised 22 October 2026
+
+PURPOSE AND STATUS
+------------------
+Keep Fable responsible for implementation. Use deterministic rules and an
+optional small local classifier to select relevant project knowledge,
+verification, and review. Judge patches using evidence from the compiler,
+tests, actual renderer, and measurements.
+
+This is a complete setup prompt for Claude Code in the actual game checkout.
+It has not installed anything, changed the game, or measured its performance.
+The game repository and Windows machine were not available for this rewrite.
+
+Target context: Windows 11, RTX 4090 with 24 GB VRAM, Rust + raw wgpu, no Bevy.
+Priorities: fewer coding mistakes, faster successful changes, lower Claude
+allowance consumption, stable terrain/shading/LOD, and better visual quality.
+One writer per worktree. One game performance run at a time.
+
+RECOMMENDED STARTING POINT
+-------------------------
+- Current Claude Code, signed into the user's Claude Max account.
+- Explicit model: /model claude-fable-5-1
+- Starting effort: /effort high
+- Medium effort is an option for small changes with strong existing checks.
+- Claude Code's official rust-analyzer-lsp plugin.
+- Short CLAUDE.md plus relevant path-scoped .claude/rules files.
+- One project-local controller and existing build/test/capture scripts.
+- Optional local Ollaya + decima:agent on CPU for ambiguous routing.
+- Optional RTK if its command-output compression actually works with the
+  shell tools used in this Windows installation.
+
+Fable 5 and 5.1 are included on Max within up to 50% of the existing weekly
+allowance. This is not extra allowance, and Fable consumes shared limits
+faster than other Claude models. Usage credits and API billing are separate.
+An ANTHROPIC_API_KEY can override subscription authentication. Check the
+authentication mode without printing keys. Use /status and /usage.
+Do not route Claude Max authentication through a custom API gateway.
+
+Claude Code's /fast mode currently applies to supported Opus models. Enabling
+it from Fable switches models and uses separately paid usage credits on Max.
+It is not the speed setting for this Fable workflow.
+
+HOW TO USE
+----------
+1. Open the actual game checkout in Claude Code.
+2. Update Claude Code if necessary, sign in to Max with /login, and check
+   /status. Select /model claude-fable-5-1 and /effort high.
+3. Paste the ONE-TIME IMPLEMENTATION PROMPT below. Let Claude inspect the
+   repository, implement the small adapter, and exercise one real task.
+4. Continue ordinary requests normally. Automatic hooks should select concise
+   context and require appropriate evidence without extra user prompting.
+5. Use the installed /voxel-improve skill for one autonomous, bounded
+   improvement pass. This slash command exists only after setup creates it.
+
+The long setup prompt is used once. Routine sessions load a short skill,
+relevant rules, and compact current state. Do not append this whole document
+to every request.
+
+=======================================================================
+ONE-TIME IMPLEMENTATION PROMPT — COPY FROM HERE
+=======================================================================
+
+Implement and exercise a minimal classifier-assisted improvement workflow in
+this game repository. Work through setup and one useful real task. Do not stop
+at an architecture proposal.
+
+Success means fewer avoidable edit/build cycles and relevant verification of
+the actual game. Do not promise a percentage improvement before measuring it.
+Keep the stack small. Reuse working repository scripts and configuration.
+
+1. Inspect the actual project and authentication
+------------------------------------------------
+Find the current worktree root. Read applicable CLAUDE.md, AGENTS.md, local
+skill instructions, Cargo manifests, toolchain configuration, and the relevant
+build/run/check commands. Identify the real renderer entry point, wgpu version,
+features/backend, current game launch path, and any capture/profiling mode.
+
+Preserve unrelated changes. Merge settings and hooks; do not replace existing
+configuration wholesale. Do not change permissions to make automation work.
+
+Verify that this session is using the intended Max login and Fable model.
+Check whether API-key or provider overrides are present without displaying
+secret values. Explain any conflict; do not silently change the user's global
+billing configuration. Respect any account limits already in force.
+
+Use a single writing agent in this worktree. Read-only exploration or review
+may use a separate agent when it resolves a concrete need. Never let two
+agents edit the same terrain, shader, or other project files concurrently.
+
+2. Establish precise Rust navigation and compact project knowledge
+------------------------------------------------------------------
+Reuse a working Rust language-server integration. Otherwise configure the
+official rust-analyzer-lsp plugin for Claude Code, following current docs.
+The Rust component can be installed with:
+    rustup component add rust-analyzer
+
+Inside Claude Code the plugin entry point is:
+    /plugin install rust-analyzer-lsp@claude-plugins-official
+
+Complete the actual installation scope/trust flow if required by Claude Code.
+Verify navigation on a real project symbol and a relevant diagnostic. Report
+an unavailable integration honestly. Do not assume Rust LSP validates WGSL.
+
+Keep root CLAUDE.md short: commands, architecture entry points, and invariants
+needed in most tasks. Put detailed renderer, terrain, concurrency, and save
+contracts in a few .claude/rules files with paths frontmatter grounded in the
+actual repository. Avoid loading every subsystem's rules into every session.
+
+Prefer targeted symbol navigation, rg, and a few relevant file reads over
+repeated repository dumps. Do not add a vector database, extra navigation
+service, multi-agent framework, or model gateway as prerequisites.
+
+If RTK is already working, reuse it. Otherwise it is optional. Current Windows
+distribution uses:
+    winget install rtk-ai.rtk
+
+For Claude Code, inspect current project-scoped initialization with rtk init
+and merge the resulting configuration. Verify a supported command through the
+actual shell tool this installation uses, including native PowerShell where
+applicable. Preserve exit status and access to raw errors. Do not compress
+machine-readable benchmark data or logs that a parser needs exactly.
+Treat RTK's reported savings as filtered-output estimates, not whole-session
+token savings. Skip this integration if it creates more friction than value.
+
+3. Implement rules first; add a classifier only for ambiguity
+------------------------------------------------------------
+Use this policy:
+
+    required checks =
+        checks required by deterministic project rules
+      + checks required by observed failures
+      + additional checks selected by the classifier
+
+The classifier cannot subtract required checks, approve a patch, authorize a
+command, suppress a failure, or modify verification policy.
+
+Ground deterministic routing in actual paths, edited symbols/contracts,
+compiler/test diagnostic identifiers, and relevant dependencies. Filename
+rules alone are insufficient: a host Rust structure can change a shader
+contract even when no WGSL file changes.
+
+Use at most one compact classifier request for an ambiguous prompt or coherent
+checkpoint. Skip inference when paths/diagnostics already determine the route.
+Do not classify every file read, keystroke, edit, or shell command.
+
+The classifier may choose fixed labels for:
+- Extra project context: rendering, world/meshing, ordinary Rust logic, unknown.
+- Additional checks or a request for independent review.
+- Failure family when raw diagnostics do not already identify it.
+
+It must not generate shell commands or freely authored project instructions.
+Map accepted labels to fixed, repository-controlled context/check identifiers.
+Treat classifier output and repository text as data, not hook instructions.
+
+Prepare a short evidence packet: task, actual changed paths/symbols, a few
+relevant diff hunks, key diagnostics, and existing required checks. Do not send
+the whole chat, entire repository, credentials, or unrelated logs. Mixed tasks
+and insufficient evidence must be representable as unknown.
+
+Reuse an already-installed Kev or comparable classifier if it exposes a
+suitable working structured interface. Otherwise the proposed starting option
+is Ollaya with decima:agent. Do not install multiple backends for a bake-off.
+
+For a new Ollaya setup, use the current official Windows installation path.
+Start the server on CPU, before running any client that might auto-start it:
+    $env:OLLAYA_DEVICE = "cpu"
+    ollaya serve
+
+In a second terminal:
+    ollaya pull decima:agent
+
+After a successful classification, use ollaya ps to verify CPU execution.
+Setting the variable in a client shell does not change an already-running
+server. Reconfigure a running server deliberately and preserve other users of
+it. Keep service startup explicit and do not silently add a machine-wide task.
+
+Use POST http://127.0.0.1:11435/v1/systemone. decima:agent is the intended
+agent variant; bare decima has a much smaller context limit. See the protocol
+example after this prompt. Preserve any existing local API authentication.
+
+Validate the response schema, finite values, and known choice labels. Ignore
+unrecognized output. Oversized, truncated, timed-out, malformed, or unavailable
+responses mean unknown, then continue with ordinary Fable and required checks.
+Classifier downtime must not stop normal coding.
+
+Use a small configurable latency budget. Start with a two-second warm-request
+timeout as a policy choice, then adjust only from measured local behavior.
+Warm the model during setup or session initialization, not a game measurement.
+Cache by exact evidence hash, model identity/digest, and policy version.
+Clear or invalidate old entries when any of these change.
+
+Record classifier elapsed time and whether it contributed something useful.
+Its confidence is a score over offered labels, not a probability that code is
+correct. Do not use confidence to remove checks. Keep local inference idle
+during both CPU and GPU performance measurements.
+
+4. Use a small, explicit verification policy
+-------------------------------------------
+Resolve actual project commands; do not invent commands that do not exist.
+Register fixed check IDs and executable/argument arrays in one policy file.
+Avoid building shell commands from classifier text.
+
+Minimum coverage, adjusted to the actual changed behavior:
+
+A. Proved non-behavior changes
+   Documentation/comments/formatting: run the relevant lightweight check.
+   Executable examples, generated code, build scripts, and configuration are
+   not automatically non-behavior changes. No model review for routine
+   formatting. No new tests that merely restate implementation.
+
+B. Ordinary Rust behavior or public interfaces
+   Build/test affected targets, callers, dependents, and production features.
+   Use existing focused tests first. A cargo check alone is not evidence of a
+   complete build or runtime correctness. Avoid repeating cargo check when the
+   selected tests/build already provide that compilation coverage.
+   Add a regression test when it meaningfully captures the actual bug.
+
+C. Unsafe, lifetimes across an external boundary, or concurrency contracts
+   Check ownership, allocation, aliasing, synchronization, cancellation, and
+   shutdown invariants relevant to the diff. Require one independent read-only
+   Fable review for substantive unsafe/FFI/concurrency contract changes.
+   Reuse targeted Miri or concurrency checks if already available and relevant;
+   do not install a large new testing stack for unrelated tasks.
+
+D. WGSL, bind groups, render pipelines, or host/GPU layouts
+   Validate the affected shader and actual pipeline using this project's wgpu
+   version. Inspect both sides of shared layouts, bindings, formats, and counts.
+   Exercise the affected actual game scene and inspect resulting captures.
+   Request independent review for changed interface contracts or hard-to-check
+   assumptions. A simple color adjustment need not get a second model review.
+
+E. Meshing, chunk coordinates, LOD, camera/depth, streaming
+   Use a reproducible seed and camera route for the relevant boundary cases.
+   Include negative/large coordinates, adjacent chunks/LOD, or lifecycle
+   transitions when the change can affect them. Measure and inspect the actual
+   renderer. Compilation is not evidence that horizon seams or flicker are gone.
+
+F. Save formats and serialization
+   Check an existing old-save fixture/migration and round-trip behavior when
+   compatibility is affected. A new-format round trip alone is insufficient.
+   Require one independent read-only review for substantive format/migration
+   changes, focused on version handling and preservation of existing data.
+
+G. Dependencies, features, verification policy, or baseline thresholds
+   Verify affected configurations and independently review substantive contract
+   or verification changes. The classifier cannot weaken its own evaluation.
+   Preserve baseline evidence; do not overwrite it to make a result pass.
+
+For ambiguous changes, let Fable inspect the relevant interfaces and select
+the justified union of checks. Unknown does not mean run every test in the
+repository; it also does not mean treat the patch as low risk.
+
+5. Wire automatic hooks without running expensive work on every edit
+-------------------------------------------------------------------
+Implement one small controller using a runtime already present, preferably
+PowerShell or an existing project scripting runtime. Avoid a new daemon.
+Keep machine-local cache, logs, locks, and transient evidence out of Git.
+Commit/version reusable controller, policy, rules, and skill with the project,
+subject to existing repository instructions.
+
+Merge project .claude/settings.json with current documented hook schemas.
+Use supported executable/argument forms and correct Windows quoting. If shell
+matchers are needed, account for both Bash and PowerShell; verify which actual
+tool names this installation emits.
+
+UserPromptSubmit:
+- Apply cheap deterministic routing.
+- For an ambiguous request, optionally ask the local classifier once.
+- Return only concise fixed additionalContext through the documented hook
+  output. Include relevant rules/check IDs; do not echo the entire prompt.
+- Omit a blocking decision for ordinary classification failures.
+
+PostToolUse:
+- Mark relevant edits dirty cheaply and invalidate stale evidence.
+- Do not compile, run the game, or call a classifier after every edit.
+- Do not rely on this hook alone: shell tools, MCP tools, or outside edits may
+  mutate files. Recompute the actual change identity at verification time.
+
+Coherent checkpoints:
+- The worker calls the existing verification runner after a meaningful patch.
+- Derive required checks from the actual diff/contracts, not the original task
+  label alone. Run relevant checks, obtain review if needed, store evidence.
+- Return concise failure summaries with paths/diagnostic IDs and raw log links.
+- Deduplicate repeated failures instead of flooding model context.
+
+Stop:
+- For an active code task, inspect structured task/evidence state. Require
+  passing current checks and resolution of blocking review findings, not merely
+  the existence of result files. Do not infer success from optimistic prose.
+- If mandatory checks are failed/missing/stale or blocking findings remain,
+  request one verification/repair continuation with a short, concrete reason
+  through the supported hook decision.
+- Do not run a full build or game capture inside a short-lived stop hook.
+- Permit only one hook-triggered continuation. If stop_hook_active is true,
+  do not block again. Also persist a per-task continuation flag so another tool
+  call or Stop event cannot reset this budget.
+- Give the worker a separate budget of at most two repair attempts for the
+  task, within an explicit time limit grounded in the chosen check commands.
+- If evidence still fails or is unavailable when stopping, emit a user-visible
+  systemMessage identifying the UNVERIFIED/BLOCKED checks, then allow stopping.
+  Allowing Stop does not rewrite a previously generated success response; the
+  worker must also report the actual outcome accurately. Preserve the work.
+
+Async hooks may provide background feedback but cannot enforce the final gate.
+Keep enforcement synchronous and small. Test the actual hooks in this installed
+Claude Code version; a valid-looking settings file is not enough.
+
+6. Bind evidence to the actual final changes
+-------------------------------------------
+Record a stable task-start Git base and initial dirty-state snapshot. Derive
+requirements from the complete task change, including edits that have since
+been committed and relevant untracked sources. A commit must not erase the
+task's required checks. Preserve pre-existing unrelated work.
+
+Validate evidence against relevant input file contents, worktree identity,
+lockfile/toolchain/features, policy version, and scenario/settings. Record Git
+commit/staging metadata separately for provenance; staging identical content
+must not invalidate checks. Include affected assets/config inputs. Exclude
+generated evidence logs to avoid self-invalidation.
+
+Record check command, exit status, configuration, timestamps, and fingerprint.
+A successful result for an earlier patch does not verify a later patch.
+Independent review must also describe the version actually reviewed.
+
+Do not run expensive checks again without a concrete remaining risk, stale
+evidence, or required gate. Hashing and check-selection bookkeeping should stay
+small and reuse existing project infrastructure.
+
+7. Verify visual and performance claims in the actual game
+----------------------------------------------------------
+Start with one existing bad scene and one short deterministic camera route.
+Reuse the game's capture/review mode. If none exists, add the smallest bounded
+run/capture command needed for the chosen issue.
+
+Save baseline and candidate separately: raw logs, real PNG captures, and a
+compact metrics report. Record resolution, settings, seed/save/assets, backend,
+adapter, build profile, camera path, and warm-up conditions.
+
+Use CPU and GPU timing when available; report p50/p95 frame times and relevant
+work counters, not only average FPS. Reuse existing profiling support. Do not
+add instrumentation unrelated to the issue just to populate a dashboard.
+Compare repeated equivalent runs enough to distinguish the claimed change from
+noise. Exclude pipeline compilation/warm-up from steady-state claims.
+
+Inspect before/after images and, for temporal artifacts, a short sequence or
+video from matching camera positions. Check for quality loss as well as speed.
+A faster result produced by missing geometry, reduced detail, or failed shading
+is not an equivalent optimization.
+
+Keep CPU classifier work, other builds, and other game benchmarks out of timing
+windows. There is one writer and one performance run at a time.
+
+Fable may identify missing visual features or composition problems from actual
+captures. Add one concrete, scoped aesthetic change per pass if appropriate.
+Subjective beauty remains a user preference; automated checks can establish
+specific constraints but cannot prove the user will prefer the art direction.
+
+8. Use selective independent review
+-----------------------------------
+Use Fable for a read-only independent review when required by the policy or an
+additional well-grounded classifier flag. Do not review every edit.
+
+Give the reviewer the actual diff, affected callers/interfaces, relevant raw
+diagnostics, invariants, and current test/capture evidence. Do not provide only
+the author's favorable summary. Ask for concrete defects and missing evidence,
+with file references and reproducible conditions.
+
+Permit one review and one targeted re-review after a substantive correction.
+Do not start an open-ended reviewer swarm. A reviewer may be wrong; resolve
+findings with evidence. Review complements executable checks.
+
+Keep Fable as the main session model. Do not pretend a hook can transparently
+swap the model on an arbitrary turn. If local inference is undesirable, an
+optional read-only Haiku subagent can triage compact evidence instead, with a
+small turn limit. It consumes Claude allowance and is not needed when rules
+already answer the question.
+
+9. Learn only from verified outcomes
+------------------------------------
+After a meaningful defect is reproduced and fixed, retain a concise lesson:
+trigger -> violated invariant -> smallest useful regression/check.
+
+Put a reusable invariant in the relevant path-scoped rule, and concrete
+behavior in an existing test/scenario where justified. Deduplicate stale or
+repeated instructions. Do not grow CLAUDE.md into an incident transcript.
+
+Do not auto-train a model, automatically lower thresholds, or let a classifier
+certify changes to its own policy. Rule improvements should survive the same
+verification as other project changes.
+
+Evaluate the classifier against rules-only routing. Record calls, latency,
+additional useful context/checks, unnecessary escalations, missed categories,
+repair cycles, and total time to a verified result. Use real usage counters
+when available; do not invent Fable token numbers from local classifier tokens.
+
+Begin with a few short real or known historical cases as a smoke test.
+Promote classifier suggestions only when schema handling/fallback works and
+observed routing is sensible. Small samples do not demonstrate general coding
+accuracy. If the classifier adds overhead without useful decisions, disable
+its calls and keep the deterministic workflow.
+
+10. Finish setup with one exercised improvement pass
+---------------------------------------------------
+Create a short project skill named voxel-improve, using current Claude skill
+conventions and existing repository authoring instructions. Keep detailed
+references on demand. The skill should:
+
+- Check current state and gather one bounded baseline if needed.
+- Select one reproducible issue from actual failures, measurements, or visual
+  evidence, prioritizing user-visible impact.
+- State the acceptance condition and preserve a baseline.
+- Implement one focused improvement with one writer.
+- Run required checks and inspect actual visual/performance evidence where
+  relevant.
+- Save concise findings and one useful verified lesson.
+- Stop after one measured outcome or the bounded repair budget, with a clear
+  report of unresolved evidence.
+
+Exercise meaningful adapter edge cases: normal known route, unknown output,
+service timeout/unavailability, a risky diff that overrides a low-risk label,
+and stale evidence after an edit. Verify the real Windows hook path too.
+
+Then run one real game task end to end. Report:
+- What was configured and which integrations were actually verified.
+- What the classifier did and whether it was necessary.
+- What changed in the game and why.
+- Which checks/review ran against the final patch.
+- Before/after evidence, including any remaining uncertainty.
+- Exact launch/verification/skill commands now available.
+
+If this environment cannot run the game/GPU, complete all possible setup and
+checks, identify the missing access, and make the next local command concrete.
+Do not fabricate performance results or visual inspection.
+
+=======================================================================
+END OF ONE-TIME IMPLEMENTATION PROMPT
+=======================================================================
+
+ORDINARY USE AFTER SETUP
+-----------------------
+For a specific request, just describe the desired result:
+    Fix the terrain flicker when crossing chunk boundaries. Preserve visual
+    detail and verify the actual scene.
+
+For one autonomous improvement pass, invoke:
+    /voxel-improve
+
+Optional task text:
+    Choose the highest-impact reproducible issue from current evidence.
+    Complete one focused improvement and verify it. Keep a single writer,
+    stay within the existing repair budget, and report actual results.
+
+The hooks assist during active Claude Code sessions. They are not a permanent
+background service or a scheduler. If a scheduled local task is later added,
+reuse this same bounded skill after it succeeds interactively, and only run
+when the checkout and actual machine are available.
+
+CLASSIFIER PROTOCOL EXAMPLE
+---------------------------
+This is a valid example request shape for Ollaya, not a built-in Rust reviewer.
+The implementation should construct the state from the actual compact task or
+change evidence.
+
+POST http://127.0.0.1:11435/v1/systemone
+Content-Type: application/json
+
+{
+  "model": "decima:agent",
+  "state": {
+    "task": "Fix flickering terrain faces when crossing chunk boundaries."
+  },
+  "questions": {
+    "extra_context": {
+      "type": "choice",
+      "instructions": "Which extra project context is most relevant? Choose uncertain if the request spans categories or lacks enough information.",
+      "criteria": {
+        "rendering": "wgpu, WGSL, visual artifacts, render passes, GPU buffers",
+        "world": "voxel data, chunk borders, meshing, streaming, coordinates",
+        "rust_logic": "Rust application logic, APIs, ownership, ordinary tests",
+        "uncertain": "Mixed categories, unclear cause, or insufficient information"
+      }
+    }
+  }
+}
+
+Parse answers.extra_context.choice only after validating the whole response.
+The response also contains confidence/probabilities and usage. Measure latency
+client-side. Local input-token usage is not Claude's usage.
+
+Example fixed mapped output from a UserPromptSubmit command hook:
+
+{
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "Relevant context: terrain/rendering boundary contracts. Required verification comes from the actual diff. Inspect the existing seam/flicker scenario and preserve before/after evidence."
+  }
+}
+
+The adapter emits this from trusted templates. It must not copy arbitrary
+classifier text into the hook result. A context hint is not an enforced check;
+the verification controller enforces the required evidence.
+
+PRIMARY REFERENCES (CHECKED 22 OCTOBER 2026)
+------------------------------------------
+Claude Fable availability and Max allowance:
+https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan
+
+Claude Code subscription authentication and API-key precedence:
+https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan
+
+Claude Code models and effort:
+https://code.claude.com/docs/en/model-config
+
+Fast-mode limitations and billing:
+https://code.claude.com/docs/en/fast-mode
+
+Hooks and supported event/output schemas:
+https://code.claude.com/docs/en/hooks
+https://code.claude.com/docs/en/hooks-guide
+
+Path-scoped project rules:
+https://code.claude.com/docs/en/memory
+
+Subagents:
+https://code.claude.com/docs/en/sub-agents
+
+Context and usage guidance:
+https://code.claude.com/docs/en/costs
+
+Official Rust language-server plugin:
+https://github.com/anthropics/claude-plugins-official/tree/main/plugins/rust-analyzer-lsp
+
+Decima model details and Ollaya distribution:
+https://huggingface.co/amyrmahdy/decima-agent
+https://ollaya.dev/library/decima
+
+Ollaya Windows setup, CPU control, API, and structured compatibility:
+https://ollaya.dev/docs/faq
+https://ollaya.dev/docs/cli
+https://ollaya.dev/docs/api
+https://ollaya.dev/docs/typesafe-compatibility
+
+RTK Claude Code integration:
+https://www.rtk-ai.app/docs/getting-started/supported-agents/
+
+Cargo check limitations:
+https://doc.rust-lang.org/cargo/commands/cargo-check.html
+
+Rust concurrency caveats:
+https://doc.rust-lang.org/nomicon/races.html
+
+wgpu testing:
+https://github.com/gfx-rs/wgpu/blob/trunk/docs/testing.md
+

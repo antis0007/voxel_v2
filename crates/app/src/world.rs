@@ -9,6 +9,9 @@ pub mod activity;
 pub mod adventure;
 mod collision;
 pub mod expedition;
+pub mod workshop;
+pub mod environment;
+pub(crate) mod effects;
 pub mod factory;
 pub mod habitats;
 pub mod interaction;
@@ -1211,10 +1214,13 @@ pub fn generate_padded(
 mod resident;
 
 pub struct World {
+    /// Exact, tick-labelled view used only by the isolated headless CA option.
+    pub(crate) ca_view: Option<Arc<crate::simulation::cpu_region::Snapshot>>,
     pub habitats: habitats::State,
     pub orbital: orbital::State,
     pub inventory: inventory::SurvivalInventory,
     pub sandbox: crate::simulation::sandbox::Sandbox,
+    pub environment: environment::State,
     pub adventure: adventure::Adventure,
     pub undercrown: undercrown::State,
     pub factory: factory::Factory,
@@ -1247,6 +1253,7 @@ impl World {
         let regions = regions::RegionStream::new();
         let region_view = regions.view.clone();
         let mut world = Self {
+            ca_view: None,
             habitats: habitats::State::default(),
             orbital: orbital::State::default(),
             inventory: {
@@ -1260,6 +1267,7 @@ impl World {
             adventure: adventure::Adventure::default(),
             undercrown: undercrown::State::default(),
             sandbox: Default::default(),
+            environment: environment::State { cells_per_metre: (1.0 / voxel_scale.meters()) as i32, ..Default::default() },
             generator_version: CURRENT_GENERATOR_VERSION,
             water_levels: water::WaterLevels::default(),
             ripples: Default::default(),
@@ -1500,7 +1508,7 @@ impl World {
                 self.revision,
                 WorldSnapshot {
                     regions: self.regions.view.clone(),
-                    water_levels: Arc::new(self.water_levels.snapshot_all()),
+                    water_levels: Arc::new(self.water_levels.snapshot_all().with_precision(&self.environment.water_deficit)),
                     cfg,
                     chunks: Arc::new(self.chunks.clone()),
                 },
@@ -1514,6 +1522,9 @@ impl World {
     }
 
     pub fn get(&self, p: IVec3) -> BlockId {
+        if let Some(cell) = self.ca_view.as_ref().and_then(|view| view.cell(p)) {
+            return if cell.volume == 0 { BlockId::Air } else { BlockId::from_u32(cell.material as u32) };
+        }
         let chunk_coord = chunk_coord_from_world_block(p);
         if let Some(chunk) = self.chunks.get(&chunk_coord) {
             chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
@@ -1537,6 +1548,10 @@ impl World {
 
     /// Eight volume units per voxel. Unedited procedural water starts full.
     pub fn water_volume(&self, p: IVec3) -> u8 {
+        // Legacy query units are a view only. The CA keeps every sixty-fourth.
+        if let Some(cell) = self.ca_view.as_ref().and_then(|view| view.cell(p)) {
+            return if cell.material == BlockId::Water as u8 { cell.volume.div_ceil(8) } else { 0 };
+        }
         if self.get(p) != BlockId::Water {
             return 0;
         }
@@ -1575,6 +1590,13 @@ impl World {
         if self.resident_edit(coord).is_err() {
             return None;
         }
+        Some(self.commit_resident_water_cell(p,volume))
+    }
+
+    /// Geometry/storage commit after complete transaction admission. The
+    /// paired path admits both chunks once and cannot fail between owners.
+    fn commit_resident_water_cell(&mut self, p: IVec3, volume: u8) -> IVec3 {
+        let coord=chunk_coord_from_world_block(p);
         let volume = volume.min(8);
         let id = if volume == 0 {
             BlockId::Air
@@ -1622,7 +1644,7 @@ impl World {
             }
         }
         self.regions.mark_dirty(coord);
-        Some(coord)
+        coord
     }
 
     /// Commit both halves of one conservative water transfer as a single
@@ -1637,92 +1659,57 @@ impl World {
         to: IVec3,
         to_volume: u8,
         moved: u8,
-    ) {
-        if from == to || moved == 0 {
-            return;
+    ) -> bool {
+        if from == to || moved == 0 || from_volume > 8 || to_volume > 8 {
+            return false;
+        }
+        let cfg = self.sample_config();
+        let size = factory::step(self);
+        if [from, to].iter().any(|&p| p.y < cfg.min_world_y() || p.y >= cfg.max_world_y()
+            || self.factory.nodes.contains_key(&factory::anchor(p, size))) {
+            return false;
+        }
+        let environmental = environment::State::enabled(self.generator_version);
+        let impact = if environmental { self.fluid_impact(from, to) } else { environment::FluidImpact::default() };
+        if environmental && !self.environment.can_transport(from, to, &impact) { return false; }
+        let source = self.water_volume(from);
+        let source_ul = self.water_microlitres(from);
+        let target_ul = self.water_microlitres(to);
+        let moved_ul = source_ul * u64::from(moved) / u64::from(source.max(1));
+        if environmental && !self.environment.can_encode(&[(from, source_ul.saturating_sub(moved_ul)), (to, target_ul + moved_ul)]) { return false; }
+        if environmental && !self.environment.transfer_fits(from, to, source, to_volume.saturating_sub(moved), moved) {
+            return false;
+        }
+        if source != from_volume.saturating_add(moved)
+            || self.water_volume(to).checked_add(moved) != Some(to_volume)
+            || !matches!(self.get(to), BlockId::Air | BlockId::Water) {
+            return false;
         }
         let from_chunk = chunk_coord_from_world_block(from);
         let to_chunk = chunk_coord_from_world_block(to);
-        if from_chunk == to_chunk && self.chunks.contains_key(&from_chunk) {
-            // Most flow is intra-chunk. Commit both cells through one mutable
-            // chunk borrow, one dirty mark and one snapshot invalidation, all
-            // still under the same bounds/assembly admission as the general
-            // path.
-            let cfg = self.sample_config();
-            let step = factory::step(self);
-            let valid = [from, to].iter().all(|&p| {
-                p.y >= cfg.min_world_y()
-                    && p.y < cfg.max_world_y()
-                    && !self.factory.nodes.contains_key(&factory::anchor(p, step))
-            });
-            if !valid {
-                return;
-            }
-            let entries = [(from, from_volume.min(8)), (to, to_volume.min(8))];
-            let mut block_changed = [false; 2];
-            {
-                let mut chunk = self.chunks.get_mut(&from_chunk).unwrap();
-                let chunk = Arc::make_mut(&mut chunk);
-                for (i, &(p, volume)) in entries.iter().enumerate() {
-                    let id = if volume == 0 {
-                        BlockId::Air
-                    } else {
-                        BlockId::Water
-                    };
-                    let index = ChunkData::local_index(p.x, p.y, p.z);
-                    let previous=chunk.blocks[index];
-                    block_changed[i] = previous != id;
-                    chunk.blocks[index] = id;
-                    if block_changed[i] { chunk.note_modified(p,previous,id); }
-                }
-            }
-            for (i, &(p, volume)) in entries.iter().enumerate() {
-                if volume > 0 && volume < 8 {
-                    self.water_levels.insert(p, volume);
-                } else {
-                    self.water_levels.remove(&p);
-                    if volume == 0 {
-                        self.water_levels.remove_velocity(&p);
-                    }
-                }
-                if block_changed[i] {
-                    self.water_levels.remove_velocity(&p);
-                }
-                if (block_changed[i] || volume == 0 || volume == 8)
-                    && let Some(cell) = self
-                        .sandbox
-                        .cells
-                        .get_mut(&crate::simulation::sandbox::key(p))
-                    {
-                        cell.fuel = 0.0;
-                        cell.gas = 0;
-                    }
-            }
-            self.regions.mark_dirty(from_chunk);
-            self.wake_acting(from);
-            self.wake_acting(to);
-            self.invalidate_snapshot_at(from_chunk);
-            self.revision = self.revision.wrapping_add(1);
-            return;
+        // Admit BOTH owners before changing either. Missing/corrupt targets
+        // cannot consume source water, sediment or schedule credit.
+        if self.resident_edit(from_chunk).is_err() { return false; }
+        if to_chunk != from_chunk && self.resident_edit(to_chunk).is_err() { return false; }
+        let (from_units, to_units) = if environmental {
+            let quantum = self.environment.quantum();
+            ((source_ul - moved_ul).div_ceil(quantum) as u8,
+                (target_ul + moved_ul).div_ceil(quantum) as u8)
+        } else { (from_volume, to_volume) };
+        self.commit_resident_water_cell(from, from_units);
+        self.commit_resident_water_cell(to, to_units);
+        if environmental {
+            self.environment.transport_exact(from, to, source_ul, target_ul, moved_ul, &impact);
+            self.environment.encode_water(from, source_ul - moved_ul);
+            self.environment.encode_water(to, target_ul + moved_ul);
         }
-        let Some(from_chunk) = self.write_water_cell(from, from_volume) else {
-            return;
-        };
-        let Some(to_chunk) = self.write_water_cell(to, to_volume) else {
-            // The second half could be refused (missing/corrupt resident edit).
-            // Restore the first half to its pre-transfer volume.
-            self.write_water_cell(from, from_volume.saturating_add(moved));
-            return;
-        };
         self.wake_acting(from);
         self.wake_acting(to);
         self.invalidate_snapshot_at(from_chunk);
-        if to_chunk != from_chunk {
-            self.invalidate_snapshot_at(to_chunk);
-        }
+        if to_chunk != from_chunk { self.invalidate_snapshot_at(to_chunk); }
         self.revision = self.revision.wrapping_add(1);
+        true
     }
-
     /// Nearest exposed water surface to a metric point. Splash effects use the
     /// voxel water volume rather than assuming a flat sea level, so contact
     /// rings sit on partial cells and cave pools as well as the ocean.
@@ -1781,9 +1768,38 @@ impl World {
         if self.water_volume(p) == volume {
             return;
         }
+        if environment::State::enabled(self.generator_version)
+            && matches!(self.get(p), BlockId::Air | BlockId::Water) {
+            // Compatibility writers change whole packets. Retain the exact
+            // fractional encoding; never round a pump withdrawal into mass.
+            let deficit = self.environment.water_deficit.get(&environment::key(p)).copied().unwrap_or(0);
+            let requested = u64::from(volume) * self.environment.quantum();
+            if requested >= deficit { self.set_water_microlitres(p, requested - deficit); }
+            return;
+        }
+        if environment::State::enabled(self.generator_version)
+            && !matches!(self.get(p),BlockId::Ice|BlockId::Steam) {
+            // This legacy setter also serves explicit editor/scenario writes.
+            // Route replacement through the normal geometry/ownership path.
+            if volume==0 { self.set(p,BlockId::Air); return; }
+            self.set(p,BlockId::Water);
+            if self.get(p)!=BlockId::Water { return; }
+            let old=self.water_microlitres(p);
+            let requested=(u64::from(volume)*self.environment.quantum()).min(old);
+            if requested<old && self.set_water_microlitres(p,requested) {
+                self.environment.ledger.edited_water_removed_ul+=old-requested;
+            }
+            return;
+        }
+        if environment::State::enabled(self.generator_version)
+            && !self.environment.can_wake(&[p, p - IVec3::Y]) { return; }
         let Some(coord) = self.write_water_cell(p, volume) else {
             return;
         };
+        if environment::State::enabled(self.generator_version) {
+            self.environment.wake(p);
+            self.environment.wake(p - IVec3::Y);
+        }
         self.wake_acting(p);
         self.invalidate_snapshot_at(coord);
         self.revision = self.revision.wrapping_add(1);
@@ -1804,18 +1820,40 @@ impl World {
     }
 
     pub fn set_many(&mut self, edits: &[(IVec3, BlockId)]) {
-        self.set_many_with(edits, false);
+        self.set_many_with(edits, false, false, |_, _, _| {});
+    }
+
+    /// Reports only applied edits, in input order. This is an intentionally
+    /// partial batch, not an all-or-nothing transaction. Callbacks cannot mutate
+    /// the world and run after each successful cell write.
+    pub(crate) fn set_many_committed(
+        &mut self,
+        edits: &[(IVec3, BlockId)],
+        committed: impl FnMut(IVec3, BlockId, BlockId),
+    ) {
+        self.set_many_with(edits, false, true, committed);
     }
 
     /// Edits written by an authored mechanism: the only path that may open a
     /// tombstone seal.
     pub fn set_many_mechanism(&mut self, edits: &[(IVec3, BlockId)]) {
-        self.set_many_with(edits, true);
+        self.set_many_with(edits, true, false, |_, _, _| {});
     }
 
-    fn set_many_with(&mut self, edits: &[(IVec3, BlockId)], unseal: bool) {
+    fn set_many_with(
+        &mut self,
+        edits: &[(IVec3, BlockId)],
+        unseal: bool,
+        require_admission: bool,
+        mut committed: impl FnMut(IVec3, BlockId, BlockId),
+    ) {
         let mut changed = false;
         for &(p, id) in edits {
+            // Earlier cells can exhaust activity capacity. Recheck immediately
+            // before each write rather than relying on a whole-batch preview.
+            if require_admission && effects::admit(self, p).is_err() {
+                continue;
+            }
             // Assemblies are dismantled as one metre-sized object. Builder and
             // physics edits cannot silently orphan their inventories or networks.
             if self
@@ -1834,11 +1872,50 @@ impl World {
                 continue;
             }
 
+            let environmental = environment::State::enabled(self.generator_version);
+            let topology_change = current.is_solid() || id.is_solid();
+            if environmental && current == BlockId::Water && id == BlockId::Ice
+                && self.water_microlitres(p) != engine_core::environment::cell_volume(self.voxel_scale) {
+                // Partial ice needs a phase-volume geometry/inventory contract.
+                // A full ice item must not be minted from a fractional puddle.
+                continue;
+            }
+            let phase_change = environmental && matches!((current, id),
+                (BlockId::Water, BlockId::Steam | BlockId::Ice)
+                | (BlockId::Steam | BlockId::Ice, BlockId::Water));
+            let phase_units = if current == BlockId::Water { self.water_volume(p) }
+                else { let gas = self.sandbox.cell(p).gas; if gas == 0 { 8 } else { gas } };
+            let affected = [p, p + IVec3::Y, p - IVec3::Y, p + IVec3::X,
+                p - IVec3::X, p + IVec3::Z, p - IVec3::Z];
+            if environmental && !self.environment.can_wake(&affected) { continue; }
+            if environmental && !self.environment.admit_material(p, current, id) { continue; }
+            if environmental && topology_change && !self.environment.can_refine(&affected) { continue; }
+            if environmental && topology_change && !self.environment.can_invalidate_light(p) { continue; }
+            if environmental && id == BlockId::Water && !self.environment.can_encode(&[(p,
+                (self.environment.quantum()*8).saturating_sub(engine_core::environment::sediment_volume(self.environment.sediment_at(p))))]) { continue; }
+            if phase_change && !self.sandbox.can_admit(&[p]) { continue; }
+
             let chunk_coord = chunk_coord_from_world_block(p);
             if self.resident_edit(chunk_coord).is_err() {
                 // A missing/corrupt edited record must never become procedural data.
                 continue;
             }
+            if environmental {
+                if topology_change { for q in affected { self.environment.refine(q); } }
+                if engine_content::environment::definition().is_some_and(|d|d.soil(current).is_some())
+                    && !self.environment.create_patch(cfg,p,current,self.get(p+IVec3::Y)==BlockId::Air,true) {
+                    continue;
+                }
+                if id==BlockId::Water && engine_core::environment::sediment_volume(self.environment.sediment_at(p))
+                    >= engine_core::environment::cell_volume(self.voxel_scale) { continue; }
+                if !phase_change && !self.displace_for_construction(p,current,id) {
+                    continue;
+                }
+                if topology_change { self.environment.invalidate_light(p); }
+            }
+            let water_before_edit = if environmental && !phase_change {
+                self.water_microlitres(p)
+            } else { 0 };
             self.sandbox.clear_fire(p);
             if let Some(cell) = self
                 .sandbox
@@ -1850,6 +1927,11 @@ impl World {
             }
             self.water_levels.remove(&p);
             self.water_levels.remove_velocity(&p);
+            if environmental && !matches!((current, id),
+                (BlockId::Water, BlockId::Steam | BlockId::Ice)
+                | (BlockId::Steam | BlockId::Ice, BlockId::Water)) {
+                self.environment.water_deficit.remove(&environment::key(p));
+            }
             if id == BlockId::Fire {
                 self.sandbox.note_fire(p);
             }
@@ -1866,12 +1948,51 @@ impl World {
                 }
             }
 
+            if phase_change {
+                if id == BlockId::Water {
+                    if phase_units < 8 { self.water_levels.insert(p, phase_units); }
+                } else {
+                    let mut cell = self.sandbox.cell(p);
+                    cell.gas = phase_units;
+                    self.sandbox.set(p, cell);
+                }
+            }
+
+            if environmental && !phase_change {
+                if id == BlockId::Water {
+                    // Replacing wet substrate releases its pore water into the
+                    // fluid owner. Only the additional created water is external.
+                    let pore = self.environment.patches.get_mut(&environment::key(p))
+                        .map_or(0,|patch| std::mem::take(&mut patch.soil.water));
+                    let amount=self.environment.water_capacity_ul(p);
+                    let units=amount.div_ceil(self.environment.quantum()) as u8;
+                    if units<8 { self.water_levels.insert(p,units); }
+                    self.environment.encode_water(p,amount);
+                    self.environment.ledger.edited_water_added_ul+=amount.saturating_sub(pore+water_before_edit);
+                    self.environment.ledger.edited_water_removed_ul+=(pore+water_before_edit).saturating_sub(amount);
+                } else {
+                    self.environment.ledger.edited_water_removed_ul+=water_before_edit;
+                }
+            }
+
+            if environmental {
+                // Capture implicit initial pore water before excavating it.
+                // Constructed substrate starts dry; revisiting a stored patch
+                // never imports procedural reserves a second time.
+                let exposed = self.get(p + IVec3::Y) == BlockId::Air;
+                if !self.environment.create_patch(cfg, p, current, exposed, true) {
+                    self.environment.create_patch(cfg, p, id, exposed, false);
+                }
+                self.environment.disturbed(p);
+                for q in affected { self.environment.wake(q); }
+            }
             self.wake_acting(p);
             self.invalidate_snapshot_at(chunk_coord_from_world_block(p));
             if id.is_torch() {
                 propagate_light(self, p, 14);
             }
             changed = true;
+            committed(p, current, id);
         }
 
         if changed {

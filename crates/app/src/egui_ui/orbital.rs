@@ -8,6 +8,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         .max_height((ui.ctx().content_rect().height() - 100.0).max(120.0))
         .show(ui, |ui| {
             radio_section(ui, view, action);
+            pass_forecasts(ui,view);
             ui.separator();
             corridors(ui, view, action);
             ui.separator();
@@ -23,6 +24,9 @@ fn radio_section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
     ui.label(format!("Level {} · {}", r.level, radio::NAMES[r.level as usize]));
     ui.label(r.status);
     ui.horizontal_wrapped(|ui| {
+        if r.level>=4 && r.knowledge&4!=0 && r.near_dish && ui.button("Track derelict relay").clicked() {
+            *action=UiAction::OrbitalRadio(RadioAction::TrackRelay);
+        }
         if r.level < 5 && r.level != 3 {
             let next = r.level as usize + 1;
             let label = format!("Build {} · {}", radio::NAMES[next], radio::COST_TEXT[next]);
@@ -32,7 +36,7 @@ fn radio_section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         }
         for (enabled, label, request) in [
             (r.can_listen, "Listen", RadioAction::Listen),
-            (r.can_handshake, "Handshake", RadioAction::Handshake),
+            (r.can_handshake, "Connect", RadioAction::Handshake),
             (r.can_build, "Build dish · 8 iron, 6 copper, 2 steel", RadioAction::BuildDish),
             (r.can_repair, "Restore dish · 2 iron", RadioAction::RepairDish),
         ] {
@@ -47,7 +51,7 @@ fn radio_section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
 
 /// One compact card per service corridor in range.
 fn corridors(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
-    ui.heading("Service corridors");
+    ui.heading("Contacts");
     if view.contacts.is_empty() {
         ui.label("None in range.");
         return;
@@ -66,10 +70,10 @@ fn corridors(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
                 ));
                 ui.small(s.site.class.manifest());
             } else {
-                ui.small("No signal. Improve your radio to read this corridor.");
+                ui.small("Radio upgrade required.");
             }
             if s.requested {
-                ui.label("Your request is booked.");
+                ui.label("Requested");
             }
             ui.horizontal_wrapped(|ui| {
                 if c.can_request && link.transmit && ui.button("Radio return").clicked() {
@@ -97,19 +101,40 @@ fn receiver_section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         ui.small("Needs a flat, dry spot with 3 m of headroom. Costs 8 iron and 4 copper.");
     }
     if receiver.minutes > 0 {
-        ui.label(format!("Delivery in {} min. Cargo waits if you leave.", receiver.minutes));
+        ui.label(format!("Delivery {}min", receiver.minutes));
     }
+    ui.small("ML-C01: 4 copper + 1 crystal for 8 steel + 4 circuits. Once per world.");
+    ui.strong("Relay recovery");
+    ui.small(receiver.recovery_status);
+    ui.small("2 steel + 1 circuit for 6 circuits + 2 crystals. One recovery per world. Place the dish near the receiver and choose Track derelict relay.");
     ui.horizontal_wrapped(|ui| {
         for (enabled, label, request) in [
             (receiver.can_deploy, "Build receiver", Action::Deploy),
             (receiver.can_order, "Order shipment", Action::Order),
             (receiver.can_collect, "Collect cargo", Action::Collect),
             (receiver.can_restore, "Restore console · 2 iron", Action::Restore),
+            (receiver.can_recover, "Survey relay & order recovery", Action::RecoverRelay),
         ] {
             if enabled && ui.button(label).clicked() {
                 *action = UiAction::OrbitalReceiver(request);
             }
         }
+    });
+}
+
+fn pass_forecasts(ui:&mut egui::Ui,view:&View) {
+    if view.radio.level==0 {return;}
+    ui.collapsing("Upcoming passes",|ui| {
+        if view.pass_forecasts_pending {ui.small("Computing local ephemerides...");}
+        else if view.pass_forecasts.is_empty() {ui.small("No qualifying passes in the next world day.");}
+        for event in &view.pass_forecasts {
+            let wait=((event.opens-view.calendar).max(0.0)*1440.0).ceil() as u32;
+            let remaining=((event.closes-view.calendar).max(0.0)*1440.0).ceil() as u32;
+            ui.strong(event.kind.name());
+            if wait==0 {ui.small(format!("Window open / {remaining} world min remaining / peak {:.0} degrees",event.peak_degrees));}
+            else {ui.small(format!("In {wait} world min / window {:.0} min / peak {:.0} degrees",(event.closes-event.opens)*1440.0,event.peak_degrees));}
+        }
+        ui.small("Bad weather can interrupt the signal.");
     });
 }
 

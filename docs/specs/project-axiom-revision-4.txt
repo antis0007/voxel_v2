@@ -1,0 +1,807 @@
+# Project Axiom: A next-generation 3D voxel engine
+
+Architecture revision 4 · Rust + WGPU · October 2026
+
+I think the strongest design is now becoming clear. We should stop optimizing toward a voxel engine that renders the most voxels and start optimizing toward the most physically interactive, visually beautiful, programmable world that can run at consistently high frame rates.
+
+The intended experience should be immediately recognizable to someone who loves heavily modded Minecraft, but with the sense of danger, discovery, and extraordinary systemic interactions found in Noita.
+
+Imagine exploring an immense underground ruin, discovering that its water channels connect to an ancient industrial complex, learning enough chemistry and electrical engineering to reactivate its machinery, and then using that machinery to manufacture components for a custom computer that automates a magical reactor.
+
+All of this should happen in the same persistent, editable, physically coherent world. You should be able to dig new passages, flood chambers, destroy structural supports, construct pumping systems, cultivate creatures, and invent entirely different solutions.
+
+The engine must make this possible without simulating every voxel, particle, electrical connection, or machine at full fidelity all the time.
+
+## 1. Define what would actually make the game revolutionary
+
+Four experiences must reinforce one another.
+
+[Mystic's Monstrosity — Minecraft Modpack](https://images.openai.com/static-rsc-4/Geg-CsB-pwGys9jXB7cxKted-8QEuRlBVjxzERXgEMZoGhadjp6MHajSQxf9YILY1Xf_k-DWuISvU3sdiZ8lBHVs96ykTT-P1S9tSveGC3uQ-6MzjSGPOF1wj2KQ2gX_j5crq6CPIe4Jjtu5BR9RVnHk5y9n9xBMn5YU2pqcgp8?purpose=inline)
+
+Minecraft's freedom
+
+Permanent building, mining, exploration, machinery, automation, modifiable terrain, farms, progression, player-created infrastructure, and large-scale construction.
+
+[Noita: a Game Based on Falling Sand Simulation](https://images.openai.com/static-rsc-4/o2Pht99N9AzXkedD8l8L8ntOW2nSk5uyn_I9lBX0hrnLIz0rJ4jIAYnbibq65GfI-XItjiX88ppty9hy_PPc4yIv2l2Paiksm6Ko6ZDtChx46KHCErIB1-xyiqMCU8N4Wyh8zofVPMI6Pzm4VkIVCdyB9DMy_01d9t0rQQRSW3g?purpose=inline)
+
+Noita's systemic depth
+
+Matter reacts with matter. Spells are constructed from interacting rules. Players learn to exploit mechanics, create chain reactions, and accomplish things the developers never explicitly scripted.
+
+[Teardown is a chaotic destruction sandbox and a great puzzle game | PC Gamer](https://images.openai.com/static-rsc-4/EnTq_01LDHSvVJlqRc4kAgYAPK8boLoreFqxC0sQx_wO4Qudf__l540KVgPK1l9Fz8WAf01LsY-qykY3cTIyGI8u2eTUhCmTLdc5NfVKWdB0va1Sbb-dX4ICJM7PYoI73YF4R0EFD34U1IZutL19-JamIjxrVQt8ZACBspBNEAw?purpose=inline)
+
+True 3D physicality
+
+Destructible structures, convincing mass and support, volumetric fluids, moving voxel assemblies, and environments where destruction changes traversal and gameplay.
+
+[What Is the Sift in Minecraft? New Dimension Explained](https://images.openai.com/static-rsc-4/5iIwn3U-kyaiS86hPHankAjFwlkQRv7lPcvhbRRDgYOeakJeS7u9VZZ0cDFtbyJBBCpobkOUi72CH5t_ze-u3jv-SbdcO29XjPY9WFrIsgmwodxM505CdhKHI88pjLyTfZnER__0ja5euCVWUUUDn0GE_sb6uFQYiDOiwgE9Byw?purpose=inline)
+
+A world worth inhabiting
+
+Exceptional landscapes, spectacular caves, atmospheric ruins, interesting enemies, meaningful dungeons, distinct material aesthetics, and long-term exploration.
+
+The critical design principle is that these aren't four separate feature sets. Every major system should create opportunities for at least two or three of them to interact.
+
+A magical projectile isn't particularly interesting if it only deals 40 fire damage. It becomes interesting when it heats rock, ignites oil, changes pressure inside machinery, triggers environmental reactions, and can be modified by the player to behave differently.
+
+Similarly, a machine shouldn't merely consume copper and produce ingots. It should belong to an interconnected manufacturing system whose energy requirements, materials, waste, heat, and control logic can be manipulated.
+
+### The new core concept: representation follows consequence
+
+Previously, we focused on independently adjustable voxel resolutions. I'd go a step further.
+
+A system should receive computational detail according to the consequences of its behavior.
+
+A mountain only needs to be evaluated when generated, edited, physically disturbed, or rendered. A running factory may require accurate electrical and production calculations without needing any per-voxel material movement. A nearby explosion requires high-detail collision, fracture, material reactions, particles, and changing illumination simultaneously.
+
+That leads to my strongest architectural recommendation:
+
+Build a world kernel that coordinates sparse physical state, derived geometry, and causally activated simulations.
+
+Not a universal octree. Not one enormous cellular automaton. Not a generic ECS containing billions of voxel entities.
+
+A specialized world architecture built specifically for this game's physics and gameplay.
+
+## 2. The authoritative world: persistent, multiscale, and lossless
+
+The foundational invariant must be that changing the representation of an object or region cannot change the physical meaning of its stored state.
+
+I would implement a canonical world model with deterministic procedural terrain, sparse persistent edits, and object-local voxel volumes for moving assemblies.
+
+### The spatial hierarchy
+
+A good starting point is dyadic resolution: spatial detail changes in powers of two.
+
+Example scale hierarchy
+
+The illustration shows 2D slices; actual regions are cubic 3D bricks. Each refinement divides volume into eight children.
+
+The game should retain a familiar Minecraft-style construction scale while supporting localized finer detail. As a provisional example, one building module could be approximately one meter, ordinary sculpting could use 12.5-centimeter cells, and exceptional fine-detail regions could go smaller.
+
+These are proposed gameplay scales, not decisions to hardcode before profiling.
+
+Crucially, a six-centimeter feature should not require loading an entire cubic kilometer at six-centimeter resolution.
+
+### Storage: sparse bricks, not universally dense chunks
+
+I'd start by benchmarking dense 16³ material bricks grouped into larger 32³ scheduling and rendering regions. These are engineering hypotheses, not magic optimal sizes.
+
+A region may be stored as a uniform material, a compact palette, a bit-packed occupancy field, a dense active brick, or a sparse collection of edits over procedurally generated terrain.
+
+Rendering and physics operate on derived data, while the persistent world remains authoritative.
+
+There is a particularly relevant 2026 research development: NVIDIA's Dynamic GPU Sparse Grids and Voxel-sequential Processing in NanoVDB describes dynamic sparse-grid construction and GPU-friendly linear traversal of active voxels, reducing the cost of repeated sparse-tree traversal. This is an excellent research candidate for active simulation bricks, though a Rust/WGSL adaptation needs independent benchmarking.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://research.nvidia.com\&sz=32)
+
+NVIDIA High Fidelity Simulation Research
+
+
+
+I would specifically test the paper's flat active-voxel iteration concept against our own brick-map layout. High-throughput linear kernels may matter much more than adopting its exact sparse-tree structure.
+
+### The world must support two broad geometry families
+
+The game should preserve exact cubic construction geometry while also supporting irregular geology, weathering, cliffs, organic growth, and damaged materials.
+
+I wouldn't force smooth Signed Distance Field terrain everywhere or hard-edged cubes everywhere. Both produce compromises.
+
+Instead, use compatible material/occupancy queries, with discrete construction geometry and continuous or sampled density fields where natural shapes require them. Ensure the two can be combined, edited, collided against, and rendered coherently.
+
+The engine's authoritative occupancy service must resolve those overlapping representations using clearly defined ownership and composition rules.
+
+Moving machinery, vehicles, debris, and modular constructs get object-local volumes with independent transforms.
+
+This avoids the impossible requirement that every moving structure be rewritten into global terrain coordinates every frame.
+
+## 3. Rendering: surpass Minecraft's appearance without sacrificing voxel identity
+
+The renderer should be extraordinarily efficient, but it also needs to produce a distinct art style.
+
+I would avoid aiming for generic photorealistic voxel graphics. The best direction for this game is physically convincing, artistically exaggerated, extremely detailed voxel materials.
+
+It should retain readable Minecraft-like forms at a distance, but close examination should reveal smaller geometric detail, physically meaningful material transitions, irregular fractures, convincing water, beautiful illumination, and handcrafted-looking environmental compositions.
+
+### The rendering pipeline I would build
+
+Use a hierarchical CPU visibility pass to determine candidate geometry regions, followed by GPU frustum and hierarchical-Z occlusion culling. Compact visible geometry into GPU-generated indirect draw commands.
+
+For cubic geometry, benchmark binary greedy meshing, packed-quad vertex pulling, and face-orientation batching. The open-source [Binary Greedy Meshing v2](https://github.com/cgerikj/binary-greedy-meshing?utm_source=chatgpt.com) project demonstrates an eight-byte-per-quad encoding and reports fast single-chunk meshing on its test hardware. Its implementation is a useful baseline, not an independently established guarantee for dynamic terrain.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://github.com\&sz=32)
+
+cgerikj/binary-greedy-meshing · GitHub
+
+
+
+For curved geological surfaces, test adaptive Dual Contouring and Marching Cubes/Transvoxel. Use separate handling for cubic LOD boundaries and continuous isosurfaces; Transvoxel does not solve every mixed-geometry transition automatically.
+
+### The most important visual invariant: no missing world coverage
+
+The previously observed distant-terrain glitches point to a fundamental issue that needs an architectural solution.
+
+Every potentially visible region should have an appropriate geometric representative, even when its requested high-detail mesh has not finished generating.
+
+The engine should maintain a hierarchy of valid fallback proxies. Refining a region creates a replacement while keeping its parent available. Once the replacement is uploaded and validated, ownership of the visible region transfers.
+
+When a chunk unloads, the coarse representative remains or becomes available again.
+
+This is not the same as merely rendering a second heightfield behind terrain. A fallback must respect the same world-space topology and relevant edits.
+
+Distant caves, arches, floating islands, megastructures, overhangs, and towers cannot simply disappear because a 2D heightfield doesn't describe them.
+
+### Introduce topology-aware LOD summaries
+
+An ordinary occupancy mipmap records whether a coarse area contains solid material. That helps culling but loses important geometric detail.
+
+I'd expand the hierarchy with conservative summaries of connected voids, surface bounds, major openings, material classes, and geometric approximation error.
+
+Not every summary needs to be stored at every level. This is a tunable hierarchy built for known consumers.
+
+This could improve the rendering of distant cave mouths, thin bridges, floating geological formations, and complex underground structures, while also helping navigation and simulation.
+
+The harder engineering problem is keeping these summaries correct after edits. Start with exact local invalidation and controlled propagation up the hierarchy.
+
+### Smooth transitions must be physically and visually coherent
+
+Use neighboring resolution constraints, transition geometry, stable geomorphing where appropriate, and coverage-safe proxy replacement.
+
+Camera-relative coordinates and integer world indexing are essential for massive distances.
+
+LOD changes must also provide correct motion vectors or invalidate temporal history where correspondence is lost. Otherwise temporal antialiasing produces smearing or ghosted terrain.
+
+For direct editing, add an immediate visual edit path so a hit or drilled hole becomes visible promptly even if full geometry and lighting updates take longer.
+
+### Do not overcommit to experimental graphics features
+
+The latest verified WGPU release is 30.0.1. Multi-draw-indirect-count is supported as an optional native feature, while mesh shaders and ray-query acceleration remain experimental capabilities requiring careful backend testing.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://github.com\&sz=32)
+
+GitHub
+
++3
+
+
+
+Conventional GPU-driven rasterization should be the production baseline. Mesh shaders, ray queries, and direct voxel ray traversal should compete in repeatable benchmarks before they are accepted into the main rendering path.
+
+A separate prototype may demonstrate an astonishing screenshot but still be a worse choice for constantly edited terrain.
+
+## 4. World physics: simulate consequences, not an ocean of individual cells
+
+The key to bringing Noita into 3D is not attempting to run its 2D cellular automaton at an enormous 3D resolution.
+
+Instead, each material interaction should select an appropriate representation and simulation method.
+
+| Phenomenon                  | Proposed model                             | Why                                      |
+| --------------------------- | ------------------------------------------ | ---------------------------------------- |
+| Stable rock, buildings      | Compressed static volume                   | Near-zero idle cost                      |
+| Granular sand, ash, rubble  | Localized cellular simulation              | Cheap, responsive, detailed              |
+| Large fluid reservoirs      | Coarse volumes and connectivity            | Avoid dense simulation of inactive water |
+| Flowing liquid fronts       | Local finite-volume or cellular transport  | Resolve terrain interactions             |
+| Splashes                    | GPU particles or local detailed fluid      | Preserve visually important motion       |
+| Pressure and confined gases | Regional pressure/transport representation | Supports enclosed environments           |
+| Heat, combustion, corrosion | Sparse reaction and transport fronts       | No full-world scans                      |
+| Structural failure          | Support graph and selective fracture       | Large objects remain manageable          |
+| Moving voxel structures     | Object-local volumes and rigid bodies      | Avoid one body per voxel                 |
+| Electricity and electronics | Sparse network equations                   | Scales with devices and connections      |
+| Magic                       | Typed operations over physical systems     | Creates emergent interactions            |
+
+### Causal simulation islands
+
+I'd formalize the earlier idea of causal islands into a scheduler with explicit ownership and interfaces.
+
+An island may consist of fluid cells around a waterfall, a mechanically coupled assembly, a thermal reaction front, or a group of interacting electrical devices.
+
+The island's update frequency should depend on what its model requires—not simply its distance from the camera.
+
+A fast projectile approaching a dormant structure causes the relevant collision region to wake. A distant machine network can advance using a compact solver. A sealed chamber may keep aggregate gas pressure without storing high-resolution flow vectors at every point.
+
+Wake and sleep transitions must preserve state consistently.
+
+### Conservative interfaces are mandatory
+
+When water flows between a fine-grid region and a coarse reservoir, maintain consistent volume and mass flux.
+
+Likewise, solid material changing spatial resolution must not gain or lose mass or change its density arbitrarily.
+
+For energy and electricity, use well-defined quantities and stable numerical integration. Reactive or magical systems may introduce explicit energy and material sources, but those changes should never be accidental.
+
+A useful development rule is that every physical solver must document which quantities it conserves, approximates, or deliberately ignores.
+
+### Structural destruction should be fast because most structures are not moving
+
+An underground building should have static terrain and collision representations until something changes.
+
+When a support is removed, perform a localized connectivity and support update. Only detached or actively moving portions become dynamic voxel assemblies.
+
+A large falling structure needs compound or simplified collision proxies, not voxel-against-voxel testing for every contact.
+
+Current [Rapier 3D](https://docs.rs/rapier3d/latest/rapier3d/?utm_source=chatgpt.com) provides a maintained Rust rigid-body physics stack, with voxel collider support and localized voxel-state updates documented in its geometry API. It is worth benchmarking before building an entire custom rigid-body solver.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://docs.rs\&sz=32)
+
+Rust
+
++2
+
+
+
+Our custom work should concentrate on destructible connectivity, material coupling, adaptive collision construction, and persistent moving volumes, rather than recreating an entire general-purpose rigid-body engine unnecessarily.
+
+### Introduce physically meaningful but inexpensive material interaction surfaces
+
+A further optimization: many material reactions occur at boundaries rather than throughout homogeneous interiors.
+
+Combustion, corrosion, dissolution, heat exchange between substances, and chemical reactions frequently depend on contact surfaces.
+
+Track active interfaces and reaction fronts instead of iterating the entire interior volume of a solid material.
+
+A material registry could compile contact rules into small lookup structures or specialized kernels. Identical rule groups can share execution paths.
+
+That gives us a path to hundreds of interesting interacting materials without hundreds of expensive full-volume solvers.
+
+## 5. Design machines, magic, and physics around the same world rules
+
+This is where the game can become substantially more interesting than either of its inspirations.
+
+I would establish a shared interaction vocabulary for both technology and magic.
+
+For example, a mechanical piston transfers force, a pump transfers fluid, a heater transfers thermal energy, a reactor transforms materials, and a spell can create a force field or change material temperature.
+
+Their implementations differ, but they ultimately interact through compatible world-state operations.
+
+That means the output of a magical apparatus might drive a physical machine. An electrical controller might actuate a spell-casting device. An alchemical reaction might supply the gas pressure needed for an industrial process.
+
+### The electronics and automation engine
+
+Electrical networks should be distinct from voxel simulation. They are graph problems.
+
+Use connectivity-aware circuit construction with specialized solvers for resistive networks, capacitors, inductors, switches, and other components. DC circuits can use modified nodal analysis or a comparable formulation; more complicated transient behavior should be simulated only where it affects gameplay.
+
+The solver should update network topology incrementally when players add or destroy cables. Stable connected networks should not need to be reconstructed every frame.
+
+Mechanical power, item logistics, fluids, heat, and data signals use similarly specialized representations. They communicate through machines and ports rather than one universal network equation.
+
+A machine's actual power draw should arise from its components and operating state, within the level of abstraction selected for gameplay.
+
+### Make semiconductor manufacturing a meaningful design system
+
+A natural evolution of IndustrialCraft, Mekanism, Immersive Engineering, and Factorio would allow players to manufacture their own processors rather than merely craft a predefined computer block.
+
+The process could cover silicon purification, crystal growth, wafer preparation, deposition, lithography, etching, doping, metallization, inspection, and packaging.
+
+But the actual fabrication time should be compressed for gameplay, especially once machines are automated.
+
+The player designs a multilayer circuit or processor on a variable-resolution engineering grid. Earlier technology offers fewer design sites, coarse routing, lower component densities, and more restrictive fabrication processes.
+
+As manufacturing technology improves, the same physical chip area supports more components and more complicated designs.
+
+The manufactured processor receives measurable characteristics: computational throughput, energy consumption, memory, I/O capability, heat dissipation, and reliability. Those characteristics are consequences of the layout and fabrication process.
+
+The installed processor can then operate real in-game programmable machines.
+
+This creates an unusually satisfying loop where learning about hardware results in better automation, which creates more resources and manufacturing capability.
+
+It also provides a good reason for the engine to support multiple simulation scales without literally resolving individual transistors in the overworld.
+
+### Spellcasting should become programmable physics
+
+I'd implement Noita-inspired wands as compiled, inspectable spell graphs.
+
+A wand defines execution order, triggers, projectiles, material creation, field effects, propagation, modifiers, and energy consumption.
+
+For example, a player could construct a spell that creates a dense ice projectile, accelerates it, fractures it on impact, and releases a conductive liquid that another spell can electrify.
+
+Or a spell could enlarge a creature by growing additional volume and scaling its relevant physical and biological properties.
+
+A mushroom-growing spell could turn suitable soil into a mycelial network that produces actual harvestable or autonomous organisms. Another modifier might cause the creatures to grow larger, develop unusual properties, or reproduce.
+
+The engine should evaluate physical consequences using material and entity systems rather than handling each combination with special-case scripts.
+
+Unbounded recursive casting, infinite event generation, and pathological material replication require execution budgets and explicit resource rules. But those safeguards should be designed to preserve creative combinations, not silently prohibit clever builds.
+
+### Automated magic is the bridge between Noita and modded Minecraft
+
+This is perhaps the most exciting connection.
+
+Players could eventually manufacture spell circuits, autonomous magical machinery, mana-harvesting apparatus, programmable wands, spell turrets, and complex rituals.
+
+An automated magical machine should use essentially the same spell definitions available to the player.
+
+This would let people convert a clever combat combination into a reusable industrial process.
+
+Imagine inventing an unusual mineral-transmutation spell during dungeon exploration, then designing a machine that repeatedly casts it under carefully controlled conditions.
+
+That is the kind of systemic discovery that could make the game exceptional.
+
+## 6. The world should feel alive even when the player isn't interacting with it
+
+The world generation needs to move well beyond noise-driven surface terrain.
+
+I would generate a three-dimensional geological and ecological history, then derive local geography from those higher-level structures.
+
+Continental formations establish large-scale geology. Regional models establish climate, drainage, underground water, fault systems, and cave connectivity.
+
+Local generators construct cliffs, caverns, volcanic conduits, mineral deposits, forests, underground ecosystems, ruins, and settlements.
+
+Then smaller-scale material processes add strata, fractures, erosion, deposits, and construction details.
+
+### An enormous cave should be a believable environment
+
+Caves should not be generic hollow blobs.
+
+An underground river may have carved a network of passages. A collapsed limestone chamber may contain a mountain of rubble. A geothermal system may create pressure vents, boiling pools, mineral deposits, and chemically unusual microbial ecosystems.
+
+Different caves should have distinct lighting and ecology: luminous fungal forests, dripping cisterns, ancient tombs, volcanic galleries, glittering mineral seams, abandoned technical facilities, and vast astral formations.
+
+The generation system should maintain large-scale layout and artistic composition, even when the terrain is destructible.
+
+Use hierarchical structure grammars, connection constraints, semantic room types, and validation. Physically meaningful features should extend across chunk boundaries without visible repetition.
+
+### Dungeons should use the same physics and engineering systems
+
+A dungeon is most interesting when its architecture and mechanisms belong to the world's physical systems.
+
+An ancient aqueduct might contain real reservoirs, sluice gates, valves, pressure chambers, and mechanical barriers. A wizard's tower could include unusual materials, self-repairing structures, magical circuits, and manipulable containment fields.
+
+The player might overcome it with careful puzzle-solving, mining, fluid manipulation, magic, stealth, machinery, or structural sabotage.
+
+Some materials can resist ordinary digging, and some chambers can suppress magic, but these should be internally consistent properties of the world—not arbitrary prohibitions that exist solely to protect a scripted puzzle.
+
+Dangerous environments should telegraph the rules by which they operate.
+
+### Design bosses as physical encounters rather than health bars
+
+A huge underground boss should have physical presence.
+
+Its armor, weak points, movement, attacks, terrain manipulation, and environmental vulnerabilities should produce observable consequences.
+
+The player might damage its supports, flood its chamber, interrupt a power source, destroy an appendage, or exploit the creature's material composition.
+
+A particularly strong design would allow expert players to construct boss-farming systems.
+
+Bosses could produce renewable materials, biological resources, magical energy, or special reaction products under defined circumstances.
+
+The farming system should be understandable and exploitable without depending on arbitrary invisible spawn caps or an endlessly scripted encounter.
+
+Creature spawning itself can connect to habitats, resource availability, environmental conditions, and world events. That makes monster farms and ecological engineering an actual player discipline.
+
+This also provides a foundation for raising, summoning, modifying, or growing organisms—including custom fungal and magical creatures—rather than limiting the game to standard hostile mob spawns.
+
+### Preserve danger without copying Noita's permadeath structure
+
+A permanent Minecraft-style world and Noita-style permadeath solve different gameplay problems.
+
+I would keep long-term worlds, construction, infrastructure, and persistent progression as the primary experience.
+
+Dangerous expeditions, isolated challenge realms, cursed regions, and optional roguelike modes can deliver the intensity of Noita without regularly deleting hundreds of hours of engineering work.
+
+There should still be meaningful death consequences, difficult enemies, environmental hazards, and potentially catastrophic industrial accidents.
+
+But losing a fight should not ordinarily invalidate the underlying world or make all accumulated work pointless.
+
+The aim is a dangerous world the player can learn to master—not a persistent factory game that randomly destroys irreplaceable progress through opaque physics bugs.
+
+## 7. A faster engine requires better scheduling, not just faster algorithms
+
+This is the area where I'd pursue the greatest original engineering work.
+
+Consider what happens during a large explosion in a generated dungeon.
+
+The engine may need to update terrain, support connectivity, rigid bodies, particles, fluid volumes, light, sounds, AI navigation, and electrical networks.
+
+If each subsystem handles its own invalidation independently, the same spatial data may be scanned and rebuilt repeatedly.
+
+If each subsystem has its own unbounded work queue, the explosion may also create several seconds of backlog.
+
+### Introduce a world-change dependency graph
+
+A terrain edit should commit once and then emit a compact change description.
+
+The description records the modified spatial region, its source revision, material changes, and affected categories of world state.
+
+Subscribed systems use those changes to invalidate their own caches.
+
+The dependency graph need not store every voxel-level relationship. At first, it can simply track region-level dependencies and specialized boundary connectivity.
+
+Over time it can support more granular dependencies where they are proven valuable.
+
+The system must avoid two common failures: eagerly rebuilding everything touched by a change, and attempting to create a gigantic universal graph of every physical interaction.
+
+### Introduce latency classes
+
+Not all work is equally urgent.
+
+| Critical      | Player collision, nearby terrain edits, immediate combat, gameplay-authoritative consequences      |
+| ------------- | -------------------------------------------------------------------------------------------------- |
+| Interactive   | Nearby mesh and lighting updates, liquid flow, visible destruction, creature behavior              |
+| Background    | Remote factory updates, distant terrain generation, compression, pathfinding summaries             |
+| Opportunistic | Higher-quality distant meshes, secondary GI refinement, visual particle detail, cache optimization |
+
+Jobs should carry estimated costs, deadlines or urgency, data dependencies, and revision identifiers.
+
+The scheduler then allocates work within CPU and GPU budgets. It can drop redundant intermediate mesh requests, coalesce adjacent edits, and cancel outdated tasks.
+
+A high-priority edit must not wait behind thousands of low-priority generation tasks.
+
+But background work also needs starvation protection, especially for saving, persistent world simulation, and delayed mechanical events.
+
+### Three key performance innovations
+
+First: active computation should scale with the active state. Instead of iterating all loaded chunks, maintain compact queues of active bricks, material interfaces, physical islands, machine graphs, and dirty geometry.
+
+Second: repeated edits should be coalesced before expensive rebuilding. If a laser removes fifty consecutive tiny pieces of a wall, that should not necessarily trigger fifty complete collision rebuilds. Keep immediate interaction results accurate, but batch expensive dependent work when possible.
+
+Third: GPU memory should be managed as a virtualized cache. Rendering resources need pooled allocations, compact formats, fragmentation control, and explicit residency. Geometry should not be repeatedly allocated and destroyed as individual GPU buffers.
+
+This combination could matter more than any isolated improvement to voxel meshing.
+
+### Avoid CPU–GPU ping-pong
+
+The CPU should not have to read back a massive GPU material field every frame simply to discover which three cells affected gameplay.
+
+Define explicit ownership of simulation state and compact event exchange.
+
+Large GPU-friendly simulations can remain resident on the GPU for multiple steps. If they produce gameplay-relevant changes, transfer bounded event buffers, reductions, or compacted deltas back to the CPU.
+
+However, GPU computation does not automatically provide reproducibility across drivers or backends.
+
+Keep authoritative gameplay calculations deterministic where multiplayer, saving, or replay actually require determinism. Cosmetic GPU effects can use cheaper nondeterministic methods.
+
+For difficult mixed CPU/GPU physics, explicitly compare the latency cost of synchronization against the potential throughput benefit. On small active regions, a cache-efficient CPU solver may still win.
+
+## 8. Engine implementation architecture
+
+I'd keep the engine custom-built in Rust rather than introducing Bevy or a heavyweight general-purpose game-engine framework.
+
+Rust's type system is useful for enforcing spatial ownership, stable handles, immutable job inputs, and transactional state changes.
+
+WGPU remains the renderer and primary GPU compute interface.
+
+The architecture should have a small, well-defined core surrounded by specialized, independently testable subsystems.
+
+A compact conceptual interface might look like this:
+
+```
+struct RegionKey {
+    origin: I64Vec3,
+    lod: u8,
+}
+
+struct WorldRevision(u64);
+
+struct WorldChange {
+    revision: WorldRevision,
+    affected_bounds: AabbI64,
+    changes: ChangeFlags,
+}
+
+struct DerivedArtifact {
+    region: RegionKey,
+    source_revisions: RevisionSet,
+    kind: ArtifactKind,
+}
+
+struct SimulationIsland {
+    bounds: AabbI64,
+    model: SimulationModel,
+    next_tick: SimTick,
+    priority: Priority,
+}
+```
+
+These are proposed boundaries, not production-ready Rust types.
+
+A derived artifact should carry the revisions of all data it depends on, not merely the revision of its own chunk. A terrain mesh often depends on neighboring occupancy; a fluid solver may depend on boundary state from adjacent regions.
+
+The renderer, collider builder, and streaming system must reject outputs whose source revisions are no longer valid.
+
+### Critical low-level optimization policies
+
+Use contiguous arrays and structures of arrays in hot loops, bit-packed occupancy masks, material palettes, and cache-friendly brick layouts.
+
+Avoid unnecessary cloning of entire chunks, per-cell allocations, excessive dynamic dispatch, and shared locks inside material update loops.
+
+Use work-stealing for independent jobs where profitable, but don't assume every workload benefits from more threads. Batch work to amortize scheduling overhead.
+
+Treat serialization as a real subsystem: incremental writes, checksums, versioned formats, crash recovery, and safe eviction of dirty data.
+
+Have shader specialization and material compilation happen outside the frame loop. Precompute material lookup tables and group compatible operations to reduce branching.
+
+A massive world also requires precision-safe transforms, stable coordinate conversion, and collision calculations in local coordinate frames.
+
+### Make the game moddable without sacrificing performance
+
+A successor to modded Minecraft should have first-class extensibility.
+
+Materials, reactions, machines, recipes, spell components, procedural structures, creatures, and loot generation should use versioned, data-driven definitions wherever practical.
+
+For complicated custom behavior, use sandboxed modules with explicit APIs and execution budgets. WebAssembly is one potential option; it should not be called once per voxel inside the hottest simulation kernels.
+
+Mods should be able to add systems through well-defined interactions rather than patch arbitrary internal memory.
+
+The engine can then support enormous modpacks while retaining profiling information about which mods and systems actually consume resources.
+
+## 9. Build an engine performance laboratory
+
+I would make performance and correctness evaluation part of the development process, rather than something performed after features are implemented.
+
+For the RTX 4090 development machine, a 120 FPS normal-play target is ambitious but reasonable to investigate. A 60 FPS stress-scene target is also useful, provided the stress workload is carefully defined.
+
+These are performance goals, not measured guarantees.
+
+Proposed benchmark scenes
+
+| Mountain traversal     | Fast flight through 3D terrain with streaming, shadows, and changing LOD           |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| Underground traversal  | Large volumetric caves, artificial structures, complex lighting, no missing meshes |
+| Continuous excavation  | Hundreds of local edits, collider updates, dust, and material activation           |
+| Structural collapse    | Detachment, falling voxel structures, impacts, secondary fracture, debris          |
+| Large fluid incident   | Reservoir breach, moving fluid fronts, changing local simulation resolution        |
+| Industrial megafactory | Many active machines, pipes, cables, inventories, and controllers                  |
+| Extended-world soak    | Repeated exploration, editing, saving, unloading, and returning over several hours |
+
+Each benchmark should record median, p95, p99, and maximum frame times; per-subsystem CPU and GPU time; peak resident memory and VRAM; allocations; generated/meshed/uploaded bytes; and deferred-work backlog.
+
+The benchmark harness should retain fixed camera routes and deterministic world seeds so changes can be compared fairly.
+
+### An important requirement: measure visual failure, too
+
+An engine could technically improve its frame time by discarding terrain, reducing simulation fidelity incorrectly, or failing to update distant geometry.
+
+Therefore every performance regression test should have corresponding correctness and visual checks.
+
+Examples include watertight LOD boundaries, persistent edits, conserved material quantities, stable shadow placement, no stale collider publication, and consistent world geometry after teleportation.
+
+Shader and geometry changes should be tested from multiple camera angles and under motion.
+
+A fast but visually broken result fails the benchmark.
+
+### A better approach to automatic optimization
+
+Instead of adding dozens of arbitrary graphics settings, expose a smaller number of meaningful computational budgets.
+
+The runtime scheduler can dynamically allocate more or less time to shadows, indirect lighting, volumetric effects, distant refinement, particle fidelity, and background jobs.
+
+Gameplay-critical simulation should be protected from ordinary graphics quality scaling.
+
+The scheduler should be able to preserve a correct but coarser world representation when under load.
+
+This is more valuable than a quality system that reduces arbitrary values until the game happens to run faster.
+
+## 10. The critical missing systems: 3D perception, creatures, and navigation
+
+The engine can support all the world's physics and still fail to feel like a great game if creatures cannot understand a changing environment.
+
+In a destructible 3D world, navigation cannot depend on a conventional static navmesh.
+
+I'd use hierarchical navigation built on the same spatial regions as terrain streaming.
+
+At a large scale, creatures use connected-region and portal information to identify viable routes. Locally, they use more detailed terrain data and specialized movement models.
+
+A flying creature needs volumetric route planning. A spider needs surface traversal. A tunneling organism needs to consider material resistance and the cost of excavation. A machine or large boss may need to account for its physical footprint.
+
+When terrain changes, invalidate only the relevant local connectivity and navigation information.
+
+Inactive creatures can be simulated through coarse ecological state rather than continuous AI and pathfinding.
+
+### Make enemy intelligence systemic
+
+Creature behavior should involve real sensory information: visibility, sound, heat, nearby movement, environmental hazards, and relevant magical effects.
+
+For example, a predator might follow noise through cave passages, react to light, avoid fire, and exploit tunnels created by other creatures.
+
+This introduces stealth, ecological manipulation, creature farming, and trap engineering without scripting every encounter.
+
+Acoustic propagation can use portal or connected-region summaries rather than expensive full 3D wave simulation.
+
+The player should be able to learn creature behavior and then manipulate it.
+
+A complex environment is most valuable when creatures respond to it.
+
+## 11. The defining vertical slice: The Drowned Observatory
+
+I would build one extraordinary playable location that serves as the proving ground for the entire engine.
+
+[Darksiders 3 reveals new concept art—gallery | PC Gamer](https://images.openai.com/static-rsc-4/Y14zq1wtv2hQH_ZLJT-Xnu9TZF1__PvlfkiYgoorY6Azoig-_l6H0IMioAYzXYvShvEh5Xbwr_BGyaD_2co0bMLQiWCNVSGedBCQzuX48N5QuvDeJN9irJbxcxuQui8mFZtaui-4zKcV04yzcCekUjAPi5rWO2Vm7Gl_Cn3nSko?purpose=inline)
+
+[Tears of the False God video - Arcane Dimensions mod for Quake - ModDB](https://images.openai.com/static-rsc-4/bujx_BnkitvzSARHNGW2jY48V4sHdJ7EDIJ9298cel0UWVYwxKe0xBcNJfBQKF2lhjHc_nLaDpOPiv5gbEQox1Cwbzd_hlS0KkofTyFsObu4KpX7UsBDPBgfMUUTTxUm_tH_8ZO-CzPTuBZwtfD3t1ZkmzHA3iUVc_Dg-warJA0?purpose=inline)
+
+[Steampunk underground city background architecture | Premium Photo  - rawpixel](https://images.openai.com/static-rsc-4/SiXLTNHcAOke40hSgD8mCaqmxat0byuJaih_GnFYU2lkn8P96OUE4D5dbfw6DWNpmUnt8cpOFQElavbxlJkJwB-cmqDnZ_N_AOYK6yhW-_vG4mWJa01mEWhhKjOuIiPdhuTV4Cv8fGmN4pHr0KvBi9flth0iyYNW-mlEHdvwgEg?purpose=inline)
+
+12
+
+Imagine discovering a partly collapsed observatory beneath a mountain.
+
+A natural underground river runs through its foundation. Ancient pumps and electrical machinery once regulated the water level. The observatory's central chamber contains an enormous dormant mechanical creature.
+
+The player can explore flooded galleries, excavate passages, discover machinery, and investigate how the system originally operated.
+
+An inexperienced player may fight through the complex, solve its intended puzzles, and defeat the guardian.
+
+A more knowledgeable player could build a water pump, construct an electrical system, drain the reservoir, and enter from below.
+
+A wizard might freeze a portion of the water, create an opening with a carefully modified digging spell, and exploit the creature's weakness to particular materials.
+
+A highly advanced engineer might reconnect the facility to an external power grid, activate its machinery, and use the observatory as an automated resource-processing site.
+
+And a particularly creative player could discover how to repeatedly reactivate the guardian, capture its material outputs, and build an automated magical resource farm.
+
+All of those solutions should emerge from the same world rules.
+
+### Why this is the right test
+
+It simultaneously tests terrain, caves, streaming, water, lighting, destruction, electrical circuits, mechanisms, AI, creature behavior, magic, and persistence.
+
+More importantly, it tests whether the game is fun.
+
+A hundred impressive technical demos are less valuable than one location that players want to explore, understand, manipulate, and eventually master.
+
+I would insist on playing this location regularly throughout development, not waiting until the engine is supposedly finished.
+
+## 12. The player experience must remain approachable
+
+A major risk is that we produce an incredibly complicated engineering simulator that lacks Minecraft's immediate accessibility.
+
+Early gameplay should still feel familiar.
+
+The player enters a beautiful, mysterious landscape. They can break and place blocks, gather materials, craft basic tools, discover caves, build shelter, and encounter dangerous creatures.
+
+Within the first meaningful exploration session, they should discover that the environment behaves differently from Minecraft.
+
+Sand doesn't simply float when unsupported. Water can interact with machinery. Fire can spread through combustible structures. A spell can transform materials, alter creatures, or create unexpected chain reactions.
+
+The interaction systems should be visible almost immediately rather than locked behind dozens of hours of progression.
+
+### Make scale selection almost effortless
+
+Variable voxel size is powerful, but players should not constantly manage complicated resolution controls.
+
+Mining and construction tools should automatically choose sensible scales.
+
+Building a house should use familiar snapped modules. Carving detailed stonework should use smaller cells. Excavating a tunnel with a large machine should remove material in bulk.
+
+A precision tool can expose finer resolution explicitly, but ordinary play must remain comfortable.
+
+The same principle applies to circuitry, machines, and magic. Basic usage should be straightforward, while expert-level control remains available.
+
+### Progression should expand possibilities, not simply increase numbers
+
+| Early      | Mining, exploration, crafting, basic magic, basic chemistry, environmental hazards                                               |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Developing | Mechanical power, pumps, furnaces, alchemy, automation, spell modification, renewable resource farms                             |
+| Advanced   | Electrical engineering, large factories, sophisticated magic, programmable controllers, advanced metallurgy                      |
+| Endgame    | Semiconductor fabrication, advanced robotics, exotic materials, huge infrastructure, planetary-scale discoveries, megastructures |
+
+These stages should overlap. A clever player should be able to reach advanced capabilities earlier through exploration, specialized knowledge, trading, or unusual discoveries.
+
+The game should reward knowledge, not demand that everyone follow the same crafting sequence.
+
+For advanced engineering, give players clear measurement tools and informative interfaces. For magic, let them inspect spell order, triggers, energy costs, and material effects.
+
+Noita's depth is valuable, but a three-dimensional persistent game benefits from stronger feedback, clearer information, and better discovery tools.
+
+## 13. The final performance research I would prioritize
+
+There are several genuinely difficult research directions worth testing, rather than prematurely selecting an algorithm.
+
+| Research experiment                 | Question to answer                                                                                       | Decision criterion                              |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Dynamic sparse GPU bricks           | Can active volumes be updated faster in compact linear GPU storage than with CPU-resident sparse bricks? | End-to-end frame time including synchronization |
+| Mixed cubic/smooth LOD              | Can we maintain watertight surfaces during rapid edits and streaming?                                    | Correctness, latency, geometry cost             |
+| Material-front simulation           | Can reactions and combustion advance by active interfaces rather than volume scans?                      | Accuracy and scaling with active surface area   |
+| Incremental structural connectivity | Can large constructions fracture without global component searches?                                      | Worst-case detachment latency                   |
+| GPU-driven geometry residency       | Can the renderer stream and compact geometry without visible stalls?                                     | p99 frame time and VRAM stability               |
+| Background causal simulation        | Can distant factories and hazards evolve correctly using specialized coarse models?                      | State consistency and computational cost        |
+
+The most promising external research direction is dynamic sparse-volume computation, particularly the 2026 NanoVDB research mentioned earlier. It should be treated as a candidate optimization for certain kernels, not as proof that GPU simulation is always the best architecture.
+
+Similarly, Rapier's voxel collision capabilities are worth benchmarking against simplified compound-collider strategies. The best solution may differ substantially between terrain, movable structures, vehicles, and small debris.
+
+### What I would explicitly reject
+
+I would not build a universal physical solver for every material, a dense global simulation grid, a single enormous octree used by every subsystem, or a fully ray-traced renderer as a prerequisite for good graphics.
+
+I would also reject blanket collision rebuilding after every edit, unlimited dynamically simulated debris, and keeping every distant machine active at full tick rate.
+
+These choices could make a technically impressive engine dramatically harder to optimize and maintain.
+
+The architecture needs to keep computational complexity related to active interactions and visible information, not the total size of the world.
+
+## 14. The development sequence I would choose
+
+For your existing engine, I'd prioritize the following milestones, while improving artistic quality in parallel rather than deferring visual work until the end.
+
+### 01
+
+Establish a reliable rendering and profiling baseline
+
+Instrument the existing renderer, streaming, world generation, and simulation. Fix incorrect horizon geometry, LOD gaps, shading glitches, and stale mesh publication. Create repeatable screenshots and camera-path benchmarks.
+
+### 02
+
+Unify world storage and edit ownership
+
+Establish the canonical world query model, persistent multiresolution edits, moving object-local volumes, transactions, and revision-aware derived caches. Validate saving, loading, and spatial boundaries before making major physics changes.
+
+### 03
+
+Develop one excellent physics sandbox
+
+Implement sparse granular motion, basic liquid transport, thermal reactions, local destruction, and selective rigid-body detachment. Prove that these systems interact correctly before expanding their scope.
+
+### 04
+
+Create the first complete emergent gameplay location
+
+Build the Drowned Observatory or a comparable dungeon. Include several physically distinct solutions, meaningful exploration, an interactive boss, material reactions, and a useful machine or magical reward.
+
+### 05
+
+Expand engineering and automation
+
+Implement coherent electrical, thermal, fluid, and mechanical networks. Add modular machine design and programmable spell components, then advance toward the semiconductor design system.
+
+### 06
+
+Scale the world without scaling its cost proportionally
+
+Add improved causal scheduling, coarse background simulation, aggressive streaming, increasingly sophisticated rendering, and large-world benchmark scenes. Scale only proven systems.
+
+Each stage should include automated tests, performance comparisons, and real gameplay evaluation.
+
+The art overhaul should run alongside these milestones. The game needs a clear identity early, because material appearance, lighting, shape language, and gameplay readability influence engine requirements.
+
+## 15. The definition of success
+
+I would establish five final acceptance conditions.
+
+| Dimension            | What success looks like                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Performance          | High, stable frame rates during real exploration, construction, fluid incidents, and combat—not merely empty-scene benchmarks               |
+| Physical consistency | Edits, material quantities, collisions, machinery, and world state behave coherently across chunk and LOD boundaries                        |
+| Visual excellence    | Memorable landscapes, richly detailed materials, excellent lighting, beautiful caves, coherent horizons, and striking environmental effects |
+| Gameplay depth       | Many interconnected, understandable systems that support unexpected solutions, automation, experimentation, and mastery                     |
+| Development quality  | Modular Rust, maintainable WGSL, reproducible tests, reliable persistence, bounded resource usage, and straightforward extensibility        |
+
+No serious engineer can establish that a particular architecture is the fastest voxel engine ever made without building it and comparing it against other engines under equivalent workloads.
+
+But this design offers a credible route toward exceptional results because it concentrates effort on the problems that existing engines struggle to solve simultaneously.
+
+### My central recommendation
+
+The engine's signature technology should be adaptive physical-world computation.
+
+Rather than making a billion voxels expensive, make an enormous world mostly inexpensive until something meaningful happens.
+
+Rather than simulating every machine component at the same physical resolution, simulate components at the abstraction appropriate to their behavior.
+
+Rather than using procedural generation to create endless generic terrain, make it produce beautiful, physically meaningful environments full of systems players can exploit.
+
+And rather than letting high-end graphics compete with physics, build one coherent architecture where geometry, lighting, simulation, and gameplay all derive from consistent world information.
+
+The ultimate benchmark isn't whether we can display a mountain at 120 FPS. It's whether a player can explore that mountain, excavate beneath it, discover a forgotten machine, rebuild its power supply, transform it into a magical factory, grow unusual creatures inside it, and later return to find their modifications intact—all while the game remains beautiful, responsive, and enjoyable.
+
+That's the standard I'd design toward for a true 3D successor to modded Minecraft and Noita.&#x20;

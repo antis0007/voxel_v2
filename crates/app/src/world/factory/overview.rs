@@ -43,17 +43,17 @@ impl Health {
         }
     }
 
-    /// What the player should do about it.
+    /// The cause as a state, for the production overview.
     pub fn fix(self) -> &'static str {
         match self {
-            Self::Running => "Working.",
-            Self::Starved => "Missing ingredients or fuel. Pipe them in, or use Load from your pack.",
-            Self::Blocked => "Output full. Pull products out with a pipe, or collect them.",
-            Self::Unpowered => "No power reaches it. Run cable from a generator, battery or matrix.",
-            Self::Idle => "Nothing to do right now. Normal for a finished line.",
-            Self::Paused => "Paused by the player. Start it again when the line is ready.",
-            Self::Unbuilt => "Its shell or matrix is incomplete. The look-at panel names the missing part.",
-            Self::Unconfigured => "No recipe set. Open the machine and choose one.",
+            Self::Running => "Working",
+            Self::Starved => "Missing Input or Fuel",
+            Self::Blocked => "Output Full",
+            Self::Unpowered => "No Power",
+            Self::Idle => "Idle",
+            Self::Paused => "Paused",
+            Self::Unbuilt => "Structure Incomplete",
+            Self::Unconfigured => "No Recipe",
         }
     }
 

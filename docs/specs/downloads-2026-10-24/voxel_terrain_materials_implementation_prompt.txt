@@ -1,0 +1,231 @@
+TERRAIN MATERIAL QUALITY OVERHAUL — RUST + WGPU VOXEL GAME
+
+Act as the rendering engineer and environment technical artist responsible for shipping a polished terrain-material pass in this existing game. Inspect the attached screenshot and the repository, then implement the improvements, run the game, inspect the rendered result, and iterate.
+
+The goal is deliberately crafted voxel materials with convincing light response, coherent pixel scale, stable motion, and efficient rendering. Aim for the visual discipline of a good Minecraft resource pack paired with a restrained shader pack. Use Complementary Reimagined as an art-direction reference: preserve a clear voxel identity while improving material definition and lighting.
+
+Scope: grass ground, exposed soil, gravel, solid rock/stone, their transitions, nearby grass tufts, and the sampling/lighting issues that directly affect those surfaces. Prioritize the terrain visible in the supplied image.
+
+Deliver working code and finished assets. An audit, parameter tweak, or successful build alone does not complete this task.
+
+1. START FROM THE ACTUAL EVIDENCE
+
+The screenshot visibly shows:
+- Foreground grass dominated by similarly sized olive and yellow-green flecks. It reads as mottled carpet, with little recognizable plant structure.
+- Broad tan exposed banks with weak soil detail and an overly uniform transition from green tops.
+- Beige/grey central steps and ground faces whose material identity is unclear. Some upper blocks have stronger crack/cobble patterns, while the lower faces are relatively blank.
+- Sparse, thin, straw-like tufts that feel detached from the ground texture.
+- A detail imbalance: busy ground pixels alongside comparatively empty vertical faces.
+- A bright foreground light pool and dark middle distance that make materials difficult to compare.
+
+Treat those as appearance observations. Identify the actual material IDs before deciding which visible surface is gravel, natural rock, soil, or constructed stone.
+
+Investigate possible UV, mip, gamma, normal, and lighting problems through code and diagnostic views. Do not report them as confirmed bugs merely because the screenshot looks poor.
+
+2. ESTABLISH A REPRODUCIBLE BASELINE
+
+Read repository instructions and inspect the working tree. Preserve unrelated work. Identify the pinned Rust/wgpu versions and use their actual APIs.
+
+Trace the existing path from material/block IDs through asset generation or loading, mesh attributes, greedy meshing, texture addressing, shader material evaluation, lighting, and final display output. Record the relevant files and confirmed weaknesses briefly, then implement.
+
+Capture the supplied scene, or the closest reproducible equivalent, before edits. Record seed/save, position, view direction, field of view, resolution, time/weather, exposure, and local lights. State any inability to reproduce the exact shot.
+
+Use the existing debug system, or a small development-only view, to inspect:
+- Albedo without lighting.
+- Geometric and shading normals.
+- Roughness and material IDs.
+- Direct versus indirect light and occlusion where available.
+
+Build a compact material test area with grass above exposed soil, a gravel strip, solid rock, a step/corner, and a grazing-angle ground view. Reuse existing development tooling. Keep this a practical validation fixture.
+
+Establish neutral daylight first. Also retain the original dark scene for final validation.
+
+3. SET ONE COHERENT ART DIRECTION
+
+Use intentional pixel clusters, a restrained palette, recognizable material forms, and quiet areas between details.
+
+Define a consistent texel density relative to the game's visible block/world scale. Preserve an existing coherent standard where possible. Select resolution for readable shapes at normal gameplay distances; resolution increases must have a visible justification.
+
+Give each material three levels of organization:
+- Broad patches or geological structure that remain legible at medium distance.
+- Material-defining forms: grass clumps, soil clods, gravel stones, rock planes.
+- Sparse small accents that enrich close inspection.
+
+Keep bright speckles and dark cracks subordinate to the main forms. Materials should remain recognizable in albedo-only views. Use physical surface response to reinforce the art.
+
+Create original assets or use appropriately licensed sources with provenance. References define quality and visual principles, not assets to copy.
+
+4. REBUILD THE TERRAIN TEXTURES AS A COORDINATED SET
+
+GRASS TOPS
+
+Replace the uniformly busy green mosaic with turf that contains recognizable short blade/leaf clusters and matted patches.
+
+Use a limited family of greens with controlled warm/cool variation. Give clusters internal shape and connect neighboring pixels into deliberate forms. Introduce a few subdued soil or dry-grass patches where appropriate, with enough quieter ground to avoid camouflage-like clutter.
+
+Use restrained broad variation across several blocks to organize the field. Keep its intensity low enough that it reads as natural patchiness. Avoid a new layer of obvious cloudy noise.
+
+Make surface relief shallow. A change in plant pigment should not automatically become a bump. Grass should remain visually soft and predominantly matte under moving light.
+
+EXPOSED SOIL AND GRASS SIDES
+
+Replace the plain tan banks with earthy clods, compacted soil, occasional embedded stones, and restrained roots.
+
+Integrate the grass top with a shallow, irregular turf fringe along eligible exposed upper edges. Keep most of the bank visibly soil. Vary the fringe without making long hanging green curtains.
+
+Resolve turf eligibility from the actual exposed surface and neighboring blocks. Deep dirt walls, undersides, caves, and freshly excavated surfaces must receive appropriate materials. Use the correct side orientation so roots and the turf cap do not rotate sideways.
+
+Keep block geometry readable. Avoid dark outlines around every cube and excessive small cracks.
+
+GRAVEL
+
+Make gravel read as individual small stones embedded in compacted fines.
+
+Use a controlled mixture of pebble sizes and irregular silhouettes, with coherent mineral colors and quieter interstitial material. Keep the stones at a believable size relative to blocks, grass, and the player.
+
+Reserve stronger contrast for selected contacts and crevices. Avoid thick black borders around every pebble, checkerboard cells, uniformly bright chips, and a pattern that resembles large masonry cobbles.
+
+Coordinate color, relief, and roughness around the same pebble shapes. Dry gravel should respond with broad, subdued highlights. Any damp treatment should follow an existing moisture state or justified material variant.
+
+SOLID ROCK AND CONSTRUCTED STONE
+
+Give natural rock broader mineral planes, sparse fractures, subtle strata where suitable, and occasional inclusions. Make its connected structure visibly different from loose gravel.
+
+Treat masonry/cobble blocks as their own material when the actual material IDs call for them. Their joints and block sizes should communicate construction consistently.
+
+Reduce the gap between nearly blank faces and overly outlined cracked faces. Match their palette, pixel scale, and relief strength to the rest of the material set.
+
+AUTHORING REQUIREMENTS
+
+Produce editable source assets or deterministic generators plus final runtime assets. If procedural generation is used, construct meaningful shape masks for blades, clods, pebbles, and fractures. Avoid using differently colored random noise as the complete material design.
+
+Bake static texture detail offline or during asset preparation. Retain a small family of compatible variants only where it visibly improves repetition.
+
+Inspect the actual exported tiles, repeated patches, and mip levels. An attractive isolated tile is insufficient if its repetition becomes obvious across the field.
+
+5. INTEGRATE TRANSITIONS AND GRASS TUFTS
+
+Use restrained surface transitions that support material identity: turf over soil, scattered small stones at a gravel edge, and limited soil encroachment where appropriate.
+
+Keep transitions aligned with the voxel world's actual material boundaries and edit state. Terrain edits must update visual dressing locally. Prevent grass or decorative stones from surviving over removed support, floating across gaps, or covering deliberately bare constructed surfaces.
+
+Improve the existing tufts with a small set of fuller, readable silhouettes and varied heights/orientations. Use greener bases that connect to the turf and limited dry tips. Position them in loose patches with intentional gaps.
+
+Correlate tuft placement with the ground variation and available terrain/biome information. Avoid building a new ecological simulation for this pass. Use deterministic placement and existing chunk ownership.
+
+Ground tuft bases visually and geometrically. If wind is already supported, keep roots anchored and motion restrained. Apply matching deformation to relevant shadow rendering.
+
+Control grass overdraw and distance visibility. Use stable transitions between detail levels. Keep the base grass texture convincing where tufts become too small to render.
+
+6. FIX TEXEL SCALE, REPETITION, AND SAMPLING
+
+Verify these requirements in the existing implementation and repair actual violations:
+
+- A greedily merged quad repeats material at the intended world scale. It must not stretch a single block tile over the entire quad.
+- Top, bottom, and all side faces use consistent scale and orientation. Validate negative coordinates, adjoining chunks, and edited terrain.
+- Variant selection and broad variation are tied to stable world/block coordinates and material identity. Chunk reloads, mesh rebuilds, camera movement, and origin rebasing must preserve a location's appearance.
+- Keep coordinate arithmetic precise over the supported world size. Use integer world identity plus bounded local coordinates where necessary.
+- Preserve efficient greedy meshing. Material variation should not require splitting every merged surface into individual cubes.
+- Use edge-compatible variants or another proven seamless scheme. Arbitrary rotations of a seamless tile do not automatically produce compatible boundaries.
+- Apply matching transforms to the material's maps. Respect directional textures such as turf sides and rock strata.
+
+Prefer the existing correct texture organization. Texture-array layers are a useful option when they fit the architecture. If retaining an atlas, generate tile-isolated mips and adequate gutters for the supported sampling footprint.
+
+Where wrapping or randomized UV transforms introduce discontinuities, derive gradients from the continuous mapping and transform them consistently. Use explicit-gradient sampling where required. Respect WGSL derivative and uniform-control-flow rules; fix the sampling logic rather than suppressing validation diagnostics.
+
+Generate mipmaps appropriate to each map: color-aware filtering for albedo, correct handling of normal directions, and preservation of grass cutout coverage where necessary. Inspect distant normal/roughness behavior for sparkle.
+
+Balance deliberate close-up pixels with stable distance filtering. Do not force mip level zero, disable mips globally, or use aggressive negative mip bias to simulate sharpness.
+
+Use valid sampler combinations for the pinned wgpu version and backend. WebGPU anisotropy greater than one requires linear magnification, minification, and mip filtering. A request for nearest magnification plus anisotropy in the same sampler is not a valid default. Choose the simplest supported filtering approach that passes both style and motion checks.
+
+7. MAKE THE MATERIAL RESPONSE CORRECT AND RESTRAINED
+
+Audit color handling end to end. Decode sRGB-encoded color inputs exactly once, keep normal/roughness/height/mask/AO data linear, perform lighting in linear space, and encode display output once. Include biome tints and palette constants in this check.
+
+Reuse the existing material model. Add only the missing representation needed for a clear improvement. Use rough dielectric response for dry grass, soil, gravel, and ordinary rock; tune relief and highlights separately for each.
+
+Create normal detail from intended surface shape. Avoid interpreting every albedo fleck as height. Keep detail shallow enough to preserve believable voxel surfaces.
+
+Define the normal-map convention and a consistent tangent basis for all six face orientations. Tile rotations and reflections must transform normals correctly, including handedness. Test an asymmetric raised shape under a moving light so inverted relief or mismatched faces becomes visible.
+
+Use ambient occlusion to support crevices and indirect-light visibility. Avoid repeatedly multiplying overlapping occlusion into black seams. Handle direct-light shadowing separately.
+
+Validate contact grounding at ledges, stone bases, and tuft roots. Diagnose the existing ambient fill, local-light falloff, shadowing, and exposure before adjusting them. Preserve readable ground materials outside the foreground light pool while keeping the intended time-of-day mood.
+
+Evaluate lighting changes separately from asset improvements. Keep bloom, fog, grading, and sharpening controlled during material comparisons.
+
+8. KEEP THE IMPLEMENTATION SMALL AND FAST
+
+Organize asset authoring, material definitions, sampling helpers, and surface evaluation according to existing module boundaries. Keep tunable parameters documented and easy to find.
+
+Preserve agreement between Rust vertex/uniform layouts, bind groups, texture formats, and WGSL declarations. Use the repository's established validation and build paths.
+
+Avoid per-frame texture synthesis, repeated full-world remeshing, unnecessary draw calls, and unbounded vegetation density. Keep added texture samples and material memory explicit.
+
+Axis-aligned voxel faces should use an economical face mapping. Reserve expensive techniques such as multi-axis triplanar sampling, parallax, or displacement for a demonstrated need after the core materials already pass visual review.
+
+Use the project's performance budget. If none exists, set and document a provisional allowance in milliseconds for the combined affected terrain and vegetation passes, using the measured baseline and frame-time headroom. Report both absolute and percentage changes and repeated-run variability. Treat differences within measurement noise as inconclusive. Include total GPU frame time so moving cost between passes cannot hide it.
+
+Measure both terrain and total frame costs after warm-up. Record resolution, quality settings, CPU/GPU, median and high-percentile frame times, texture memory, and any meaningful change in draw/mesh counts. Separate frame caps and CPU limits from actual GPU work. If GPU timing is unavailable, state that limitation.
+
+If extra detail exceeds the budget, simplify the implementation while preserving the improved material design. Prefer a few useful quality controls over a large configuration surface.
+
+If work is delegated, assign non-overlapping asset/code ownership and one integrator for shared shader interfaces.
+
+9. VALIDATE THE VISUAL RESULT IN THE GAME
+
+Inspect actual screenshots and motion after each substantial pass. Correct the largest remaining defect before adding another effect.
+
+Required views:
+- The original gameplay composition under its original lighting.
+- The same composition under neutral daylight.
+- Close, medium, and distant views of grass, soil, gravel, and rock.
+- A grazing-angle ground view and a slow camera pan.
+- A corner/face-orientation test under moving light.
+- A chunk boundary and a terrain edit followed by remeshing/reloading.
+
+For each before/after pair, match camera, resolution, exposure, time, weather, and lights. Where a lighting correction is part of the result, also show the asset/shader comparison under controlled common lighting.
+
+Capture useful albedo, normal, and roughness views so the result can be assessed beyond the final shaded image.
+
+Acceptance criteria:
+1. Grass reads as organized vegetation at close range and coherent turf at medium range. Random bright flecks no longer dominate.
+2. Soil banks have readable earthy structure and a believable connection to the grass top.
+3. Gravel has recognizable small stones; natural rock has larger connected forms; masonry remains distinct when present.
+4. Materials remain distinguishable at normal gameplay size and when the screenshot is reduced.
+5. The ground has a coherent palette and pixel scale across top and side faces.
+6. Repeated surfaces show no distracting grid, seams, stretched tiles, or abrupt variant boundaries.
+7. Relief follows the light correctly without inflated, metallic, or plastic-looking terrain.
+8. Camera movement shows stable detail: no objectionable shimmer, crawling patterns, texture swimming, or abrupt grass/mip changes.
+9. Chunk reloads and edits preserve stable material placement and remove unsupported dressing.
+10. The original dark scene remains atmospheric while retaining useful material separation.
+11. Build/shader validation passes, relevant regressions are checked, and measured performance meets the stated budget or the remaining tradeoff is explicit.
+
+Add focused regression coverage only where it protects concrete invariants, such as material addressing, face transforms, or deterministic variation. Use visual inspection for artistic quality. A passing test suite does not establish that the terrain looks good.
+
+10. DELIVER THE FINISHED PASS WITH EVIDENCE
+
+Provide:
+- A concise explanation of the confirmed causes and the implemented fixes.
+- Finished material assets and their editable sources/generators.
+- Matched before/after full-scene images and close crops of grass, a soil bank, gravel, and rock.
+- A short motion capture, or a precise report of the motion checks actually performed.
+- Performance and memory deltas, plus the exact build/test commands used.
+- Actual file paths and the small set of parameters relevant to future tuning.
+- Any remaining defects or visual checks that could not be performed.
+
+If the application cannot run in your environment, complete the implementable work and clearly mark visual acceptance as unverified. Supply reproducible local capture steps. Do not invent screenshots, timings, or a claim of professional-quality parity.
+
+Start with the baseline and material audit, then execute the full pass. Continue through implementation and visual correction until the acceptance criteria are met or a concrete blocker is documented.
+
+PRIMARY REFERENCES
+
+Use these for visual principles and technical validation; consult documentation matching the repository's pinned dependency versions.
+
+- Complementary visual styles: https://www.complementary.dev/shaders/
+- wgpu texture formats: https://docs.rs/wgpu/latest/wgpu/enum.TextureFormat.html
+- WebGPU sampler requirements: https://www.w3.org/TR/webgpu/#sampler-creation
+- WGSL derivatives and texture sampling: https://www.w3.org/TR/WGSL/
+- Filament material inputs: https://google.github.io/filament/Materials.md.html
+- Filament shading and occlusion: https://google.github.io/filament/Filament.md.html

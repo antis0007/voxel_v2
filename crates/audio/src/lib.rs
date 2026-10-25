@@ -64,9 +64,11 @@ pub enum Cue {
     Rift,
     Echo,
     Splash,
+    Mine,
+    Smelt,
 }
 impl Cue {
-    const COUNT: usize = 24;
+    const COUNT: usize = 26;
 }
 #[derive(Clone, Copy)]
 pub struct Event {

@@ -477,7 +477,7 @@ impl State {
     }
 
     pub fn models(&self, model: &mut Model, viewer: Vec3) {
-        model.set_surface_kind(58.0);
+        let previous_material = model.set_surface_kind(58.0);
         for s in &self.sources {
             let Some(p) = s.pos.filter(|p| p.distance(viewer) < 90.0) else {
                 continue;
@@ -520,7 +520,7 @@ impl State {
                     Vec3::splat(0.35),
                     Quat::IDENTITY,
                     [0.55, 0.74, 0.82],
-                    0.0,
+                    crate::mesh::models::AUTHORED_SURFACE,
                     0.0,
                 );
             }
@@ -548,7 +548,7 @@ impl State {
                 0.3,
             );
         }
-        model.set_surface_kind(0.0);
+        model.set_surface_kind(previous_material);
     }
 }
 

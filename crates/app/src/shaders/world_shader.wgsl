@@ -37,6 +37,7 @@ struct VsOut {
     @location(10) @interpolate(flat) material_family: u32,
     @location(11) gravel_coverage: f32,
     @location(12) model_uv: vec2<f32>,
+    @location(13) @interpolate(flat) camera_relative: u32,
 };
 
 // Integrated-GPU shading tier (render::lean_shading). Desktop pipelines keep
@@ -454,7 +455,7 @@ fn vs_main(in: VsIn) -> VsOut {
     // moving it halfway toward 1 is monotonic, so the pieces still sort against
     // each other, but they now win the depth test against anything beyond a few
     // centimetres of the lens.
-    if geometry_kind == 54.0 || geometry_kind == 55.0 {
+    if camera_relative {
         out.pos.z += (out.pos.w - out.pos.z) * 0.5;
     }
     // Decode BEFORE interpolation, so gradients and biome averages are linear.
@@ -465,6 +466,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.surface    = in.surface;
     out.surface.z = geometry_kind;
     out.material_family = u32(geometry_kind);
+    out.camera_relative = select(0u, 1u, camera_relative);
     out.ao_strength = in.ao_strength;
     // Resolve IDs at vertices; interpolate colors/finish, never material IDs.
     let far_terrain=in.ao_strength<0.0 && in.ao_strength> -1.5 && surface_key==0.0;
@@ -1047,7 +1049,10 @@ fn eval_torch_light(
     let distance_m = sqrt(max(dist2, 1e-8));
     let l = terrain_safe_unit3(to_torch, n);
     let cutoff = clamp(1.0 - pow(distance_m / radius, 4.0), 0.0, 1.0);
-    let falloff = cutoff * cutoff / (1.0 + dist2 * 0.045);
+    // Keep a readable pool around the source without summing a hall full of
+    // distant flames into a uniform amber wash. Distances are physical metres;
+    // the soft core preserves nearby surfaces and the finite cutoff is smooth.
+    let falloff = cutoff * cutoff / (1.0 + dist2 * 0.14);
     let flicker_seed = select(torch_pos_radius.xyz * 0.23, vec3<f32>(0.0), moving);
     let flicker = torch_light_flicker(flicker_seed + vec3<f32>(0.0, 1.7, 0.0), time);
     let radiance = max(torch_color_strength.rgb, vec3<f32>(0.0))
@@ -1104,11 +1109,6 @@ fn surface_noise(p: vec2<f32>) -> f32 {
 // Conservative octave clamping, not an exact integral of the complete shader.
 // A noise cell loses contrast between five and two pixels across and converges
 // to its statistical mean. Fixed wavelengths never change with camera distance.
-// Means of the per-texel leaf tint/tone ramps (surface_hash is uniform on
-// [0,1)), so the footprint fade keeps a canopy's average colour.
-const LEAF_TINT_MEAN: vec3<f32> = vec3<f32>(0.985, 1.01, 0.89);
-const LEAF_TONE_MEAN: vec3<f32> = vec3<f32>(0.97, 0.995, 0.825);
-
 fn surface_detail_weight(footprint_in_cells: f32) -> f32 {
     return 1.0 - smoothstep(0.20, 0.50, max(footprint_in_cells, 0.0));
 }
@@ -1124,19 +1124,6 @@ fn surface_noise_grad_filtered(p: vec2<f32>, footprint_in_cells: f32) -> vec3<f3
     if weight <= 0.0 { return vec3<f32>(0.5, 0.0, 0.0); }
     let sample = surface_noise_grad(p);
     return vec3<f32>(0.5 + (sample.x - 0.5) * weight, sample.yz * weight);
-}
-
-// Small shading relief from one fixed world field, shared by resident terrain
-// and the horizon mesh. This does not reconstruct missing geometric relief.
-// Projecting the gradient into the tangent plane keeps the normal in the same
-// hemisphere and avoids flattening cliffs toward the world-up axis.
-fn far_shade(n: vec3<f32>, xz: vec2<f32>, footprint_m: f32) -> vec3<f32> {
-    let coarse = surface_noise_grad_filtered(xz / 48.0 + vec2<f32>(13.7, -29.4), footprint_m / 48.0);
-    let fine = surface_noise_grad_filtered(xz / 12.0 + vec2<f32>(-17.3, 8.1), footprint_m / 12.0);
-    let g = coarse.yz * 0.045 + fine.yz * 0.014;
-    let gradient = vec3<f32>(g.x, 0.0, g.y);
-    let tangent_gradient = gradient - n * dot(n, gradient);
-    return normalize(n - tangent_gradient);
 }
 
 // Distant-terrain detail maps (render/horizon_detail.rs). One RGBA16F layer per
@@ -1402,7 +1389,12 @@ fn natural_tilt_from(normal: vec3<f32>, slope_texels: vec2<f32>) -> vec3<f32> {
 fn gravel_surface(base: vec3<f32>, q: vec3<f32>, normal: vec3<f32>, fp: f32) -> vec3<f32> {
     let t = natural_face_uv(q, normal) * PIXEL_RES;
     let shape_w = surface_detail_weight(fp * PIXEL_RES / GRAVEL_STONE_TEXELS);
-    let mean = mix(base * 0.66, base * 1.01, 0.34);
+    // Quiet mineral washes carry the bank; individual pebbles are subordinate.
+    // This is pigment variation, not a second shoreline/sediment simulation.
+    let wash = surface_noise_filtered(q.xz / 18.0 + q.y * vec2<f32>(0.017, 0.023), fp * 0.07);
+    let mineral = mix(base * vec3<f32>(0.84, 0.86, 0.82), vec3<f32>(0.16, 0.145, 0.105),
+        0.20 + wash * 0.25);
+    let mean = mineral * 0.80;
     if shape_w <= 0.0 { return mean; }
     let c = shape_cells(t, GRAVEL_STONE_TEXELS, vec2<f32>(211.0, -67.0));
     let texel_w = surface_detail_weight(fp * PIXEL_RES);
@@ -1414,11 +1406,11 @@ fn gravel_surface(base: vec3<f32>, q: vec3<f32>, normal: vec3<f32>, fp: f32) -> 
     if pick == 2.0 { tone = vec3<f32>(0.80, 0.82, 0.86); }
     if pick == 3.0 { tone = vec3<f32>(1.16, 1.14, 1.08); }
     let fleck = (surface_hash(floor(t) + vec2<f32>(3.0, 91.0)) - 0.5) * texel_w;
-    let fines = base * (0.66 + fleck * 0.08);
+    let fines = mineral * (0.79 + fleck * 0.012);
     // Crevice: fines texels hugging a stone sit in its shadow.
     let crevice = step(c.d1, radius + 0.9) * (1.0 - stone);
-    let detailed = mix(fines * (1.0 - crevice * 0.16), base * tone * (0.98 + fleck * 0.05), stone);
-    natural_tilt = natural_tilt_from(normal, -c.to_seed / max(radius, 1.0) * 0.34 * stone * shape_w);
+    let detailed = mix(fines * (1.0 - crevice * 0.025), mineral * mix(vec3<f32>(1.0), tone, 0.18) * (0.82 + fleck * 0.012), stone);
+    natural_tilt = natural_tilt_from(normal, -c.to_seed / max(radius, 1.0) * 0.10 * stone * shape_w);
     return mix(mean, detailed, shape_w);
 }
 
@@ -1466,8 +1458,8 @@ fn rock_surface(rock: vec3<f32>, q: vec3<f32>, normal: vec3<f32>, fp: f32) -> ve
 // texels across with a lean direction: texels on the lean side are lit tips,
 // the far side is the root, and texels just behind it fall in its shade.
 // `turf` is the field colour already carrying climate and broad patchiness.
-// `bloom` (0-1, a patch field) lets a few tufts carry one flower at their heart.
-fn grass_top(turf: vec3<f32>, q: vec3<f32>, fp: f32, dry: f32, bloom: f32) -> vec3<f32> {
+// Blossoms are meshed above the soil by the support-owned ground-detail pass.
+fn grass_top(turf: vec3<f32>, q: vec3<f32>, fp: f32, dry: f32) -> vec3<f32> {
     let t = q.xz * PIXEL_RES;
     let shape_w = surface_detail_weight(fp * PIXEL_RES / GRASS_TUFT_TEXELS);
     if shape_w <= 0.0 { return turf * 0.90; }
@@ -1478,23 +1470,20 @@ fn grass_top(turf: vec3<f32>, q: vec3<f32>, fp: f32, dry: f32, bloom: f32) -> ve
     let r = 1.3 + fract(c.id * 7.31) * 1.4;
     let along = dot(c.to_seed, lean);
     let across = dot(c.to_seed, vec2<f32>(-lean.y, lean.x));
-    let in_tuft = step(c.d1, r);
+    let edge_width = max(fp * PIXEL_RES, 0.65);
+    let in_tuft = 1.0 - smoothstep(r - edge_width, r + edge_width, c.d1);
     // Blade columns inside a tuft: a run of texels across the lean is on.
     let blade = mix(0.68, step(0.32, surface_hash(vec2<f32>(floor(across + 0.5), c.id * 977.0))), texel_w);
     let rise = saturate1(along / r * 0.5 + 0.5);
     let quiet = (surface_hash(floor(t) + vec2<f32>(-13.0, 29.0)) - 0.5) * texel_w;
-    var value = 0.81 + quiet * 0.04;
+    var value = 0.87 + quiet * 0.018;
     // Variation is pigment/root occlusion, not a painted directional highlight.
     // Live direct and local lights illuminate the material-shaped normal below.
-    value = mix(value, mix(0.87, 1.02, blade), in_tuft);
+    value = mix(value, mix(0.89, 0.98, blade), in_tuft);
     var col = turf * value;
-    let dry_tip = dry * in_tuft * blade * step(0.55, rise);
+    let dry_tip = dry * in_tuft * blade * smoothstep(0.45, 0.75, rise);
     col = mix(col, turf * vec3<f32>(1.20, 1.10, 0.62), dry_tip * 0.75);
-    let flower_pick = fract(c.id * 53.7);
-    let flower = step(1.0 - bloom * 0.08, flower_pick) * step(c.d1, 0.75) * texel_w;
-    let petal = select(select(vec3<f32>(0.86, 0.84, 0.74), vec3<f32>(0.92, 0.74, 0.16), flower_pick > 0.93),
-        vec3<f32>(0.55, 0.36, 0.78), flower_pick > 0.97);
-    col = mix(col, petal, flower);
+    // Flowers are supported mesh geometry; never bright confetti on flat soil.
     natural_tilt = vec3<f32>(lean.x, 0.0, lean.y) * 0.05 * in_tuft * shape_w;
     return mix(turf * 0.90, col, shape_w);
 }
@@ -1538,17 +1527,10 @@ fn natural_surface_blended(
     // Snapped to texel centres: every noise below is flat inside a texel.
     let q = (floor(p * cam.world_params.x * PIXEL_RES) + vec3<f32>(0.5)) / PIXEL_RES;
     let fp = max(footprint * cam.world_params.x, 0.0);
-    let seed = cam.scene_seed.x;
-    let warped = q.xz + vec2<f32>(
-        climate_noise_filtered(q.xz / 420.0, seed + 7u, fp / 420.0) - 0.5,
-        climate_noise_filtered(q.xz / 390.0, seed + 9u, fp / 390.0) - 0.5) * 180.0;
-    let climate_gain = select(1.0, 1.55, cam.scene_seed.y >= 5u);
-    let lapse = select(0.0035, 0.0018, cam.scene_seed.y >= 7u);
-    // 2.5 bounds the original domain warp's local magnification.
-    let heat = clamp((climate_noise_filtered(warped / 700.0, seed + 11u, fp * (2.5 / 700.0)) - 0.5)
-        * climate_gain + 0.5 - max(q.y - 30.0, 0.0) * lapse, 0.0, 1.0);
-    let wet = clamp((climate_noise_filtered(warped / 520.0, seed + 23u, fp * (2.5 / 520.0)) - 0.5)
-        * select(1.0, 1.4, cam.scene_seed.y >= 5u) + 0.5, 0.0, 1.0);
+    let climate = terrain_surface_climate(q, fp);
+    let heat = climate.x;
+    let wet = climate.y;
+    natural_relief_strength = terrain_surface_strength(weights, heat, wet);
     let arid = smoothstep(0.48, 0.70, heat) * (1.0 - smoothstep(0.26, 0.48, wet));
     let mottle = surface_noise_filtered(q.xz / 17.0 + q.y * vec2<f32>(0.017, 0.027), fp * 0.068);
     let clumps = surface_noise_filtered(q.xz * 0.65 + q.y * vec2<f32>(0.21, 0.16), fp * 0.71) - 0.5;
@@ -1566,12 +1548,12 @@ fn natural_surface_blended(
         let vigor = clamp(0.5
             + (surface_noise_filtered(q.xz / 310.0 + vec2<f32>(7.0, -3.0), fp / 310.0) - 0.5) * 1.1
             + (surface_noise_filtered(q.xz / 105.0 + vec2<f32>(-19.0, 41.0), fp / 105.0) - 0.5) * 0.55, 0.0, 1.0);
-        // Saturated lush ramp (the pre-olive grass that read best in ground
-        // captures), with vigour tint for patchy health.
-        let meadow = mix(mix(vec3<f32>(0.055, 0.145, 0.038), vec3<f32>(0.132, 0.198, 0.058), 1.0 - wet),
-            vec3<f32>(0.135, 0.175, 0.076), (1.0 - forest) * mottle * 0.42);
+        // Reference meadow: related olive/sage masses, with color accents left
+        // to living flowers. This is linear reflectance, not a display grade.
+        let meadow = mix(mix(vec3<f32>(0.060, 0.105, 0.052), vec3<f32>(0.150, 0.167, 0.081), 1.0 - wet),
+            vec3<f32>(0.130, 0.151, 0.084), (1.0 - forest) * mottle * 0.42);
         let base_turf = mix(meadow, sand, arid * 0.18)
-            * mix(vec3<f32>(1.14, 1.02, 0.78), vec3<f32>(0.90, 1.12, 0.86), vigor);
+            * mix(vec3<f32>(1.08, 1.02, 0.88), vec3<f32>(0.94, 1.04, 1.02), vigor);
         let turf = mix(base_turf, vec3<f32>(0.30, 0.285, 0.075), arid * 0.26);
         let coastal_dune = (1.0 - smoothstep(12.2, 13.6 + mottle * 0.6, q.y)) * 0.24;
         let sparse = smoothstep(0.34, 0.88, arid) * 0.30;
@@ -1630,28 +1612,21 @@ fn natural_surface_blended(
             turf_color = mix(turf_color, sand * 0.82, savanna * up * 0.24 * (1.0 - coastal_dune));
             turf_color = mix(turf_color, vec3<f32>(0.30, 0.43, 0.25) * 0.82, rainforest * up * 0.42);
         }
-        // Break the meadow with low-frequency worn soil so the ground has an
-        // authored patch language instead of one continuous pastel green.
+        // Broad wear patches leave quiet intervals between detailed plants.
         let worn = smoothstep(
             0.68,
             0.90,
-            surface_noise_filtered(q.xz * 1.7 + vec2<f32>(23.0, -11.0), fp * 1.7),
+            surface_noise_filtered(q.xz / 4.5 + vec2<f32>(23.0, -11.0), fp / 4.5),
         ) * up * (1.0 - snow);
         turf_color = mix(turf_color, soil, worn * 0.16);
         // Broad dry patches (several blocks) choose where tuft tips straw.
         let dry_field = smoothstep(0.58, 0.78,
             surface_noise_filtered(q.xz / 6.5 + vec2<f32>(17.0, 5.0), fp / 6.5)) * (1.0 - snow);
-        // Meadow flowers in patches. A low-frequency field decides where they
-        // grow; inside a patch a few grass tufts carry one bloom at their heart
-        // (grass_top), so flowers belong to plants instead of speckling texels.
-        let flower_patch = smoothstep(0.56, 0.68,
-            surface_noise_filtered(q.xz / 9.0 + vec2<f32>(-23.0, 17.0), fp / 9.0));
         // Deepen the meadow's authored olive at full daylight. Snow and dry
         // coastal sand keep their own values.
-        turf_color *= mix(vec3<f32>(0.80, 0.92, 0.74), vec3<f32>(1.0), snow);
+        turf_color *= mix(vec3<f32>(0.89, 0.90, 0.88), vec3<f32>(1.0), snow);
         if normal.y > 0.5 && turf_exposed {
-            turf_color = grass_top(turf_color, q, fp, dry_field * (0.35 + arid * 0.65),
-                flower_patch * (1.0 - snow) * (1.0 - forest * 0.5));
+            turf_color = grass_top(turf_color, q, fp, dry_field * (0.35 + arid * 0.65));
         } else {
             let bank = soil_surface(mix(soil * 0.86, top_coat, coastal_dune), q, normal, fp);
             if turf_exposed {
@@ -1710,13 +1685,9 @@ fn natural_surface_blended(
     }
     let modulation = 0.92 + mottle * 0.16 + clumps * 0.06;
     let mixed = max(base * (1.0 - coverage) + color * modulation, vec3<f32>(0.0));
-    // Shared natural-material finish: lift saturation and preserve contrast.
-    // Without this the independently mixed dirt, stone and sand layers drift
-    // toward the same grey-brown average at grazing angles.
-    let natural_luma = dot(mixed, vec3<f32>(0.2126, 0.7152, 0.0722));
-    // A slightly stronger hue separation keeps the Noita-like material ramps
-    // from averaging into a pale mint under high daytime exposure.
-    return max(mix(vec3<f32>(natural_luma), mixed, 1.09) * 0.985, vec3<f32>(0.002));
+    // Preserve the authored reflectance; exposure and display grading have
+    // their own owners. A second saturation boost made quiet greens acidic.
+    return max(mixed, vec3<f32>(0.002));
 }
 
 fn natural_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, footprint: f32) -> vec3<f32> {
@@ -1812,19 +1783,46 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
     let metric_footprint=footprint*cam.world_params.x;
     let fine_fade = surface_detail_weight(metric_footprint * 8.0);
     let medium_fade = surface_detail_weight(metric_footprint * 4.0);
-    let physical_uv = texel_centre(uv * cam.world_params.x);
+    let continuous_uv = uv * cam.world_params.x;
+    let physical_uv = texel_centre(continuous_uv);
+    if kind == 45 {
+        // Books are measured in metres, not per voxel: one coarse block
+        // shows several volumes; fine adjacent blocks continue the same row.
+        // Horizontal faces remain timber, so stacks read as solid furniture.
+        let grain = surface_noise_filtered(continuous_uv * vec2<f32>(2.0, 18.0), metric_footprint * 18.0);
+        let wood = base * (0.55 + 0.18 * grain);
+        if abs(normal.y) > 0.5 { return wood; }
+        let shelf = fract(continuous_uv.y);
+        let slot = floor(continuous_uv.x / 0.18);
+        let row = floor(continuous_uv.y);
+        let roll = surface_hash(vec2<f32>(slot, row));
+        let local = fract(continuous_uv.x / 0.18);
+        let height = 0.58 + roll * 0.28;
+        var binding = vec3<f32>(0.26, 0.09, 0.055);
+        if roll > 0.33 { binding = vec3<f32>(0.08, 0.20, 0.19); }
+        if roll > 0.66 { binding = vec3<f32>(0.34, 0.25, 0.10); }
+        let spine = step(0.06, local) * step(local, 0.94)
+            * step(0.12, shelf) * step(shelf, height);
+        let band = step(0.12, shelf) * step(shelf, 0.17)
+            + step(height - 0.09, shelf) * step(shelf, height - 0.05);
+        binding = mix(binding, vec3<f32>(0.60, 0.44, 0.20), clamp(band, 0.0, 1.0) * 0.6);
+        let inset = mix(vec3<f32>(0.045, 0.031, 0.022), binding, spine);
+        let frame = max(1.0 - step(0.09, shelf), step(0.94, shelf));
+        let detailed = mix(inset, wood, frame);
+        return mix(base * vec3<f32>(0.36, 0.34, 0.28), detailed,
+            surface_detail_weight(metric_footprint * 8.0));
+    }
     // Meter-scale color survives when individual blades and voxel faces no
     // longer resolve. The same continuous field spans every mesh/LOD boundary.
     let broad = surface_noise_filtered(landscape_p / 83.0, metric_footprint / 83.0);
     let landscape_patch = surface_noise_filtered(landscape_p / 17.0 + vec2<f32>(31.0, -12.0), metric_footprint / 17.0);
     let ridge = surface_noise_filtered(landscape_p / 5.2 + vec2<f32>(-73.0, 22.0), metric_footprint / 5.2);
     let land_tone = broad * 0.50 + landscape_patch * 0.32 + ridge * 0.18;
-    // Keep continuous metre coordinates up close. Snapping onto a 16-sample
-    // grid flattened mortar, grain and leaf shapes at every playable distance.
+    // Default detail stays pixel-aligned; masonry and boards use continuous_uv
+    // for narrow joints, independently of their snapped grain coordinates.
     uv = physical_uv;
-    // Hard 20-cell/metre grain. This is one pixel per 5 cm, shared by every
-    // built material, rather than a smooth 8-cell noise field that softens
-    // into a high-resolution haze when the camera moves.
+    // Default 20-cell/metre grain: one pixel per 5 cm. Masonry and boards
+    // override this with finer 32-cell grain below.
     let grain_cell = floor(physical_uv * PIXEL_RES);
     let grain = (surface_hash(grain_cell) - 0.5)
         * surface_detail_weight(metric_footprint * 20.0);
@@ -1841,44 +1839,34 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
             let rings = sin(length(center) * 70.0 + surface_noise(uv * 6.0) * 2.0) * fine_fade;
             color = base * vec3<f32>(1.32, 1.22, 1.05) * (1.0 + rings * 0.18 + grain * 0.2);
         } else {
-            let bark = surface_noise(vec2<f32>(uv.x * 13.0, uv.y * 2.0));
-            let furrow = smoothstep(0.22, 0.46, bark);
-            color *= mix(1.0, 0.58 + furrow * 0.57, surface_detail_weight(metric_footprint * 13.0));
+            let bark = surface_noise_filtered(physical_uv * vec2<f32>(4.5, 0.65), metric_footprint * 4.6);
+            let age = surface_noise_filtered(physical_uv / 2.7 + vec2<f32>(37.0, -13.0), metric_footprint / 2.7);
+            let grey_bark = vec3<f32>(dot(base, vec3<f32>(0.2126, 0.7152, 0.0722)))
+                * vec3<f32>(1.02, 1.06, 0.91);
+            color = mix(base, grey_bark, smoothstep(0.44, 0.78, age) * 0.52)
+                * (0.68 + smoothstep(0.22, 0.76, bark) * 0.52);
         }
     } else if kind == 6 {
-        let clusters = surface_noise(uv * 4.0);
+        // Reference crowns read as connected olive/teal masses. Use the same
+        // metric field on every face; per-texel hue lotteries made the canopy
+        // noisy nearby and changed its colour when the detail filtered away.
         let grove = surface_noise_filtered(landscape_p / 34.0 + vec2<f32>(8.0, 61.0), metric_footprint / 34.0);
         let pine = smoothstep(-0.02, 0.02, base.b - base.r);
-        let autumn = vec3<f32>(0.55, 0.34, 0.18);
-        let broadleaf = mix(base, autumn, smoothstep(0.68, 0.90, grove) * 0.40);
+        let autumn = vec3<f32>(0.24, 0.13, 0.045);
+        let green_mass = mix(base, vec3<f32>(dot(base, vec3<f32>(0.2126, 0.7152, 0.0722))), 0.22)
+            * vec3<f32>(0.82, 0.83, 0.80);
+        let broadleaf = mix(green_mass, autumn, smoothstep(0.68, 0.90, grove) * 0.32);
         let needles = base * mix(0.86, 1.02, land_tone);
-        let leaf = fract(uv * 4.0) - 0.5;
-        let leaf_shape = 1.0-smoothstep(0.34, 0.48, abs(leaf.x + leaf.y * 0.35) + abs(leaf.y) * 0.65);
-        let leaf_light = select(-0.08, 0.10, leaf.x > -leaf.y * 0.35) * leaf_shape;
-        // Hard one-texel leaf pixels give the canopy the same authored
-        // speckle language as ground cover, without the old smooth noise wash.
-        let leaf_cell = floor(physical_uv * PIXEL_RES) + vec2<f32>(5.0, -3.0);
-        let leaf_px = (surface_hash(leaf_cell) - 0.5)
-            * surface_detail_weight(metric_footprint * PIXEL_RES);
-        let leaf_pixel_hue = surface_hash(leaf_cell + vec2<f32>(13.2, -8.4));
-        let leaf_tint = mix(
-            vec3<f32>(0.92, 1.02, 0.90),
-            vec3<f32>(1.05, 1.00, 0.88),
-            leaf_pixel_hue,
-        );
-        // Canopy stays on the authored leaf hue. Autumn is the copper swatch.
-        // Per-texel tint and tone fade toward their own means, not toward 1:
-        // fading to 1 shifted unresolved faces about 18% bluer than resolved
-        // faces, so the detail fade showed up as a hue seam across a canopy.
-        let leaf_resolved = surface_detail_weight(metric_footprint * PIXEL_RES);
-        color = mix(broadleaf, needles, pine) * (1.04 + (clusters-0.5) * 0.16 * medium_fade
-            + leaf_light * fine_fade + grain * 0.10 + leaf_px * 0.16)
-            * mix(vec3<f32>(1.0), mix(LEAF_TINT_MEAN, leaf_tint, leaf_resolved), 0.45);
-        // Per-leaf hue drift: some leaves run yellow-green, some cool and dark.
-        // Stays within the canopy's hue family and fades with the footprint.
-        let leaf_drift = surface_hash(leaf_cell + vec2<f32>(13.1, -5.3));
-        let leaf_tone = mix(vec3<f32>(1.10, 1.03, 0.72), vec3<f32>(0.84, 0.96, 0.93), leaf_drift);
-        color *= mix(vec3<f32>(1.0), mix(LEAF_TONE_MEAN, leaf_tone, leaf_resolved), 0.8);
+        let crown_uv = (p.xz + p.y * vec2<f32>(0.41, -0.23)) * cam.world_params.x;
+        let crown_mass = surface_noise_filtered(crown_uv / 4.8, metric_footprint * 0.27);
+        let crown_tone = mix(vec3<f32>(0.65, 0.78, 0.85), vec3<f32>(1.16, 1.12, 0.80),
+            smoothstep(0.20, 0.80, crown_mass));
+        // Do not stamp the same leaf diamond into every grid cell: even a
+        // low-contrast motif becomes a checker across a broad crown plane.
+        let leaf_cluster = surface_noise_filtered(texel_centre(crown_uv) * 3.0
+            + vec2<f32>(17.0, -9.0), metric_footprint * 3.8);
+        color = mix(broadleaf, needles, pine) * crown_tone
+            * (0.97 + leaf_cluster * 0.06);
     } else if kind == 9 {
         color *= 1.0 + mottling * 0.2;
     } else if kind == 11 {
@@ -1896,16 +1884,16 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         let board_tint = (surface_hash(floor(plank_uv) + vec2<f32>(3.3, 9.1)) - 0.5) * 2.0;
         color *= vec3<f32>(1.0 + board_tint * 0.05 * medium_fade, 1.0, 1.0 - board_tint * 0.06 * medium_fade);
     } else if kind == 12 {
-        // Cut stone: two bricks per metre, four courses, running bond.
+        // Large cut-stone courses: read construction first, joints second.
         // Joints are measured in continuous metres so they stay open next to the camera.
-        let courses = uv.y * 4.0;
+        let courses = uv.y * 2.5;
         let row = floor(courses);
         let row_phase = row - 2.0 * floor(row * 0.5);
-        let brick_uv = vec2<f32>(uv.x * 2.0 + row_phase * 0.5, courses);
+        let brick_uv = vec2<f32>(uv.x * 1.25 + row_phase * 0.5, courses);
         let cell = floor(brick_uv);
         let local = fract(brick_uv);
         let edge = min(min(local.x, 1.0 - local.x), min(local.y, 1.0 - local.y));
-        let joint = 0.12;
+        let joint = 0.045;
         let mortar = 1.0 - smoothstep(joint, joint + 0.028, edge);
         let bevel = smoothstep(0.0, 0.2, edge);
         let id = surface_hash(cell);
@@ -1913,20 +1901,20 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         let chip = smoothstep(0.76, 0.92, speckle);
         let crack = smoothstep(0.84, 0.93, surface_noise(vec2<f32>(local.x * 2.4 + id * 5.0, local.y * 0.35)));
         let weathered = smoothstep(0.045, 0.11, base.g - base.r);
-        let tint = mix(vec3<f32>(0.84, 0.82, 0.76), vec3<f32>(1.12, 1.07, 0.98), id);
+        let tint = mix(vec3<f32>(0.94, 0.93, 0.90), vec3<f32>(1.05, 1.03, 0.99), id);
         let moss = vec3<f32>(0.30, 0.38, 0.22);
-        color = base * tint * (0.70 + bevel * 0.36 + (speckle - 0.5) * 0.08);
-        color = mix(color, color * vec3<f32>(0.58, 0.54, 0.50), (chip * 0.55 + crack * 0.22) * (1.0 - mortar));
-        let mortar_col = mix(base * vec3<f32>(0.46, 0.42, 0.37), moss, weathered * (0.45 + id * 0.35));
+        color = base * tint * (0.89 + bevel * 0.12 + (speckle - 0.5) * 0.035);
+        color = mix(color, color * vec3<f32>(0.76, 0.74, 0.70), (chip * 0.28 + crack * 0.18) * (1.0 - mortar));
+        let mortar_col = mix(base * vec3<f32>(0.81, 0.81, 0.79), moss, weathered * (0.25 + id * 0.20));
         let joint_keep = 1.0 - smoothstep(0.16, 0.6, metric_footprint);
         color = mix(color, mortar_col, mortar * joint_keep);
-        let stain = smoothstep(0.58, 0.86, surface_noise(cell * 0.41 + uv * 1.3));
-        color = mix(color, moss, stain * weathered * (1.0 - mortar) * 0.34);
+        let stain = smoothstep(0.58, 0.86, surface_noise_filtered(physical_uv / 4.0, metric_footprint / 4.0));
+        color = mix(color, moss, stain * weathered * (1.0 - mortar) * 0.18);
         // Filter the complete brick response: cell IDs, chips, cracks, and
         // bevels also alias after mortar becomes subpixel. This mean is an
         // authored approximation, pending a baked material mip chain.
-        let stone_mean = mix(base * vec3<f32>(0.84, 0.82, 0.76), moss, weathered * 0.08);
-        color = mix(stone_mean, color, surface_detail_weight(metric_footprint * 4.0));
+        let stone_mean = mix(base * vec3<f32>(0.96, 0.95, 0.92), moss, weathered * 0.04);
+        color = mix(stone_mean, color, surface_detail_weight(metric_footprint * 2.5));
     } else if kind == 13 {
         let q = uv*4.0;
         let cell = floor(q); let local = fract(q);
@@ -2108,6 +2096,10 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let model_fp = max(length(dpdx(in.model_uv)), length(dpdy(in.model_uv))) * PIXEL_RES;
     var albedo = clamp(in.base_color, vec3<f32>(0.0), vec3<f32>(1.0));
     let kind = i32(in.material_family);
+    let is_viewmodel = in.camera_relative != 0u;
+    // Model family 39 preserves authored body/wood colours. Family 0 is terrain,
+    // not a neutral fallback: it applies grass, soil and climate-dependent tint.
+    let authored_model = kind == 39;
     // Celestial bodies are projected from f64 planet-centred ephemerides into
     // the observer tangent frame. They do not belong to terrain coverage or
     // ground shadow cascades. Positive AO >= 4 carries their eclipse fraction.
@@ -2155,12 +2147,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
             -vec3<f32>(3.0e-6)*aerosol_column);
         let sky = max(atmosphere_color(view_ray),vec3<f32>(0.0));
         let through_air = orbital_light*transmission+sky*(vec3<f32>(1.0)-transmission);
-        let cloud = clamp(cloud_fog_amount(view_ray,distance),0.0,1.0);
-        return WorldOutput(vec4<f32>(mix(through_air,sky,cloud),1.0),vec4<f32>(0.0));
+        // Foreground clouds are integrated once by the volumetric composite.
+        // The weather-summary fog approximation here double-occluded stations
+        // and changed their contrast independently of the visible cloud edge.
+        return WorldOutput(vec4<f32>(through_air,1.0),vec4<f32>(0.0));
     }
     // Authored rigid bodies share the vertex-colour/UV path, with their own finish.
     let cut_crystal = kind == 56 || kind == 57 || kind == 58;
     let enemy_metal = kind == 59 || kind == 60;
+    let rigid_material = authored_model || cut_crystal || enemy_metal;
     // Orbital rigid parts: baked local UVs; w selects ceramic/alloy/radiator.
     let orbital_part = kind == 62 || kind == 63;
     let footprint = fp_m / scale;
@@ -2174,6 +2169,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     }
     if cut_crystal { roughness = select(0.24, 0.84, kind == 57); reflectance = 0.5; }
     if kind == 58 { roughness = 0.82; reflectance = 0.24; }
+    if authored_model { roughness = 0.82; reflectance = 0.35; }
     if enemy_metal { roughness = select(0.68, 0.46, kind == 60); reflectance = 0.38; }
     // First-person skin/leather and wand wood are deliberately matte. Their
     // default material family has no PBR override, so leaving them in the
@@ -2213,7 +2209,6 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // choice flips mid-face as the world normal rotates past 45 degrees, which
     // pops whole triangles. Evaluate their patterns in camera space instead,
     // using both a camera-space position and a camera-space normal.
-    let is_viewmodel = kind == 54 || kind == 55;
     let vm_right = terrain_safe_unit3(cam.ray_right.xyz, vec3<f32>(1.0, 0.0, 0.0));
     let vm_up = terrain_safe_unit3(cam.ray_up.xyz, vec3<f32>(0.0, 1.0, 0.0));
     let vm_forward = terrain_safe_unit3(cam.camera_forward.xyz, vec3<f32>(0.0, 0.0, -1.0));
@@ -2226,6 +2221,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let detail_strength = clamp(material_props.z, 0.0, 2.0);
     var detail_color = albedo;
     natural_tilt = vec3<f32>(0.0);
+    // Fallback for gravel and natural materials outside the four-way blend.
+    natural_relief_strength = vec4<f32>(0.045, 0.030, 0.060, 0.025);
     // Distant terrain shades with the detail map's texel normal (16-128 m)
     // instead of the coarse lattice normal, so ridges, spurs and gullies read
     // at any range. Resident terrain keeps its own geometry normals; both get
@@ -2273,7 +2270,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let pattern = select(joint * 0.18, channel * 0.32, radiator);
         let pattern_mean = select(0.0975 * 0.18, 0.1 * 0.32, radiator);
         detail_color = albedo * (1.0 - pattern_mean + (grain - pattern + pattern_mean) * fade);
-    } else if kind == 34 || kind == 35 || cut_crystal || enemy_metal {
+    } else if kind == 34 || kind == 35 || rigid_material {
         // Ground-detail tufts and loose stones (mesh/ground_detail.rs) carry
         // their finished colour in the vertex. Painting them with the turf
         // pipeline gave blades the soil/grass-side bank colour.
@@ -2301,7 +2298,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Natural ground skips it: its shape cells already own the texel detail,
     // and a regular 4x4 dither over them reads as a grid on open turf.
     if kind != 8 && kind != 9 && kind != 40 && kind != 42 && !is_torch_material && !is_viewmodel
-        && !is_natural && kind != 34 && kind != 35 && !cut_crystal && !orbital_part {
+        && !is_natural && kind != 5 && kind != 6 && kind != 34 && kind != 35 && !rigid_material && !orbital_part {
         albedo = terrain_pixel_albedo(albedo, world_pos, geometric_normal, fp_m);
     }
     // Diagnostic albedo excludes cached roof visibility and lighting-derived
@@ -2309,22 +2306,29 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // production path below; retain all procedural surface colour and dither.
     let diagnostic_albedo = max(albedo * material_tint.rgb, vec3<f32>(0.0));
     if is_natural {
-        let relief = far_shade(macro_normal, in.voxel_pos.xz * scale, fp_m);
-        n = terrain_safe_unit3(mix(macro_normal, relief, min(detail_strength, 1.0)), macro_normal);
+        let relief = terrain_surface_relief(macro_normal, in.voxel_pos * scale, fp_m);
+        n = terrain_safe_unit3(mix(macro_normal, relief.normal, min(detail_strength, 1.0)), macro_normal);
         // Material-shaped relief (pebble domes, clods, rock planes), already
         // faded by footprint in the material functions.
         let tilt = natural_tilt * min(detail_strength, 1.0);
         n = terrain_safe_unit3(n - (tilt - n * dot(n, tilt)), n);
-        let coarse_weight = surface_detail_weight(fp_m / 48.0);
-        let fine_weight = surface_detail_weight(fp_m / 12.0);
         // Approximate lost slope variance prevents filtered relief from turning
         // into an unnaturally perfect mirror. This is not a measured normal map.
-        filtered_slope_variance = 0.20 * min(detail_strength * detail_strength, 1.0)
-            * (0.055 * 0.055 * (1.0 - coarse_weight * coarse_weight)
-                + 0.030 * 0.030 * (1.0 - fine_weight * fine_weight));
+        filtered_slope_variance = relief.variance * min(detail_strength * detail_strength, 1.0);
     }
 
     let cave_amount = 1.0 - smoothstep(0.03, 0.62, sky_access);
+    if kind == 6 {
+        // Broad, world-fixed leaf-cluster relief gives large voxel planes a
+        // restrained roll in the light. Geometry, silhouette and shadow-bias
+        // normals stay authoritative; unresolved relief fades continuously.
+        let shear = vec2<f32>(0.41, -0.23);
+        let crown_uv = (world_pos.xz + world_pos.y * shear) / 4.8;
+        let gradient = surface_noise_grad(crown_uv).yz;
+        let g = vec3<f32>(gradient.x, dot(gradient, shear), gradient.y);
+        let tangent = g - n * dot(n, g);
+        n = terrain_safe_unit3(n - tangent * 0.28 * surface_detail_weight(fp_m / 4.8), n);
+    }
     // Natural ground already has the shared far-field relief. Built and mined
     // materials previously had no normal detail at all; natural cave surfaces
     // get an additional pass only below the skylight threshold.
@@ -2334,7 +2338,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
         is_natural,
     );
     if kind != 6 && kind != 8 && kind != 9 && kind != 34 && !is_backdrop && !is_viewmodel
-        && relief_strength > 0.02 && !cut_crystal && kind != 22
+        && relief_strength > 0.02 && !rigid_material && kind != 22
     {
         n = surface_relief(n, world_pos, fp_m, relief_strength);
         filtered_slope_variance += 0.0016 * relief_strength * relief_strength;
@@ -2351,7 +2355,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
             + bitangent * (facet.w - 0.75)) * 0.40 * resolved, geometric_normal);
         filtered_slope_variance += 0.013 * (1.0 - resolved * resolved);
     }
-    if !is_backdrop && sky_access < 0.80 && !cut_crystal {
+    if !is_backdrop && sky_access < 0.80 && !rigid_material && !is_viewmodel {
         let grime = surface_noise_filtered(
             world_pos.xz / 0.90 + vec2<f32>(world_pos.y * 0.27, -world_pos.y * 0.19),
             fp_m / 0.90,
@@ -2371,7 +2375,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
         n = terrain_safe_unit3(n + heat, geometric_normal);
         filtered_slope_variance += 0.0025;
     }
-    if kind != 8 && kind != 9 && kind != 54 && kind != 55 && !cut_crystal {
+    if kind != 8 && kind != 9 && !is_viewmodel && !rigid_material {
         let micro = surface_noise_filtered(
             world_pos.xz / 0.22 + vec2<f32>(world_pos.y * 0.41, -world_pos.y * 0.33),
             fp_m / 0.22,
@@ -2494,10 +2498,6 @@ fn fs_main(in: VsOut) -> WorldOutput {
             normalize(n + wall_tangent * (gradient.x * 1.6) + vec3<f32>(0.0, gradient.y * 1.6, 0.0)),
             water_side);
         let refracted = refract(v_inc, refract_n, 0.75);
-        let refract_depth = min(depth, 4.2);
-        let ray_xz = select(refracted.xz - v_inc.xz, refracted.xz, water_side);
-        let parallax_xz = ray_xz * (refract_depth / max(-refracted.y, 0.24)) * local_water;
-        let bed_p = p + parallax_xz;
 
         let turbidity = surface_noise_filtered(p / 340.0, fp / 340.0);
         let sand_bed = mix(vec3<f32>(0.185, 0.168, 0.108), vec3<f32>(0.105, 0.178, 0.148), turbidity);
@@ -2507,28 +2507,13 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let deep_t = 1.0 - exp(-max(depth - 1.2, 0.0) * 0.18);
         var water_col = mix(sand_bed, turquoise_mid, shallow_t);
         water_col = mix(water_col, deep_ocean, deep_t);
-        // Resident art direction (expedition design §6, Wind Waker): three bands
-        // readable at a glance. Shallow celadon under ~0.4 m, sea in the middle,
-        // ink in the trough. Far water keeps the depth ramp above.
-        let wind_shallow = vec3<f32>(0.42, 0.62, 0.48);
-        let wind_sea = vec3<f32>(0.05, 0.38, 0.48);
-        let wind_ink = vec3<f32>(0.02, 0.07, 0.14);
-        // Depth reaches the shader in 0.25 m steps (water_optics is packed as
-        // k = depth*4). The transitions below span many steps, so each step
-        // moves the colour a little and no contour reads as a hard band.
-        let wind_shallow_t = 1.0 - smoothstep(0.25, 2.5, depth);
-        let wind_ink_t = smoothstep(2.5, 9.0, depth);
-        var wind_col = mix(wind_sea, wind_shallow, wind_shallow_t);
-        wind_col = mix(wind_col, wind_ink, wind_ink_t);
-        water_col = mix(water_col, wind_col, local_water);
+        // Resident and distant water share the same optical-depth palette.
+        // The former resident-only cyan ramp changed colour with residency.
 
         if local_water > 0.0 {
-            // Refracted seabed ripples & mineral grain visible through clear shallows.
-            let bed_ripple = sin(dot(bed_p, vec2<f32>(0.82, 0.57)) * 3.6 + surface_noise(bed_p * 0.9) * 3.2)
-                * surface_detail_weight(fp * 3.0);
-            let bed_grain = surface_noise_filtered(bed_p * 4.2, fp * 6.5);
-            let bed_detail = (0.91 + 0.09 * bed_ripple + 0.06 * (bed_grain - 0.5)) * (0.94 + 0.08 * cusp_x * w2);
-            let refracted_bed = albedo * bed_detail;
+            // The mesh supplies the authoritative sampled substrate colour.
+            // Do not paint imaginary ripples/minerals over an edited bottom.
+            let refracted_bed = albedo;
 
             // Physical Beer-Lambert spectral absorption along the refracted ray + solar path.
             let optical_path = depth * (1.0 / max(-refracted.y, 0.22) + 0.45 / max(light.sun_dir_intensity.y + 0.28, 0.25));
@@ -2793,8 +2778,10 @@ fn fs_main(in: VsOut) -> WorldOutput {
 
     // --- Direct diffuse ---
     let foliage = kind == 6 || kind == 34;
-    let foliage_sun = max((dot(n, sun_dir) + 0.35) / 1.35, 0.0);
-    let foliage_moon = max((dot(n, moon_dir) + 0.35) / 1.35, 0.0);
+    let foliage_sun_n = saturate1((dot(n, sun_dir) + 0.08) / 1.08);
+    let foliage_moon_n = saturate1((dot(n, moon_dir) + 0.08) / 1.08);
+    let foliage_sun = foliage_sun_n * mix(0.50, 1.0, smoothstep(0.16, 0.72, foliage_sun_n));
+    let foliage_moon = foliage_moon_n * mix(0.50, 1.0, smoothstep(0.16, 0.72, foliage_moon_n));
 
     // PCF shadow
     let sun_shadow_strength = 0.94 * smoothstep(0.03, 0.16, light.sun_dir_intensity.w);
@@ -2861,7 +2848,11 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Dense clouds remove the direct sun, but should replace it with a broad
     // bright sky dome rather than turning the terrain nearly black. Keep the
     // clear-day level restrained and let the local cloud field lift overcast.
-    let sky_fill_strength = mix(mix(0.30, 0.95, cloudiness * daylight), 0.66, twilight_fill);
+    // Direct/ambient captures showed the clear-day fill reproducing almost
+    // the whole scene by itself. Keep overcast and twilight illumination, but
+    // let a visible sun establish the primary value structure.
+    let sky_fill_strength = mix(mix(0.14, 0.95, cloudiness * daylight), 0.66, twilight_fill);
+    let clear_day = daylight * (1.0 - twilight_fill) * (1.0 - cloudiness);
 
     // A low sun still leaves a broad cool hemisphere above shaded ground.
     // Sampling only the bright solar horizon made that fill too warm while
@@ -2892,6 +2883,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let cavity      = mix(mix(0.32, 1.0, shaped_ao), 1.0, hemi * 0.08);
     let ambient     = (
         light.ambient_exposure.rgb * mix(vec3<f32>(0.38), vec3<f32>(1.0), hemi * hemi)
+            * mix(1.0, 0.55, clear_day)
         + mix(terrain_sky_ambient,
               vec3<f32>(dot(terrain_sky_ambient, vec3<f32>(0.2126, 0.7152, 0.0722))),
               cloudiness * 0.18) * sky_fill_strength
@@ -3025,7 +3017,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // --- Sun/moon fill (bounced indirect) ---
     let sun_fill = light.sun_color_daylight.rgb * sun_spectral
                    * light.sun_dir_intensity.w * sun_trans
-                   * (0.02 + 0.025 * daylight) * (0.55 + 0.45 * hemi);
+                   * (0.02 + 0.025 * daylight) * (0.55 + 0.45 * hemi)
+                   * mix(1.0, 0.45, clear_day);
     let moon_fill = light.moon_color_twilight.rgb * moon_spectral
                     * light.moon_dir_intensity.w * moon_trans
                     * 0.02 * (0.55 + 0.45 * hemi);
@@ -3068,12 +3061,17 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let moon_h = terrain_safe_unit3(to_eye + moon_dir, n);
     let sun_diffuse_energy = (vec3<f32>(1.0) - terrain_fresnel(f0, dot(to_eye, sun_h))) * (1.0 - metallic);
     let moon_diffuse_energy = (vec3<f32>(1.0) - terrain_fresnel(f0, dot(to_eye, moon_h))) * (1.0 - metallic);
+    // Material response, before atmosphere/tonemapping: vegetation groups warm
+    // solar planes against cooler sky-lit planes, as in the landscape studies.
+    // Local lamps and emissive colour keep their authored spectra.
+    let botanical = select(select(0.0, 0.45, is_natural && in.terrain_weights.x > 0.5), 1.0, foliage);
+    let sun_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(1.10, 1.025, 0.76), botanical);
+    let fill_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(0.77, 0.91, 1.07), botanical);
     var lit = albedo * (
-        diffuse_energy * ((ambient + sun_fill + moon_fill) * sky_access + cave_fill)
-        + sun_radiance * sun_diffuse_energy * sun_diffuse * 0.318309886
-        + moon_radiance * moon_diffuse_energy * moon_diffuse * 0.318309886 * sky_access
-        + (torch_diffuse + torch_fill) * fire_exposure
-    );
+        diffuse_energy * cave_fill + (torch_diffuse + torch_fill) * fire_exposure)
+        + fill_albedo * diffuse_energy * (ambient + sun_fill + moon_fill) * sky_access
+        + sun_albedo * sun_radiance * sun_diffuse_energy * sun_diffuse * 0.318309886
+        + albedo * moon_radiance * moon_diffuse_energy * moon_diffuse * 0.318309886 * sky_access;
     // Inter-ridge occlusion comes from the detail-map sun march in `sun_shadow`.
     let direct_specular = sun_radiance * terrain_directional_specular(n, macro_normal, to_eye, sun_dir,
             roughness, f0, in.ao_strength, kind, in.terrain_weights.z)
@@ -3084,14 +3082,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
         + torch_spec * fire_exposure;
 
     if debug_mode == 23 { // Directional diffuse + specular, linear HDR.
-        let direct = albedo * (sun_radiance * sun_diffuse_energy * sun_diffuse * 0.318309886
-            + moon_radiance * moon_diffuse_energy * moon_diffuse * 0.318309886 * sky_access)
+        let direct = sun_albedo * sun_radiance * sun_diffuse_energy * sun_diffuse * 0.318309886
+            + albedo * moon_radiance * moon_diffuse_energy * moon_diffuse * 0.318309886 * sky_access
             + direct_specular - torch_spec * fire_exposure;
         return debug_surface_output(vec4<f32>(max(direct, vec3<f32>(0.0)), 1.0));
     }
     if debug_mode == 24 { // Existing ambient/bounce diffuse; excludes environment specular.
-        return debug_surface_output(vec4<f32>(albedo * diffuse_energy
-            * ((ambient + sun_fill + moon_fill) * sky_access + cave_fill), 1.0));
+        return debug_surface_output(vec4<f32>(fill_albedo * diffuse_energy
+            * (ambient + sun_fill + moon_fill) * sky_access + albedo * diffuse_energy * cave_fill, 1.0));
     }
     if debug_mode == 25 { // All local-light diffuse/fill/specular contributions.
         return debug_surface_output(vec4<f32>((albedo * (torch_diffuse + torch_fill) + torch_spec) * fire_exposure, 1.0));
@@ -3117,14 +3115,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // F0 suppresses diffuse above, so this response is not layered on a
         // full-strength diffuse reflector. Screen-space or probe GI stays external.
         lit += max(environment, vec3<f32>(0.0)) * environment_fresnel
-            * sky_access * cavity * mix(0.35, 1.0, metallic);
+            * select(sky_access, 0.0, is_viewmodel) * cavity * mix(0.35, 1.0, metallic);
         lit += direct_specular;
     }
 
     // A small neutral first-person fill keeps the hand and sleeve readable in
     // deep caves without turning them into shiny world objects. It is applied
-    // only to the authored viewmodel materials.
-    if kind == 54 || kind == 55 {
+    // to every camera-relative part, including a metal tool head and its haft.
+    if is_viewmodel {
         lit += albedo * vec3<f32>(0.075, 0.078, 0.082)
             * (0.55 + 0.45 * hemi);
     }
@@ -3135,7 +3133,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // it cannot illuminate a canopy at night or through solid terrain.
         let backlight = pow(max(dot(-to_eye, sun_dir), 0.0), 2.5);
         let top_sheen = smoothstep(0.15, 0.85, n.y) * (0.28 + 0.72 * sun_shadow);
-        let transmission = (0.055 + backlight * 0.22 + top_sheen * 0.08) * sun_shadow * sun_trans
+        let transmission = (0.015 + backlight * 0.18 + top_sheen * 0.035) * sun_shadow * sun_trans
             * light.sun_dir_intensity.w * (0.45 + 0.55 * cavity);
         let leaf_warmth = mix(albedo, albedo * vec3<f32>(1.18, 1.24, 0.72), 0.55);
         lit += leaf_warmth * light.sun_color_daylight.rgb * sun_spectral * transmission;

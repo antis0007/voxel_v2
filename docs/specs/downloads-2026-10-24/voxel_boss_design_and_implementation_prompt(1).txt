@@ -1,0 +1,983 @@
+VOXEL BOSS SERIES — DESIGN AND IMPLEMENTATION PROMPT, REVISION 2
+Twelve distinct encounters for a first-person editable voxel game
+Rust + raw wgpu. No Bevy.
+21 October 2026
+
+STATUS AND INTENT
+
+This revision supersedes the earlier eight-boss brief. It retains the six clearest systemic encounters, adds six encounters with different combat rhythms and movement, simplifies the Hart, and moves two expensive concepts into later research.
+
+Implement a complete series of memorable, readable, expressive boss encounters for the existing game. Aim for the quality of an excellent action adventure while preserving construction, spell composition, material interactions, preparation, and automation. Keep the engineering compact.
+
+This document is a design and coding-agent prompt, not a claim that any described feature has been implemented or playtested. The available evidence is screenshots and user implementation reports, not a verified current repository. Audit the actual checkout and existing interfaces before editing.
+
+The principal correction is variety. The previous roster leaned too heavily on inspecting an apparatus, redirecting a resource, and exploiting the result. This revision alternates a duel, terrain manipulation, aerial interception, excavation, perception deception, production theft, coordinated opponents, fluid traversal, balance, spell routing, brood control, and roaming interception.
+
+Treat originality as a particular combination of body, movement, environment, and player decisions. Do not force every boss to invent a new simulation. Conversely, do not make twelve skins around the same attack sequence.
+
+A. CORE CONSTRAINTS
+
+1. Keep the custom Rust implementation and raw wgpu renderer. No Bevy, engine replacement, new ECS, general scripting language, or behavior-tree editor is required by this brief.
+2. Use current entity, inventory, material, spell, terrain, animation, audio, machine, save, and rendering systems where available. Add focused shared operations when an actual encounter needs them.
+3. Preserve first-person control. No forced third-person view, lock-on requirement, camera rotation, inverted controls, or unannounced attacks from behind.
+4. Ordinary attacks, movement, and a basic tool kit must provide a viable route through the core series. Specialized preparation creates better or different opportunities.
+5. Meaningful openings are welcome. Avoid making every fight a prescribed switch sequence followed by the only valid damage window.
+6. Each boss starts with one defining rule, roughly three to five dependable actions, one movement profile, and one meaningful escalation. These are production constraints, not permanent numerical laws.
+7. Give attacks visible preparation, a commitment point, a clear danger region, and useful recovery. Difficulty comes from decisions and execution.
+8. Respect genuine world interactions. Walls, excavated paths, intercepted items, severed connections, and powered machinery must have real consequences.
+9. Keep resources and ownership coherent. Do not duplicate modules, refund consumed material on reload, spawn infinite stock, or allow free recursive spells.
+10. Preserve world edits, important encounter state, outcomes, and rewards. Retreat and return must not erase the player's preparation.
+11. Permit creative preparation and automation. Machinery may become an observed threat, but bosses do not magically detect every machine in the world or disable an effective build.
+12. Do not require every boss to be capturable, restorable, farmable, tameable, and replayable. Give each the outcomes that suit its identity.
+13. Keep science visible through causes and effects, with optional instruments and explanations. Explicitly label fictional magical rules.
+14. Count completed playable encounters, not enums, placeholders, screenshots, generated concepts, or passing tests.
+
+Reported systems include battery rate limits, induction matrices, cable tiers, transformers, a biomass burner, assembling machines, item pipes, and production statistics. Some reports identify missing fluid/gas/chemical machinery, control conditions, and creature growth/summoning. Check the current state; do not silently assume those dependencies exist.
+
+The last reported save format was version 21. A terrain-generation timing test reportedly remained about 1.99 times slower than its prior generator while other sessions edited terrain. Establish current baselines. Do not claim this is fixed, caused by the boss work, or unrelated without evidence. Preserve unrelated uncommitted changes and do not weaken a benchmark threshold to obtain a pass.
+
+B. WHAT TO LEARN FROM THE REFERENCES
+
+These are design interpretations, not claims that the reference games prescribe this exact system.
+
+Zelda:
+- Give an encounter a clear physical idea, a recognizable sequence of discovery and mastery, and an arena that makes the idea playable.
+- Teach important interactions in a smaller encounter before combining them in a boss.
+- Reuse movement and implementation techniques while authoring distinct creatures.
+- Preserve alternative solutions when the world rules support them.
+- Do not import a giant-boss design that relies on cinematic camera assistance.
+
+Elden Ring:
+- Make spacing, commitment, animation, and openings enjoyable before adding machinery.
+- Offer spatial defensive answers: sidestep a thrust, move beyond a sweep, use cover, interrupt a preparation, or accept a guarded exchange when blocking is available.
+- Borrow the reward for reading an opponent. Avoid long unreadable combinations, unlimited tracking, and reflex tests that depend on seeing behind the camera.
+
+JRPGs:
+- Borrow setup and payoff: create an advantage, then choose whether to spend resources on damage, recovery, movement, or changing the arena.
+- Make status effects and preparation useful without adding several universal meters.
+- Pressure, interruption, or stance loss can create an opening. They should not require every build to possess one elemental key.
+
+Noita:
+- Reuse spell and material operations so an ordinary effect can have an unusual consequence.
+- Keep combinations bounded, observable, and consistent.
+- Simplified models are acceptable when their behavior is coherent; a full simulation of every discipline is unnecessary.
+
+Minecraft and technical modpacks:
+- Construction, excavation, inventory, and persistent preparation remain part of combat.
+- Supply low-tier manual alternatives before rewarding advanced machinery.
+- Let completed encounters create new activities in the player's world.
+
+C. THE SERIES AT A GLANCE
+
+01 Last Tollkeeper — physical duel; broad crossing and flanking route; carried and planted guard.
+02 Rime Hart Sentinel — grow/use/cut the battlefield; flooded archive; heavy movement and planted crown.
+03 Vane Manta — intercept low flight; wind galleries; perches and committed passes.
+04 Buried Miller — shape an excavation; quarry and soft seams; short burrow and exposed cutter.
+05 Vent Choir — deceive perception; connected galleries; anchored organs and directional pressure.
+06 Unfinished Engine — steal the next capability; salvage foundry; mobile production and installation.
+07 Mason and Unmaker — separate and redirect a pair; unfinished hall; coordinated construction/demolition.
+08 Ferryman Without a River — change connected reach; lock complex; finite-volume basin movement.
+09 Funeral Scale — alter balance during action; sunken lifting court; counterweighted stances.
+10 Glassweaver — edit a spell route; prism garden; a small contested lattice.
+11 Orchard Matron — relocate developing threats; terraced nursery; mobile brood defense.
+12 Cairnback Procession — choose the interception site; outdoor route and terraces; deliberate giant movement.
+
+This is a series, not a mandatory twelve-step linear campaign. Arrange regional branches so players can approach a mixture of encounter types. Avoid consecutive encounters with the same mental demand. Progression should reward capabilities rather than a long chain of mandatory boss trophies.
+
+D. ENCOUNTER SPECIFICATIONS
+
+01. THE LAST TOLLKEEPER
+
+Experience: a satisfying physical duel in which both combatants use the same piece of cover.
+
+Identity and silhouette:
+A narrow, armored keeper carries an enormous iron-and-timber gate on one arm and a hooked polearm in the other. Its outline is deliberately asymmetric. The gate is recognizable as a real object with gaps, wear, weight, and an attachment.
+
+Arena:
+A ruined tollhouse over a broad gorge. Provide a main crossing, a lower maintenance route, wide enough landings for lateral movement, and locations where the player can construct another approach. Falling should usually create recovery or displacement rather than being the encounter's main instant-death mechanism.
+
+Defining rule:
+The Tollkeeper plants its gate into the world, freeing itself to fight more quickly and leaving useful cover behind. It later attempts to recover the gate. The planted object blocks attacks for either side according to ordinary collision and material rules.
+
+Action set:
+- Guarded advance and a short, clearly prepared shove.
+- A committed thrust with limited turning after commitment.
+- A hooked sweep that covers a different region from the thrust.
+- Plant or retrieve the gate, changing stance and movement.
+
+Representative exchange:
+The player pressures the guarded front. The Tollkeeper plants the gate and moves around one edge. The player takes the opposite route, fires through an existing gap, or puts the gate between themselves and the next thrust. The keeper must decide whether to pursue, retrieve its defense, or reposition.
+
+Strategies:
+Win through spacing and recovery punishment; use a supported bouncing shot; excavate a flank; build another crossing; separate the keeper from its gate; or sustain direct pressure against a readable guard. Do not require a parry or dodge-roll ability that the game does not actually have.
+
+AI:
+Two small stance modes, carried and planted. Select actions using distance, angle, line of sight, reachable space, and recent observed pressure. The AI does not inspect uncommitted player inputs or instantly counter equipment changes.
+
+Escalation:
+After losing its preferred defense or taking sufficient pressure, it changes retrieval priority and adds one clearly signaled follow-up. Preserve the established meanings of the original cues.
+
+Implementation:
+Shared grounded motion, four authored actions, one cover object, and a small stance enum. Do not build a procedural melee solver.
+
+Outcome:
+Defeat or a supported passage resolution yields a portable defensive fixture, a polearm/guard technique, or access to the crossing. If the gate is recoverable, its ownership must be singular.
+
+Reject if:
+The keeper spends most of the fight blocking, rotates perfectly with the player, or is only vulnerable to a prescribed parry. The duel must be enjoyable without its special interaction.
+
+02. RIME HART SENTINEL
+
+Experience: grow an escape route from the boss's external crown, then sever its attack path.
+
+Identity:
+An ancient living custodian preserves a seed archive containing a forest that no longer grows outside. Its damaged duty is to enclose breaches and disturbances. Its external crown explains both its silhouette and how it changes the battlefield.
+
+Art direction:
+Deep chest, substantial shoulders and neck root, lean abdomen, powerful haunches, articulated cervine limbs, and planted cloven feet. Build the face from a brow, recessed eyes, muzzle, and jaw. Use thick antler roots, a few primary beams, broad stepped structures, and deliberate negative space.
+
+Use dark hide, aged bone or ceramic, selective frost, and small warm mantle openings. Avoid huge uniform colored body regions and equally thin twig antlers. The earlier generated sheet is a concept reference; collapse most microgeometry into authored texture detail and selected silhouette shapes.
+
+Arena:
+A flooded seed vault with shallow channels, ordinary dry ground, two useful ledges, several substantial supports, and space to read the creature. Later contexts can use scarce water or an outdoor conservatory. The first encounter must clearly demonstrate the rule.
+
+Defining rule:
+The Hart grows editable ice branches into the world. New growth can be influenced by visible heat sources. Connected ice can carry a clearly visible rime pulse when launched through actual contact. Cut the connection and that route stops.
+
+Player-facing explanation:
+It grows. You can use what it grows. It can attack through connected growth. You can cut the connection.
+
+Keep heat bookkeeping backstage. Do not ask players to manage multiple thermal meters during the fight.
+
+Action set:
+- Deliberate advance and a committed crown sweep.
+- Plant and grow one branching front toward a visibly accepted target.
+- Launch a pulse through connected growth.
+- Replant, clear a suitable obstruction, or vent/recover.
+
+Representative exchange:
+The Hart plants beside a wet channel. The player puts a heat source on a ledge. Growth forms a supported crossing toward it. A pulse is announced. The player crosses and cuts the feeding branch without removing the bridge's terrain supports. The pulse stops at the gap. The Hart moves to another planting point and contests the new arrangement.
+
+Strategies:
+Ordinary combat and movement; branch severing with a pick or excavation effect; a heated object or ember lure; obstructing a contact; controlling available water; prepared emitters or cutters when those systems exist. No single named spell is required.
+
+AI:
+The Hart selects a service target, visibly commits, protects or completes the action, and reassesses. It does not endlessly follow the hottest object. Reconnection consumes real material and time. If a supply is exhausted, it uses physical pursuit or seeks another contact.
+
+Escalation:
+Change the planting location and which side of the arena it contests. A second approach can complicate a familiar rule. Do not add a large unrelated projectile arsenal.
+
+Implementation:
+Begin with three live branches and one growth front as provisional caps. Reuse voxel edits, a local connectivity cache, action playback, and resource accounting. Do not add a full thermal state to every world voxel solely for this boss.
+
+Finite water becomes ice. If using a heat-pump model, represent work and the destination of removed heat. If magical work supplies the process, name and cost that fictional rule. The rime pulse itself is fictional; do not present it as real thermal propagation.
+
+The Hart needs actual contact to launch into a growth network. Detached ice remains normal world material, subject to existing support and melting rules. Do not create invisible permanent tethers.
+
+Outcome:
+Combat salvage or restoration of the archive provides rime construction/traversal and cooling capabilities in different forms. Restoration is appropriate here because the creature has a recoverable duty.
+
+Reject if:
+It reduces to circling a lure, filling an overheat bar, repeatedly cutting the same junction, or waiting for the only damage window.
+
+03. THE VANE MANTA
+
+Experience: intercept a visible low pass and alter the conditions of its next approach.
+
+Identity:
+A heavy manta-like or moth-like creature with rigid sail ribs and broad wings. Its folded, perched silhouette differs sharply from its gliding shape. It is a predator using old wind architecture, not another stationary ancient machine.
+
+Arena:
+A collapsed wind tower with broad galleries, sheltered recesses, several low perches, and a few clearly shown draft corridors. Important flight paths cross ordinary viewing height. Provide landing positions reachable by a player using basic movement.
+
+Defining rule:
+The creature selects and commits to a flight lane. Draft conditions influence its approach and supported projectiles. A player can intercept the pass, change the draft, obstruct the lane, or exploit the landing.
+
+Action set:
+- Perch and aim a short volley.
+- Commit to a low crossing with a visible approach.
+- Bank toward another visible perch.
+- Land to recover or clear an obstruction.
+
+Representative exchange:
+Banners and dust reveal a draft. The Manta lines up a pass. The player chooses cover, leads a shot into the lane, closes an available shutter, or uses the airflow to bend a supported projectile. The creature completes the pass and relocates instead of tracking continuously around the player's head.
+
+Strategies:
+Ranged interception; shelter; route denial; a constructed firing angle; wind-assisted attacks; or approaching a reachable landing. A melee build must not wait through long periods with no useful action.
+
+AI:
+A small graph of perches and approach corridors, validated against current geometry. Route choice occurs before the pass. If the player loses sight, use an orientation cue and enough time to reacquire the threat before a major attack.
+
+Escalation:
+Change which draft or perch is preferred, or link one additional pass to a clear cue. Do not simply keep the creature airborne longer.
+
+Implementation:
+Kinematic curves, local collision, and bounded wind volumes for supported projectiles. No aerodynamic solver, unrestricted flying navigation, or mandatory player flight.
+
+Outcome:
+Sail material, a directional impulse modifier, and wind-sensitive devices. A powered workshop application can emerge from the same bounded force model.
+
+Reject if:
+The fight becomes endless overhead circling, camera pursuit, tiny airborne weak-point shooting, or attacks originating behind the player.
+
+04. THE BURIED MILLER
+
+Experience: guide a moving excavation and use the trench and spoil it leaves behind.
+
+Identity:
+A squat excavation animal with a massive cutting head, a short armored body, and visible spoil outlets. Avoid a very long worm that requires many simulated segments.
+
+Arena:
+A quarry, transport cutting, or buried works. Distinguish soft seams from resistant structures. Leave enough sight distance for ground disturbance to communicate approach. Provide stable terrain and more than one route through the area.
+
+Defining rule:
+The Miller commits to short routes through supported materials, consumes a bounded swath, and deposits accounted spoil. Player edits change the feasible route and the next surface confrontation.
+
+Action set:
+- Surface or probe to acquire a direction.
+- Commit to a short burrow.
+- Sweep with the exposed cutter.
+- Eject spoil in a readable fan during recovery.
+
+Representative exchange:
+The cutter aligns with a soft seam. The player opens one route or reinforces another with an appropriate material. A visible disturbance advances through the seam. The Miller emerges into an altered position, leaving a trench and a bank that can now serve as cover.
+
+Strategies:
+Fight the exposed head/body; change emergence access; use resistant ground; build a firing route; exploit spoil cover; or interrupt preparation. Burrowing must not turn most of the encounter into waiting beside a marked hole.
+
+AI:
+Choose a short feasible local route, then commit. If the route becomes invalid, surface, stop, or perform a communicated clearing action. Burrowing does not grant permission to teleport through arbitrary blocks.
+
+Escalation:
+Use a different seam or surface approach and change spoil placement. Preserve material rules and useful player interventions.
+
+Implementation:
+A kinematic head with a few visual body segments, bounded voxel edits, short route queries, and material accounting. Valuable extracted material must have one destination. Avoid global subterranean pathfinding or continuous worm-body physics.
+
+Outcome:
+Excavation and recovery components with operating costs. Let a prepared player deliberately use the creature's work without treating all productive preparation as an exploit.
+
+Reject if:
+Emergence is unannounced, resistant material is ignored, the body disappears for long periods, or excavation creates free resources.
+
+05. THE VENT CHOIR
+
+Experience: make a perceiving enemy commit to evidence that you planted.
+
+Identity:
+A colony of bell-mouths, diaphragms, and resonant growth inhabits a ventilation network. It has a distributed body but a limited amount of simultaneous attention.
+
+Arena:
+Connected galleries with broad doorways, short loops, visible duct mouths, and quiet recesses. Major emitting organs should be readable without turning repeatedly through 360 degrees.
+
+Defining rule:
+The Choir infers disturbance locations from bounded sound events and duct connections. A thrown object, operating machine, or noisy spell can cause a believable misidentification.
+
+Action set:
+- Listen and visibly orient an organ.
+- Inhale and announce a pressure path.
+- Discharge toward the inferred location.
+- Shift the listening/emitting organ or perform a local defensive shove.
+
+Representative exchange:
+A loud action draws visible vibration through a duct. The player throws a noisy object into another gallery. A mouth prepares toward that evidence. The player uses the commitment to move, strike an organ, or alter a pressure route.
+
+Strategies:
+Quiet movement; decoys; cover; direct attack; redirecting an available duct; or a prepared machine cycle. The player can understand why a decoy succeeded or failed.
+
+AI:
+Maintain an inferred location and confidence, not omniscient knowledge. After an unsuccessful discharge, investigate or switch listeners. Do not become universally immune to decoys after a fixed number of uses.
+
+Escalation:
+Change the listening location or shorten a familiar probing sequence with a visible cue. Keep one major pressure commitment at a time in the initial encounter.
+
+Implementation:
+Gameplay stimulus events, a small duct graph, and ordinary directional effects. No full acoustic simulation. Essential audio information also appears through movement, dust, vibration, and pressure fronts.
+
+Outcome:
+Sensing, echo mapping, and pressure/signal devices; possible stabilization or diversion of the colony.
+
+Reject if:
+It requires pitch matching, a rhythm minigame, invisible aggro exceptions, or unavoidable attacks from several unseen mouths.
+
+06. THE UNFINISHED ENGINE
+
+Experience: steal a capability while the enemy is building it.
+
+Identity:
+A mobile foundry repeatedly attempts to finish its own body. Show bins, a cradle, installed tools, a service arm, and a conspicuously empty attachment. A player should recognize the next module from its shape before installation.
+
+Arena:
+A salvage foundry with a ground-level interception route, side access, stock bins, substantial cover, and room for the body to move. Do not make conveyor belts a prerequisite if the current game uses item pipes and physical service arms.
+
+Defining rule:
+A completed module must move from assembly to installation. During that transfer, it is a real object that can be intercepted, diverted, or stolen.
+
+Action set:
+- An installed tool sweep or directed attack.
+- A short mobile advance or bracing action.
+- Manufacture/transfer/install a module.
+- Defend or recover an accessible part.
+
+Representative exchange:
+A sweeping tool remains dangerous while a launcher is assembled. The player interrupts the transfer, takes the module, and mounts or uses it with its real power requirements. The Engine chooses another feasible production plan from its remaining stock.
+
+Strategies:
+Direct damage; destroy an unfinished component; intercept the output; reroute a connection; interrupt the service arm; or supply a compatible alternative material with a defined effect. Arbitrary trash is not a hidden weakness.
+
+AI:
+Track current recipe, real stock, installed slots, and observed threats. Protect a route, recover an accessible part, or choose a different affordable module. No instant fabrication of a perfect counter.
+
+Escalation:
+Change module priority or move the assembly/installation position. Begin with three visibly different module types, such as shield, sweeping tool, and launcher.
+
+Implementation:
+Use existing inventories, recipes, power, item ownership, and an action runner. The service arm can follow an authored path. No general self-assembling creature solver.
+
+Outcome:
+Functional modules, reclamation, and a possible serviced fabrication facility. Assembly progression and tools should benefit both adventurers and factory builders.
+
+Reject if:
+The encounter is merely supply-pylon destruction, production pauses all combat, or a stolen module is only a scripted temporary pickup.
+
+07. THE MASON AND THE UNMAKER
+
+Experience: manage two threats whose actions can create opportunities against each other.
+
+Identity:
+Two clearly different custodians of an unfinished hall. The Mason carries stock and builds substantial barriers. The Unmaker carries a demolition instrument and aims through those barriers. Their old instructions conflict.
+
+Arena:
+Several connected fighting spaces with partial walls and wide lanes. Avoid a small circular room where the bodies overlap and the player cannot keep both relevant actions in view.
+
+Defining rule:
+The Mason changes cover while the Unmaker commits to a destructive line. The player can redirect their combined result through movement and construction.
+
+Action set:
+- Mason: short close pressure.
+- Mason: place a limited barrier using finite stock.
+- Unmaker: modest ranged pressure.
+- Unmaker: a slow, conspicuous demolition commitment.
+
+Representative exchange:
+The Mason places a wall between the player and its partner. The Unmaker announces a demolition line through it. The player moves so the committed attack opens a useful route, strikes the Mason, or removes an obstacle at a favorable moment.
+
+Strategies:
+Separate the pair; attack the builder; interrupt demolition; line up their effects; create cover; or concentrate on one while managing the other's predictable pressure.
+
+AI:
+Two ordinary agents share a small coordinator that grants one major commitment at a time. The other may reposition or apply limited readable pressure. Their coordination cannot produce unavoidable unseen combinations.
+
+Escalation:
+When one falls, the survivor changes one part of its plan. No resurrection, full health reset, or simultaneous-kill requirement. Killing either first should create a different but manageable remainder.
+
+Implementation:
+Ground movement, four action families, existing build/demolish operations, and a shared major-action allowance. Reclamation consumes an action and preserves stock accounting.
+
+Outcome:
+Construction and demolition tools, reusable barriers, and access to a repairable hall. This can support workshop improvements without making every victory a permanent companion.
+
+Reject if:
+The pair merely doubles incoming damage, both attack invisibly from opposite sides, or construction creates unlimited material.
+
+08. THE FERRYMAN WITHOUT A RIVER
+
+Experience: change where a creature can reach by rebuilding its route.
+
+Identity:
+A ceremonial mask and ribbed hull move with finite dark water through a broken lock system. The solid core provides a readable target while the fluid defines reach.
+
+Arena:
+A compact lock complex with several basins, clear level differences, manual sluices, dry paths, and at least one route for building or excavation. Begin with bounded basins; a universal fluid creature is unnecessary.
+
+Defining rule:
+Actual connected water and finite transferred volume determine where the creature can extend or move. No instantaneous emergence from unrelated puddles.
+
+Action set:
+- Advance along a valid connected route.
+- A short visible fluid/body sweep.
+- Announce and send a surge through a channel.
+- Reposition the core or strike a suitable obstruction.
+
+Representative exchange:
+The leading body enters a channel. The player opens a divider and diverts part of its volume into a side basin. Its reach changes and a crossing becomes available. Direct attacks interrupt its attempt to recover that position.
+
+Strategies:
+Manual gates and buckets; terrain edits; freezing a supported connection; direct combat; constructed banks; pumps and controls when available. Do not require the advanced pump rewarded by this encounter to solve it.
+
+AI:
+Choose among currently connected routes and occupied basins. Contest gates or barriers through communicated actions. Changing the water must change actual reach and positioning.
+
+Escalation:
+Shift which basin it occupies or contest a new connection. Do not flood the entire arena without warning or simply increase liquid rendering complexity.
+
+Implementation:
+Reuse the existing fluid system if reliable. Otherwise a bounded, shared basin-volume transfer model can support both the encounter and site machinery. Do not create a full free-surface solver solely for this boss.
+
+Outcome:
+A restored crossing/ferry, portable siphoning, and fluid-handling components.
+
+Reject if:
+The best experience is waiting beside a pump, water movement is invisible, or the boss ignores the changed connections.
+
+09. THE FUNERAL SCALE
+
+Experience: change a moving opponent's balance and exploit the resulting stance.
+
+Identity:
+A funerary lifting machine carries a central body between counterweighted limbs. Ground-accessible baskets, chains, brakes, and loading chutes explain the motion.
+
+Arena:
+A sunken lifting court with broad dry platforms, a few accessible ballast sources, grounded loading points, and multiple ways around the body. Avoid necessary interaction far overhead.
+
+Defining rule:
+Supported changes in load alter balance, stance, reach, and eligible attacks. Several useful configurations exist.
+
+Action set:
+- A loaded descending strike.
+- A lateral reach from the currently supported stance.
+- Transfer or unload ballast.
+- Brake, brace, or recover balance.
+
+Representative exchange:
+A weapon begins descending. The player releases rubble into an accessible opposing basket. The motion stalls or changes as the machine transfers support. The player uses the changed stance to attack, move, or alter another part of the mechanism.
+
+Strategies:
+Ordinary combat; ballast placement/removal; a supported impulse; interrupting a brake; a winch; or automated feeding. Never require one exact hidden weight.
+
+AI:
+Select attacks from valid stance and load conditions. React by unloading, bracing, or changing support. Do not silently cancel the player's effect.
+
+Escalation:
+Change the preferred support or open another visible loading route. Preserve the core load relationship.
+
+Implementation:
+A small number of modeled degrees of freedom with authored poses. Use actual supported masses and lever relationships where available. No universal rigid-body solver is required.
+
+Outcome:
+Lifting and hauling equipment, field pulleys, and a repaired construction capability.
+
+Reject if:
+It becomes a static arithmetic lock, changes are invisible during motion, or the player must continually look straight upward.
+
+10. THE GLASSWEAVER
+
+Experience: turn part of a hostile spell instrument to your own use.
+
+Identity:
+A creature tends a compact external lattice of prisms and luminous filaments. Its manipulators make repair and repositioning physical actions.
+
+Arena:
+A prism garden or broken optical laboratory with a few substantial anchors, cover, accessible routes between nodes, and clear sight lines. Avoid a room filled with indistinguishable glowing strings.
+
+Defining rule:
+Supported spell payloads follow visible connections and modifiers. The player can cut, rotate, move, or insert into that routing arrangement.
+
+Action set:
+- Emit a readable payload through a chosen route.
+- Reposition to another anchor.
+- Repair or retract a connection.
+- A short direct defensive attack.
+
+Representative exchange:
+A projectile enters the lattice. The player cuts a strand or rotates a prism, changing the next shot. A utility payload sent through a reclaimed section changes terrain or a connection elsewhere. The Weaver moves to contest that section.
+
+Strategies:
+Direct attack; disconnect part of the lattice; use cover; reroute a payload; inject a supported utility effect; or prepare timed emitters.
+
+AI:
+Maintain a small live graph and select from valid visible routes. Repairs take time and resources. Never silently rewrite the entire graph or retarget a committed shot without a cue.
+
+Escalation:
+Move one anchor, change payload choice, or reconnect around a known break. Keep the same route meanings.
+
+Implementation:
+Start with four to six meaningful nodes as a provisional cap. Use the game's actual spell execution, ownership, costs, and trigger limits. Do not clone entire wands or implement a separate spell language.
+
+Outcome:
+Routing, filtering, delayed delivery, and remote utility components.
+
+Reject if:
+It becomes a colored-crystal sequence, one compulsory beam reflection, or an unreadable network.
+
+11. THE ORCHARD MATRON
+
+Experience: decide which developing threats to destroy, move, contain, or preserve.
+
+Identity:
+A broad, mobile nursery creature carries a few large seed pods in a visibly finite brood. Use an original beetle/plant or other coherent organism rather than a generic spider plus infinite adds.
+
+Arena:
+Terraced nursery beds, open paths, shallow basins, defensible corners, and a few visually distinct substrates with explicitly supported effects. Basic movement must reach the useful locations.
+
+Defining rule:
+Developing pods are real objects. Moving or containing one changes where and whether it becomes a threat.
+
+Action set:
+- A close sweep or shove.
+- Throw or place a small number of pods.
+- Move to defend a developing brood.
+- Recover or consume an abandoned pod.
+
+Representative exchange:
+A pod lands beside the player and visibly develops. The player can destroy it, carry it to a less dangerous location, interrupt development with a supported effect, or put it in a containment bed. The Matron reacts to that choice while remaining an active opponent.
+
+Strategies:
+Direct aggression; selective pod destruction; terrain containment; relocation; capturing a viable specimen; or preparing a nursery arrangement.
+
+AI:
+Select meaningful planting locations and respond to actual brood state. Cap active offspring and pods. Do not spawn simply because a timer elapsed. A recovered or consumed pod has one accounted destination.
+
+Escalation:
+Defend a different nursery region or choose another authored offspring type. A larger unlimited swarm is not an acceptable escalation.
+
+Implementation:
+Begin with a few live pods and a strict offspring cap, for example three loose pods and four offspring as prototype settings. Use one or two authored offspring types initially, ordinary carry/throw or object relocation, and a small table of substrate effects.
+
+If carrying live pods is implemented, keep them as owned world/carry objects until contained; do not permit an unlimited stack of active hatching actors in inventory. Contained specimens need explicit saved development state.
+
+Outcome:
+A concrete entry into growing or keeping a creature, plus nursery equipment. The first useful companion may need only a small supported command set such as follow, stay, and one useful task. Do not claim a whole ecosystem, genetics, or general summoning system.
+
+Reject if:
+It becomes endless adds, mandatory destruction of every pod, arbitrary elemental nursery keys, or a nutrient-management panel during active combat.
+
+12. THE CAIRNBACK PROCESSION
+
+Experience: decide where and when a large moving threat becomes a confrontation.
+
+Identity:
+A slow titan carries the remains of a garden or shrine. Its head, feet, reachable assemblies, and stopping behavior communicate a creature undertaking a journey rather than a stationary arena statue.
+
+Arena:
+A compact outdoor route with several connected clearings. One offers strong cover, another height, another a useful crossing or facility. Terraces let the player see more than ankles without needing a forced cinematic camera.
+
+Defining rule:
+The titan has a destination and a visible route. Interception, obstructions, and supported destination cues change where the meaningful exchange occurs.
+
+Action set:
+- Deliberate stride with visible foot placement.
+- A low-reaching sweep.
+- A directed grounded debris or shock attack with a readable path.
+- Kneel, turn, or clear an obstruction.
+
+Representative exchange:
+The player gets ahead and prepares a position. During an announced turn, they attack a reachable assembly, place an obstruction, or lure a committed strike into favorable terrain. The titan takes a supported alternate route or contests the blockage.
+
+Strategies:
+Choose an interception site; pursue between short stops; use height and cover; constrain a turn; attack during movement; or manipulate a clearly established destination cue. An authored portable procession marker could serve as a cue if its behavior is consistent.
+
+AI:
+Route among local destinations and use ordinary combat actions when engaged. Validate clearance against edits. A failed route produces a visible alternative, clearing action, or stop, not a teleport.
+
+Escalation:
+Change the destination or turning pattern and contest the player's prepared route. Avoid a long empty chase.
+
+Implementation:
+A normal large entity with an authored local route and attack states. Design the initial encounter around ground and terrace interaction so it does not require a moving voxel city, climbable body, or carried-player physics. Do not add invisible boarding barriers merely to preserve a script; solve supported collision honestly.
+
+Outcome:
+A salvaged or redirected procession can open transport, lifting, or mobile service opportunities. Avoid making the first implementation depend on a fully simulated settlement riding the creature.
+
+Reject if:
+It is a health sponge, only accepts damage while kneeling, makes the camera stare at feet, or destroys arbitrary player infrastructure without an established encounter and warning.
+
+E. COMMON COMBAT RULES
+
+A compact production rule:
+One memorable rule, three to five strong actions, one arena relationship, one meaningful escalation, and at least three different kinds of response across the encounter.
+
+The three responses need not apply to every single attack:
+- Execute: move, aim, block where supported, interrupt, or punish recovery.
+- Manipulate: use a tool, spell, material, object, or terrain relationship.
+- Prepare: construct a position, choose equipment, place a device, or alter the site.
+
+Avoid mandatory preparation for every encounter. A spontaneous duel, a tense pursuit, and a prepared industrial capture should feel different.
+
+Openings and payoff:
+A good interruption gives a choice. The player might deal damage, heal, reposition, retrieve an object, or change the arena. Do not force all opportunities into the same stationary burst-damage routine.
+
+If the game already has stance/poise, reuse it where appropriate. Otherwise add only the reaction state needed by the current boss. Do not introduce health, shield, stagger, elemental break, temperature, and rage bars for every creature.
+
+Statuses:
+Give relevant effects useful, coherent consequences. An impulse might alter a load or interrupt an exposed action. Cooling might slow a supported growth process. Excavation might sever a connection. Biological effects need not affect a machine identically. Explain material-specific resistance through the body and inspection; avoid blanket immunity to the player's whole tool kit.
+
+Difficulty:
+Increase the need to choose correctly before increasing simultaneous clutter. Tighten recovery only after testing. Combine familiar actions with a readable transition. Do not make the same cue mean several unrelated attacks.
+
+AI may vary among eligible actions and react to observations, but should not select a perfect counter at every frame. No hidden input reading, automatic retaliation to inventory changes, or unlimited rotation during a committed attack.
+
+First-person legibility:
+- Essential danger needs a visible source or adequate directional warning and reacquisition time.
+- Major interactions should occur near ordinary viewing height.
+- Use broad readable hit and interaction regions.
+- Show attack origin, preparation, commitment, path, contact, and aftermath.
+- Match visual pose, collision, timing, and the actual effect.
+- Keep dangerous effects distinct from particles.
+- Avoid forced camera shake, bloom, opaque frost, and effects that hide the next action.
+- Provide visual counterparts for important audio cues and more than color alone for state.
+- Preserve useful sight lines even when the player builds cover.
+- If the player intentionally creates a dangerous confined space, apply world rules consistently; do not silently relocate them or the boss.
+
+Escalation:
+Prefer one understandable change: new planting point, changed route, another module priority, different partner role, or a clearly signaled follow-up. A second phase does not require another complete AI.
+
+Retreat and retry:
+Allow withdrawal where the world supports it. Preserve preparation and resources. The creature's recovery must use explicit resources or a declared encounter rule. Saving during a dangerous action must not lead to immediate invisible damage on load.
+
+Automation:
+A prepared machine can lure, cut, route, detect, defend, feed, or intercept through shared systems. Bosses may respond to visible damage or sensed activity and attack a reachable device according to their normal capabilities. They do not scan distant factories or acquire arbitrary anti-machine powers.
+
+An effective automated rematch is a valid engineering accomplishment when its resource economy is coherent. Separate one-time progression rewards from renewable outputs. Do not require repetitive boss grinding for ordinary machine components.
+
+F. ARENAS AND WORLD PLACEMENT
+
+Author the arena relationship with the creature. A different floor color is not a new encounter.
+
+Each arena needs:
+- A clear first view of the creature and its important body parts.
+- At least two useful routes or positions, with a reason to move between them.
+- A place to learn the signature interaction at reduced risk.
+- Useful ordinary materials and a basic-tool route.
+- Space for the creature's movement and attack preparation.
+- Recovery options appropriate to the site's difficulty.
+- A plausible withdrawal route unless the player explicitly enters a clearly communicated sealed challenge.
+- A defined footprint for major terrain effects and expensive local queries.
+
+Use authored encounter structures or small layout grammars placed into procedural terrain. Vary approach, route geometry, resource availability, cover, and optional objectives. Keep the core relationship testable. Do not introduce a general constraint-solving level generator solely for bosses.
+
+Validate placement with bounded checks:
+Walkable connections, boss clearance, useful interaction reach, flight approach clearance, basin connections, and expected camera sight lines. If generation fails, choose a supported fallback or another placement. Do not spawn a giant inside an unsuitable cave.
+
+Reactive geometry:
+World edits invalidate relevant local routes and affordances. A blocked passage can cause replanning, a communicated breaking action, or a change of objective. It must not be ignored.
+
+Protected tomb architecture:
+Some sites can use visibly established hard materials or local wards to constrain approach. Their rules must be discoverable and consistent. Do not make all blocks globally unbreakable or disable all magic just to preserve the intended boss script. A deliberate bypass can be a valid exploration outcome; the boss's unique reward may remain with the encounter.
+
+Variant policy:
+After a base encounter succeeds, create alternate contexts that change decisions. Examples include scarce water for the Hart, awkward transfer access for the Engine, missing wind corridors for the Manta, or a different titan interception route. Do not multiply variants before the fundamental interaction works.
+
+G. SMALL, MODULAR IMPLEMENTATION
+
+Use one small action runtime and ordinary Rust code for each boss. Maintain the existing engine conventions.
+
+Seven shared capabilities are enough as an initial organization:
+
+1. Action playback
+Preparation, commitment, timed simulation events, recovery, and interruption.
+
+2. Movement
+Collision, steering, local destination checks, route validation, and bounded replanning.
+
+3. Perception
+Local sight, sound/contact events, recent observed threats, and remembered observations.
+
+4. Body parts
+Pose-linked hit regions, damage routing, supported part loss, and reaction.
+
+5. World effects
+Calls into existing projectiles, spells, materials, terrain edits, inventories, power, and fluids.
+
+6. Encounter context
+Nearby useful features, territory, routes, local revisions, and placement requirements.
+
+7. Persistence
+Identity, consumed resources, important damage, resolution, rewards, and effect ownership.
+
+Do not force every boss through every capability. The Tollkeeper needs no fluid or thermal system.
+
+Illustrative Rust shape only; use existing equivalents:
+
+struct Boss {
+    id: EntityId,
+    brain: BossBrain,
+    action: Option<ActionRun>,
+    motion: MotionState,
+    encounter: EncounterId,
+}
+
+enum BossBrain {
+    Tollkeeper(TollkeeperState),
+    Hart(HartState),
+    Foundry(FoundryState),
+    // Add variants when their encounters are implemented.
+}
+
+struct ActionRun {
+    kind: ActionId,
+    sequence: u32,
+    target: TargetSnapshot,
+    started_at: SimTick,
+    next_event: usize,
+}
+
+fn tick_boss(boss: &mut Boss, observations: &Observations, world: &mut World) {
+    advance_action(boss, world);
+    if boss.can_choose_action() {
+        let choice = choose_action(boss, observations, world);
+        begin_action(boss, choice, world);
+    }
+    update_movement(boss, world);
+}
+
+This sketch is not compilable production code and does not prescribe the current repository's types. The responsibility boundary matters: decision, execution, and rendering must remain distinct.
+
+Decision function:
+- Handle a valid interruption or exceptional condition.
+- Resolve an obstructed or unsuitable position.
+- Use the signature action when its visible prerequisites are available.
+- Choose a suitable ordinary action.
+- Otherwise reposition or investigate.
+
+Eligibility uses actual distance, direction, line of sight, resources, cooldowns, and observations. A short recent-action history discourages accidental repetition. Seeded variation among a few eligible options is sufficient. Start with explicit priority rules; add a small scoring function only if a real encounter needs it.
+
+Commitment:
+Snapshot the important target position, direction, or route at the action's defined commitment point. If later turning is allowed, its limit is authored and visible. Do not retarget continuously by default.
+
+One authoritative timeline:
+Simulation drives animation phase, contact windows, spawned effects, sounds, and terrain changes. Rendering consumes the result. Render frames do not create damage.
+
+Track affected targets for an attack event so extra frames or repeated collision reports cannot multiply its damage. Use swept contacts for fast limbs and projectiles where necessary.
+
+For terrain-changing actions, visible growth, collision, and danger must agree. If a work budget delays a growth operation, the threat front waits for it. A delayed mesh must not conceal newly harmful geometry.
+
+Movement profiles:
+- Ground fighter: approach, flank, retreat, and attack positioning.
+- Heavy ground: the same foundations with different clearance, acceleration, turning, and obstruction actions.
+- Perch/flight: a small graph of perches and committed curves, with local collision checks.
+- Burrow: short material-valid traversal with an announced disturbance.
+- Anchored/basin: restricted reachable positions or extensions through supported connections.
+
+The titan uses heavy ground movement plus local route destinations; it does not require a sixth universal vehicle simulator.
+
+Local edits:
+Subscribe to relevant nearby world revisions. Invalidate only affected routes, contacts, and cached connections. Queue bounded rebuilds. Never rebuild a whole-world navigation mesh for one block edit.
+
+Unique state should stay small:
+Tollkeeper: gate identity and stance.
+Hart: planting contact, accepted growth target, bounded branch connectivity, resource budget.
+Manta: perch, chosen approach, draft state.
+Miller: short route, current cut, accounted spoil.
+Choir: inferred disturbance and selected organ.
+Engine: recipe, stock references, module slots, transfer state.
+Pair: partner identities and major-action allowance.
+Ferryman: basin occupancy and supported volume transfers.
+Scale: loads, stance, and brake state.
+Glassweaver: small connection graph and current payload.
+Matron: pod/offspring identities and planting choice.
+Cairnback: route destination and engagement state.
+
+Extract a reusable abstraction after real implementations show a shared need. Action timing, ownership, and pose/contact coherence should be shared from the start because correctness depends on them. Do not build a universal boss language before any fight is fun.
+
+H. ASSETS AND RAW WGPU PRESENTATION
+
+Use authored low-poly geometry, deliberate pixel/material work, and compatible rigs or rigid named parts. The current asset pipeline takes priority; do not force a new importer or format without a demonstrated blocker.
+
+Silhouette diversity across the series:
+- Tollkeeper: narrow upright body with an oversized rectangular gate.
+- Hart: heavy cervine chest and broad crown.
+- Manta: horizontal wing span that folds dramatically on a perch.
+- Miller: low wedge and dominant cutter.
+- Choir: distributed mouths and diaphragms.
+- Engine: asymmetrical production cradle and changing tool slots.
+- Pair: stock-carrying builder versus long directional demolition instrument.
+- Ferryman: vertical mask over a low moving hull.
+- Scale: suspended center and widely separated loaded limbs.
+- Glassweaver: small central creature and a few large manipulator gestures.
+- Matron: broad nursery body with conspicuous pods.
+- Cairnback: a horizontal landscape-like mass with readable feet and head.
+
+Do not rely on color changes to distinguish encounters. Material, pose, movement, sound, architecture, and attack geometry carry identity.
+
+For modular parts, use the existing rig/socket system where possible. Module swaps and body poses should not trigger terrain chunk remeshing. Reuse sensible materials and draw paths, while profiling actual instancing, skinning, shadows, and overdraw.
+
+Character texture density should be readable at normal gameplay distances and consistent with the world style. Do not blindly impose terrain texel size on a small face.
+
+Level of detail must preserve the outline and the parts that carry attack cues. Do not remove a telegraphing appendage while retaining its attack.
+
+Every creature needs adequate motion for idle load, attention, movement, turning, attacks, interruption, and resolution. The Hart needs visibly planted contact and weight; the Manta needs readable banking and landing; the Tollkeeper needs believable reach and gate handling.
+
+I. PERFORMANCE, OWNERSHIP, AND SAVING
+
+Performance settings below are initial hypotheses, not measurements:
+- Refresh expensive sensing/decision queries around 5–10 Hz or on relevant events when appropriate.
+- Continue movement, contact checks, and active attack timing at the existing simulation cadence.
+- Hart: initially three live branches, one growth front.
+- Glassweaver: initially four to six meaningful nodes.
+- Matron: initially three loose pods and four offspring.
+- Pair: initially one major commitment at a time.
+- Begin with one major terrain operation per boss at a time, then expand only if play and profiling justify it.
+
+Use explicit work limits for edits, connectivity visits, path searches, remesh submissions, emitted effects, and active particles. Work budgets need honest gameplay behavior when exhausted: delay visibly, choose another action, or decline the operation. Do not silently complete expensive work without the corresponding visual state.
+
+Use squared-distance and broad-phase checks before detailed tests where the current engine supports them. Prefer cached local relationships with revision invalidation over repeated whole-world queries.
+
+Measure total frame time, simulation work, rendering, shadows, overdraw, and remeshing in a stated scene and hardware configuration. The user's RTX 4090 can be one reference machine if actually available; it is not evidence that performance is acceptable on other hardware. Do not promise 144 FPS without a measured scene, resolution, settings, and frame-time distribution.
+
+Do not lower dangerous contact accuracy to improve an average benchmark. Do not hide a previous terrain regression inside the boss report.
+
+Ownership:
+A material-consuming operation owns the created material or item. A manufactured module cannot remain in the machine and in the player's inventory. A carried pod cannot also hatch at its former position. A severed branch becomes world material once, with the appropriate resource deduction.
+
+Use stable action/effect identities or the existing equivalent to prevent duplicate application. Clear mutation boundaries and ordinary saved state are sufficient; a transactional database is unnecessary.
+
+Persist:
+Encounter outcome; significant body state; real stock and water; created world geometry; installed and loose modules; pod development; acquired rewards; and relevant local machine ownership.
+
+Save/load during actions:
+Restore enough information to avoid duplication. Resume with adequate warning or cancel according to explicit resource rules. Never load an attack directly into invisible active damage. Do not refund stock that already became a world object.
+
+Streaming:
+Unloading does not erase outcomes or regenerate stock. Expensive active simulation should follow existing world activation rules. Resolve deferred work safely, preserving resources and world revisions.
+
+J. PROGRESSION, SCIENCE, AND CONTENT VALUE
+
+Progression should branch across exploration, spellcraft, and machinery. A player can win manually and later automate a rematch or operate a restored site.
+
+Examples of capability rewards:
+- Tollkeeper: cover and defensive technique.
+- Hart: rime construction and cooling.
+- Manta: directional impulse and sail material.
+- Miller: excavation and material recovery.
+- Choir: sensing and signals.
+- Engine: modular tools and fabrication.
+- Pair: controlled construction and demolition.
+- Ferryman: fluid transport.
+- Scale: lifting and hauling.
+- Glassweaver: spell routing.
+- Matron: a first growable/keepable creature and nursery equipment.
+- Cairnback: route logistics or a mobile service opportunity when supported.
+
+Keep basic counterplay available before advanced rewards. Do not gate all pumps, all excavation, or all control devices behind the boss that assumes them.
+
+Science:
+Let the player observe a relationship and inspect its explanation. Heat moves somewhere; mass has a destination; load changes stance; finite stock limits manufacturing; a signal can be occluded or misinterpreted. Use units only where the modeled quantity supports them.
+
+Chemistry and ecology can appear in adjacent sites and useful processes. A crystallization site can distinguish dissolving, concentration, and deposition using explicitly supported substances. A nursery can use a few honest growth conditions. Do not invent a universal chemistry or genetics simulator to justify one fight.
+
+Separate magical rules from physical ones: rime pulses, spell conversion, and enchanted growth are fictional. Do not wrap fantasy in misleading scientific precision.
+
+Content target:
+Twelve main families, a smaller teaching encounter for each, and alternate contexts after the base version works. Twelve strong base encounters are more valuable than thirty-six cosmetic variants. Counts are planning targets, not completion claims.
+
+A late capstone can reuse two established interactions in a new objective. It should not combine every boss, all effects, and a mandatory gauntlet. Test any combined encounter for conflicting cues and excessive simultaneous attention.
+
+K. DEFERRED OR RECLASSIFIED IDEAS
+
+Lamplighter's Vacancy:
+Retain as a later research candidate. A living projected shape needs fair agreement between lighting, receiving surfaces, and attack collision on edited terrain. That is a specialized rendering problem and is outside this efficient first series.
+
+Unhoused King:
+Retain as a later candidate after reliable machine-control transfer and host ownership exist. Do not build those systems merely to add one more boss now.
+
+Surveyor:
+Keep as a construction encounter that scans a bounded supported structure, previews an interpretation, and builds with actual stock. No copying inventories or free rare materials.
+
+Graft Nursery:
+Keep as persistent ecological content, distinct from the compact Matron brood fight. Long-term cultivation can support richer care and automation after a useful small implementation exists.
+
+Salt Regent:
+Use the strongest material-processing ideas in a dangerous crystallization site. Its current major-boss design overlaps fluid routing.
+
+Lodestone Pilgrim:
+A small magnetic scavenger may teach sorting and material response. The major burden-manipulation fight overlaps the Scale. Do not equate all metals with magnetic materials.
+
+Avoid now:
+Full-world rewinds; inverted controls; arbitrary possession; universal aerodynamic, acoustic, chemical, or rigid-body simulation; an enormous rideable moving voxel city; unrestricted spell copying; a general encounter scripting editor; and permanent enemies that raid distant factories without established world rules.
+
+L. IMPLEMENTATION ORDER
+
+This order follows shared capabilities, not the in-world encounter order.
+
+1. Establish current code and performance baselines.
+Inspect existing interfaces, active changes, save migration, dependencies, and tests. Choose integration points. Avoid unrelated terrain/shader rewrites.
+
+2. Prove basic combat with a Tollkeeper blockout.
+Build a satisfying thrust, sweep, movement pattern, recovery, and planted cover object. If an ordinary duel is unpleasant, fix the foundation before hiding it behind more systems.
+
+3. Complete the Hart's distinctive playable loop.
+One wet supply, accepted target, visible growth, pulse, severing, and physical response. Demonstrate deliberate crossing creation and an enemy response. Then finish art, site, outcomes, and persistence.
+
+4. Complete the Engine's real interception loop.
+Actual stock, assembly, physical transfer, a usable recovered module, and a changing installed capability. Reuse the common action runtime.
+
+5. Expand through the existing foundations.
+Choir for sensing; Miller for bounded excavation; Manta for perch/flight; pair for coordination. Integrate the Matron once object carry/containment and a useful small offspring behavior exist.
+
+6. Add remaining shared-system encounters.
+Scale with a small load model; Ferryman with reliable bounded fluid transfer; Glassweaver with real spell routing. Add the Cairnback after heavy movement and local route handling are dependable.
+
+7. Populate and polish.
+Teaching encounters, meaningful alternate sites, useful rewards, restored facilities, optional challenges, audio, visual identity, and evidence of performance.
+
+This is a staged implementation of the whole series. Do not count a plan, empty data entries, or a generic temporary fight as finished content. Finish each playable slice, retain a concrete remaining-work manifest, and continue toward the requested roster.
+
+M. ACCEPTANCE AND REVISION GATES
+
+For each boss, record:
+- The central player action in one sentence.
+- Arena role and movement pattern.
+- Three to five initial actions with their cues, commitment, contact, and recovery.
+- At least three encounter-level response types.
+- The unique state and shared implementation it uses.
+- An active response to player manipulation.
+- A meaningful escalation.
+- A reward or world outcome with real use.
+- Missing prerequisites, actual play evidence, and measured costs.
+
+Play review:
+Use normal first-person footage, not only fixed-camera beauty captures. Review ordinary and close range, movement, edited terrain, leaving and re-entering, and reduced-effects settings.
+
+Ask:
+- Could a new player explain why the attack hit?
+- Did the player understand what changed after an intervention?
+- Was there a useful action during repositioning or concealment?
+- Did a different build find a different workable approach?
+- Did the encounter contain unnecessary waiting?
+- Did complexity create a new choice or merely another task?
+- Would the fight still be enjoyable after the surprise of its mechanic wore off?
+- Did the player choose to experiment again?
+
+These are evaluation questions, not evidence that fun has already been achieved.
+
+Meaningful correctness checks:
+An interrupted action cannot hit twice; a committed trajectory respects its defined turning; a stolen module has one owner; a severed connection blocks the relevant effect; an edit invalidates an affected route; brood caps hold; save/load does not refund consumed resources or repeat rewards.
+
+Do not write tests that merely restate configuration constants. Do not treat a large passing test count as evidence of animation quality or enjoyable pacing.
+
+Report:
+Implemented behavior, normal-camera evidence, measured performance, changed files, save compatibility, unresolved failures, and remaining work. Do not claim parity with Zelda, Elden Ring, or a professional voxel production from a single screenshot.
+
+N. PRIMARY REFERENCES AND HOW THEY WERE USED
+
+1. Nintendo, Ocarina of Time development interview, Making the Bosses and Enemies:
+https://www.nintendo.com/en-gb/Iwata-Asks/Iwata-Asks-The-Legend-of-Zelda-Ocarina-of-Time-3D/Vol-3-Original-Development-Staff-Part-2/3-Making-the-Bosses-and-Enemies/3-Making-the-Bosses-and-Enemies-216367.html
+Supports the appearance/attack/defeat/conclusion framing, iteration on movement, and the example of Volvagia movement reusing programming from Star Fox 64. It supports practical reuse, not the specific architecture proposed here.
+
+2. Nintendo, Skyward Sword development interview, Making Huge Bosses and Stages:
+https://www.nintendo.com/en-gb/Iwata-Asks/Iwata-Asks-The-Legend-of-Zelda-Skyward-Sword/Vol-2-The-Dense-Forest/3-Making-Huge-Bosses-and-Stages/3-Making-Huge-Bosses-and-Stages-216733.html
+Supports a destination/interception objective, arena landform designed around it, and explicit camera difficulties with giant opponents.
+
+3. Nintendo, Tears of the Kingdom developer interview, Chapter 5:
+https://www.nintendo.com/au/news-and-articles/ask-the-developer-vol-9-the-legend-of-zelda-tears-of-the-kingdom-chapter-5/
+Supports allowing player-created solutions and communicating object interaction rules.
+
+4. Bandai Namco, Elden Ring Introduction Part 4 — Combat Guide:
+https://www.bandainamcoent.com/es_mx/news/elden-ring-introduction-part-4-combat-guide
+Supports commitment, openings, spatial defensive choices, and stance-related opportunities. This is a publisher-hosted gameplay guide by a guest creator, not a FromSoftware AI engineering paper.
+
+5. Square Enix, Octopath Traveler II official announcement:
+https://press.it.square-enix.com/OCTOPATH-TRAVELER-II-DEMO-AVAILABLE-NOW
+Describes Break through exploiting weaknesses and Boost through enhanced abilities. The real-time setup/payoff translation in this brief is an original recommendation.
+
+6. Noita official site:
+https://noitagame.com/
+Describes crafted spells, material interactions, and simplified chemical, electrical, and thermal systems.
+
+7. Minecraft official game information:
+https://www.minecraft.net/en-us/about-minecraft
+Provides general game and modification context. This brief does not claim the proposed bosses or advanced automation exist in vanilla Minecraft.
+
+All twelve encounter designs, proposed resource caps, architecture sketches, production priorities, and acceptance criteria are recommendations for this project. Their quality must be established through implementation and play.
+

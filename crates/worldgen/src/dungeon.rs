@@ -1121,6 +1121,11 @@ impl Dungeon {
             let inside_xz = m.x >= r.x0 && m.x < r.x1 && m.z >= r.z0 && m.z < r.z1;
             if r.kind == Kind::WeighingHall {
                 if inside_xz && fy >= -bearer_hall::DEPTH && fy < r.h {
+                    if cfg.generator_version >= 45
+                        && let Some(b) = bearer_hall::articulation(m.x - r.x0, fy, m.z - r.z0, r.x1 - r.x0, r.z1 - r.z0, v)
+                    {
+                        return Some(b);
+                    }
                     return Some(bearer_hall::block(m.x-r.x0, fy, m.z-r.z0,
                         r.x1-r.x0, r.z1-r.z0, self.seed));
                 }
@@ -1182,7 +1187,7 @@ impl Dungeon {
             return None;
         }
         if bearer_shell {
-            return Some(B::Basalt);
+            return Some(if cfg.generator_version >= 45 { B::StoneBricks } else { B::Basalt });
         }
         if let Some(r) = cosmos_floor {
             return Some(self.cosmos_floor(r, m.x - r.x0, m.z - r.z0));
@@ -1217,7 +1222,11 @@ impl Dungeon {
                 _ => B::CoalOre,
             });
         }
-        Some(if n > 0.8 {
+        let repair = if cfg.generator_version >= 45 {
+            hash2((m.x / 5.0).floor() as i32 ^ (m.y / 3.0).floor() as i32,
+                (m.z / 5.0).floor() as i32, self.seed.wrapping_add(71)) > 0.92
+        } else { n > 0.8 };
+        Some(if repair {
             self.theme.alt
         } else {
             self.theme.wall
@@ -1698,6 +1707,7 @@ fn build_complex(cfg: &WorldSampleConfig, ix: i32, iz: i32, key: CellKey) -> Com
     // footprint would run into the Undercrown's reserve.
     let built = site(cfg, ix, iz)
         .map(|(seed, cx, cz, ground)| v2::generate(seed, cx, cz, ground, cfg.generator_version))
+        .and_then(|d| v2::fit_terrain(cfg, d))
         .filter(|d| !super::undercrown::overlaps(cfg, d.min, d.max))
         .filter(|d| !super::amberroot::overlaps(cfg, d.min, d.max))
         .map(Rc::new);
@@ -1863,6 +1873,40 @@ pub fn cosmos_review_view(cfg: &WorldSampleConfig, around: Vec3) -> Option<(Vec3
                     let eye = Vec3::new(r.x0 + 1.5, r.floor + 1.7, r.z0 + 1.5);
                     return Some((eye, Vec3::new(r.x1 - 2.0, r.floor + r.h * 0.6, r.z1 - 2.0)));
                 }
+            }
+        }
+    }
+    None
+}
+
+/// Deterministic camera in an actual generated inhabited room, not a prop
+/// showcase injected into the world. Used to compare physical voxel scales.
+pub fn inhabited_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec3, Vec3)> {
+    if cfg.generator_version < 46 || cfg.world_type == WorldType::Superflat { return None; }
+    let accepts = |kind| match name {
+        "library" => matches!(kind, v2::Kind::Library | v2::Kind::Scriptorium),
+        "infirmary" => kind == v2::Kind::Infirmary,
+        "refectory" => kind == v2::Kind::Refectory,
+        "armory" => kind == v2::Kind::Armory,
+        _ => false,
+    };
+    let (ix, iz) = (cell_index(300.0), cell_index(0.0));
+    for ring in 0..12i32 {
+        for z in iz - ring..=iz + ring {
+            for x in ix - ring..=ix + ring {
+                if (x - ix).abs().max((z - iz).abs()) != ring { continue; }
+                let Some(c) = complex_at(cfg, x, z) else { continue; };
+                let Some(r) = c.rooms.iter().find(|r| accepts(r.kind)) else { continue; };
+                let (cx, cz) = r.centre();
+                // The central cross is always free of furniture and remains
+                // comparable across 1 m, 0.5 m and 0.25 m generated voxels.
+                let eye = Vec3::new(cx, r.floor + 1.7, cz);
+                let target = if r.w() >= r.d() {
+                    Vec3::new(r.x0 + 3.5, r.floor + 1.7, r.z0 + 1.5)
+                } else {
+                    Vec3::new(r.x0 + 1.5, r.floor + 1.7, r.z0 + 3.5)
+                };
+                return Some((eye, target));
             }
         }
     }

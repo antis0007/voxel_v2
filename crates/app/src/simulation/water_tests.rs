@@ -125,6 +125,7 @@ fn water_pair_commit_microbenchmark() {
     let q = IVec3::new(7, 108, 8);
     let mut old = chamber();
     old.set_water_volume(p, 8);
+    old.set(q,B::Air);
     let start = Instant::now();
     for i in 0..N {
         if i & 1 == 0 {
@@ -139,12 +140,14 @@ fn water_pair_commit_microbenchmark() {
 
     let mut pair = chamber();
     pair.set_water_volume(p, 8);
+    pair.set(q,B::Air);
+    let mut committed=0;
     let start = Instant::now();
     for i in 0..N {
         if i & 1 == 0 {
-            pair.apply_water_pair(p, 0, q, 8, 8);
+            committed+=usize::from(pair.apply_water_pair(p, 0, q, 8, 8));
         } else {
-            pair.apply_water_pair(q, 0, p, 8, 8);
+            committed+=usize::from(pair.apply_water_pair(q, 0, p, 8, 8));
         }
     }
     let pair_ns = start.elapsed().as_nanos() as f64 / N as f64;
@@ -153,6 +156,7 @@ fn water_pair_commit_microbenchmark() {
         old_ns / pair_ns.max(1.0)
     );
     assert_eq!(pair.water_volume(p), 8);
+    assert_eq!(committed,N,"benchmark must measure committed transfers, not rejected solid targets");
 }
 
 #[test]

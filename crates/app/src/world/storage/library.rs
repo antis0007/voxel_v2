@@ -140,9 +140,9 @@ fn default_name(h: &Header) -> String {
     format!(
         "{} · {}",
         match h.kind {
-            WorldType::Hills => "Wildlands",
+            WorldType::Hills => "Default",
             WorldType::Ridged => "Highlands",
-            WorldType::Superflat => "Open canvas",
+            WorldType::Superflat => "Flat",
         },
         h.seed
     )

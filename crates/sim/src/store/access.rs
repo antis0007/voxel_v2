@@ -1,7 +1,7 @@
 //! What the kernel and the scenario snapshots need from the store: direct brick access, waking,
 //! reserving and the canonical state hash. A child module so it sees the store's private fields.
 use super::{BrickStore, NO_SLOT, PoolFull};
-use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, BrickCoord, Cell};
+use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, Cell};
 use glam::IVec3;
 
 impl BrickStore {
@@ -26,34 +26,29 @@ impl BrickStore {
 
     /// Mark the bricks in `mask` dirty; bits of absent bricks are ignored.
     pub(crate) fn or_dirty(&mut self, chunk: IVec3, mask: u64) {
-        if let Some(e) = self.chunks.get_mut(&chunk) {
+        if mask != 0
+            && let Some(e) = self.chunks.get(&chunk)
+            && mask & !e.dirty != 0
+        {
             let present = (0..BRICKS_PER_CHUNK).filter(|&b| e.slots[b] != NO_SLOT).fold(0u64, |m, b| m | 1 << b);
-            e.dirty |= mask & present;
+            self.set_dirty(chunk, e.dirty | (mask & present));
         }
     }
 
     /// Mark a stored brick dirty because a neighbour across a face changed. An absent brick is all
     /// empty and needs no stepping, so waking it does nothing.
     pub fn wake(&mut self, chunk: IVec3, brick: u8) {
-        if let Some(e) = self.chunks.get_mut(&chunk)
+        if let Some(e) = self.chunks.get(&chunk)
             && e.slots[brick as usize] != NO_SLOT
+            && e.dirty & (1 << brick) == 0
         {
-            e.dirty |= 1 << brick;
+            self.set_dirty(chunk, e.dirty | (1 << brick));
         }
     }
 
     /// Make sure the brick exists, so a later write into it cannot run out of pool.
     pub fn reserve(&mut self, chunk: IVec3, brick: u8) -> Result<(), PoolFull> {
         self.ensure_brick(chunk, brick).map(|_| ())
-    }
-
-    /// Every dirty brick in a fixed order, with all dirty masks cleared: the work list of one pass.
-    pub fn take_all_dirty(&mut self) -> Vec<BrickCoord> {
-        let bricks = self.dirty_bricks();
-        for e in self.chunks.values_mut() {
-            e.dirty = 0;
-        }
-        bricks
     }
 
     /// FNV-1a over every stored brick in (chunk z, y, x, brick) order: the same cells hash the same

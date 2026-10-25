@@ -16,6 +16,9 @@ mod hart;
 mod orbital;
 pub use hart::HartPose;
 
+/// Vertex-coloured moving geometry, never a terrain/biome material (family 0).
+pub const AUTHORED_SURFACE: f32 = 39.0;
+
 pub struct Model {
     pub vertices: Vec<Vertex3>,
 
@@ -71,8 +74,12 @@ impl Model {
     }
 
     fn new(scale: f32) -> Self {
+        Self::with_vertices(scale, Vec::with_capacity(65536))
+    }
+
+    fn with_vertices(scale: f32, vertices: Vec<Vertex3>) -> Self {
         Self {
-            vertices: Vec::with_capacity(65536),
+            vertices,
 
             scale,
 
@@ -86,8 +93,15 @@ impl Model {
 
     /// Select the shader material for non-glow model pieces. The wand hand uses
     /// the dedicated skin/leather branch instead of inheriting brushed machinery.
-    pub fn set_surface_kind(&mut self, kind: f32) {
-        self.surface_kind = kind;
+    pub fn set_surface_kind(&mut self, kind: f32) -> f32 {
+        std::mem::replace(&mut self.surface_kind, kind)
+    }
+
+    /// A model's material changes must not recolour the next entity or tool.
+    pub fn with_surface_kind(&mut self, kind: f32, draw: impl FnOnce(&mut Self)) {
+        let previous = self.set_surface_kind(kind);
+        draw(self);
+        self.set_surface_kind(previous);
     }
 
     /// Bake planar UVs before rigid animation; authored body pixels travel with it.
@@ -385,16 +399,16 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
     let viewer = player.pos * scale;
 
-    let mut mesh = Model::new(scale);
     // Reuse last frame's allocation. The scene holds ~400k vertices (orbital
     // anchorages dominate); growing a fresh Vec to that size every frame cost
     // several milliseconds of reallocation and page faults.
-    SCENE_POOL.with(|pool| {
+    let mut mesh = SCENE_POOL.with(|pool| {
         let mut recycled = std::mem::take(&mut *pool.borrow_mut());
         recycled.clear();
-        if recycled.capacity() > mesh.vertices.capacity() {
-            mesh.vertices = recycled;
-        }
+        // Do not construct Model::new first: that allocates 65k vertices only
+        // to immediately throw them away when a pooled scene is available.
+        if recycled.capacity() == 0 { recycled.reserve(65536); }
+        Model::with_vertices(scale, recycled)
     });
     orbital::build(&mut mesh, world, day, viewer, pixel_angle);
 
@@ -1363,15 +1377,15 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         );
     }
 
-    mesh.surface_kind = 0.0;
+    mesh.surface_kind = AUTHORED_SURFACE;
 
     world.habitats.models(&mut mesh, viewer);
     for enemy in &world.adventure.enemies {
         if enemy.habitat.is_some() && enemy.pos.distance(viewer)>90.0 {continue;}
-        enemy.model(&mut mesh, world.adventure.time);
+        mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| enemy.model(mesh, world.adventure.time));
     }
     if let Some(companion) = &world.adventure.companion {
-        companion.model(&mut mesh, world.adventure.time);
+        mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| companion.model(mesh, world.adventure.time));
     }
     for shot in &world.adventure.projectiles {
         let shot_mark = mesh.mark();
@@ -1400,7 +1414,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                     0.0,
                 );
             }
-            mesh.surface_kind = 0.0;
+            mesh.surface_kind = AUTHORED_SURFACE;
         }
         if !shot.hostile && shot.spell == 10 {
             mesh.orb(shot.pos, 0.1, [0.08, 0.05, 0.12], 0.3);
@@ -1712,6 +1726,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
     // vertices tagged `CAMERA_RELATIVE_FLAG` as offsets from the camera, so
     // the only world term left is the eye's sub-f32 residual.
     let viewmodel_mark = mesh.mark();
+    mesh.set_surface_kind(AUTHORED_SURFACE);
     let eye = camera_residual(player.precise_eye(world.voxel_scale) * scale as f64);
 
     if world.adventure.swing() > 0.0 {
@@ -1774,6 +1789,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
         let wrist = grip - forward * 0.12 - up * 0.035;
 
+        mesh.set_surface_kind(54.0);
         mesh.beam(
             eye + right * 0.43 - up * 0.48 + forward * 0.12,
             wrist,
@@ -1784,6 +1800,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
         mesh.beam(wrist, grip + shaft * 0.035, 0.055, [0.57, 0.39, 0.27], 0.0);
 
+        mesh.set_surface_kind(AUTHORED_SURFACE);
         mesh.cuboid(
             (grip + tip) * 0.5,
             Vec3::new(0.055, 0.34, 0.055),
@@ -1819,12 +1836,13 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                 haft,
                 0.0,
             );
-            mesh.cuboid(
+            mesh.material_box(
                 tip + shaft * 0.83,
                 Vec3::new(0.46, 0.22, 0.24),
                 tool_rotation,
                 metal,
-                0.25,
+                59.0,
+                0.0,
             );
             mesh.cuboid(
                 tip + shaft * 0.83 + right * 0.02,
@@ -1883,7 +1901,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                 [0.64, 0.39, 0.16]
             };
 
-            mesh.cuboid(tip, Vec3::new(0.15, 0.15, 0.28), tool_rotation, metal, 0.0);
+            mesh.material_box(tip, Vec3::new(0.15, 0.15, 0.28), tool_rotation, metal, 59.0, 0.0);
 
             if world.expedition.tool_tier == 2 {
                 mesh.orb(tip, 0.05, [0.38, 0.76, 1.0], 1.3);

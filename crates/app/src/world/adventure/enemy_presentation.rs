@@ -31,10 +31,43 @@ fn strike(e: &Enemy) -> f32 {
     if e.recovery <= 0.0 {
         0.0
     } else {
-        ((1.0 - e.recovery / 0.24) * std::f32::consts::PI)
-            .sin()
-            .max(0.0)
+        let t = (1.0 - e.recovery / 0.24).clamp(0.0, 1.0);
+        // Fast release, slower follow-through; recovery no longer swings the
+        // weapon back through the same sine arc at an even speed.
+        if t < 0.22 { ease(t / 0.22) } else { 1.0 - ease((t - 0.22) / 0.78) }
     }
+}
+
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Distance-driven stance (60%) and swing (40%). During stance the foot
+/// travels backwards relative to the body and stays down; only swing lifts.
+pub(super) fn step(phase: f32, stride: f32, height: f32, weight: f32) -> (f32, f32) {
+    let t = phase.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+    let weight = weight.clamp(0.0, 1.0);
+    if t < 0.6 {
+        ((t / 0.6 * 2.0 - 1.0) * stride * weight, 0.0)
+    } else {
+        let swing = (t - 0.6) / 0.4;
+        ((1.0 - ease(swing) * 2.0) * stride * weight,
+            (swing * std::f32::consts::PI).sin().powi(2) * height * weight)
+    }
+}
+
+pub(super) fn pose(e: &Enemy, m: &mut Model, mark: usize, time: f32, wind: f32) {
+    let moving = e.gait.clamp(0.0, 1.0);
+    let breath = (time * 1.8 + e.slot as f32 * 2.4).sin() * 0.007 * (1.0 - moving);
+    let planted = if super::brawler(e.kind) { wind * 0.07 } else { 0.0 };
+    let recoil = (e.flash / 0.18).clamp(0.0, 1.0);
+    let impact = recoil * recoil * 0.10;
+    m.scale_since(mark, e.pos, Vec3::new(1.0 + planted * 0.2, 1.0 - planted + breath, 1.0));
+    let roll = (e.phase * 4.2).sin() * moving * 0.018 * (1.0 - wind);
+    m.rotate_since(mark, e.pos, Quat::from_rotation_y(e.yaw)
+        * Quat::from_rotation_z(roll)
+        * Quat::from_rotation_x(-wind * 0.07 + impact));
 }
 
 fn status_tint(e: &Enemy, m: &mut Model, mark: usize) {
@@ -62,8 +95,7 @@ pub(super) fn warden(e: &Enemy, m: &mut Model, _time: f32, wind: f32, _hit: [f32
     let sink = brace * 0.09 + strike * 0.04;
     let gait = e.phase * 5.0;
     for (side, phase) in [(-1.0_f32, 0.0), (1.0, std::f32::consts::PI)] {
-        let step = (gait + phase).sin() * 0.17 * (1.0 - brace) * e.gait;
-        let lift = (gait + phase).cos().max(0.0) * 0.07 * (1.0 - brace) * e.gait;
+        let (step, lift) = step(gait + phase, 0.32, 0.13, (1.0 - brace) * e.gait);
         let hip = at(e, side * 0.17, 0.66 - sink, 0.0);
         let knee = at(e, side * 0.19, 0.34 - sink * 0.4, -step * 0.45 - 0.025);
         let foot = at(e, side * 0.20, 0.075 + lift, step - 0.03);
@@ -268,11 +300,12 @@ pub(super) fn fallback(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32
                     };
                 let hip = at(e, side * 0.25, 0.30 - dip, z);
                 let knee = at(e, side * 0.43, 0.20, z + 0.07);
+                let (travel, lift) = step(phase, 0.11, 0.075, e.gait * (1.0 - wind));
                 let foot = at(
                     e,
                     side * 0.53,
-                    0.035 + phase.cos().max(0.0) * 0.05 * e.gait,
-                    z + phase.sin() * 0.08 * e.gait,
+                    0.035 + lift,
+                    z + travel,
                 );
                 bone(m, hip, knee, 0.055, STEEL);
                 bone(m, knee, foot, 0.035, DARK);
@@ -301,9 +334,11 @@ pub(super) fn fallback(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32
             (-1.0, 0.30, std::f32::consts::PI),
             (1.0, 0.30, 0.0),
         ] {
-            let step = (e.phase * 3.8 + phase).sin() * 0.10 * (1.0 - wind) * e.gait;
-            let foot = at(e, side * 0.40, 0.12, z + step);
-            bone(m, at(e, side * 0.37, 0.92, z), foot, 0.24, DARK);
+            let (travel, lift) = step(e.phase * 3.8 + phase, 0.30, 0.16, (1.0 - wind) * e.gait);
+            let foot = at(e, side * 0.40, 0.12 + lift, z + travel);
+            let knee = at(e, side * 0.44, 0.48 + lift * 0.5, z - travel * 0.35 - 0.08);
+            bone(m, at(e, side * 0.37, 0.92, z), knee, 0.24, DARK);
+            bone(m, knee, foot, 0.20, STEEL);
             plate(m, foot, Vec3::new(0.31, 0.24, 0.40), Quat::IDENTITY, STEEL);
         }
         plate(

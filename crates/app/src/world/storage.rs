@@ -11,7 +11,13 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV29";
+const MAGIC: &[u8; 8] = b"VXWSAV34";
+#[cfg(test)]
+#[path = "storage/environment_tests.rs"]
+mod environment_tests;
+#[cfg(test)]
+#[path = "storage/chip_tests.rs"]
+mod chip_tests;
 /// Current writer version. Companion bytes follow the adventure block from 18;
 /// the found-spell log (3 words) follows the companion from 19. Version 20
 /// widens the resource table to 22 and the machine table to 21 kinds, and
@@ -24,7 +30,12 @@ const MAGIC: &[u8; 8] = b"VXWSAV29";
 /// Version 25 adds the ground receiver and finite cargo contract ledger.
 /// Version 26 adds habitat sources, residents, production and separate mana/XP ledgers.
 /// Version 28 adds radio equipment, finite knowledge and registered dish tracking.
-pub(crate) const SAVE_VERSION: u8 = 29;
+/// Version 30 permits monotone receiver stages 3/4 for finite relay recovery.
+/// Version 31 persists sparse soil, sediment, ecological stocks and due work.
+/// Version 32 adds optional resonance expeditions and permanent calibration.
+/// Version 33 stores lantern ownership and switch state in the expedition flags.
+/// Version 34 appends the chip library and installed controllers.
+pub(crate) const SAVE_VERSION: u8 = 34;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -94,6 +105,7 @@ pub use background::{
 pub use library::{WorldEntry, WorldLibrary};
 
 fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result<Vec<u8>> {
+    ensure!(world.ca_view.is_none(), "Experimental CPU region requires an exact checkpoint format; ordinary world save refused");
     ensure!(
         player.pos.abs().max_element() <= 1_000_000.0,
         "Player position exceeds supported save range"
@@ -201,7 +213,8 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     }
     push(&mut bytes, world.expedition.tool_tier);
     push(&mut bytes, u32::from(world.expedition.workshop_found));
-    push(&mut bytes, u32::from(world.expedition.lamp));
+    push(&mut bytes, u32::from(world.expedition.lamp)
+        | (u32::from(world.expedition.lamp_disabled) << 1));
     world.factory.encode_format(
         &mut bytes,
         match save_version {
@@ -225,6 +238,8 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     world.sandbox.encode(&mut bytes);
     if save_version >= 24 { world.orbital.encode(&mut bytes, save_version); }
     if save_version >= 26 { world.habitats.encode_versioned(&mut bytes,save_version); }
+    if save_version >= 31 { world.environment.encode(&mut bytes); }
+    if save_version >= 32 { world.adventure.resonance.encode(&mut bytes); }
     world.inventory.encode_versioned(&mut bytes, save_version);
     push(&mut bytes, world.inventory.dropped.len() as u32);
     for drop in &world.inventory.dropped {
@@ -236,6 +251,7 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
             push(&mut bytes, v);
         }
     }
+    if save_version >= 34 { world.factory.chips.encode(&mut bytes); }
     bytes
 }
 fn manifest(
@@ -492,9 +508,10 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             ensure!(world.expedition.tool_tier <= 2, "Invalid tool tier");
             let found = input.u32()?;
             let lamp = input.u32()?;
-            ensure!(found <= 1 && lamp <= 1, "Invalid expedition flags");
+            ensure!(found <= 1 && lamp <= if version >= 33 { 3 } else { 1 }, "Invalid expedition flags");
             world.expedition.workshop_found = found != 0;
-            world.expedition.lamp = lamp != 0;
+            world.expedition.lamp = lamp & 1 != 0;
+            world.expedition.lamp_disabled = lamp & 2 != 0;
         }
         if version_six {
             let size = super::factory::step(&world);
@@ -549,6 +566,12 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             world.adventure.restore_farm_mastery(world.habitats.mastered);
         }
         if version_thirteen {
+            if version >= 31 {
+                world.environment = super::environment::State::decode(&mut || input.u32(), world.voxel_scale)?;
+            }
+            if version >= 32 {
+                world.adventure.resonance = super::adventure::resonance::State::decode(&mut || input.u32())?;
+            }
             world.inventory = super::inventory::SurvivalInventory::decode_versioned(
                 &mut || input.u32(),
                 world.voxel_scale.meters(),
@@ -573,6 +596,9 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                             stack: super::inventory::ItemStack { item, count },
                         });
                 }
+            }
+            if version >= 34 {
+                world.factory.chips = super::factory::chips::Bay::decode(&mut || input.u32())?;
             }
             let bank = world.adventure.wand_bank.len();
             let inv = &world.inventory;

@@ -2,11 +2,14 @@
 //!
 //! This is the CPU mirror. The GPU pool is the same bytes: `pool_bytes` is the
 //! upload, `chunk_slots` the pointer table, `take_dirty` the dispatch list.
-use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, BrickCoord, Cell, Scale, brick_and_cell, local_of};
+use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, Cell, Scale, brick_and_cell, local_of};
 use engine_core::fast_hash::FastMap;
 use glam::IVec3;
 
 mod access;
+mod activity;
+
+const INACTIVE: usize = usize::MAX;
 
 /// No brick in this slot of a chunk's pointer table.
 pub const NO_SLOT: u32 = u32::MAX;
@@ -19,13 +22,15 @@ struct ChunkEntry {
     scale: Scale,
     /// Bit `i` set: brick `i` changed and must be stepped. Clear: not dispatched at all.
     dirty: u64,
+    /// Index in `BrickStore::awake_chunks`, or `INACTIVE` when the mask is zero.
+    awake_index: usize,
     /// Pool slot of each brick, or `NO_SLOT`. The only record of which bricks exist.
     slots: [u32; BRICKS_PER_CHUNK],
 }
 
 impl ChunkEntry {
     fn new() -> Self {
-        Self { scale: Scale::FINEST, dirty: 0, slots: [NO_SLOT; BRICKS_PER_CHUNK] }
+        Self { scale: Scale::FINEST, dirty: 0, awake_index: INACTIVE, slots: [NO_SLOT; BRICKS_PER_CHUNK] }
     }
 
     fn stored(&self) -> usize {
@@ -39,12 +44,14 @@ pub struct BrickStore {
     pool: Vec<Cell>,
     free: Vec<u32>,
     chunks: FastMap<IVec3, ChunkEntry>,
+    /// Dense work index: sleeping chunks never participate in dispatch-list discovery.
+    awake_chunks: Vec<IVec3>,
 }
 
 impl BrickStore {
     /// A store of at most `capacity` bricks (4 KiB each), the size of the GPU pool.
     pub fn new(capacity: u32) -> Self {
-        Self { capacity, pool: Vec::new(), free: Vec::new(), chunks: FastMap::default() }
+        Self { capacity, pool: Vec::new(), free: Vec::new(), chunks: FastMap::default(), awake_chunks: Vec::new() }
     }
 
     pub fn capacity(&self) -> u32 {
@@ -62,11 +69,6 @@ impl BrickStore {
 
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
-    }
-
-    /// Bricks marked dirty across the store: the "active bricks" number the overlay shows.
-    pub fn active_bricks(&self) -> usize {
-        self.chunks.values().map(|c| c.dirty.count_ones() as usize).sum()
     }
 
     pub fn get(&self, chunk: IVec3, local: IVec3) -> Cell {
@@ -90,7 +92,7 @@ impl BrickStore {
         }
         let slot = self.ensure_brick(chunk, brick)?;
         self.pool[slot as usize * BRICK_CELLS + cell] = value;
-        self.entry_mut(chunk).dirty |= 1 << brick;
+        self.wake(chunk, brick);
         Ok(())
     }
 
@@ -113,7 +115,7 @@ impl BrickStore {
         for (brick, cells) in bricks {
             let slot = self.ensure_brick(chunk, brick)?;
             self.pool[slot as usize * BRICK_CELLS..][..BRICK_CELLS].copy_from_slice(&cells);
-            self.entry_mut(chunk).dirty |= 1 << brick;
+            self.wake(chunk, brick);
         }
         Ok(())
     }
@@ -138,14 +140,16 @@ impl BrickStore {
             .filter(|&b| entry.slots[b] != NO_SLOT && self.brick(entry.slots[b]).iter().all(|c| *c == Cell::EMPTY))
             .collect();
         let mut freed = Vec::with_capacity(empty.len());
+        let mut dirty = entry.dirty;
         if let Some(entry) = self.chunks.get_mut(&chunk) {
             for &b in &empty {
                 freed.push(std::mem::replace(&mut entry.slots[b], NO_SLOT));
-                entry.dirty &= !(1 << b);
+                dirty &= !(1 << b);
             }
-            if entry.stored() == 0 {
-                self.chunks.remove(&chunk);
-            }
+        }
+        self.set_dirty(chunk, dirty);
+        if self.chunks.get(&chunk).is_some_and(|entry| entry.stored() == 0) {
+            self.chunks.remove(&chunk);
         }
         self.free.extend(freed);
         empty.len()
@@ -153,29 +157,10 @@ impl BrickStore {
 
     /// Free every brick of `chunk` (it left residency).
     pub fn remove_chunk(&mut self, chunk: IVec3) {
+        self.take_dirty(chunk);
         if let Some(entry) = self.chunks.remove(&chunk) {
             self.free.extend(entry.slots.iter().filter(|s| **s != NO_SLOT));
         }
-    }
-
-    /// The chunk's dirty mask, cleared.
-    pub fn take_dirty(&mut self, chunk: IVec3) -> u64 {
-        self.chunks.get_mut(&chunk).map_or(0, |e| std::mem::take(&mut e.dirty))
-    }
-
-    /// Every dirty brick in a fixed order (chunk z, y, x, then brick), for the dispatch list.
-    pub fn dirty_bricks(&self) -> Vec<BrickCoord> {
-        let mut out: Vec<BrickCoord> = self
-            .chunks
-            .iter()
-            .flat_map(|(&chunk, e)| {
-                (0..BRICKS_PER_CHUNK as u8)
-                    .filter(move |b| e.dirty >> b & 1 != 0)
-                    .map(move |brick| BrickCoord { chunk, brick, scale: e.scale })
-            })
-            .collect();
-        out.sort_by_key(|b| (b.chunk.z, b.chunk.y, b.chunk.x, b.brick));
-        out
     }
 
     /// Every chunk with an entry, in no particular order.

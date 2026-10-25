@@ -12,6 +12,38 @@ pub enum Task {
     /// below the lower threshold, off once every watched level reaches the
     /// upper one, and hold in between (hysteresis).
     FillBand,
+    /// The same band on crate fill: run a processor until its output crates
+    /// are full.
+    StockBand,
+    /// Inverse band on the machine's own heat: off above the upper
+    /// threshold, on again once every reading is below the lower one.
+    HeatGuard,
+}
+
+/// What a task's sensor channels measure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sensor {
+    TankLevel,
+    CrateLevel,
+    CoreHeat,
+}
+
+impl Task {
+    pub const ALL: [Task; 3] = [Task::FillBand, Task::StockBand, Task::HeatGuard];
+    pub fn sensor(self) -> Sensor {
+        match self {
+            Task::FillBand => Sensor::TankLevel,
+            Task::StockBand => Sensor::CrateLevel,
+            Task::HeatGuard => Sensor::CoreHeat,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Task::FillBand => "Tank Fill",
+            Task::StockBand => "Crate Fill",
+            Task::HeatGuard => "Heat Guard",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -48,7 +80,7 @@ impl Firmware {
     pub fn mix(&self) -> Mix {
         let ch = u32::from(self.channels.max(1));
         match self.task {
-            Task::FillBand => Mix {
+            Task::FillBand | Task::StockBand => Mix {
                 io: 2 * ch + 1,
                 alu: 3 * ch,
                 control: 6 + ch,
@@ -57,13 +89,19 @@ impl Firmware {
                 // Output latch plus the last reading of each channel.
                 ram_bytes: 1 + 2 * ch,
             },
+            Task::HeatGuard => Mix {
+                io: 2 * ch + 1,
+                alu: 2 * ch,
+                control: 6 + ch,
+                conversions: ch,
+                rom_bytes: 24 + 10 * ch,
+                ram_bytes: 1 + 2 * ch,
+            },
         }
     }
 
     pub fn label(&self) -> &'static str {
-        match self.task {
-            Task::FillBand => "Pump until full (hysteresis)",
-        }
+        self.task.label()
     }
 }
 
@@ -72,7 +110,7 @@ impl Firmware {
 /// no connected channel fails safe (off).
 pub fn decide(task: Task, prev: bool, levels: &[u16], lower: u16, upper: u16) -> bool {
     match task {
-        Task::FillBand => {
+        Task::FillBand | Task::StockBand => {
             let (mut any, mut low, mut full) = (false, false, true);
             for &l in levels.iter().filter(|&&l| l != OPEN) {
                 any = true;
@@ -85,6 +123,21 @@ pub fn decide(task: Task, prev: bool, levels: &[u16], lower: u16, upper: u16) ->
                 true
             } else if full {
                 false
+            } else {
+                prev
+            }
+        }
+        Task::HeatGuard => {
+            let (mut any, mut hot, mut cool) = (false, false, true);
+            for &l in levels.iter().filter(|&&l| l != OPEN) {
+                any = true;
+                hot |= l > upper;
+                cool &= l < lower;
+            }
+            if !any || hot {
+                false
+            } else if cool {
+                true
             } else {
                 prev
             }
@@ -107,5 +160,11 @@ mod tests {
         assert!(decide(t, true, &[950, 600], 300, 900), "all channels must reach upper");
         assert!(!decide(t, true, &[OPEN], 300, 900), "no sensor: off");
         assert!(!decide(t, true, &[950, OPEN], 300, 900));
+        let h = Task::HeatGuard;
+        assert!(!decide(h, true, &[760], 500, 750), "too hot: off");
+        assert!(!decide(h, false, &[600], 500, 750), "cooling: stays off");
+        assert!(decide(h, false, &[400], 500, 750), "cool: on");
+        assert!(decide(h, true, &[700], 500, 750), "inside the band: holds on");
+        assert!(!decide(h, true, &[OPEN], 500, 750), "no sensor: off");
     }
 }

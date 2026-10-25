@@ -1,0 +1,1154 @@
+CLAUDE CODE IMPLEMENTATION PROMPT
+MONUMENTAL VOXEL ARCHITECTURE, LIVING SETTLEMENTS AND EXPLORABLE RUINS
+Reference-driven implementation specification — October 23, 2026
+
+HOW TO USE
+Give Claude Code this entire file together with the 16 reference images listed below, inside the existing game repository. Also provide voxel_biome_implementation_plan.txt if available. This prompt is self-contained about the architectural requirements; the biome document supplies broader world-generation context. Exact source filenames/functions below are not asserted because this prompt was prepared without inspecting the repository. All dimensions and content counts are proposed starting values, not verified engine limits.
+
+BEGIN IMPLEMENTATION PROMPT
+
+You are implementing the architectural identity and playable structures of my existing voxel game. Work as an environment art director, procedural environment engineer and gameplay engineer. Read the actual repository and implement production code and content. Do not stop at another design proposal, a list of suggestions, placeholder generators or screenshots of isolated cubes.
+
+The project uses Rust and WGPU. Preserve its architecture and the no-Bevy constraint. Reuse existing terrain, world storage, materials, meshing, editing, physics, lighting, water, navigation, interaction and save systems where they are suitable. Audit before replacing anything. Do not assume a capability exists because this prompt describes it. Names in this prompt identify responsibilities, not compulsory new crates or filenames.
+
+The supplied paintings are the visual target. Reproduce their architectural forms, layered composition, scale, material relationships, depth, atmosphere and density of meaningful detail as closely as practical in the game's voxel language. Painted brush marks, impossible perspective and image compression are not geometry requirements. Where an image is spatially ambiguous, create a coherent original three-dimensional interpretation with accessible routes and document that interpretation. Do not claim pixel-identical reproduction or claim to have inspected unavailable images.
+
+Our structures must look authored, inhabited or historically inhabited, monumental where appropriate, and mechanically interesting. They must be integrated into real terrain, readable in motion, useful for exploration, and compatible with building, excavation, magic and industrial systems. A generic box with four cylindrical towers and a noisy stone texture does not meet the target.
+
+CONTENTS
+01 Mission and definition of success
+02 Reference image ledger: all 16 images
+03 Unified art direction and shape hierarchy
+04 Architectural cultures and permitted combinations
+05 Scale, proportion and human readability
+06 Repository audit and first implementation actions
+07 Authoring model and deterministic structure compilation
+08 Solid geometry: walls, openings, arches and columns
+09 Roofs, domes, towers, spires and landmark silhouettes
+10 Facades, trim, windows, balconies and ornament
+11 Foundations, cliffs, waterfronts, bridges and aqueducts
+12 Building plans, interior circulation and furnishings
+13 Town generation and lived-in streets
+14 Cities, districts and vertical circulation
+15 Castles, fortresses and multi-route dungeons
+16 Ruins, history, damage and material aging
+17 Temples, monuments, obelisks and magitech
+18 Materials, palette and painterly voxel treatment
+19 Lighting, atmosphere, sky and water integration
+20 Architectural vegetation, props, sound and habitation
+21 Gameplay, destruction and system interactions
+22 World placement and biome integration
+23 Chunk boundaries, streaming, LOD and save ownership
+24 Performance and hardware validation
+25 Debugging and authoring tools
+26 Reference scenes and measurable visual acceptance
+27 Implementation work packages and dependencies
+28 Test matrix and regression fixtures
+29 Anti-failure rules, reporting and completion contract
+30 Immediate execution order
+
+01. MISSION AND DEFINITION OF SUCCESS
+
+Build a reusable but art-directed system capable of producing:
+- Small towns with coherent streets, useful buildings and distinct rooflines.
+- Layered cliff and canal settlements with bridges, stairs and believable support.
+- Large fortified cities whose dominant landmarks remain legible above dense neighborhoods.
+- Castles with supported massing, strong roof/tower silhouettes and meaningful interiors.
+- Ruins that visibly descend from intact architecture and expose understandable history.
+- Monumental temples, colonnades, ceremonial stairs, statues and water courts.
+- Rare slender towers, sculptural marble arches and magitech structures with distinctive silhouettes.
+
+Success has four simultaneous conditions:
+A) Visual: the references are recognizable in the massing, roof shapes, large openings, light relationships and material grouping.
+B) Spatial: structures are coherent from arbitrary player viewpoints, including above, behind, inside and underneath where accessible.
+C) Gameplay: entrances lead somewhere; stairs and bridges work; important rooms have purpose; destruction and alternative routes behave consistently.
+D) Technical: deterministic generation, bounded work, correct persistence, stable streaming and measured performance.
+
+Do not trade away one condition and call the project complete. A beautiful noninteractive skybox city fails spatial/gameplay requirements. A functional dungeon of undecorated boxes fails the visual requirement. A detailed scene that stalls during movement fails the technical requirement.
+
+The first reference-quality district is a quality gate, not the full scope. Complete the subsequent structure families through the staged work packages. If execution is interrupted, preserve an exact checkpoint and state the remaining packages; do not relabel a partial prototype as completion.
+
+02. REFERENCE IMAGE LEDGER: ALL 16 IMAGES
+
+Use filenames as identifiers only. Artist identity and source provenance are not verified by the filenames. Inspect the actual supplied images before implementation if available. The observations below remain useful if images are missing, but missing visual inspection must be reported.
+
+R01 — Витаутас Лайсонас.jpg
+Visible design: two gigantic pale cliff-like walls flank a very narrow deep canal/chasm. Dense small buildings occupy the upper edges and vertical recesses, with ochre roofs, irregular projecting rooms, bridges and tiny windows. A sailboat establishes human scale against immense largely unbroken walls.
+Extract: the contrast between enormous quiet surfaces and concentrated fine settlement detail; a deep central void; warm small roofs against pale masonry; buildings accreted into the wall rather than distributed uniformly.
+Implement: a cliff-canal settlement family with dominant retaining/citadel walls, inset housing terraces, corbelled or explicitly supported projections, high-level links and a usable waterfront route. Keep the void wide enough for movement/camera and the intended water traffic.
+Do not implement: infinite tiny houses glued to a vertical plane, unsupported floating boxes, or every surface equally busy. The settlement needs actual lateral circulation and vertical access.
+
+R02 — 989806824364727771.jpg
+Visible design: a massive pale cylindrical tower on dark rock at the waterline. Its enormous dark domed/conical roof curves outward into a pronounced flared eave with a pointed finial. Corbels and warm windows cluster below the roof. The shaft is mostly quiet, with sparse deep openings. Neighboring towers and bridges repeat the language at smaller scales.
+Extract: roof profile, overhang shadow, shaft-to-roof proportion, sparse window distribution, rock foundation and dusk warmth.
+Implement: a signature great round-tower archetype with a sampled curved roof profile, readable eave thickness, corbel band, circumferential upper gallery, usable internal circulation and a connected bridge or gate.
+Do not implement: a straight cone on a cylinder with uniformly spaced glowing dots. The broad curved roof and its under-eave depth are essential.
+
+R03 — 620793129921799020.jpg
+Visible design: pale monumental piers flank a central circular opening and a descending slit. Long gold/orange recessed or inlaid lines connect the opening to the base. A circular upper platform and small cap/finial crown the structure. Golden trees grow on terraces. A wide approach and tiny figure establish scale.
+Extract: symbolic negative space, vertical line rhythm, restrained gold, pale stone and botanical terraces.
+Implement: a solar/conduit monument with a genuine circular aperture, a narrow lower opening, raised accessible dais and a small set of meaningful conduit routes. Make at least one element operate as an actual mechanism or traversal feature.
+Do not implement: painted glyphs replacing the opening, uniform neon outlines, or decorative wire spaghetti unrelated to the structure.
+
+R04 — 756041856209075444.jpg
+Visible design: dark fractured rock, red vegetation, a stream, a broad natural rock bridge and large angular distant forms beneath an enormous celestial body.
+Extract: geological framing, bridge silhouette, coherent red ground cover and scale through a small stream beneath monumental landforms. This is principally a landscape reference, not evidence of a particular building style.
+Implement: a crimson geological setting used to frame an observatory, fortress or ruin without assuming the natural arch is masonry. Keep structure and rock legible as different systems.
+Do not implement: recoloring all stone red, randomly spawning the huge moon in ordinary regions, or calling a stone bridge a completed town feature.
+
+R05 — 394416879867503716.jpg
+Visible design: a vast hill city climbs through retaining walls, bridges, arcades, compact houses and golden domes toward twin exceptionally tall upper towers. Small warm roofs establish scale beneath massive pale public structures.
+Extract: hierarchy of skyline heights, districts on successive terraces, giant arches, dome accents, dense but organized housing and clear vertical escalation.
+Implement: a terraced citadel city with a dominant upper landmark, middle civic/religious district, lower housing/market district and waterfront access. Plan circulation between levels before filling plots.
+Do not implement: a random pile of towers, repeated equal-height buildings, or a city whose upper district has no route from the waterfront.
+
+R06 — (1) #artist George Brad.jpg
+Visible design: a nearly monochrome city silhouette dominated by an enormous square shaft with a domed top, surrounded by spired towers and layered lower roofs. Dark nearby roofs frame the lighter distant monumental mass.
+Extract: value grouping, unusually broad quiet tower shaft, skyline asymmetry, foreground framing and readable silhouette without color.
+Implement: a civic/arcane tower family distinct from the round tower, with a square or lightly buttressed shaft and a carefully proportioned cap. Use it to anchor a city skyline, not every hamlet.
+Do not implement: dense surface ornament on the entire quiet shaft or reliance on saturated colors to create hierarchy.
+
+R07 — Il Solstizio (Fons Perennis).jpg
+Visible design: huge classical colonnades stand beside or in water beneath a low orange sun. Long rows of slender columns, deep shaded gaps, damaged entablatures, boats and tiny people create monumental rhythm and atmospheric depth.
+Extract: repetition with scale, genuinely open column bays, strong water reflection, partial ruin, warm haze and quiet open foreground.
+Implement: a flooded temple/harbor complex with traversable raised walks, boat or water-level routes if supported, strong column bases/capitals and a limited number of structurally meaningful broken sections.
+Do not implement: a wall textured to resemble columns, hundreds of fully simulated floating fragments, or a requirement that the scene only looks good at one sunset.
+
+R08 — 607915649682386943.jpg
+Visible design: a colossal dark cliff or overhang dominates nearly the whole scene. A small pale coastal settlement occupies the base, while sailboats establish scale on the water.
+Extract: geology overwhelmingly larger than settlement, bright inhabited strip under a dark rock mass, horizontal water against diagonal rock planes.
+Implement: an undercliff harbor with preserved clearance, daylight openings, access to land and water, and believable rock integration. Maintain a non-heightfield proxy for the important overhang.
+Do not implement: making the cliff merely a backdrop that intersects buildings or disappears as the player approaches.
+
+R09 — Ramazan Kazaliev on Instagram “Old temple.jpg
+Visible design: close, oversized pale arches and piers, broken capitals/entablatures, broad steps, fallen dressed blocks and orange vegetation. Cool sky light and warm reflected tones distinguish faces. The camera is tilted in the painting.
+Extract: real stone thickness, deep arches, purposeful fractures, broad accessible stairs, large coherent rubble pieces and warm/cool surface planes.
+Implement: a close-range ruin benchmark with structural order still visible. Show how intact components became damaged and where broken pieces landed.
+Do not implement: tilting the player's normal camera to fake the composition or covering all surfaces with uniform chip noise.
+
+R10 — 426012446023776257.jpg
+Visible design: saturated red curtain walls and round towers with dark flared roofs enclose densely packed pale houses on green slopes beneath dark clouds. Plaster has chipped away to a lighter substrate, especially near the base.
+Extract: bold district-scale red, pale roofs/houses as secondary texture, dark roof silhouettes, continuous walls and age expressed through substrate exposure.
+Implement: a vermilion fortress culture with red mineral plaster over masonry, a connected wall walk, defensible gate, asymmetrical towers and a layered inhabited interior.
+Do not implement: emissive red walls, uniform checkerboard red/white noise, or a complete ring wall with no practical gate/service access.
+
+R11 — Estrutura de marmore- Zona Magica.jpg
+Visible design: an exceptionally slender pale sculptural monument rises through sweeping, interlocking arch-like forms, with large empty spaces and a sharp tapering upper silhouette. A stepped base, lone figure, sparse red growth and still water establish scale.
+Extract: elegance through voids, continuous curvature, asymmetry, few materials and restraint.
+Implement: a rare sculptural marble landmark using a coherent 3D interpretation of curved ribs/surfaces. Prototype it in a turntable view before integration. Preserve its principal apertures in voxelization and LOD.
+Do not implement: a stack of random toruses, disconnected floating sheets, or a thick blob after coarse voxel sampling. Any magical support behavior must be explicit and localized.
+
+R12 — Casaguzza (423).jpg
+Visible design: a solitary extremely tall tapering blade-like tower stands in an open plain. It has a small dark doorway, sparse openings, subtle surface variation and a few small adjacent forms. A person and animal emphasize scale.
+Extract: extreme slenderness, nearly empty surroundings, strong taper, quiet material and a genuine entrance.
+Implement: a rare waytower/obelisk with an accessible base, coherent vertical interior or a clearly bounded accessible portion, and a visual role in long-range navigation. Use a unique skyline anchor rather than a repeated fence of spikes.
+Do not implement: a generic rectangular prism, constant-width extrusion, or a tower invisible in the horizon until its near chunk loads.
+
+R13 — 682013937338979712.jpg
+Visible design: a monumental warm-gold castle rises in stepped layers with asymmetrical towers, a dominant high spire, dense smaller openings and strong shadow masses. Dark conifers and a small figure frame its base.
+Extract: clear primary/secondary tower hierarchy, warm sunlit planes, cooler shadow planes, deep openings, built mass stepping toward the summit.
+Implement: an upland castle family with terraces, substantial curtain/base mass, distinct tower types, a central hall and a dominant upper spire. Warmth comes largely from materials and light, not a gold-metal shader on every surface.
+Do not implement: identical towers at four corners, a thin facade pretending to be a fortress, or black interiors behind every opening.
+
+R14 — painting-How can I go.jpg
+Visible design: an intricate small castle/manor grips an irregular cliff, with a tall turret, projecting rooms, small balconies, mixed roof forms and fractured foundations. A separated ledge opposite the building holds a tiny figure.
+Extract: interlocking natural and built forms, asymmetrical additions, overhangs, precarious-looking but intentional routes and strong close-to-medium detail.
+Implement: a cliff manor with old core, later additions, corbels/anchors, ledge route and a broken or missing crossing that creates a traversal problem. Build a valid support story.
+Do not implement: rectangular house on a flattened platform, unsupported rooms treated as ordinary masonry, or unreachable entrances without alternate approaches.
+
+R15 — 706009679105207606.jpg
+Visible design: tall cool-blue geometric towers, pale bridges/arcades, green roof terraces and a crystalline cube-like artifact above an upper platform. Far below is a coastal town. Mist and water deepen the vertical scale.
+Extract: layered public circulation, tower setback rhythm, garden terraces, geometric magitech accent, white/cool-blue/gold material relationships and dramatic vertical connections.
+Implement: a magisterial harbor/acropolis family with traversable bridges, gardens with credible soil depth, service routes and one important artifact mechanism. Keep its geometry distinct from medieval domestic buildings.
+Do not implement: disconnected decorative bridges, giant floating cubes everywhere, or no physical route between the lower town and upper terraces.
+
+R16 — 1055531231393509643.jpg
+Visible design: a colossal pale crowned figure with gold accents and a spear stands before a rounded monumental building. A long dark foreground retaining wall/colonnade, banners, cypress-like trees, a smaller equestrian statue and water reflections frame the distant figure. Cloud light and a narrow luminous accent reinforce the axis.
+Extract: ceremonial scale, statue silhouette, layered foreground/middle/background, restrained gold and an intentional long approach.
+Implement: a civic/temple sanctuary with a readable statue, processional route, side entrances, water court and a functioning public/arcane purpose. Sculpt the statue in large masses before adding costume detail.
+Do not implement: an unreadable voxel pile called a statue, a flat image of a statue, or a brightly glowing humanoid used to hide poor shape.
+
+03. UNIFIED ART DIRECTION AND SHAPE HIERARCHY
+
+The world combines painterly fantasy monumentalism with coherent, detailed voxel construction. Its structures may be strange, elegant, huge or ancient, but they must share material behavior, scale cues and readable construction logic.
+
+Work from five scales:
+1. Landscape composition: mountain, water body, cliff, settlement silhouette.
+2. Architectural mass: citadel, tower, dome, wall, terrace, major void.
+3. Structural rhythm: bays, piers, roofs, stairs, buttresses, bridges.
+4. Human-scale use: doors, windows, balconies, rails, shops, machinery, furniture.
+5. Surface character: joints, chips, stains, vegetation, carvings and small hardware.
+
+Do not start at scale 5. A richly textured cylinder with the wrong roof is farther from R02 than a simple, correctly proportioned tower under neutral light.
+
+Composition rules:
+- Give each site one main landmark or a deliberate paired landmark; use supporting forms to reinforce it.
+- Keep a substantial part of large monumental surfaces quiet.
+- Concentrate detail at functional seams: eaves, entries, ledges, base transitions, bridges and occupied terraces.
+- Preserve meaningful negative spaces: canal chasm, arch opening, courtyard, skyline gap, bridge span and statue silhouette.
+- Use asymmetric composition built from locally ordered parts. Total randomness is not organic growth.
+- Ensure the foreground and approach establish scale before the player reaches the main monument.
+- Design reverse and side views. The whole site cannot be a one-camera stage set.
+
+Shape vocabulary:
+Pale massive shafts; tapering spires; curved flared roofs; layered terraces; deep arches; long colonnades; interrupted roof ridges; projecting rooms; quiet plaster; articulated stone bases; and rare elegant sculptural voids.
+
+Avoid generic fantasy defaults: equal-height crenellations everywhere, uniform block noise, identical towers, glowing cracks on every wall, repetitive evenly spaced flags and dense random debris.
+
+04. ARCHITECTURAL CULTURES AND PERMITTED COMBINATIONS
+
+Implement related families with shared low-level builders, not one universal style with palette swaps.
+
+F1. Pale Reach — R01, R02, R08, parts of R14
+Pale plaster/stone, large curved dark roofs, waterside foundations, cliff-integrated housing and deep shadowed openings. Signature: a huge roofed tower or canal-wall settlement.
+
+F2. Crownstone — R05, R06, R13
+Warm or pale monumental masonry, dense smaller roofs, domes, spires, terraces and powerful retaining structures. Signature: a skyline hierarchy rising to a civic/royal/arcane center.
+
+F3. Vermilion March — R10, compatible domestic portions of R13
+Red plastered fortifications, dark flared tower roofs, pale homes, continuous wall walks and exposed stone scars. Signature: broad red wall masses against green terrain and stormy sky.
+
+F4. Solar Marble — R03, R07, R09, R11, R16
+Pale dressed stone, classical column/arch rhythm, ceremonial axes, rare sculptural forms, restrained gold and carefully placed vegetation. Signature: a major aperture, colonnade, statue or processional court.
+
+F5. Azure Collegium — R15, selected symbolic details from R03
+Cool geometric towers, pale bridges, terrace gardens, orderly gold inlays and a limited number of actual magitech mechanisms. Signature: high-level public routes and a geometric artifact.
+
+F6. Waytowers and border remnants — R12, R14, selected R04 setting
+Sparse isolated landmarks, strong taper, terrain-dependent access, later additions and readable damage. Signature: one unmistakable silhouette in a quiet landscape.
+
+Sites may have historical layers. For example, a Crownstone city can occupy the remains of a Solar Marble waterworks. Record that relationship in a small historical descriptor and make the older layer materially/spatially legible. Do not randomly mix all roof/column/window styles within one building.
+
+R04 is an environmental frame, not a seventh building culture. Its red vegetation and geological arches can host a fitting outpost without forcing every structure to inherit red coloration.
+
+05. SCALE, PROPORTION AND HUMAN READABILITY
+
+Derive final dimensions from the actual player controller, voxel resolution, camera height, interaction distance and movement abilities. The following are initial art/layout probes:
+- Ordinary doors: approximately 1.1–1.8 m clear width and 2.2–3 m clear height.
+- Busy public passages: roughly 3–6 m clear width.
+- Local streets: roughly 3–8 m, with deliberate narrower alleys where movement allows.
+- Civic avenues/courts: larger where composition and traffic justify it; avoid oversized empty paved fields.
+- Domestic story height: roughly 2.8–4 m.
+- Public/ritual stories: taller as a distinct hierarchy, not the default for every house.
+- Ordinary houses: roughly 6–14 m frontage with varied depth and height.
+- First hero tower: roughly 18–30 m shaft diameter and 35–65 m total height, tuned to the production scene.
+- Major city landmarks: may exceed that range substantially, after streaming and distance readability are verified.
+
+These are not historically exact dimensions or hard constraints. Check them in engine with a scale figure and normal camera. Quantize to supported voxel/material resolution without shrinking clearance below gameplay requirements.
+
+Ratio rules are often more important than meters:
+- R02's roof must feel unusually broad and tall relative to its shaft.
+- R12 must read as an extreme tapering blade, not a standard watchtower stretched vertically.
+- R05's upper landmark must clearly dominate the housing tiers.
+- R07's columns must be slender enough to leave substantial visible space between them.
+- R11's apertures must remain wider than the ribs around them at intended viewing distances.
+
+Never create apparent detail by shrinking player scale. Keep furniture, stairs and doors consistent across families, with intentional monumental exceptions.
+
+06. REPOSITORY AUDIT AND FIRST IMPLEMENTATION ACTIONS
+
+Read repository instructions and inspect current changes before editing. Preserve unrelated work. Do not assume every existing issue belongs to this task. Identify actual code paths for:
+- Terrain and structure generation.
+- Voxel density/material storage and supported resolution levels.
+- Chunk boundaries, meshing and geometry upload.
+- Entity/instance placement and persistent object identities.
+- Collision and player movement, including stairs and narrow passages.
+- Structure editing, destruction and resource accounting.
+- Materials, direct/ambient lighting, shadows, water, fog and exposure.
+- Navigation and enemy movement.
+- Save versions, procedural seeds and regeneration policy.
+- LOD/horizon proxies and edit invalidation.
+- Existing buildings, ruins, props, puzzles and machine interfaces.
+
+Produce a concise evidence map using real source locations. Then implement, rather than pausing after the audit. If the project already has a suitable structure compiler, extend it. If its output is visually weak but its storage is sound, improve shape/content rules rather than discarding the pipeline.
+
+Capture a baseline with fixed world seed, camera route, time, exposure, resolution and graphics settings. Include a present-day structure at close, middle and distant views. Measure relevant CPU/GPU/frame-time/memory behavior. Establish which visual defects predate the changes.
+
+Create an isolated architecture preview area or test-world mode using the production renderer and collision paths. Provide fixed cameras and a free-walk route. Do not create a second bespoke renderer that cannot be integrated with the world.
+
+07. AUTHORING MODEL AND DETERMINISTIC STRUCTURE COMPILATION
+
+Use a staged representation with clear ownership. Names below are conceptual, not an instruction to introduce an elaborate framework.
+
+SitePlan:
+Site identity/version, family, terrain/water constraints, district/building envelopes, main routes, landmark hierarchy, service connections and far silhouette bounds.
+
+BuildingPlan:
+Building identity, function, family, floor elevations, rooms, circulation, structural masses, roof profile, entrances, windows, foundations, service anchors and damage/history descriptors.
+
+ConstructionParts:
+Walls, floors, piers, arches, roofs, stairs, railings, foundations, trim and selected sculptural components. Each part has stable identity, conservative bounds, materials, support/connection intent and detail importance.
+
+ResolvedGeometry:
+Authoritative solid/empty/material result and interactive objects after applying the saved world state. Derived collision, render meshes, light sources and navigation must correspond to this resolved state.
+
+Do not keep two inconsistent authoritative worlds: one beautiful mesh and one unrelated coarse collision/voxel building. Decorative non-solid elements are acceptable when they are honestly decorative, but walls, stairs, doors, floors and meaningful openings must agree with interaction.
+
+Compilation order:
+1. Resolve site terrain, support anchors, water levels and reserved routes.
+2. Solve main building masses and circulation graph together.
+3. Resolve floors, stairs, entrances, internal voids and functional room volumes.
+4. Place structural walls, piers, columns, beams and roof support.
+5. Carve exact openings and verify remaining wall thickness/support constraints.
+6. Add roofs, landings, balconies, bridges and rails with valid connections.
+7. Add facade articulation and hero ornament.
+8. Apply historical alteration/damage rules with protected gameplay constraints.
+9. Resolve rubble, repair, vegetation and furnishings against usable space.
+10. Apply persistent edits, removed objects and dynamic mechanism states.
+11. Derive geometry/collision/navigation/light/proxy outputs from that revision.
+12. Run validity checks and publish atomically enough to avoid playable mismatch.
+
+If an existing pipeline generates some derived data earlier, invalidate and rebuild the relevant portions after changes. Do not allow pre-damage collision or pre-edit proxies to survive publication.
+
+Geometry operations:
+Use the existing voxel stamping/CSG/density tooling. If adding a small compiler, define typed operations with explicit roles: solid addition, void subtraction, material layer, decorative overlay and gameplay object. Make operation order deterministic and visible in debugging. A window carve must not delete an unrelated adjacent roof because broad bounds overlap.
+
+Per-voxel evaluation should inspect only nearby intersecting parts. Build a spatial index or bins for part bounds. Do not test every building component against every voxel in an entire city.
+
+Determinism:
+Seed by world seed, site ID, building ID, component role and generator version using a stable specified algorithm. Keep cosmetic variation independent from room layout and macro silhouette. Sort candidate sets and define tie-breaking. Avoid dependence on hash-map iteration, worker completion, frame count or camera position.
+
+Canonical ownership:
+A structure crossing chunks remains one structure. Neighbor chunks consume the same plan and stable part identities. Local stamps use one consistent world-coordinate convention. Save interaction/damage state once, not separately in each chunk's interpretation.
+
+Topology before decoration:
+Generate real circulation graphs with explicit floors/heights and clearance envelopes. A graph edge is provisional until its corresponding stairs, doorway or bridge exists and passes geometric reachability. Re-run relevant checks after damage and dressing.
+
+Fallback:
+If a plan fails, try a bounded number of alternate candidates or a smaller valid archetype. An unsuitable site can omit a building. Do not silently substitute a generic cube and label the visual target achieved. Log why the candidate failed in authoring tools.
+
+08. SOLID GEOMETRY: WALLS, OPENINGS, ARCHES AND COLUMNS
+
+Walls:
+Use actual thickness that survives voxel quantization and editing. Distinguish exterior shell, plaster/finish and structural masonry when the material system supports useful layers. Keep tall walls articulated by base, main shaft and termination. Huge blank walls can be intentional, as in R01/R02/R06, but they need scale cues and correct neighboring proportions.
+
+Wall intersections:
+Join corners without overlapping decorative skins or internal slivers. Resolve shared walls between houses deliberately. Windows must not open into an adjacent building's solid mass unless intentionally blocked and visually treated as such. Retaining walls contain terrain; occupied rooms behind them must be carved and supported explicitly.
+
+Openings:
+Represent door/window openings as real cuts. Define clear aperture, frame depth, sill, lintel/arch and interior reveal. Keep external window placement consistent with floor elevations and room use. Decorative blind niches may exist but must be distinguishable from traversable/transparent openings.
+
+Arch builder:
+Parameterize clear span, rise, depth, ring thickness, pier width, springing height and profile. Support a small meaningful set: semicircular, pointed and shallow/segmental profiles if needed by the families. Do not implement many unsupported variants before the references look correct.
+
+For a semicircular test arch with clear span w, the opening's radius is w/2 above its spring line; use the profile in the local arch plane and extrude through the wall depth. Other profiles use explicit curves. Sample against authoritative voxel coordinates and preserve minimum ring/pier thickness. Use this as a geometric guide, not mandatory code if the engine already has a builder.
+
+Masonry expression:
+Voussoir-like divisions may be conveyed by material joints or selected geometry. Do not create a physically simulated entity for every arch stone. Keep the keystone/crown and ring readable at close range, while the void silhouette survives distance simplification.
+
+Pier and column builder:
+Define plinth, base transition, shaft, capital and supported element. A column that is only a cylinder with identical radius top to bottom lacks the reference character. Use restrained taper and family-specific capitals. Fluting is optional close detail; it must not consume more geometry than the entire colonnade warrants.
+
+Colonnades:
+Generate a bay rhythm from a supported entablature and functional walkway. Align paired rows intentionally. At damaged bays, show broken supported elements and plausible fallen pieces. Avoid columns placed through stairs or on water with no base/pier representation.
+
+Vaults and covered arcades:
+Use real ceiling volumes and headroom. A series of arches without a coherent roof/ceiling can work as a ruin, but not as a complete inhabited corridor. Add rain drainage and light openings where appropriate. Keep shadowed arcade depth readable.
+
+Stairs:
+Derive tread/riser parameters from supported movement and voxel resolution. Verify each flight, landing, turning clearance and headroom with the actual controller. If the engine uses a movement smoothing/ramp convention for stairs, keep it consistent and test feet/camera/collision against the visible stair. Do not place invisible walkable planes across open gaps.
+
+Spiral stairs:
+Reserve a real shaft and central/support volume. Check inner/outer tread width, headroom and door placement. For the first round tower, a perimeter stair or compact switchback may be more reliable; use it if it preserves the intended interior. A tower's exterior silhouette does not justify a broken staircase inside.
+
+Railings and parapets:
+Use consistent fall protection where the site is maintained. Ruined sections can be missing intentionally. Decorative railing mesh and collision need a defined relationship; a visually open railing should not behave like an unexplained solid wall for all interactions.
+
+09. ROOFS, DOMES, TOWERS, SPIRES AND LANDMARK SILHOUETTES
+
+Roofs are primary forms, not a cap added after walls are complete.
+
+R02-style flared roof:
+Represent the roof by a radial profile sampled from several meaningful height/radius controls: finial attachment, narrow upper crown, swelling main body, lower shoulder, pronounced eave flare and underside return. Use a continuous interpolant with controlled slopes or a validated piecewise profile. Avoid overshoot/self-intersection from unconstrained curves. Keep enough samples to preserve the profile at the current voxel resolution, then simplify by screen importance.
+
+Separate outer roof, roof thickness/underside, eave structure and internal usable volume. The eave must cast a readable shadow on the wall/gallery below. Add a corbel/bracket rhythm that corresponds to the support band. Roof ribs/seams are subordinate to the large curve and should fade before the silhouette does.
+
+Round tower shaft:
+Allow gentle taper and a strong base transition. Place openings according to floor use, with a denser upper inhabited/gallery band and sparse lower defensive openings. Avoid uniform decorative window grids. Connect roof supports to the upper wall/gallery rather than floating them independently.
+
+Square monumental tower:
+Use setbacks, buttressed corners, deep vertical recesses and a deliberate top termination. Keep much of the shaft quiet. A dome or lantern cap must be proportioned as part of the silhouette. Include real floor/circulation planning inside, even if upper storage/service spaces are sparsely furnished.
+
+Domestic roofs:
+Implement a small family-appropriate set: gable, hipped, shed/addition and select mansard/curved variants only when needed. Use actual ridge lines, eave depth, end conditions and roof intersections. Attached additions create valleys/joins; do not allow roof slabs to clip through neighboring windows.
+
+Domes:
+Distinguish the main dome, supporting drum, base cornice and optional lantern/finial. Golden civic domes are rare focal accents. Use restrained metal behavior; a painted golden roof should not become a mirror reflecting the whole scene at full brightness. Preserve the drum's openings and roof silhouette at distance.
+
+Spires:
+Use tapered transitions and secondary shoulders rather than extremely thin needles attached to blocks. Keep the leading spire visibly dominant. For long-range representation, protect the overall width/taper enough that it does not alias away or suddenly pop in.
+
+Blade/waytower:
+Define a tapering asymmetric footprint across height. Add subtle plane changes and a sparse set of real openings. The main form must remain strong with ornament disabled. Make the base doorway a useful entrance with a clear interior extent, not a black decal.
+
+Roof damage:
+Remove coherent sections based on structural/history intent. Expose rafters/roof layers where appropriate. Do not cut random single-voxel holes across every roof. Keep remaining supports believable or explicitly magical.
+
+Snow and vegetation on roofs:
+Use slope/shelter/soil-depth rules. Tall trees need a real terrace/root bed; they cannot grow from one tile of sloped roof. Thin moss and deep gardens are different systems. Snow coverage must not close every window or erase the roof's characteristic shape.
+
+10. FACADES, TRIM, WINDOWS, BALCONIES AND ORNAMENT
+
+Facade grammar:
+Begin with structural bays and actual floors. Assign openings by room function and street relationship. Add a limited sequence of base, main wall, sill/stringcourse, upper band and cornice where appropriate. Different families need different density; R02's shaft should remain quieter than R05's housing tiers.
+
+Windows:
+Recess windows enough to produce depth. Include frame/sill/shutter variants appropriate to the family. Windows that reveal a room must correspond to its volume and lighting. Opaque/curtained windows can simplify interior visibility but do not excuse impossible room geometry. Avoid identical yellow emissive squares across the whole city.
+
+Doors:
+Use meaningful entrance hierarchy: main public entry, domestic entry, service door and hidden/ruined access. Entries need landings and approach clearance. Doors should not open into terrain, a stair riser, a railing or a furnishing. Existing lock/hinge interaction semantics remain authoritative.
+
+Balconies and oriels:
+Define wall connection, supporting corbels/brackets/pier and a usable or explicitly decorative platform. Large projecting rooms need support or a magical rule. Do not place tiny supports that visually cannot relate to the projection above them. Check that the player can pass through an intended balcony door.
+
+Cornices and trim:
+Use layered profiles with a few significant steps. Concentrate detail at light-catching edges. Fine moldings should be simplified before large rooflines. Keep trim materials coherent across one building, with damage/repair as intentional exceptions.
+
+Buttresses:
+Place them in relation to wall height, vault/roof load or retaining function. They should create meaningful facade rhythm and shadows. Decorative buttress spam on every low house wastes geometry and weakens the monumental buildings.
+
+Crenellations:
+Reserve them for defensive structures. Vary their treatment by culture but maintain continuous wall-walk usability. Their spacing cannot prevent enemy/player movement on the parapet. Avoid automatically adding them to temples, homes and every tower.
+
+Ornament:
+Use an importance hierarchy: entrance emblem or sculpted focal piece; a few family motifs; repeated simple trim; small close detail. Magitech inlays should follow a readable route with terminals or a known symbolic purpose. Avoid all-surface glowing filigree.
+
+Motif library:
+Start small: one cornice, one window-head treatment, one bracket/corbel, one railing, one doorway and one emblem per family, with controlled variants. Share construction logic while preserving proportions. Expand after scene review identifies repetition.
+
+11. FOUNDATIONS, CLIFFS, WATERFRONTS, BRIDGES AND AQUEDUCTS
+
+Site fitting:
+Evaluate slope, support, flood level, route access and terrain volume before placing a building. Prefer a plan that fits the land over enormous invisible flattening. Allow bounded cut/fill and retaining works. Show where civilization has modified the hillside.
+
+Foundations:
+Project support anchors into actual solid terrain. Step foundations down slopes. Change from finished wall to rougher base/bedrock transition deliberately. Remove tiny unsupported gaps and avoid burying all architectural base detail in the terrain.
+
+Cliff integration:
+For R01/R08/R14-inspired sites, preserve dominant rock masses and place architecture into compatible shelves/recesses. Carve occupied rooms explicitly. Do not let terrain intrude into usable interiors. Maintain the important overhang/cliff shape across distant and near representations.
+
+Retaining walls:
+Give them appropriate depth, base and visible drainage/service details where useful. Upper terraces require enough space for streets, buildings and edge protection. Multiple terraces should be linked by stairs/ramps/lifts supported by the game's systems.
+
+Waterfronts:
+Keep quay elevation relative to actual water state. Provide stairs/ladders or other supported water access. Piers need foundations/supports, and dock decking needs real collision. Boats are optional if the game lacks them; do not make a mandatory route depend on an unavailable vehicle system.
+
+Bridges:
+Define endpoints, deck width, clearance, span structure, supports, parapets and approaches. For arch bridges, preserve the main water opening. For high city bridges, connect real floor/street elevations. Test the bridge from underneath and from the far bank; it must not be a paper-thin scenic strip.
+
+Aqueducts:
+Use repeated structural bays with a coherent grade and water channel if functional. If ruined, show where the channel fails. A working waterworks requires explicit source, destination and transfer behavior; a decorative trough cannot claim to power machinery.
+
+Missing crossings:
+A broken bridge can be an intended traversal problem. Preserve abutments, broken surfaces and plausible debris. Provide a playable alternative or a supported build/repair solution. Do not create an unresolvable gap and call it immersive difficulty.
+
+Large-scale support and magic:
+Fantasy forms can exceed ordinary construction plausibility. Make the exception legible: unusual material, anchor stones, active support mechanism or an established magical architectural family. Ordinary buildings should not float because the generator omitted foundations. Do not add a full structural solver as a prerequisite if the engine has no such system; use validated support rules and clearly scoped destruction behavior.
+
+12. BUILDING PLANS, INTERIOR CIRCULATION AND FURNISHINGS
+
+Plan buildings from function and circulation as well as exterior silhouette. A landmark with no interior is not complete merely because its facade looks correct.
+
+Each occupied building needs:
+- A defined use and entrance hierarchy.
+- Floors at coherent elevations.
+- Circulation connecting intended accessible areas.
+- Adequate headroom and door/landing clearance.
+- Rooms corresponding to visible apertures and exterior volumes.
+- Light sources/openings appropriate to use.
+- A small set of useful or storytelling furnishings.
+- Roof/attic/service treatment where accessible.
+
+Small house program:
+Entry or shopfront, common/work space, storage, sleeping area and a sensible vertical connection if multi-story. Use furniture to communicate function without filling every walkable square. A house can be compact; it does not need a mansion's room count.
+
+Workshop program:
+Material delivery, machine/work area, storage, utility connection and safe circulation around machinery. Use existing machines where possible. If a prop is only decorative, do not give it misleading controls. A real workshop should support meaningful player interaction or salvage.
+
+Public building program:
+Approach/vestibule, main hall, side/service circulation, support rooms and a recognizable focal destination. The room arrangement should fit its temple, guild, civic or arcane role. Avoid identical rectangular room chains behind every public facade.
+
+Tower program:
+Entrance landing, lower utility/defense space, vertical circulation, intermediate usable floors, upper gallery and roof/service space. Large shafts can contain tall halls or voids, but these need readable support and connections.
+
+Interior style:
+Carry exterior materials and family motifs inside. Use thicker reveals, beams, vaults, tile/stone floors, stairs and window seats where appropriate. Interior detail must not be a separate low-quality style. The first complete hero interior should receive the same visual review as the exterior.
+
+Furnishing placement:
+Reserve circulation and interaction envelopes first. Place beds/worktables/storage against suitable walls or dedicated zones. Align furniture to floors; reject clipping with doors, stairs and windows. Keep a few intentional clutter clusters rather than uniform debris.
+
+Access promises:
+Maintain architectural honesty. Ordinary doors shown as usable should lead to valid space. Sealed/collapsed doors must visibly communicate why they are blocked. Large populations of buildings may generate detailed interiors lazily from stable plans, but the interior must fit the exterior and materialize before interaction/destruction exposes it. Do not use a solid brick volume behind a house facade as the final inhabited building solution.
+
+Lazy generation:
+Store enough room/opening plans to guarantee consistency before high-detail furnishing exists. Trigger needed authoritative geometry from approach, visibility, excavation or interaction, not only from a door-open animation. Preserve persistent state across unload. Avoid the player digging through a wall to find an ungenerated void or solid filler.
+
+13. TOWN GENERATION AND LIVED-IN STREETS
+
+Towns must have the same artistic care as castles. They are where the player repeatedly walks, trades, builds, repairs and observes the world at close range.
+
+Use a staged layout:
+1. Identify the reason for settlement: river crossing, harbor, mine access, mill, shrine, road junction or castle service.
+2. Place that anchor and connect it to regional routes.
+3. Define a small street network with terrain-aware grades and at least one useful loop.
+4. Reserve market/public space, working yards, water access and possible player building space.
+5. Subdivide remaining compatible land into irregular but usable plots.
+6. Assign building functions according to plot access and local industry.
+7. Place building masses, shared walls and roof relationships.
+8. Add extensions, yards, stairs and service alleys representing growth over time.
+9. Resolve detail and validate walking/interaction clearance.
+
+Town scale targets:
+Begin with roughly 8–12 buildings in the first complete district, then validate a town of around 20–40 buildings. These counts are development probes; visual quality and performance decide final range. A smaller town of good buildings is preferable to an advertised large town of identical empty boxes.
+
+Street hierarchy:
+A main route connects the settlement's anchor to outside access. Smaller routes connect homes/workshops. Alleys provide optional shortcuts and service access. Avoid perfectly uniform grids unless the chosen culture/site explicitly calls for planned geometry. Avoid random zigzags that make every trip frustrating.
+
+Plot fitting:
+Buildings face a useful route or court. Main doors require a landing and approach. Rear/service sides can be quieter. Preserve gaps for drainage, daylight or maintenance where plausible. If density requires shared walls, represent party walls intentionally.
+
+Roofscape:
+Vary ridge orientation, story height, additions and roof type within family constraints. Create clusters of related forms, punctuated by a few taller civic structures. Avoid alternating every roof color or making each building a unique unrelated style. Shared scale and material rules create unity; use history and function for variation.
+
+Ground-floor life:
+Include workshops with visible work areas, storage yards, modest stalls, awnings, door canopies, steps, carts or appropriate equivalents supported by available assets. Select details by function. Do not scatter identical barrels beside every door.
+
+Service logic:
+Provide water access, storage, delivery paths and waste/drainage cues appropriate to the world. These can initially be spatial and visual rather than a complete economic simulation. A settlement can feel coherent without simulating every resident's routine.
+
+First town benchmark:
+A waterside approach, a small market/workshop court, a stair street climbing one terrace, a bridge or arcade, and a visible hero tower. Include at least one fully functional workshop, multiple enterable homes, a public interior and a secondary route linking back to the waterfront.
+
+Every street segment should have a readable destination or relationship to the network. Allow quieter residential corners; do not turn every door into a combat encounter or every alley into a chest location.
+
+14. CITIES, DISTRICTS AND VERTICAL CIRCULATION
+
+Build cities hierarchically. Do not scatter buildings over a mountain and rely on fog to make the result look urban.
+
+District plan:
+- Waterfront/arrival district: docks, gates, warehouses and public access.
+- Domestic/workshop district: compact housing, lanes, work yards and services.
+- Civic/market district: larger courts, guild or administrative building and a recognizable public route.
+- Upper citadel or temple district: dominant landmark, ceremonial/public approach and service access.
+- Optional older layer: buried/ruined foundations, reused aqueduct or undercity route.
+
+Adapt the mix to settlement identity. Not every city needs every district, and a tiny town should not contain a miniature version of each.
+
+Terraces:
+Lay out terrace elevations and retaining boundaries before plots. Connect adjacent terraces with actual stairs, ramps, bridges or lifts already supported by the game. Avoid one extremely long stair as the only access to the entire upper city. Offer a principal route and a secondary/service connection between important levels where possible.
+
+Vertical route graph:
+Represent route nodes with full 3D coordinates, floor/terrace identity and clearance. Distinguish walking connections, stairs, ladders, bridges and optional transport. Two overlapping routes in plan view are not connected unless geometry actually joins them. Validate headroom beneath upper routes and support above lower routes.
+
+Skyline grammar:
+Select a dominant landmark envelope and protected view corridors. Set district height ranges subordinate to it. Use a few larger secondary masses such as domes or public halls, then dense smaller buildings. Preserve deliberate gaps between major silhouettes. R05/R06 should remain identifiable in a simple massing render without windows.
+
+Growth history:
+Generate an initial core, then a limited number of expansion phases. Earlier roads/structures constrain later development. New neighborhoods can follow old walls, reuse ruins and add stairs to new terraces. This produces intentional irregularity. Do not run an expensive historical city simulation if a few authored growth rules achieve the effect.
+
+Density:
+Concentrate density where access and terrain support it. Retain plazas, gardens, service yards and water spaces. Dense facade detail needs broad quiet areas nearby, otherwise the city becomes visual static.
+
+Interior scalability:
+Maintain stable building plans for the whole city. Stream geometry and furnishings by relevance. Reuse kits and room arrangements with meaningful variation. Optimize repeated construction data and rendering, while preserving unique persistent edits. Avoid storing giant fully dense voxel arrays for every untouched building if the existing representation supports more compact generation/caching.
+
+City-size validation:
+After the town benchmark passes, test a larger planned settlement, for example 60–150 building envelopes, within the measured budget. This is a stress/scale milestone, not a promise to fully furnish a huge metropolis in the first patch. Report how many buildings are complete, how many use stable lazy interiors, and any intentionally inaccessible volumes. Never count decorative silhouettes as finished playable buildings.
+
+15. CASTLES, FORTRESSES AND MULTI-ROUTE DUNGEONS
+
+Castle identity comes from hierarchy and purpose:
+- Outer defenses respond to terrain and approach.
+- Gatehouse controls a real route.
+- Courtyard/service space supports operation.
+- Main hall/keep gives a dominant mass.
+- Towers vary by role rather than copy-paste corners.
+- Upper landmark expresses authority, ritual or technology.
+- Infrastructure connects water, storage, power and service spaces.
+
+Use R10 for red fortified settlements, R13 for monumental upland castle massing, R02 for a distinctive round tower, and R14 for precarious cliff adaptation. Do not combine all four equally in every castle.
+
+First complete castle program:
+Approach/reveal, main gate, outer court, inhabited or abandoned service wing, machinery/utility space, main hall, vertical route to upper gallery, optional side chamber and a useful return shortcut. Rooms can share volumes/functions if the layout is compact.
+
+Route requirements:
+Provide at least two genuinely different approaches to the key interior, and preferably a third for a major fortress. Examples: gate mechanism, cliff service route, drainage/maintenance entry. They should differ in information, traversal, resource cost or danger. Three corridors leading to the same locked door are not three approaches.
+
+Dungeon structure:
+Use a room/connection graph with loops, optional branches and shortcuts. Lock/key or power/gate dependencies must be checked for solvability. Place the required tool/source on a reachable side of its dependency. Provide recovery if a physical puzzle piece is moved or destroyed under supported game rules.
+
+Puzzles:
+Tie mechanisms to the building's purpose: water gates, counterweights, lifts, power routing, mirror apertures, rotating bridges or ward anchors. Select from working systems. A puzzle must communicate state, action and consequence. Do not scatter unrelated glowing switches through empty rooms and call it a coherent dungeon.
+
+Difficulty and excavation:
+Allow ordinary construction/destruction systems to matter. Critical vaults can use visible reinforced or warded material with local anchors and clear feedback. Preserve meaningful challenge through layered objectives, resource costs, environmental consequences and information, rather than a global invisible no-dig box. Bypassing a door may be valid; accessing the reward or controlling machinery can still require understanding the site.
+
+Interior lighting:
+Every primary route, mechanism, stair edge and major hazard must be readable at normal gameplay exposure with supported player lighting. Use exterior openings, lamps, furnaces, reflective pale surfaces and a restrained ambient component. Do not finish exteriors while leaving the dungeon black.
+
+Combat and cover:
+If enemies are included, validate their actual navigation and attacks in the space. Provide maneuver room and intentional cover. Avoid decoration that blocks player shots but not enemy attacks or traps enemies behind railings. Boss-scale rooms need encounter-specific movement space; do not insert a large enemy into a chamber designed only for sightseeing.
+
+16. RUINS, HISTORY, DAMAGE AND MATERIAL AGING
+
+Generate a convincing intact ancestor before generating ruin. Damage should reveal construction logic and history.
+
+Historical descriptor:
+Original function and family; construction phases; cause of abandonment/damage; severity; time since damage class; water/vegetation exposure; later repair or occupation. These are art/gameplay parameters, not a demand for an expensive chronological simulation.
+
+Damage families:
+- Roof loss: exposed rafters, broken roof edge, debris below and water staining inside.
+- Wall collapse: coherent breach, leaning or broken remaining masses, rubble matching missing material.
+- Foundation failure: a tilted/settled local section, cracks tied to support and a blocked or altered route.
+- Flooding: waterline stains, submerged floors, sediment and a bounded water-state model.
+- Fire: localized charred timber, roof loss and coherent material changes where supported.
+- Deliberate dismantling: missing dressed blocks, salvaged metal and relatively orderly cuts.
+- Arcane failure: one defined anomalous deformation/material effect associated with a mechanism, not random glowing cracks everywhere.
+
+Damage operations:
+Apply a few large structural changes before medium fractures and small edge wear. Protect essential remaining routes unless an alternate is intentional. Preserve enough intact rhythm to identify the original building. In R09, the temple is still recognizable because arches, columns and steps retain their order.
+
+Rubble:
+Place large fragments based on nearby missing parts. Keep material and scale consistent. Cluster smaller debris around impact/erosion locations. Avoid filling corridors with individually simulated stones. Most old rubble is static authoritative terrain/structure or decorative detail according to interaction promises.
+
+Fracture surfaces:
+Exposed interior stone should differ subtly from weathered exterior. Broken beams reveal direction/grain. Do not use a uniform black mask for all damage. Large architectural blocks should fracture in a way consistent with the world's stylized material vocabulary.
+
+Weathering masks:
+Use meaningful signals: height above wet ground, local runoff paths, sheltered recesses, exposed edges, orientation, vegetation contact and material transitions. Correlate variation over patches. Avoid independent noise on each voxel, which produces camouflage rather than age.
+
+R10 plaster:
+Large red fields remain continuous. Pale stone appears at selected damaged bases, edges and repair patches. Add some intermediate wear, but do not dissolve the wall into a random red-white checkerboard.
+
+R01/R02 pale surfaces:
+Use subtle cool/warm shifts and streaking. The enormous quiet mass must survive. Dirty corners should not turn every wall nearly black.
+
+Ruined routes:
+A collapse may create a new climbable path, reveal a room, open a light shaft or expose machinery. Use damage to change play. A random rubble pile that only slows movement is low-value content.
+
+Persistent destruction:
+Keep authored historical damage distinct from player damage but resolve them through one authoritative geometry/state. Player demolition must not be reset when a ruin detail pass reruns. Rebuilding or repairing a site should not fight automatic decorative regeneration.
+
+17. TEMPLES, MONUMENTS, OBELISKS AND MAGITECH
+
+Solar aperture monument, R03:
+Build the main opening and narrow split as true voids. Use broad piers, a circular/curved crown platform and a coherent stepped base. Conduits follow a small readable route from base to aperture. A light/energy mechanism can use the opening to reveal alignment, power state or a traversal change. Separate visual beam effects from gameplay line-of-sight/activation checks.
+
+Flooded colonnade, R07:
+Make the water court and column rows the main composition. Provide a dry raised path or another supported traversal route. Several bays may be damaged, but enough rhythm remains to communicate scale. A lower service/waterworks route gives purpose beyond scenic repetition.
+
+Broken temple, R09:
+Create a compact high-detail specimen with two or three intact bays, one substantial broken section, broad steps, fallen dressed blocks and a clear destination. Validate at arm's length and while walking through the arch. This is a microdetail and material benchmark, not only a distant landmark.
+
+Sculptural marble gate, R11:
+First create a low-detail coherent 3D model/voxel volume and inspect a full turntable. Identify which surfaces/ribs connect to the base and where the large voids pass through. Use a curve/sweep or equivalent existing geometry representation, with finite thickness and non-self-intersection checks. Reserve fine detail for silhouette-critical parts. If voxel resolution cannot preserve the design, adjust local supported detail resolution or measured proportions rather than filling the voids.
+
+Waytower, R12:
+Build one extremely tall tapering landmark in a quiet setting with an actual entry. Give it a purpose: survey station, beacon, observatory, archive or remote mechanism. The interior can occupy a limited coherent base/shaft path if the upper tip is solid or inaccessible, but communicate that honestly. Provide a visible destination or payoff for entering.
+
+Azure elevated complex, R15:
+Connect high terraces with actual bridges and service access. Place gardens over plausible slabs/soil beds. One major geometric artifact may animate above a pedestal using an explicit magical support rule. Make the surrounding platform, terminals and maintenance route functional. The artifact should not replace the building's entire visual identity.
+
+Ceremonial sanctuary, R16:
+Build a readable colossal statue from large anatomical/clothing masses: base, legs/lower drapery, torso, shoulders, head/crown, arms and spear. Evaluate silhouette from the intended approach and at least three other angles before ornament. Use a limited palette of pale body/cloth, restrained gold and dark recesses. Tiny face detail is lower priority than posture and silhouette.
+
+Statue production:
+Prefer an authored voxel sculpture or a carefully converted source asset whose use is authorized and whose style fits. If no asset exists, construct a custom blockout with controlled forms and refine it. Do not import unknown copyrighted models or claim ownership of external assets. Store the finished sculpture in the existing asset pipeline with clear provenance. This is an asset task, not a reason to replace the renderer.
+
+Monument purpose:
+Every major monument needs at least one meaningful role: navigation, public space, mechanism, exploration route, lore delivery, resource process or optional challenge. Small memorials can be decorative; a landmark dominating a whole region should reward approaching it.
+
+Magitech art rule:
+Technology appears through materials, housings, conduits, apertures, mechanisms and deliberate energy paths. Keep ordinary surfaces mostly non-emissive. Gold ornament is not automatically an electrical conductor, and a glowing line is not automatically a working circuit. Gameplay simulation owns electrical/mechanical truth.
+
+18. MATERIALS, PALETTE AND PAINTERLY VOXEL TREATMENT
+
+Unify material behavior across architecture and terrain. Art variants can share physical properties; do not create a new physics material for every tint of plaster.
+
+Core material set:
+Pale plaster, warm limestone-like stone, cool marble-like stone, dark slate/roof material, warm roof tile, rough foundation stone, weathered timber, aged metal, restrained gold/bronze accent, glass/opening treatment, and family-specific red/cool-blue finishes.
+
+Material layering:
+Where edits expose walls, retain coherent structural material beneath finish. A plastered wall should not be red all the way through unless intentionally made from red material. Implement only the layering resolution the engine can support honestly. Avoid fake paper-thin skins if excavation reveals inconsistent interiors.
+
+Palette allocation:
+Use one dominant body family, one roof/shadow family and one limited accent family per building group. Warm roof neighborhoods can contrast with pale civic masses. Red fortifications can enclose pale houses. Gold domes and artifacts should be rare enough to remain focal.
+
+Painterly translation:
+Create broad correlated color/value patches, restrained roughness variation and clear lit/shadowed planes. Keep surface detail stable in world/material coordinates. Avoid camera-facing painted highlights or shadows that become wrong when the player moves. Do not overlay a universal canvas texture onto every screen pixel as a substitute for art direction.
+
+Texture scale:
+Mortar joints, roof seams and plaster wear use believable scale relative to doors and the player. Giant masonry may intentionally use larger blocks, but ordinary houses should not share fortress-scale joints by accident. Keep repeating patterns from becoming obvious over long walls.
+
+Voxel detail:
+Use finer geometry for important profiles, openings, moldings and sculptures where supported. Keep large quiet walls simple. The aim is detailed shapes with a coherent voxel language, not maximum voxel count everywhere. Test fine geometry under movement for shimmer and aliasing.
+
+Color from light versus material:
+R13's warm castle and R07's sunset colonnade rely on illumination. Their stone should still look plausible at noon or under overcast sky. Avoid baking the reference's sunset shadow colors into albedo so strongly that dynamic lighting produces contradictory results.
+
+Surface depth:
+Use real geometry for silhouette and meaningful recesses. Use existing material/shading techniques for tiny joints and shallow wear where appropriate. Do not use normal detail to fake large openings, cornices or broken edges the player can inspect from the side.
+
+19. LIGHTING, ATMOSPHERE, SKY AND WATER INTEGRATION
+
+The architecture must pass under neutral light before dramatic atmosphere is added.
+
+Lighting review sequence:
+1. Neutral fixed daylight and exposure: check massing, material values, normals and openings.
+2. Low-angle sun: check eave, buttress, arch and balcony shadow depth.
+3. Overcast: verify material grouping and silhouette without strong cast shadows.
+4. Dusk/night: verify windows, lanterns, mechanisms and interior navigation.
+5. Motion: inspect shadow stability, exposure adaptation, light popping and material shimmer.
+
+Large value masses:
+Use dark foreground roofs or cliffs to frame brighter distant architecture where geography supports it. The reference composition should result from actual scene lighting and geometry, not a forced screen-space vignette around one camera.
+
+Interior/exterior balance:
+A doorway into shadow can be dark, but the interior must become readable when entered under intended exposure/player tools. Avoid setting global ambient so high that arches lose depth, or so low that every room is black. Place light sources and openings based on room use.
+
+Windows:
+Select lit windows by actual building/room state or a stable believable pattern. Use emissive appearance separately from bounded local light contribution. Do not attach a shadow-casting point light to every window. Critical interior lights must not be culled merely because decorative lights won a distance sort.
+
+Gold and metal:
+Use material roughness that produces broad controlled highlights. Do not let metallic domes become noisy, nearly black mirrors in ordinary sky lighting. Match appearance to the intended material, which may be gilded, painted or weathered rather than pure polished metal.
+
+Atmospheric depth:
+Make distant masses progressively integrate with the atmosphere while preserving important silhouette. Use the existing coherent fog/sky model. No per-building arbitrary fog sheet should conceal a malformed roof or empty neighborhood. Undercliff sites need skylight openings and local light, not simply thicker blue fog.
+
+Water:
+Match quays, columns, stairs and wet marks to actual water levels. A temple's reflection must not be essential to recognizing its structure because reflection quality may vary. Inspect depth intersections, shore halos and transparency ordering. Use the existing water implementation before adding expensive reflection features.
+
+Sky/celestial imagery:
+R04's enormous moon and R07's large sun are reference mood/scale cues, not automatic changes to the global sky. Use the game's existing celestial design unless a separate approved realm/event warrants them. Do not solve an architectural task by dramatically altering the whole sky.
+
+Bloom:
+Keep bloom subordinate. Structures must remain legible with it disabled. Emissive architecture needs controlled brightness and surface illumination where appropriate, not clipped white bands obscuring all detail.
+
+20. ARCHITECTURAL VEGETATION, PROPS, SOUND AND HABITATION
+
+Vegetation follows ecology and construction:
+- Moss favors suitable damp/shaded areas.
+- Ivy climbs connected support and avoids blocking every opening.
+- Grass grows in joints, terraces and damaged paving, not uniformly through intact interior floors.
+- Roof gardens require soil volume, water access and room for roots.
+- Large terrace trees must be included in the structure's space/support plan.
+- Red/golden vegetation belongs to compatible settings and family compositions, not every ruin.
+
+Separate maintained, abandoned and reclaimed states. Maintained towns have swept routes and controlled planting; ruins show accumulation and intrusion. Use a few meaningful occupation signs rather than indiscriminate clutter.
+
+Prop logic:
+Delivery routes have crates/carts where they fit; workshops have tools and material storage; temples have ritual/public furnishings; homes have domestic objects; defenses have relevant equipment. Keep objects within interaction and navigation budgets. Decorative props must not promise loot or mechanics they do not provide.
+
+Sound:
+Use spatially meaningful water, wind, bells, machinery, room tone and settlement ambience through existing systems. Large courts differ from tight alleys or covered arcades. Avoid a unique always-active sound emitter for every architectural component.
+
+Population:
+Architecture can be complete before a full NPC economy. If residents exist, provide usable paths, entrances and destinations. Report the difference between an occupied-looking settlement and simulated resident behavior. Do not add a large AI rewrite to satisfy decorative market activity.
+
+21. GAMEPLAY, DESTRUCTION AND SYSTEM INTERACTIONS
+
+Architecture should create opportunities for the game's existing systems.
+
+Use a small explicit interaction contract for each major site:
+- What can the player enter, climb, dig, break, repair or operate?
+- Which material properties matter?
+- What state changes persist?
+- What feedback explains the result?
+- What alternative route exists if a mechanism or route is altered?
+- What prevents duplication, soft-locks or stale collision?
+
+Example: Pale Reach gate tower
+The main gate is operated from a reachable upper gallery. A service stair or water-side entrance provides an alternate route. A damaged drive can be repaired or supplied through an existing power/mechanical interface. A wall breach may bypass the gate at a material/time cost. Do not make the entire tower uneditable merely to protect the gate puzzle.
+
+Example: flooded temple waterworks
+A bounded water-control mechanism exposes a lower route or activates a bridge. Use the existing fluid/reservoir semantics. Save the resulting level/gate state. Cosmetic shader displacement is not a functioning drainage puzzle.
+
+Example: Azure artifact tower
+An artifact changes one local mechanism or route when powered/aligned. Visible conduits correspond to actual terminals or are clearly ornamental. Support power limits and failure states from the real circuit system; do not invent free power to make the scene look active.
+
+Example: cliff manor
+A lost crossing can be repaired, bypassed by climbing/building, or approached from a service ledge. The interior reward is useful even if the player creates a shortcut. Clear landmarks guide return travel.
+
+Destruction behavior:
+Authoritative solids/materials own damage. Decorative meshes, lights, nav data and proxies respond to those changes. Give large components stable identities so removal/repair can be tracked. Do not let a destroyed doorway retain collision or a removed statue retain its shadow.
+
+Structural consequences:
+If support simulation exists, integrate and bound it. If it does not, use the engine's ordinary editing model and validate generated support at creation time. Do not claim runtime structural realism from a static support check. A narrowly implemented local collapse mechanic may be added only when required and tested.
+
+Debris:
+Use bounded local dynamic fragments for active events, then sleep/simplify according to existing rules. Preserve material/resource accounting. Old ruins are mostly static. Never allocate one rigid body per masonry voxel in a city.
+
+Repair:
+A repair should not respawn removed furnishings, duplicate loot or erase player machines. Preserve the distinction between restoring selected structural components and resetting a whole site. Make regeneration/repair operations revision-aware and transactional where needed.
+
+Loot and rewards:
+Use stable container/encounter identity and existing inventory systems. Reloading chunks or switching LOD must not reroll rewards. Major structures should provide knowledge, routes, functioning machinery, resources or meaningful discoveries rather than dozens of interchangeable chests.
+
+22. WORLD PLACEMENT AND BIOME INTEGRATION
+
+Use the existing biome plan when available:
+- Greenward Basin: towns, workshops, civic centers, mills and lower city districts.
+- Frostbound Gorge: cliff fortresses, bridge gates, service ledges and undercliff settlements.
+- Skyglass Tarn: isolated observatories, pale towers, lake temples and sparse highland ruins.
+- Wisp Fen: drowned utility structures, abandoned quays and partly flooded older architecture.
+- Amberroot Wildwood: reclaimed temples, smaller ruins, root-integrated structures and controlled clearings.
+- Crimson geological setting from R04: optional rare area with natural arches and a compatible isolated monument/outpost, not a mandatory new biome subsystem.
+
+Select sites from geology, hydrology, slope, accessibility and view relationships. Share planning data with terrain generation. Do not add a second independent terrain generator just for structures.
+
+Placement constraints:
+Foundation support; maximum cut/fill; water containment/flow preservation; route connection; minimum building/feature spacing; visibility from plausible approaches; room and bridge clearance; and compatibility with player edits.
+
+Reveal zones:
+Reserve one primary and at least one secondary vantage for important landmarks. Use roads, shorelines, ridge paths, courtyards and bridges to create them. Keep these as spatial opportunities, not forced cameras. Preserve the landmark from multiple approach directions.
+
+Rarity:
+Ordinary houses and workshops are common; monumental towers, giant statues and sculptural gates are rare. Their impact depends on visual hierarchy across the world. Do not place a huge temple beside every village.
+
+Historical placement:
+An older ruin can shape a newer settlement's road, foundation or waterworks. Keep its construction language legible. Use this relationship to create interesting routes and layers, not just overlapping independent prefab stamps.
+
+Player-built areas:
+Do not generate new structures through established player construction. Consult persistent occupied/edited regions and site reservations. Define what happens when future generator versions encounter existing saves before rolling out new placement rules.
+
+23. CHUNK BOUNDARIES, STREAMING, LOD AND SAVE OWNERSHIP
+
+One authoritative structure, many derived representations.
+
+The plan, generation version and mutable state determine geometry. Near meshes, collision, distant proxies, shadows and navigation are derived views of the same state. Do not implement a separate far-city random generator whose skyline differs from the actual city.
+
+Cross-chunk parts:
+Use world-space part coordinates and conservative bounds. Every intersecting chunk queries the same part definition and stamps its local region. Opening cuts and roof profiles must use identical boundary conventions. Avoid duplicate coplanar walls/trim from neighboring ownership.
+
+Shared building edges:
+Resolve shared walls and touching plots deliberately. City generation needs a common site plan or compatible boundary contracts, not independently generated edge buildings that overlap when both chunks load.
+
+Representation hierarchy:
+Near: accurate openings, stairs, interiors, important trim and interaction geometry.
+Middle: preserve roof profiles, tower shapes, major facade depth, arcades and significant windows/voids.
+Far: preserve district masses, wall lines, domes, main spires and principal apertures; merge small domestic detail into coherent roof/building groups.
+
+Detail importance:
+Assign high importance to the R02 eave profile, R11 voids, R12 taper, R05 skyline hierarchy, R07 column spacing and R16 statue silhouette. These should survive longer than small masonry joints, flags or roof seams.
+
+Non-heightfield features:
+Bridges, cliff overhangs, arcades, spires and sculptural gates need suitable proxy geometry. A terrain heightfield cannot faithfully encode an arch or a house beneath an overhang. Reuse or add a focused feature-proxy path rather than flattening these forms into the horizon.
+
+LOD transitions:
+Use stable thresholds/hysteresis and the project's established transition technique. Check silhouette, lighting and depth continuity in motion. If a transition blends/dithers geometry, validate interaction with transparency and antialiasing. Do not fade an entire solid building to transparency merely to hide a mismatch.
+
+Coverage:
+Maintain a valid representation while a replacement is loading. Do not remove the far building before the near building exists. Collision/interaction availability must follow a safe publication policy; the player cannot walk into an empty space that becomes a wall one frame later.
+
+Async revisions:
+Jobs capture world/site/component revisions and generator version. On completion, discard results whose inputs are obsolete. This includes meshes, proxies, lighting summaries and navigation. A pending job must not restore a demolished tower or refill a cleared room.
+
+Edit invalidation:
+Propagate changed bounds through affected geometry, neighboring seams, lights, navigation and far summaries. Use bounded dirty queues and prioritize visible/interactive changes. Document any allowed distant update latency; do not lose the mutation.
+
+Save data:
+Store generator version, stable site/building/interactive-object IDs, required generated plans or reproducible seeds, persistent edits and mechanism/container state. Derived meshes are caches. Keep existing save compatibility or implement a tested migration. Reordering a component list must not remap saved loot or damage to a different object.
+
+Large coordinates:
+Use the engine's established world-coordinate/local-render-origin convention. Do not evaluate fine facade detail from low-precision enormous world floats if that causes seams or jitter. Verify the actual coordinate scheme before changing it.
+
+24. PERFORMANCE AND HARDWARE VALIDATION
+
+Do not use high detail as an excuse for unbounded work. The target is excellent visual structure per unit of rendering and generation cost.
+
+The user's main GPU is an RTX 4090, but CPU generation, main-thread uploads, memory and frame-time spikes still matter. Record actual available hardware. Never report performance for hardware that was not tested.
+
+Budget establishment:
+Measure baseline first. If the project targets 60 fps, the full frame interval is 16.67 ms; if it targets 120 fps, it is 8.33 ms. Architecture receives measured headroom, not the whole interval. Agree with existing project targets and retain separate CPU/GPU evidence.
+
+Track:
+Frame-time p50/p95/p99; main-thread work; GPU pass cost where available; generation/meshing latency; upload bytes and spikes; queue lengths; resident memory; active lights/shadows; draw/instance counts; and visible geometry/overdraw.
+
+Optimization priorities:
+- Avoid evaluating every city component for every voxel.
+- Cache stable site plans and repeated kit data.
+- Generate only needed detail while retaining deterministic authoritative structure.
+- Batch compatible repeated parts using current renderer facilities.
+- Cull components/buildings/districts through existing spatial visibility systems.
+- Preserve silhouette while simplifying tiny repeated detail.
+- Limit animated materials and transparent surfaces.
+- Bound local lights and shadow casters separately.
+- Keep old static rubble out of dynamic physics.
+- Budget uploads and cancel obsolete jobs during travel/teleport.
+
+Do not assume one draw call per material is achievable or necessary without inspecting the renderer. Do not promise a particular polygon/voxel count from generic reasoning. Establish empirical ceilings and record them with the benchmark.
+
+Quality tiers:
+Preserve major silhouettes, openings, route cues, collision and gameplay state across all supported tiers. Scale small trim, minor props, distant interior furnishings, particles, secondary shadows and reflection fidelity first. Simplifying a colonnade into a solid wall or removing the only readable stair is not acceptable quality scaling.
+
+Interior performance:
+Use visibility and streaming suited to the existing engine. Do not automatically build a new portal renderer. If available culling is sufficient, use it. If enclosed city interiors are a measured bottleneck, implement a targeted improvement with evidence and a fallback.
+
+Stable rendering:
+Inspect fine railings, distant roof ribs, repeated windows and column rows for shimmer. A static screenshot may look detailed while motion is unreadable. Reduce or filter overly fine detail before adding more antialiasing complexity.
+
+25. DEBUGGING AND AUTHORING TOOLS
+
+Add or extend focused tools that make art and geometry failures visible:
+- Structure/site/building IDs and family overlays.
+- Component bounds and construction-stage visualization.
+- Void/opening visualization independent of material shading.
+- Floor elevations, stair connections, room graph and route clearances.
+- Foundation/support anchors and cut/fill bounds.
+- Water levels and waterfront connection checks.
+- Detail-importance and LOD tier colors.
+- Dirty revisions, stale jobs and pending proxy updates.
+- Light contribution/shadow selection and interior exposure checks.
+- Damage/history masks and rubble provenance.
+- Material layers and surface coordinate inspection.
+
+Preview controls:
+Fixed neutral/day/dusk/night presets, fixed exposure, effects-off toggles, turntable cameras, normal-player walkthrough and repeatable travel routes. Allow safe parameter iteration in a disposable test world. Never silently regenerate a user's edited world during asset preview.
+
+Asset gallery:
+Place the roof/tower profiles, columns, arches, windows, stairs, bridges, statues and sculptural elements together with scale figures. Inspect from near/middle/far ranges. A component that fails alone should not be hidden inside a large city.
+
+Debug failure messages:
+Report concrete reasons: insufficient doorway clearance, unsupported foundation anchor, room intersects terrain, roof intersects adjacent room, unreachable stair landing, blocked water outlet or stale revision. Avoid generic generation-failed logs that cannot guide correction.
+
+26. REFERENCE SCENES AND MEASURABLE VISUAL ACCEPTANCE
+
+Create reproducible named specimens. They may share a test world; each needs its own camera/route fixture. Do not force all artistic families into one incoherent scene.
+
+S01 — Gate of the Pale Reach — R01/R02, supporting R14
+First full-quality slice. A great pale round tower with its characteristic flared dark roof stands on rock beside water. A real bridge/arcade connects to a short terraced street with roughly 8–12 smaller buildings. Warm upper windows contrast with quiet pale walls. Include one courtyard, usable tower interior, functional gate mechanism and a secondary service route.
+Must show: correct roof profile, deep eave shadow, architectural scale, cliff/water support, actual street/interior detail and restrained dusk lighting.
+
+S02 — The Cliff Manor — R14
+A compact asymmetrical manor grips a natural cliff with projections, a turret and mixed roof forms. A broken crossing creates a route choice. Include a complete interior loop and a service ledge.
+Must show: terrain/building interlock, support story, close facade quality and playable alternate approach.
+
+S03 — Crownstone City — R05/R06/R13
+A terraced city rises from a lower district toward a dominant upper landmark. Use separate validated skyline variants: twin high towers, broad square capped tower, or spired upland castle. Do not pile all three dominant variants together.
+Must show: district hierarchy, real inter-terrace circulation, large arches, dome accents where appropriate, dense small roofs and a legible skyline in grayscale.
+
+S04 — Vermilion Fortress — R10
+Red plastered walls enclose pale roof clusters on green terrain. Dark roofed towers, coherent wall walk and a working gate define the defenses.
+Must show: strong red fields, controlled substrate wear, valid wall/gate circulation and ordinary-light readability without the reference's exact storm.
+
+S05 — The Drowned Colonnade — R07/R09
+A large water court with tall column bays transitions into a close accessible ruined temple section with broad steps and fallen dressed blocks.
+Must show: genuine open bays, water-level coherence, ordered damage, close stone detail and an understandable route through the site.
+
+S06 — Solar Aperture — R03
+A pale/gold monument with a real circular opening, vertical split, upper terrace and golden vegetation integrated into real planting spaces.
+Must show: dominant negative space and a working mechanism or meaningful access, not merely surface runes.
+
+S07 — Marble Threshold — R11
+A slender sculptural landmark with sweeping connected forms and large apertures, set on a stepped base near still water.
+Must show: coherent 360-degree geometry and silhouette preservation across LODs.
+
+S08 — The Long Waytower — R12
+A tapering isolated tower in open land, with a real base entrance and sparse details.
+Must show: extreme slenderness, quiet surroundings and stable long-distance visibility.
+
+S09 — Undercliff Harbor — R08
+A small bright harbor is dwarfed by a huge dark overhang. Keep land/water access and meaningful structures at the cliff base.
+Must show: correct scale ratio, readable settlement despite shade, no terrain clipping and no heightfield-only disappearance of the overhang.
+
+S10 — Azure Terraces — R15
+A small elevated complex with tall cool towers, white bridges, garden terraces and one geometric artifact. Connect lower arrival to upper platforms.
+Must show: actual vertical circulation, coherent materials, finite gardens and limited meaningful magitech.
+
+S11 — Sanctuary of the Colossus — R16
+A ceremonial approach frames a monumental statue and rounded public/temple structure across a water court or basin. Use foreground wall/colonnade and planting to create depth.
+Must show: statue silhouette, procession/side routes, material restraint and composition from multiple positions.
+
+S12 — Crimson Arch Setting — R04
+Use an appropriate existing or narrowly adapted landscape specimen with a natural rock arch and red vegetation to test a restrained structure's integration. Do not create a new celestial/biome simulation merely to reproduce the screenshot.
+Must show: distinction between natural geology and architecture, coherent color grouping and a working ground-level route.
+
+Comparison method:
+For each specimen, capture a reference-inspired view at a documented camera position/FOV, plus normal player views and a short moving route. Use neutral and dramatic lighting separately. Include bloom/fog/particles disabled where relevant. Add a 360-degree or multi-angle inspection for sculptural and hero tower forms.
+
+Review the following in order:
+1. Silhouette and proportion.
+2. Main voids and mass distribution.
+3. Terrain/water relationship.
+4. Material/value grouping.
+5. Light and atmospheric depth.
+6. Structural/facade detail.
+7. Ground-level play and interiors.
+8. Motion, LOD and performance.
+
+Do not compensate for a failed early category by adding more late-category detail. Do not use an image-similarity score as proof of architectural success; camera, painterly abstraction and 3D interpretation make that inadequate on its own.
+
+Minimum review evidence:
+- Thumbnail/grayscale comparison showing hierarchy.
+- Close architectural detail view.
+- Normal-eye-height route and interior view.
+- Side/reverse view.
+- A travel segment crossing LOD/streaming transitions.
+- Relevant edit/interaction outcome.
+Record specific mismatches: roof too shallow, aperture too narrow, shaft too busy, city too flat, statue unreadable, wall color too noisy, interior too dark. Correct them explicitly.
+
+27. IMPLEMENTATION WORK PACKAGES AND DEPENDENCIES
+
+Do not estimate completion time before the audit. Implement in reviewable increments with complete evidence. Use existing tests/checks appropriate to each change. Do not introduce a broad unrelated engine rewrite.
+
+P0 — Audit, baseline and asset/reference access
+Inspect source, existing content, instructions and reference availability. Establish reproducible world/camera/settings and performance baseline. Map reuse points and blockers with actual file/function evidence.
+Gate: implementation plan grounded in the repository; then continue coding.
+
+P1 — Shape laboratory and art foundations
+Implement/repair core wall, opening, arch, column, stair and roof-profile construction in the existing pipeline. Produce R02 roof, R09 arch and R12 taper specimens under neutral lighting. Validate clearance, voxel detail and material values.
+Gate: each shape reads correctly before large-scale scene generation.
+
+P2 — First complete Pale Reach district
+Build S01 using production systems, including tower interior, small street, bridge, supported waterfront and gate/service routes. Add restrained lighting and close detail. Integrate save/edit behavior.
+Gate: reviewed moving walkthrough and reference comparison, not compilation alone.
+
+P3 — Building grammar and ordinary town
+Generalize successful parts into coherent domestic/workshop/public plans. Build a 20–40-building town probe with stable interiors, useful streets and limited kit repetition.
+Gate: enterable buildings, valid circulation, no terrain/roof overlap and acceptable measured cost.
+
+P4 — Ruins and layered material damage
+Implement intact-ancestor damage rules, ordered rubble and persistent edits. Finish S05's close ruin section and at least one inhabited/repaired variant of a shared building.
+Gate: recognizable construction history, clear paths and no random-noise destruction.
+
+P5 — Fortress gameplay and cliff integration
+Finish S02/S04 and one substantial castle/dungeon layout with alternate routes, lit interiors, a functioning mechanism and useful rewards. Integrate localized reinforced/warded construction only where justified.
+Gate: all promised approaches work with actual movement, editing and interaction.
+
+P6 — Terraced city planning
+Build S03 with district elevations, retaining walls, roads, stairs and skyline hierarchy. Validate a larger planned settlement within measured limits. Implement the dominant skyline variants as coherent alternatives.
+Gate: the city works from street level and overview; far/near silhouettes agree.
+
+P7 — Solar and water architecture
+Finish S05's full colonnade/water court and S06. Integrate bounded water/mechanism behavior where needed. Validate actual bays, steps and aperture geometry.
+Gate: ordinary-light quality, functional route and saved mechanism state.
+
+P8 — Sculptural and isolated landmarks
+Finish S07/S08 with authored profiles or focused builders. Inspect full turntables and far silhouettes. Give each an accessible meaningful base/site function.
+Gate: elegant forms survive voxelization and LOD; no blob substitutions.
+
+P9 — Harbor and magisterial complex
+Finish S09/S10. Add needed non-heightfield proxies and vertical circulation. Keep gardens, bridges and artifact support coherent.
+Gate: complete arrival-to-upper-platform route and stable undercliff streaming.
+
+P10 — Ceremonial sanctuary and statue
+Finish S11 with a carefully reviewed large sculpture, processional space, side access and useful site role. Add S12's environmental integration specimen without expanding into unrelated sky systems.
+Gate: statue/setting recognizable in silhouette and from multiple views.
+
+P11 — World placement and cultural consistency
+Integrate completed families into biome/site planning with rarity, terrain, hydrology and historical-layer rules. Preserve existing player worlds. Test multiple seeds and family variants.
+Gate: plausible placement, no ubiquitous megamonuments and no cross-chunk identity failures.
+
+P12 — Streaming, edits and performance completion
+Although validated throughout, now run full city/ruin/destruction travel cases. Fix stale jobs, silhouette mismatches, upload spikes and quality-tier regressions.
+Gate: agreed frame-time/memory budgets, correct persistence and no visible coverage holes.
+
+P13 — Full reference review and release evidence
+Review all named specimens and all 16 reference mappings. Correct highest-impact visual failures. Run final relevant tests and document remaining limitations honestly.
+Gate: each delivered family has a production example, usable interior/site interaction, multi-angle visual evidence and technical verification. Features not implemented remain explicitly incomplete.
+
+Execution checkpoints:
+After each package, record completed changes, tests/captures, metrics, unresolved failures and exact next work. Keep the checkpoint concise and tied to real source locations. Do not fill project documentation with redundant planning while implementation remains unfinished.
+
+28. TEST MATRIX AND REGRESSION FIXTURES
+
+Geometry/clearance:
+T01. Door and window openings cross a chunk boundary without seams or duplicate frames.
+T02. Arch ring remains thick enough after voxel sampling; its opening is traversable as designed.
+T03. Curved tower roof preserves its profile and does not self-intersect or seal the upper gallery.
+T04. Stairs connect all intended floors with valid landing/headroom clearance.
+T05. Shared walls/roof joins do not expose cracks, z-fighting or overlapping occupied rooms.
+T06. Foundations fit sloped terrain and interiors remain free of unintended terrain intrusion.
+T07. Bridges join both endpoints and have working under-span clearance.
+T08. Sculptural apertures remain open at supported representations.
+
+Generation/determinism:
+T09. Same seed/version produces equivalent authoritative plans under shuffled chunk order and worker count within the declared determinism scope.
+T10. Adding cosmetic trim variation does not rearrange streets or rooms.
+T11. Cross-chunk/site parts have one identity and no duplicated doors, containers or rewards.
+T12. Impossible placement finishes within bounded attempts and logs a useful reason.
+T13. Different seeds produce controlled variation without losing family identity.
+
+Gameplay/interiors:
+T14. Every promised ordinary entrance reaches valid interior/circulation.
+T15. Primary and alternate fortress routes work with normal abilities.
+T16. Lock/power/mechanism dependencies are solvable, with reset/recovery behavior where needed.
+T17. Furnishings and rubble preserve required movement/interaction clearance.
+T18. Excavation into a lazy interior resolves the correct room before it is exposed.
+T19. Low effects settings preserve controls, hazard cues and route readability.
+
+Persistence/concurrency:
+T20. Demolish a roof/tower during a pending mesh/proxy job; obsolete output is rejected.
+T21. Break a light-bearing component; visual source, illumination and shadow state update coherently.
+T22. Modify a shared wall, travel away, return and reload; geometry and collision remain correct.
+T23. Loot/repair/mechanism states do not duplicate or reset on regeneration.
+T24. Save/generator-version compatibility follows the selected policy.
+T25. Player-built objects are not overwritten by later site/detail generation.
+
+Water/terrain:
+T26. Waterfront stairs, docks and column bases match actual water state.
+T27. A functioning aqueduct/reservoir has defined source/destination and persists changes.
+T28. Structure cut/fill does not block a river or create unintended flooding.
+T29. Undercliff geometry and cave/arcade openings survive near/far transitions.
+
+Performance/visual motion:
+T30. Cold and warm town/city traversal with identical settings and recorded timing distributions.
+T31. Rapid approach/teleport and camera turn with bounded queues/uploads.
+T32. Dense facade, long colonnade, water court, statue and interior stress views.
+T33. Repeated edits while streaming do not produce stale geometry or unbounded memory.
+T34. Quality-tier changes preserve important form and gameplay cues.
+T35. Distant roof ribs, windows and spires remain stable enough in motion; no unacceptable shimmer/popping.
+
+Test selection:
+Use focused unit/property tests for geometric and deterministic rules, integration tests for world/save behavior, and actual engine walkthroughs for movement and visual quality. Do not write hundreds of trivial tests mirroring constants. Compile/lint/tests are necessary where appropriate but cannot prove the art succeeds.
+
+If the environment cannot launch/capture the game:
+Complete the implementation and available checks, provide exact reproduction/capture instructions and mark visual approval as unverified. Do not fabricate screenshots, performance numbers or an inspected result. Do not use generated concept imagery as evidence that the engine renders the target.
+
+29. ANTI-FAILURE RULES, REPORTING AND COMPLETION CONTRACT
+
+Reject these shortcuts:
+- Generic boxes and cones with ornate names.
+- Uniform noise standing in for weathering or city complexity.
+- Empty black shells behind impressive facades.
+- A screenshot-only fake city or noninteractive painted backdrop.
+- Infinite staircases or doors that do not fit actual movement.
+- Floating ordinary buildings caused by missing support.
+- Fake windows everywhere with no relation to rooms.
+- Flat slabs labeled arches, colonnades or bridges.
+- Fog/bloom used to hide weak geometry.
+- One identical tower/roof kit used for every culture.
+- Unbounded per-voxel physics, dynamic lights or background generation.
+- A separate far-world generator that disagrees with near geometry.
+- Silent save regeneration that destroys player work.
+- Claiming all work is complete after implementing only the first prototype.
+
+Quality review is not self-congratulation. Describe specific successes and remaining shortcomings. If the roof still resembles a straight cone, say so and fix it. If the city is visually flat or repetitive, improve massing and district layout before adding more windows. If a statue is unreadable, refine posture and silhouette before gold trim.
+
+Deliverable contents:
+1. Production code/content integrated with the existing world.
+2. Reference ledger mapped to implemented specimens and actual assets/builders.
+3. Reproducible scene seeds/cameras/routes and settings.
+4. Before/after and reference-comparison captures from actual engine output where available.
+5. Relevant test results and performance evidence with hardware/settings.
+6. Save/edit/streaming behavior verified or explicitly marked unverified.
+7. Concise architecture notes explaining real ownership/integration choices.
+8. Clear list of incomplete packages, limitations and next actions.
+
+Respect repository workflow and existing user changes. Keep changes reviewable and reversible. Do not overwrite unrelated work, publish releases or perform remote deployment simply because this prompt asks for local implementation. Follow existing authorized workflow for commits and integration.
+
+30. IMMEDIATE EXECUTION ORDER
+
+Start now with the actual repository and supplied images.
+
+First, inspect the available reference files and map their visible features to this ledger. Read project instructions and relevant source. Establish a fixed baseline scene and measurements.
+
+Second, implement the shape laboratory, concentrating on the R02 great round tower roof/shaft relationship, the R09 thick stone arch and the R12 taper. Inspect those forms under neutral light and from multiple angles. Correct their silhouettes before decorating them.
+
+Third, implement Gate of the Pale Reach as a complete production slice: supported waterside tower, curved flared roof, deep openings, warm upper gallery, connected bridge, small terraced street, usable interiors, gate mechanism and alternate route. Validate movement, editing, save/load, streaming and actual frame cost.
+
+Then proceed through the remaining work packages, carrying forward the visual standard into towns, ruins, castles, layered cities, colonnades, sculptural monuments and magitech terraces. Do not stop after producing another plan. Use the implementation checkpoints to maintain continuity across sessions, and keep unfinished scope explicit.
+
+The intended result is a world whose architecture carries the drama, craft and specificity of these paintings at player scale: monumental quiet masses, exquisite silhouettes, coherent small details, real inhabited spaces, readable ruins and meaningful systems. Every visual flourish should strengthen that result rather than obscure an incomplete structure.
+
+END IMPLEMENTATION PROMPT

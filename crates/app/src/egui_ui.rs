@@ -1,5 +1,14 @@
 use egui::{Align2, Color32, RichText};
 mod adventure;
+mod chip_canvas;
+mod chip_editor;
+mod chip_fab;
+mod chip_panel;
+mod chip_report;
+mod chip_tools;
+#[cfg(test)]
+mod text_rules;
+mod description_copy;
 mod factory;
 mod habitats;
 mod front_end;
@@ -8,6 +17,9 @@ mod icons;
 mod icons_spells;
 mod inventory;
 mod look_at;
+mod loading_screen;
+mod main_menu;
+pub(crate) mod menu_capture;
 mod orbital;
 mod magic_fx;
 pub(crate) mod magic_style;
@@ -17,9 +29,11 @@ mod sigils;
 mod production;
 mod recipe_book;
 mod relics;
+mod resonance;
 mod settings;
 mod tinkering;
 mod tool_hud;
+pub(crate) mod typography;
 mod wand_atelier;
 mod wand_xmb;
 mod wands;
@@ -52,6 +66,8 @@ pub enum UiAction {
     OrbitalReceiver(crate::world::orbital::receiver::Action),
     OrbitalRadio(crate::world::orbital::radio::Action),
     Factory(crate::world::factory::Action),
+    /// Chip designer and controller installation.
+    Chip(crate::world::factory::chips::Action),
     /// Creative catalogue grant: item and requested count.
     GiveItem(crate::world::inventory::Item, u32),
     DropInventory(usize),
@@ -89,8 +105,8 @@ pub enum ToolUseAction {
 #[derive(Clone, Debug)]
 pub struct LoadingUiState {
     pub title: String,
-    pub detail: String,
-    pub progress_01: f32,
+    /// Completion of the current stage; None when the worker has no work count.
+    pub progress_01: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1663,6 +1679,9 @@ pub struct EguiUi {
     /// The factory assembly under the crosshair, for the look-at panel.
     pub target_machine: Option<crate::world::factory::Probe>,
     pub target_cell_temp_c: Option<f32>,
+    pub target_volume_ul: Option<u64>,
+    pub target_environment: Option<crate::world::environment::inspect::Inspection>,
+    pub environment_lag: u64,
     pub tool_feedback: tool_hud::Feedback,
     pub fov_degrees: f32,
     pub mouse_sensitivity: f32,
@@ -1697,6 +1716,8 @@ pub struct EguiUi {
 impl EguiUi {
     /// Show a sky-event banner. Repeated calls for the same event are ignored.
     pub fn announce_sky(&mut self, title: &'static str, line: &'static str) {
+        // Cosmetic sky changes need no banner; meteorites are collectible.
+        if line.is_empty() { return; }
         let now = self.ctx.input(|i| i.time);
         self.sky_notice = Some((title, line, now));
     }
@@ -1748,6 +1769,9 @@ impl EguiUi {
             target_block: None,
             target_machine: None,
             target_cell_temp_c: None,
+            target_volume_ul: None,
+            target_environment: None,
+            environment_lag: 0,
             tool_feedback: Default::default(),
             fov_degrees: 70.0,
             mouse_sensitivity: 0.0025,
@@ -1785,6 +1809,7 @@ impl EguiUi {
     }
 
     pub fn begin_frame(&mut self, window: &Window) {
+        typography::apply(&self.ctx);
         // Keep widget dimensions in egui points across resolutions; only the
         // explicit user preference changes their size.
         self.ctx.set_zoom_factor(self.ui_scale.clamp(
@@ -1813,7 +1838,11 @@ impl EguiUi {
     }
 
     pub fn build_loading_ui(&mut self, loading: &LoadingUiState) {
-        front_end::loading(&self.ctx, loading);
+        loading_screen::draw(&self.ctx, loading);
+    }
+
+    pub fn show_title_screen(&mut self) {
+        self.home_page = front_end::HomePage::Title;
     }
 
     /// The short view: how fast, what is limiting it, and the one thing to try.
@@ -1822,7 +1851,7 @@ impl EguiUi {
             ui.label(RichText::new(format!("GPU: {}", perf.adapter_summary)).strong());
         }
         ui.label(format!(
-            "{:.0} fps Â· {:.1} ms average Â· {:.1} ms at 95% Â· {:.0} fps 1% low",
+            "{:.0} fps · {:.1} ms average · {:.1} ms at 95% · {:.0} fps 1% low",
             perf.fps_avg, perf.frame_ms_avg, perf.frame_ms_p95, perf.fps_1p_low
         ));
         let gpu_ms = perf.render_avg.gpu_pass_total_ms;
@@ -1835,11 +1864,11 @@ impl EguiUi {
                 perf.cpu_avg.total_ms
             ));
             if gpu_bound && perf.fps_avg < 50.0 {
-                ui.label("Try: Settings â†’ Clouds off, or a lower Quality preset.");
+                ui.label("Try: Settings → Clouds off, or a lower Quality preset.");
             }
         }
         ui.label(format!(
-            "{}Ã—{} Â· {} terrain triangles Â· {} draw calls",
+            "{}×{} · {} terrain triangles · {} draw calls",
             perf.resolution[0],
             perf.resolution[1],
             perf.counters_latest.terrain_triangles,
@@ -2644,7 +2673,7 @@ impl EguiUi {
                     status_rect = Some(status.response.rect);
                 }
                 front_end::journey_hud(&self.ctx, self.expedition.as_ref(), status_rect);
-                if let Some((title, line, since)) = self.sky_notice {
+                if let Some((title, _line, since)) = self.sky_notice {
                     let age = self.ctx.input(|i| i.time) - since;
                     if age < 7.0 {
                         let fade = ((age / 0.8).min(1.0) * ((7.0 - age) / 1.2).min(1.0))
@@ -2662,12 +2691,6 @@ impl EguiUi {
                                                 .strong()
                                                 .color(presentation::AMBER),
                                         );
-                                        ui.label(
-                                            RichText::new(line)
-                                                .size(12.0)
-                                                .italics()
-                                                .color(presentation::PAPER),
-                                        );
                                     });
                                 });
                             });
@@ -2675,7 +2698,8 @@ impl EguiUi {
                         self.sky_notice = None;
                     }
                 }
-                if !creative_state.any_ui_open() && !self.show_debug_performance_panel
+                if self.ctx.input(|i| i.modifiers.alt)
+                    && !creative_state.any_ui_open() && !self.show_debug_performance_panel
                     && (creative_state.tool != ToolKind::Hand || self.adventure.wand == 0) {
                     tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback);
                 }
@@ -2808,6 +2832,8 @@ impl EguiUi {
                             &look_at::LookAt {
                                 block,
                                 temperature_c: self.target_cell_temp_c,
+                                volume_ul: self.target_volume_ul,
+                                environment: self.target_environment,
                                 distance_m: self.tool_feedback.distance_m,
                                 hint,
                                 machine: self
@@ -2825,6 +2851,10 @@ impl EguiUi {
                         .show(&self.ctx, |ui| {
                             presentation::hud_frame().show(ui, |ui| {
                                 ui.monospace(format!("{fps} FPS  |  {:.1} ms", perf.frame_ms_avg));
+                                if self.environment_lag > 1 {
+                                    ui.colored_label(presentation::DANGER,
+                                        format!("Environment {} s behind", self.environment_lag));
+                                }
                                 ui.monospace(format!(
                                     "XYZ  {:.1}  {:.1}  {:.1}",
                                     player.pos.x, player.pos.y, player.pos.z
@@ -3050,22 +3080,6 @@ impl EguiUi {
                     self.hovered_quick_area_shape = None;
                 }
 
-                if self.show_hud
-                    && !creative_state.any_ui_open()
-                    && self.ctx.content_rect().width() >= 1040.0
-                {
-                    egui::Area::new("play_hint".into())
-                        .anchor(Align2::LEFT_BOTTOM, [14.0, -18.0])
-                        .interactable(false)
-                        .show(&self.ctx, |ui| {
-                            ui.label(
-                                RichText::new("B tools  E inventory  Q quick")
-                                    .small()
-                                    .color(Color32::from_rgba_premultiplied(235, 238, 242, 180)),
-                            );
-                        });
-                }
-
                 if self.drag_source.is_some()
                     && self
                         .ctx
@@ -3152,6 +3166,7 @@ impl EguiUi {
             UiMode::Paused | UiMode::WorldSelect | UiMode::Loading => {}
         }
         grimoire::state_sheet(&self.ctx);
+        wands::review_spell_card(&self.ctx, &self.adventure);
 
         if self.show_debug_performance_panel {
             self.build_debug_performance_panel(mode, perf);
@@ -3194,11 +3209,7 @@ impl EguiUi {
             .handle_platform_output(window, full_output.platform_output);
 
         self.textures_delta = full_output.textures_delta;
-        for (id, delta) in &mut self.textures_delta.set {
-            if *id == egui::TextureId::Managed(0) {
-                delta.options = egui::TextureOptions::NEAREST;
-            }
-        }
+        typography::prepare_textures(&self.ctx, &mut self.textures_delta);
         self.shapes = self
             .ctx
             .tessellate(full_output.shapes, self.ctx.pixels_per_point());
@@ -3239,7 +3250,13 @@ impl EguiUi {
                 .render(&mut rpass, &self.shapes, &screen_descriptor);
         }
 
-        queue.submit(command_buffers);
+        // The enclosing frame submits its encoder immediately after this UI
+        // pass. An empty submit here flushes every queued upload separately,
+        // adding another GPU submission to gameplay, menus and loading alike.
+        // Keep real callback command buffers ordered before the frame as usual.
+        if !command_buffers.is_empty() {
+            queue.submit(command_buffers);
+        }
 
         for id in &self.textures_delta.free {
             self.renderer.free_texture(id);
@@ -3248,6 +3265,7 @@ impl EguiUi {
 
     pub fn end_frame_no_paint(&mut self, window: &Window) {
         let full_output = self.ctx.end_pass();
+        typography::defer_texture(&self.ctx);
         self.state
             .handle_platform_output(window, full_output.platform_output);
         for id in &full_output.textures_delta.free {

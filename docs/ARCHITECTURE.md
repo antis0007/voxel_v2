@@ -2,6 +2,13 @@
 
 ## Data flow
 
+Revision-4 integration: [Axiom implementation track](parked/2026-10-24-axiom-implementation.md) (parked for M1–M3).
+`world/effects.rs` now provides synchronous conditional terrain replacement and
+water-buffer exchange for drill/pump/drain consumers. It admits prepared legacy
+owners and wake capacity, returns explicit failures or a consumed commit receipt,
+and publishes the existing mesh dependency halo only after success. This is not
+a global transaction journal, a renderer replacement or a CA authority cutover.
+
 ```
 assets/*.ron ──► engine_content (BlockId table), app tables (spells, recipes, machines, bestiary)
 WorldSampleConfig {seed, generator_version, world_type, voxel_scale}
@@ -27,7 +34,9 @@ A `World` holds resident edited chunks plus a `RegionStream` of chunks on disk; 
 5. `WorldSimulation::update` (factory extraction, rigid bodies, cellular water and sand, thermal) under a `Budget`
 6. `day_night.advance(dt)`
 
-`main.rs` runs this with wall-clock budgets so frames keep pacing; `headless::Session::tick` runs the same order with `Budget::UNBOUNDED` and waits for chunk generation, which makes a scenario reproducible to the hash.
+Both `headless::Session::tick` and the window now call executable `simulation::fixed::gameplay` and `fixed::finish` for every 120 Hz step, with tool ingress between adventure and simulation. Zero-step frames retain input edges; several steps execute the full sequence individually. Headless settles legacy source jobs; the window shares one bounded simulation budget across its steps. Legacy residency and edit scheduling still depend on wall time, so equivalent execution order does not establish world-hash equivalence. See ADR 0018 for clocks, edge consumption and remaining scheduling debt.
+
+`--headless=<path> --ca-cpu-region=x,y,z` activates the bounded CPU development path: an exact 8³ interior, immutable sealed halo, ordered commands, a 60 Hz divider and tick-labelled two-tick mirror. Player queries use that mirror; unmigrated writers are suspended for the isolated session. Ordinary window play and persistence retain legacy authority. No CA-to-legacy rounding or save migration is performed; ordinary saves reject an active experimental mirror.
 
 ## Scale and LOD
 

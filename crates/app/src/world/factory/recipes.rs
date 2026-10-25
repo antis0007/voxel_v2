@@ -59,8 +59,8 @@ impl Kind {
             ],
             Self::Fabricator => &[
                 "Coils: 2 copper + 1 fibre → 2 coils",
-                "Core: 1 crystal + 1 circuit + 1 essence → 1 arcane core",
-                "Essence: 1 crystal + 2 biomass → 1 wild essence. Condenses resonance with heavy power",
+                "Core: 1 crystal + 1 circuit + 1 wild essence → 1 arcane core",
+                "Wild Essence: 1 crystal + 2 biomass → 1 wild essence (heavy power draw)",
                 "Circuits: 2 copper + 1 tin + 1 crystal → 2 circuits (16 kW, 12 s)",
             ],
             Self::Pipe => &[
@@ -85,8 +85,8 @@ impl Kind {
                 "Fermenter: 2 biomass + 0.25 fibre → 1 bio-ethanol",
             ],
             Self::Furnace => &[
-                "Dust: smelts crushed or washed dust, 1 dust → 1 ingot",
-                "Ore: smelts raw ore directly, 1 ore → 1 ingot, slower and without a yield bonus",
+                "Dust: 1 dust → 1 ingot",
+                "Ore: 1 ore → 1 ingot, slower, no yield bonus",
             ],
             Self::BlastFurnace => &[
                 "Iron: 2 iron ore + 0.5 coke → 3 iron ingots at 1500 °C",

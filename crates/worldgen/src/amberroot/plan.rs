@@ -36,6 +36,8 @@ pub(super) struct Plan {
     pub pools: Vec<Pool>,
     /// Door of the hollow tree, local (u, v); the clearing spur ends here.
     pub door: Vec2,
+    /// Generator 43 palette: teal canopy layers and moss under the crowns.
+    pub palette: bool,
 }
 
 /// Local (u, v, trunk radius, height) of the authored giants. Index 0 throws
@@ -124,6 +126,11 @@ impl Plan {
         crate::smoothstep(18.0, 9.0, (v - self.path_v(u)).abs()) * crate::smoothstep(-20.0, -40.0, u)
     }
 
+    /// Generator 43: moss where a giant's crown shades the floor.
+    pub fn shaded(&self, wx: f32, wz: f32) -> bool {
+        self.palette && self.giants.iter().any(|g| g.shades(wx, wz))
+    }
+
     /// Blue-violet mycelium under the giants and around the mushroom grove.
     pub fn mossy(&self, wx: f32, wz: f32) -> bool {
         let patch = value_noise2(wx / 7.0, wz / 7.0, self.seed.wrapping_add(35_027));
@@ -152,6 +159,7 @@ pub(super) fn layout(cfg: &WorldSampleConfig, o: Vec2, floor: f32, seed: u32) ->
         shrooms: Vec::new(),
         pools: Vec::new(),
         door: Vec2::ZERO,
+        palette: cfg.generator_version >= super::PALETTE_VERSION,
     };
     for (c, r, depth) in [(Vec2::new(2.0, -20.0), 5.0, 1.5), (Vec2::new(-22.0, 13.0), 3.6, 1.1)] {
         // Water stands 0.6 m under the lowest rim point, so every rim voxel
@@ -174,7 +182,14 @@ pub(super) fn layout(cfg: &WorldSampleConfig, o: Vec2, floor: f32, seed: u32) ->
         let radius = (radius * (1.0 + j(3) * 0.18)).max(vm * 2.0);
         let height = height * (1.0 + j(4) * 0.2);
         let toward_clearing = (plan.world(0.0, 0.0) - w).normalize_or(Vec2::X);
-        let mut g = Giant::new(Vec3::new(w.x, base, w.y), radius, height, seed.wrapping_add(i as u32 * 97));
+        // Generator 43: the far pair is all teal, a cool back layer; near
+        // crowns mix teal and broadleaf masses.
+        let teal = match (plan.palette, i >= 6) {
+            (false, _) => 0.0,
+            (true, true) => 1.0,
+            (true, false) => 0.55,
+        };
+        let mut g = Giant::new(Vec3::new(w.x, base, w.y), radius, height, seed.wrapping_add(i as u32 * 97), teal);
         if i == HOLLOW {
             g.hollow = Some(toward_clearing);
             plan.door = Vec2::new(u, v) - Vec2::new(u, v).normalize_or(Vec2::X) * (g.ground_radius() + 1.0);

@@ -67,10 +67,18 @@ pub struct Model {
     /// Ticks from a wake to the output changing (conversion + handler).
     pub response_ticks: u32,
     pub boot_ticks: u32,
+    /// A watchdog restarts the core after a brownout; without one it hangs.
+    #[serde(default = "recovers_by_default")]
+    pub recovers: bool,
     /// Continuous draw, nW (includes core run power when it never sleeps).
     pub idle_nw: u64,
     /// Energy per wake, nJ.
     pub wake_nj: u64,
+}
+
+/// Revisions released before the watchdog existed restarted after a brownout.
+fn recovers_by_default() -> bool {
+    true
 }
 
 fn wire_ns(p: &Process, net: &Net) -> f32 {
@@ -116,7 +124,7 @@ pub fn characterize(design: &Design, registry: &Registry, p: &Process, core: &Pa
             let access = if spec.combinational { alu_chain(design, registry, p, part, 0) } else { spec.delay_ns };
             let t = core_spec.delay_ns + 2.0 * wire_ns(p, net) + access + core_spec.setup_ns;
             if t > critical.0 {
-                critical = (t, format!("core.{port} → {} #{} over {} sites, {} vias", spec.name, part.id, net.length(), net.vias()));
+                critical = (t, format!("CPU {} → {} #{} · {} Sites · {} Vias", port.to_uppercase(), spec.name, part.id, net.length(), net.vias()));
             }
         }
     }
@@ -129,17 +137,20 @@ pub fn characterize(design: &Design, registry: &Registry, p: &Process, core: &Pa
         .map_or(0.0, |(_, s, _)| s.hz as f32);
     let clock_hz = osc_hz.min(core_spec.hz as f32).min(max_clock_hz);
     if clock_hz <= 0.0 {
-        d.push(Diagnostic { severity: Severity::Error, message: "The core's clock is not driven by an oscillator".into(), fix: Some(Fix::UsePreset) });
+        d.push(Diagnostic { severity: Severity::Error, message: "Clock Undriven".into(), fix: Some(Fix::UsePreset) });
         return None;
     }
 
     // Work per wake.
     let has_alu = slaves("alu").iter().any(|(_, s)| s.role == Role::Alu);
     let alu_cpi = if has_alu { core_spec.cpi } else { core_spec.soft_alu_cpi.max(core_spec.cpi) };
-    let instructions = mix.io + mix.alu + mix.control;
-    let cycles = core_spec.cpi * (mix.io + mix.control) + alu_cpi * mix.alu;
-    let handler_us = cycles as f32 / clock_hz * 1.0e6;
     let periph = slaves("pbus");
+    let watchdog = periph.iter().any(|(_, s)| s.role == Role::Watchdog);
+    // Each wake kicks the watchdog: a bus write and a reload.
+    let control = mix.control + if watchdog { 2 } else { 0 };
+    let instructions = mix.io + mix.alu + control;
+    let cycles = core_spec.cpi * (mix.io + control) + alu_cpi * mix.alu;
+    let handler_us = cycles as f32 / clock_hz * 1.0e6;
     let adcs: Vec<&ModuleSpec> = periph.iter().filter(|(_, s)| s.role == Role::Adc).map(|(_, s)| *s).collect();
     let channels = adcs.iter().map(|s| s.channels).sum::<u32>().min(255) as u8;
     let outputs = periph.iter().filter(|(_, s)| s.role == Role::Gpio).map(|(_, s)| s.channels).sum::<u32>().min(255) as u8;
@@ -152,12 +163,12 @@ pub fn characterize(design: &Design, registry: &Registry, p: &Process, core: &Pa
     let wake_ms = if sleeps { fw.sample_ms as f32 } else { busy_us / 1000.0 };
     if sleeps && (fw.sample_ms as f32) * 1000.0 < timer {
         let min = (timer / 1000.0).ceil() as u32;
-        d.push(Diagnostic { severity: Severity::Error, message: format!("This timer cannot wake faster than every {min} ms"), fix: Some(Fix::SampleAtLeast(min)) });
+        d.push(Diagnostic { severity: Severity::Error, message: format!("Timer Min {min} ms"), fix: Some(Fix::SampleAtLeast(min)) });
         return None;
     }
     if sleeps && (fw.sample_ms as f32) * 1000.0 < busy_us {
         let min = (busy_us / 1000.0).ceil() as u32;
-        d.push(Diagnostic { severity: Severity::Error, message: format!("A wake takes {busy_us:.0} µs: the task cannot run every {} ms", fw.sample_ms), fix: Some(Fix::SampleAtLeast(min)) });
+        d.push(Diagnostic { severity: Severity::Error, message: format!("Wake {busy_us:.0} µs > {} ms", fw.sample_ms), fix: Some(Fix::SampleAtLeast(min)) });
         return None;
     }
 
@@ -184,6 +195,7 @@ pub fn characterize(design: &Design, registry: &Registry, p: &Process, core: &Pa
         wake_ticks: ((wake_ms / tick_ms).round() as u32).max(1),
         response_ticks: ((busy_us / 1000.0 / tick_ms).ceil() as u32).max(1),
         boot_ticks: ((BOOT_MS / tick_ms).ceil() as u32).max(1),
+        recovers: watchdog,
         // A polling core wakes every busy period, far faster than the world
         // step: its whole average draw is continuous.
         idle_nw: ((if sleeps { idle_w } else { average_w }) * 1.0e9) as u64,

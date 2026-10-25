@@ -188,7 +188,7 @@ fn receiver(mesh: &mut Model, world: &World, day: &DayNightCycle, viewer: Vec3, 
             p + Vec3::new(0.0, 0.62, -0.25),
             Vec3::new(0.48, 0.08, 0.15),
             Quat::IDENTITY,
-            if world.orbital.receiver.stage == 2 {
+            if matches!(world.orbital.receiver.stage,2|4) {
                 [0.4, 0.7, 0.5]
             } else {
                 [0.3, 0.75, 0.8]

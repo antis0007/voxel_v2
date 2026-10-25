@@ -21,6 +21,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const VERSION: u32 = 35;
+/// Teal canopy layers and grove moss.
+pub const PALETTE_VERSION: u32 = 43;
 /// Fully shaped floor radius; the hollow blends back to natural ground by `OUTER_R`.
 const FLOOR_R: f32 = 70.0;
 const OUTER_R: f32 = 102.0;
@@ -148,6 +150,8 @@ pub(super) fn column(cfg: &WorldSampleConfig, wx: f32, wz: f32, ground: (B, B), 
         B::Clay
     } else if plan.mossy(wx, wz) {
         B::FungalSoil
+    } else if plan.shaded(wx, wz) {
+        B::GroveMoss
     } else {
         B::Grass
     };

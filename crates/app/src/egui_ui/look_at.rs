@@ -1,9 +1,9 @@
-//! "Here's what you're looking at" panel (HWYLA / Jade style) for the block
+//! Contextual inspection panel for the block
 //! under the crosshair. Non-interactive, compact, top centre.
 //!
 //! Layout, top to bottom:
 //! * a small icon, the name, and a temperature chip when the cell is hot;
-//! * the category in the accent colour (where Minecraft shows the mod name),
+//! * the material category in the accent colour,
 //!   with state, hardness pips and distance on the same line;
 //! * for an assembly, a status dot and only the readings that matter for its
 //!   kind: power in W, stored energy in Wh, batch progress with time left,
@@ -20,8 +20,10 @@ use egui::{Align2, Color32, FontId, RichText, Sense, Stroke, vec2};
 
 pub struct LookAt<'a> {
     pub block: BlockId,
-    /// Shown only for cells noticeably above ambient.
+    /// Measured cell temperature, including ambient and frozen states.
     pub temperature_c: Option<f32>,
+    pub volume_ul: Option<u64>,
+    pub environment: Option<crate::world::environment::inspect::Inspection>,
     pub distance_m: Option<f32>,
     /// Control hint from `expedition::hint`, e.g. `F  Inspect   ·   E  Inventory`.
     pub hint: &'a str,
@@ -62,11 +64,20 @@ pub fn draw(ctx: &egui::Context, look: &LookAt) {
                     ui.spacing_mut().interact_size.y = 10.0;
                     ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
                     header(ui, look);
+                    if let Some(environment) = look.environment {
+                        ui.label(RichText::new(environment.condition).small().color(AMBER));
+                        if ui.input(|i| i.modifiers.shift) {
+                            row(ui, "Water", &format!("{:.3} L", environment.water_ul as f64 / 1_000_000.0), MANA);
+                            if environment.sediment_mg > 0 {
+                                row(ui, "Sediment", &format!("{:.3} kg", environment.sediment_mg as f64 / 1_000_000.0), AMBER);
+                            }
+                        }
+                    }
                     if let Some(probe) = look.machine {
                         ui.add_space(1.0);
                         machine(ui, probe);
                     }
-                    if !look.hint.is_empty() {
+                    if ui.input(|i| i.modifiers.shift) && !look.hint.is_empty() {
                         keycap_row(ui, look.hint);
                     }
                 });
@@ -137,23 +148,29 @@ fn facts(ui: &mut egui::Ui, look: &LookAt) {
     if look.machine.is_none() {
         let state = match material.physics.matter_state {
             MatterState::Solid => None,
-            MatterState::Powder => Some(("powder", AMBER)),
-            MatterState::Liquid => Some(("liquid", MANA)),
-            MatterState::Gas => Some(("gas", MUTED)),
-            MatterState::Plasma => Some(("plasma", DANGER)),
-            MatterState::Vacuum => Some(("void", MUTED)),
+            MatterState::Powder => Some(("Powder", AMBER)),
+            MatterState::Liquid => Some(("Liquid", MANA)),
+            MatterState::Gas => Some(("Gas", MUTED)),
+            MatterState::Plasma => Some(("Plasma", DANGER)),
+            MatterState::Vacuum => Some(("Vacuum", MUTED)),
         };
         if let Some((text, colour)) = state {
             ui.label(RichText::new(text).size(SMALL).color(colour));
         }
-        if material.physics.collision == CollisionKind::Passable && solid {
-            ui.label(RichText::new("passable").size(SMALL).color(MUTED));
+        if (!solid || ui.input(|i| i.modifiers.shift))
+            && let Some(volume) = look.volume_ul {
+                ui.label(RichText::new(format!("{:.3} L", volume as f64 / 1_000_000.0))
+                    .size(SMALL).color(MUTED));
+            }
+        if ui.input(|i| i.modifiers.shift)
+            && material.physics.collision == CollisionKind::Passable && solid {
+            ui.label(RichText::new("Passable").size(SMALL).color(MUTED));
         }
-        if solid && material.physics.hardness > 0.0 {
+        if ui.input(|i| i.modifiers.shift) && solid && material.physics.hardness > 0.0 {
             hardness_pips(ui, material.physics.hardness);
         }
     }
-    if let Some(distance) = look.distance_m {
+    if let Some(distance) = look.distance_m.filter(|_| ui.input(|i| i.modifiers.shift)) {
         ui.label(RichText::new(format!("{distance:.1} m")).size(SMALL).color(MUTED));
     }
 }
@@ -241,7 +258,7 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
         let colour = status_colour(n.status, n.enabled);
         let (dot, _) = ui.allocate_exact_size(vec2(7.0, 10.0), Sense::hover());
         ui.painter().circle_filled(dot.center(), 3.0, colour);
-        let status = if n.enabled { n.status } else { "Paused" };
+        let status = if n.enabled { super::factory::status_label(n.status) } else { "Paused" };
         ui.label(RichText::new(status).size(11.0).strong().color(colour));
         if n.upgrade > 0 {
             let tier = if n.kind == Kind::Battery {
@@ -262,6 +279,31 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
             }
         });
     });
+    if let Some(controller) = &probe.controller {
+        ui.label(RichText::new(controller).size(SMALL).color(MANA));
+    }
+    if !ui.input(|i| i.modifiers.shift) {
+        if let Some(process) = n.process() {
+            bar(ui, n.progress as f32 / process.ticks.max(1) as f32, JADE,
+                &format!("{} → {}  {:.0}%", short(NAMES[process.inputs[0].0]),
+                    short(NAMES[process.output.0]),
+                    n.progress as f32 * 100.0 / process.ticks.max(1) as f32));
+        }
+        if let Some((stored, capacity, _)) = probe.pool {
+            bar(ui, stored as f32 / capacity.max(1) as f32, MANA,
+                &format!("{} / {}", power::fmt_energy(stored as f64),
+                    power::fmt_energy(capacity as f64)));
+        } else if n.kind.powered() {
+            bar(ui, n.energy as f32 / power::CONSUMER_BUFFER as f32, MANA,
+                &format!("{} / {}", power::fmt_joules(n.energy as f64),
+                    power::fmt_joules(power::CONSUMER_BUFFER as f64)));
+        }
+        if n.water > 0 || n.kind.water_port() {
+            bar(ui, n.water as f32 / 8192.0, MANA,
+                &format!("{:.1} / 16,000 L", n.water as f32 * 1000.0 / 512.0));
+        }
+        return;
+    }
     if let Some(mode) = n.kind.modes().get(n.mode as usize)
         && (n.kind != Kind::Furnace || n.mode == 1) {
             let short = mode.split(':').next().unwrap_or(mode);
@@ -493,14 +535,9 @@ fn keycap_row(ui: &mut egui::Ui, hint: &str) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         for segment in hint.split('·').map(str::trim).filter(|s| !s.is_empty()) {
-            match segment.split_once("  ") {
-                Some((key, action)) => {
-                    keycap(ui, key.trim());
-                    ui.label(RichText::new(action.trim()).size(SMALL).color(PAPER));
-                }
-                None => {
-                    ui.label(RichText::new(segment).size(SMALL).color(MUTED));
-                }
+            if let Some((key, action)) = segment.split_once("  ") {
+                keycap(ui, key.trim());
+                ui.label(RichText::new(action.trim()).size(SMALL).color(PAPER));
             }
         }
     });
@@ -512,6 +549,6 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
         .stroke(Stroke::new(1.0, EDGE))
         .inner_margin(egui::Margin::symmetric(3, 0))
         .show(ui, |ui| {
-            ui.label(RichText::new(key).size(SMALL).strong().color(PAPER));
+            ui.label(RichText::new(format!("[{key}]")).size(SMALL).strong().color(PAPER));
         });
 }

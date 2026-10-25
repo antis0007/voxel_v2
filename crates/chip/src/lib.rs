@@ -9,8 +9,10 @@ pub mod edit;
 pub mod extract;
 pub mod fab;
 pub mod firmware;
+pub mod foundry;
 pub mod library;
 mod loops;
+pub mod lot;
 pub mod presets;
 pub mod registry;
 pub mod route;
@@ -20,3 +22,5 @@ pub mod runtime;
 mod tests;
 #[cfg(test)]
 mod tests_runtime;
+#[cfg(test)]
+mod tests_fab;

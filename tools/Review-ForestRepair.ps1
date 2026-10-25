@@ -7,7 +7,7 @@ param(
     [int]$CloudDivisor=3,
     [ValidateSet('clear','partly','overcast','storm','winter')][string]$Weather='partly',
     [ValidateSet('','preview','canonical')][string]$HorizonSource='',
-    [string]$DebugView='', [switch]$Capture, [switch]$Video,
+    [string]$DebugView='', [switch]$Capture, [switch]$Video, [switch]$CaptureHud,
     [switch]$NoShadows, [switch]$Physics, [switch]$SkipClouds, [switch]$SkipHorizon,
     [switch]$GpuTelemetry, [switch]$FrameTiming, [switch]$NormalPresent,
     [int]$Warmup=12,
@@ -31,6 +31,7 @@ $argsList=@('--benchmark-world=hills','--benchmark-seed=2738958700',"--benchmark
 if($GeneratorVersion -gt 0){$argsList+="--benchmark-generator-version=$GeneratorVersion"}
 if($VoxelScale){$argsList+="--benchmark-scale=$VoxelScale"}
 if($Capture -or $Video){$argsList+='--benchmark-capture-frames'}
+if($CaptureHud){$argsList+='--benchmark-capture-hud'}
 if($Video){$argsList+='--benchmark-capture-interval=0.5'}
 if($DebugView){$argsList+="--benchmark-debug=$DebugView"}
 if($NoShadows){$argsList+='--benchmark-no-shadows'}
@@ -57,6 +58,10 @@ $vars.VOXEL_HORIZON_UPLOAD_BYTES=$null
 $vars.VOXEL_HORIZON_TRACE=[Environment]::GetEnvironmentVariable('VOXEL_HORIZON_TRACE')
 $vars.VOXEL_HORIZON_CULL=[Environment]::GetEnvironmentVariable('VOXEL_HORIZON_CULL')
 $vars.VOXEL_RENDER_TIMING=if($FrameTiming){'1'}else{$null}
+$vars.VOXEL_GRIMOIRE_REVIEW=[Environment]::GetEnvironmentVariable('VOXEL_GRIMOIRE_REVIEW')
+$vars.VOXEL_REVIEW_INPUT_ISOLATED=[Environment]::GetEnvironmentVariable('VOXEL_REVIEW_INPUT_ISOLATED')
+$vars.VOXEL_REVIEW_SPELL_CARD=[Environment]::GetEnvironmentVariable('VOXEL_REVIEW_SPELL_CARD')
+$vars.VOXEL_REVIEW_CODEX=[Environment]::GetEnvironmentVariable('VOXEL_REVIEW_CODEX')
 $vars.VOXEL_BENCHMARK_NORMAL_PRESENT=if($NormalPresent){'1'}else{$null}
 if($Case -eq 'motion'){$vars.VOXEL_TERRAIN_ROUTE='1'}
 if($Case -eq 'edits'){$vars.VOXEL_TERRAIN_EDITS='1'}

@@ -128,7 +128,7 @@ pub(super) fn reprofile(h: f32, shore: Shore, version: u32) -> f32 {
         let concave = 1.0 + 0.22 * smoothstep(0.0, shore.limit * 1.4, d);
         WATER_LEVEL_METERS + d * (gain + (1.0 - gain) * blend) * concave
     } else {
-        let blend = smoothstep(0.0, -5.0, d);
+        let blend = if version >= 37 { 1.0 - smoothstep(-5.0, 0.0, d) } else { smoothstep(0.0, -5.0, d) };
         // Nearshore is flatter (wide shallow shelf); farther out it steepens.
         WATER_LEVEL_METERS + d * (0.48 + 0.52 * blend)
     }
@@ -145,7 +145,17 @@ pub(super) fn shore_surface(
     version: u32,
 ) -> Option<(BlockId, BlockId)> {
     let d = height - WATER_LEVEL_METERS;
-    let beach_limit = if version >= 22 {
+    let patch_scale = if version >= 45 { 43.0 } else { 9.0 };
+    let jitter = value_noise2(wx / patch_scale, wz / patch_scale, seed.wrapping_add(9521));
+    let beach_limit = if version >= 49 {
+        // Low wet strand, with grass-backed coves between exposed headlands.
+        // A wide elevation interval formerly coated the whole coastal terrace.
+        shore.limit * (0.55 + jitter * 0.65) + 0.25
+    } else if version >= 45 {
+        // Broad grass/soil tongues interrupt the upper sand band. Reuse the
+        // same sediment patch for shingle and wrack instead of adding speckle.
+        shore.limit + 0.5 + jitter * 2.4
+    } else if version >= 22 {
         shore.limit + 2.2
     } else {
         shore.limit + 0.6
@@ -153,12 +163,14 @@ pub(super) fn shore_surface(
     if !(-3.0..=beach_limit).contains(&d) {
         return None;
     }
-    let jitter = value_noise2(wx / 9.0, wz / 9.0, seed.wrapping_add(9521));
     let underwater = d < -0.4;
     // Steep ground never holds sand: cliffs are bare rock whatever the coast type.
     // Generator 17 starts that rock a little sooner so headlands read as cliffs.
     let cliff = slope > if version >= 17 { 0.40 } else { 0.5 };
     let kind = if cliff { CoastKind::Rocky } else { shore.kind };
+    if version >= 49 && !cliff && d > 0.9 + jitter * 1.3 {
+        return Some((BlockId::Grass, BlockId::Dirt));
+    }
     let mut placed = match kind {
         CoastKind::Rocky if !underwater => (
             if jitter > 0.55 {
@@ -195,7 +207,7 @@ pub(super) fn shore_surface(
         {
             placed.0 = BlockId::Gravel;
         }
-        if kind == CoastKind::Rocky && d < 1.5 {
+        if kind == CoastKind::Rocky && d < if version >= 49 { 0.65 } else { 1.5 } {
             placed = (BlockId::Gravel, BlockId::Stone);
         }
     }
@@ -205,6 +217,17 @@ pub(super) fn shore_surface(
 /// Generator 17 beach face. A low berm, the swale behind it, and short cusps.
 /// Rocky coasts get a wave-cut notch instead. The shift stays under about a
 /// metre so the waterline does not turn into a step.
+pub(super) fn coastal_shoulders(h: f32, wx: f32, wz: f32, seed: u32) -> f32 {
+        let d = h - WATER_LEVEL_METERS;
+        // Broad coastal shoulders, not small bumps at the waterline. Keep
+        // the wet strand fixed while raising broken grass-backed terraces.
+        let shoulder = smoothstep(0.15, 1.5, d)
+            * (1.0 - smoothstep(5.0, 9.0, d));
+        let bank = value_noise2(wx / 38.0, wz / 38.0, seed.wrapping_add(9541));
+        let rise = (1.2 + smoothstep(0.20, 0.80, bank) * 2.8) * shoulder;
+        h + rise
+}
+
 pub(super) fn strand(h: f32, shore: Shore, wx: f32, wz: f32, seed: u32, version: u32) -> f32 {
     let d = h - WATER_LEVEL_METERS;
     match shore.kind {
@@ -237,7 +260,9 @@ pub(super) fn strand(h: f32, shore: Shore, wx: f32, wz: f32, seed: u32, version:
             }
             let fade = smoothstep(-4.2, -1.8, d)
                 * (1.0 - smoothstep(shore.limit + 0.6, shore.limit + 3.4, d));
-            let cusp = (value_noise2(wx / 17.0, wz / 17.0, seed.wrapping_add(9533)) - 0.5) * 0.42;
+            let section_scale = if version >= 45 { 67.0 } else { 17.0 };
+            let section = value_noise2(wx / section_scale, wz / section_scale, seed.wrapping_add(9533));
+            let cusp = (section - 0.5) * 0.42;
             let bars = if version >= 24 {
                 // Bars run along the shore, not around it. Keyed to elevation alone,
                 // the sine drew a ring of stripes at constant height on every coast.
@@ -249,9 +274,13 @@ pub(super) fn strand(h: f32, shore: Shore, wx: f32, wz: f32, seed: u32, version:
                 bar_phase.sin() * 0.24 * (1.0 - smoothstep(-3.8, -0.2, d))
             };
             let platform = -0.10 * (1.0 - smoothstep(-0.7, 0.18, d));
-            let lower_berm = (-((d - shore.limit * 0.42) / 0.72).powi(2)).exp() * 0.58;
-            let swale = (-((d - shore.limit * 0.95) / 1.15).powi(2)).exp() * 0.62;
-            let dune_toe = (-((d - shore.limit * 1.65) / 1.65).powi(2)).exp() * 0.92;
+            // Continuous beach sections vary together: low open strands give
+            // way to raised dune toes, rather than three contour-wide rings.
+            let shift = if version >= 45 { (section - 0.5) * 1.8 } else { 0.0 };
+            let strength = if version >= 45 { smoothstep(0.24, 0.76, section) } else { 1.0 };
+            let lower_berm = (-((d - shore.limit * 0.42 - shift) / 0.72).powi(2)).exp() * 0.58 * strength;
+            let swale = (-((d - shore.limit * 0.95 - shift) / 1.15).powi(2)).exp() * 0.62 * strength;
+            let dune_toe = (-((d - shore.limit * 1.65 - shift) / 1.65).powi(2)).exp() * 0.92 * strength;
             h + (cusp + bars + platform + lower_berm - swale + dune_toe) * fade
         }
         CoastKind::Mudflat => h,
@@ -551,7 +580,9 @@ pub(super) fn relief(wx: f32, wz: f32, seed: u32, h: f32, footprint: f32, versio
     // Generator 17 squeezes that rim and leaves a talus apron on the toe.
     let plateau_field = value_noise2(wx / 1500.0, wz / 1500.0, seed.wrapping_add(9841))
         + (value_noise2(wx / 330.0, wz / 330.0, seed.wrapping_add(9843)) - 0.5) * 0.08;
-    let (rim_lo, rim_hi) = if version >= 17 {
+    let (rim_lo, rim_hi) = if version >= 37 {
+        (0.59, 0.73)
+    } else if version >= 17 {
         (0.648, 0.672)
     } else {
         (0.62, 0.68)
@@ -643,6 +674,19 @@ mod tests {
                 "beach ornament moved height by {} at {h}",
                 shaped - h
             );
+        }
+    }
+
+    #[test]
+    fn painterly_strand_is_bounded_and_continuous_across_sections() {
+        for x in [-200.0, -67.0, -0.01, 0.0, 67.0, 200.0] {
+            for step in -30..=80 {
+                let h = WATER_LEVEL_METERS + step as f32 * 0.1;
+                let a = strand(h, beach(), x, 19.0, 7, 45);
+                let b = strand(h, beach(), x + 0.01, 19.0, 7, 45);
+                assert!((a - h).abs() < 1.8);
+                assert!((a - b).abs() < 0.01);
+            }
         }
     }
 }

@@ -13,6 +13,8 @@ struct Crown {
     rx: f32,
     up: f32,
     down: f32,
+    /// Deep teal needle-leaf mass instead of the lighter broadleaf green.
+    teal: bool,
 }
 
 pub(super) struct Giant {
@@ -51,7 +53,9 @@ fn bezier(a: &[Vec3; 3], t: f32) -> Vec3 {
 }
 
 impl Giant {
-    pub fn new(base: Vec3, radius: f32, height: f32, seed: u32) -> Self {
+    /// `teal` is the share of crown masses in deep teal (generator 43); 0 keeps
+    /// the generator 35 all-broadleaf canopy.
+    pub fn new(base: Vec3, radius: f32, height: f32, seed: u32, teal: f32) -> Self {
         let h = |salt: i32| hash2(salt, 3, seed);
         let phase = h(0) * TAU;
         let lean_a = h(1) * TAU;
@@ -90,10 +94,11 @@ impl Giant {
                 rx: 7.0 + radius * 1.2 + h(70 + k) * 3.0,
                 up: 4.0 + h(80 + k) * 2.0,
                 down: 2.4 + h(90 + k),
+                teal: h(95 + k) < teal,
             });
         }
         let crest = g.axis(height * 0.84);
-        g.crowns.push(Crown { c: crest + Vec3::Y * 2.0, rx: 6.0 + radius, up: 5.0, down: 3.0 });
+        g.crowns.push(Crown { c: crest + Vec3::Y * 2.0, rx: 6.0 + radius, up: 5.0, down: 3.0, teal: h(99) < teal });
         // Bracket fungi in small tiers: three clumps, two brackets each.
         for k in 0..6 {
             let clump = (k / 2) as i32;
@@ -138,6 +143,11 @@ impl Giant {
         let taper = self.radius * (1.0 - 0.58 * t);
         let flare = self.radius * 0.85 * (-y.max(0.0) / 2.8).exp();
         (taper + flare) * (1.0 + 0.13 * (5.0 * theta + y * 0.21 + self.phase).sin())
+    }
+
+    /// Is (x, z) under one of this tree's crown masses?
+    pub fn shades(&self, x: f32, z: f32) -> bool {
+        self.crowns.iter().any(|c| (c.c.x - x).hypot(c.c.z - z) < c.rx * 0.8)
     }
 
     /// Trunk radius at ground level, ignoring fluting.
@@ -262,7 +272,7 @@ impl Giant {
                 let n = value_noise3(m.x / 3.6, m.y / 3.6, m.z / 3.6, self.seed);
                 let hole = value_noise3(m.x / 8.5, m.y / 6.0, m.z / 8.5, self.seed.wrapping_add(1));
                 if e < 0.72 + (n - 0.5) * 0.6 && !(e > 0.3 && hole < 0.26) {
-                    return Some(B::Leaves);
+                    return Some(if c.teal { B::PineLeaves } else { B::Leaves });
                 }
             }
             if q.y < 0.0 && horiz < 0.66 {

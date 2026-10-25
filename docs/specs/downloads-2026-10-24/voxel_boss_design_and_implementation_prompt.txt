@@ -1,0 +1,581 @@
+VOXEL BOSSES: ORIGINAL GAMEPLAY AND IMPLEMENTATION BRIEF
+Rust + raw wgpu. No Bevy.
+Design direction and coding-agent prompt — 21 October 2026
+
+PURPOSE
+
+Implement a distinctive boss and world-encounter program for the existing first-person, editable voxel game. The intended experience combines adventurous discovery, expressive spell construction, consequential materials, and substantial factory building. Its identity must come from what players can do, the creatures' purposes, and the consequences left in the world.
+
+The immediate priority is the Rime Hart Sentinel redesign. Its defining mechanic is EDITABLE BATTLEFIELD ANATOMY: the Hart grows an external crown of ice through the terrain, and players can steer, climb, cut, obstruct, and repurpose that growth while fighting it.
+
+The second priority is the Unfinished Engine, whose defining mechanic is STEALING THE ENEMY'S NEXT CAPABILITY WHILE IT IS BEING MANUFACTURED. These two encounters should establish clearly different play before the remaining roster is produced.
+
+The broader target is eight major boss families, supported by lesser creatures, substantial industrial and ecological sites, multiple encounter contexts, and useful outcomes after resolution. The final two boss concepts have especially important prototype gates. More content must mean more player decisions and discoveries, rather than recolors, health multipliers, empty registration entries, or repeated core-exposure fights.
+
+This is a proposed design and implementation brief. The source conversation contains screenshots and implementation reports, not a verified checkout of the current game. Audit the actual repository before selecting integration points. Do not describe proposed systems as already implemented.
+
+1. NON-NEGOTIABLE CONSTRAINTS
+
+- Retain the custom Rust game and raw wgpu rendering architecture. Do not introduce Bevy or replace the engine.
+- Use the established world, save, inventory, material, spell, machine, animation, and rendering systems where they exist. Add focused missing capabilities instead of parallel boss-only simulations.
+- Preserve first-person control. No required third-person camera, forced lock-on, camera spins, inverted controls, or unannounced attacks that originate outside the player's view.
+- Support ordinary weapons, terrain editing, utility spells, construction, and preparation. A factory must not be required to enter or understand an early encounter.
+- Give automation meaningful advantages through the same rules that manual play uses.
+- Preserve persistent world edits and resolved encounter states. Reloading must not duplicate loot, restore consumed stock, resurrect a dismantled mechanism, or silently reverse the player's construction.
+- Give each boss a recognizable job, territory, sensory model, limitations, and behavior when the player is absent.
+- Maintain an original visual identity. Interpret the requested influences through weight, history, inspectable objects, material interactions, and multiple approaches. Do not reproduce an existing game's boss design.
+- Keep science understandable through visible consequences and optional instruments. Clearly distinguish invented magical rules from simplified physical models.
+- Never call a concept, generated reference image, placeholder mesh, unit-test count, or boss definition a completed playable encounter.
+
+Reported existing features include battery rate limits, induction matrices, cable tiers, transformers, a biomass burner, assembling machines, item pipes, and production statistics. Reports also identify missing gas/chemical/fluid-fuel machinery and redstone-style conditions. Verify what has changed since those reports. Do not write designs that silently assume all of those missing prerequisites exist.
+
+The user reported save version 21 and an unresolved terrain timing test that consistently measured approximately 1.99 times the previous generator's cost. Other sessions were editing terrain. Establish the current baseline; neither attribute that failure to these boss changes nor dismiss it as unrelated without evidence. Preserve unrelated uncommitted work. Do not weaken a performance threshold to make a report green.
+
+2. THE DESIGN FILTER
+
+Every retained boss must answer these questions with a concrete demonstration:
+
+1. What useful or surprising action can the player perform here that an ordinary enemy does not invite?
+2. What will happen in the next twenty to forty seconds of normal first-person play?
+3. Can the player understand the cause, commitment, path, contact, and aftermath of its major actions?
+4. Can at least two materially different approaches succeed?
+5. Does the opponent actively contest the player's intervention?
+6. Can the player improvise using ordinary world systems?
+7. What remains useful, changed, or consequential after the encounter?
+8. Which resource, ownership, persistence, or performance rule could this interaction violate?
+
+Reject the following as defining mechanics:
+- An elemental animal with a charge, ring attack, summon wave, and larger health bar.
+- Destroy three special objects, wait for a shield to vanish, then damage a core.
+- Fire raises an overheat meter and triggers the only damage window.
+- A hidden sequence of correct spells, switches, or exact numerical values.
+- Unlimited copying of spells, inventories, machines, or terrain.
+- Offscreen teleport attacks, forced camera movement, and omnidirectional visual clutter.
+- A slow industrial process that leaves the player waiting beside a progress bar.
+- A clever player solution that is invalidated by an arbitrary boss immunity.
+
+Charges, sweeps, ranged attacks, and brief recovery windows can support an encounter. They cannot carry its entire identity.
+
+Keep the following distinct player activities across the roster:
+- Hart: grow and edit the battlefield.
+- Engine: intercept production and steal capabilities.
+- Ferryman: change connectivity and relocate a moving threat.
+- Choir: deceive perception.
+- Scale: alter a moving opponent's balance.
+- Glassweaver: change a spell's route and composition.
+- Vacancy: reshape a projected threat through light and occlusion.
+- Unhoused King: choose and constrain the enemy's next body.
+
+3. WHAT THE CURRENT HART IMAGES ACTUALLY SHOW
+
+The provided purple, green, and blue captures share a broad visual vocabulary: thin branching antlers, a wedge-like head, a narrow neck/chest transition, large relatively plain colored torso regions, pale lower legs or bib, and dark cuboid feet. Exact mesh or rig reuse cannot be established from still images.
+
+The individual geometric components read more strongly than the animal's anatomy. The redesign needs clear shoulder mass, a load-bearing neck root, a deep chest, a leaner abdomen, haunches, articulated limbs, and convincing cloven feet. Some limbs are visibly bent in the blue capture, so do not claim the model has no articulation.
+
+Antlers need substantial roots, primary beams, secondary structures, deliberate negative space, and a crown that reads from both front and side. Adding many equally thin branches will not provide that hierarchy.
+
+The head needs a brow, eye recesses, muzzle and jaw structure, and a clear attachment to the neck. Material zones should explain hide, bone or ceramic, frost, and limited mechanical components.
+
+The blue full-screen capture identifies the creature as Rime Hart Sentinel and displays Enraged. Its captured posture is comparatively neutral, and large bright cyan prismatic effects compete with the body. This is a presentation observation, not proof that the animation or state-machine code is missing.
+
+The environment should explain why this particular creature is here. A seed archive, a failed heat-rejection route, frozen irrigation channels, worn contact stones, and partially preserved growth are more specific than a generic masonry room with crystals.
+
+4. RIME HART SENTINEL — THE CROWN YOU CAN EDIT
+
+Premise and visual identity
+
+The Hart is an ancient living custodian of a seed vault. Its original duty was to preserve a forest that no longer exists outside the archive. Its damaged maintenance behavior now treats heat leaks and disturbances as breaches to be enclosed.
+
+Keep it recognizably cervine and physically imposing. Use a heavy forward body, strong neck roots, lean belly, powerful haunches, deliberate leg articulation, and planted cloven hooves. A compact pale face sits beneath a crown with thick beams and a few broad, comb-like structures. A shoulder mantle opens to reject accumulated heat.
+
+Use a restrained palette: dark peat or charcoal hide, aged bone or ceramic, small areas of tarnished conductive material, selective frost, and narrow warm openings when heat is being rejected. Color and emission must communicate material or state rather than replace form.
+
+The generated concept reference from the conversation is an art-direction aid. It is not a working mesh or validated game capture. Its dense tiny surface protrusions should largely become authored texture detail and selected silhouette clumps. Do not turn every depicted micro-voxel into a separate cube or draw call.
+
+Defining mechanic
+
+The Hart plants its crown against a wet surface and grows a branching external crown into the world. This growth becomes ordinary editable ice geometry: cover, obstacles, crossings, and temporary extensions of its reach.
+
+Heat sources influence the direction of new growth. The player can provide, move, extinguish, or shield sources. A visible target commitment determines the next segment; already-grown geometry does not swivel after the player.
+
+When the Hart makes contact with its connected growth, it can launch a clearly visible rime pulse along it. Cutting a physical connection stops that route. The pulse is an explicitly fictional magical effect, not a claim about real thermal or electrical propagation.
+
+Avoid a permanent invisible tether between a moving creature and detached world geometry. Define contact and pulse launch precisely. A pulse already emitted can continue along valid connected ice; a new pulse needs an actual supported contact. Detached pieces remain normal world ice under the game's existing support, collision, and melting rules.
+
+A representative thirty-to-forty-second exchange
+
+- The Hart braces, lowers its crown into a shallow channel, and draws available water toward a contact. A visible growing front announces the threatened route.
+- The player sends an ember projectile onto a ledge across a gap. Alternatively, they throw a heated object or move a portable fueled lure. The Hart visibly accepts that target.
+- A stepped branch grows toward the ledge, consuming local water. It forms a crossing supported by the surrounding terrain.
+- The Hart announces a pulse through the connected crown. The player crosses and cuts the feeding junction without removing the bridge's terrain supports.
+- The pulse reaches the break and stops. The player now owns a useful piece of cover or traversal geometry.
+- The Hart advances, repositions its planting point, or begins a new visible connection. Its mantle opens as stored heat is rejected.
+- The player can attack the body, interrupt the new connection, alter water access, or exploit the route they created.
+
+This exchange must work without requiring one named spell. A pick, ordinary heat source, available water, and movement should demonstrate the central rule.
+
+Opponent behavior and escalation
+
+The Hart commits long enough for players to act. It does not perfectly follow a moving heat source forever. It protects a chosen maintenance action, reassesses after completion or interruption, and can physically clear appropriate obstructions.
+
+After interference, it changes its planting point or branch geometry instead of switching on an arbitrary immunity. Reconnection consumes water, time, and work. Depleting its supply or thermal capacity changes what it can do. It can continue a shorter physical pursuit while seeking another usable contact.
+
+Begin with only a few large, readable branches. More active connections are not automatically a better difficulty increase. Changes in available routes, water sources, and cover should create the escalation.
+
+Combat and alternatives
+
+Ordinary damage remains useful throughout. Manipulation changes position, exposure, reach, and resource use; it does not unlock the only valid damage window.
+
+Manual approaches include severing branches, luring growth, obstructing contacts, using cover, and direct combat. Automation can supply fueled lures, redirect water, or trigger an existing spell emitter or cutter at a connection. Implement these through actual supported systems.
+
+A restoration route repairs the vault's heat-rejection path and restores viable conditions. This must be an observable world condition that can be achieved through more than one arrangement, not a mandatory sequence of glowing pedestals. Stabilization allows the Hart to resume its original work.
+
+Rewards and lasting world changes
+
+A resolved encounter provides a rime-growth capability for traversal and construction, and a cooling or phase-change-storage component for factories. Salvage and restoration can provide different forms of the same broad capability category. Do not force a later kill after a successful restoration.
+
+Growth requires material and energy. Cooling requires a modeled destination for removed heat. If the implementation uses a heat-pump model, include the work input and heat rejection in the energy account. Magical work must have an explicit fictional source and cost.
+
+Prototype rejection gate
+
+Reject or revise the mechanic if players only circle a heat lure, wait for a meter, cut the same mandatory junction, or cannot understand why a pulse reached them. The target demonstration is deliberate bridge creation, connection severing, and an enemy response that obeys the same rules.
+
+5. THE UNFINISHED ENGINE — STEAL ITS NEXT ARM
+
+Premise
+
+A mobile foundry has spent centuries trying to complete itself. Its body is a recognizable production line: material bins, visible assembly cradles, sorting manipulators, installed tool limbs, and a conspicuously unfinished attachment point.
+
+Immediate play
+
+The player sees a weapon arm taking shape while an installed limb continues attacking. The finished arm must physically travel through a short installation route. The player interrupts that transfer, diverts the output, or steals the completed module before installation.
+
+The stolen module is a real usable object with its own requirements. A player might mount it on a temporary support, use it as a powered field tool, or carry it home. It is not a boss-only glowing pickup.
+
+Other approaches
+
+Damage an unfinished module, interrupt a service arm, remove stock, reroute an existing item connection, or supply a different compatible material whose actual properties change the next component. Do not make arbitrary rubbish a secret weakness; supported recipes and material rules determine valid outcomes.
+
+An automator can filter outputs, time a gate, provide controlled stock, or build a competing route. Manual interaction remains feasible with the tools and access provided by the site.
+
+Active opposition
+
+The Engine changes its next module choice based on actual stock and observed threats. It can protect a transfer route, recover accessible stolen parts, or choose a different attachment. It cannot instantly fabricate a counter from nonexistent resources.
+
+Keep the initial module set small and visibly different. For example: a bracing shield, a sweeping tool, and a ranged launcher. Installed modules change geometry and behavior rather than only statistics.
+
+Resolution and reward
+
+Defeat yields real salvage. Restoring a feasible production order can turn the site into a limited, serviced fabrication facility. Useful unlocks include modular field tools, reclamation, and machine assembly.
+
+Resource rules
+
+Finite stock, installation time, bounded module slots, real power requirements, and explicit item ownership prevent infinite repair or item duplication. The encounter may use communicated site stock and intentionally offered materials; it must not consume arbitrary distant player constructions.
+
+Reject if the fight becomes destroying supply pylons while watching a manufacture timer.
+
+6. THE FERRYMAN WITHOUT A RIVER — MOVE THE MONSTER BY BUILDING ITS ROUTE
+
+Premise
+
+A ceremonial mask and ribbed hull travel with a finite volume of dark water through a ruined lock system. The Ferryman still attempts a crossing whose channel has collapsed.
+
+Immediate play
+
+An approaching extension of its body enters a channel. The player breaks a divider, opens a sluice, or places a barrier. Water visibly moves into a side basin, changing where the creature can reach and exposing a route the player can cross.
+
+The first implementation should use bounded basins, channels, and a solid readable core. Do not require an unrestricted full-world fluid creature.
+
+Combat and construction
+
+Direct attacks interrupt accessible body structures while the player alters the route. Building a bank, draining a short connection, freezing an available channel, or opening a spillway changes the threat's connectivity.
+
+The Ferryman cannot teleport into arbitrary puddles. Its volume and travel must visibly reach a location. It can contest interventions by moving mass, striking barriers, or choosing another valid connected route.
+
+Automation
+
+Pumps, level controls, gates, and powered transport can make routing more reliable. Basic buckets, accessible site sluices, and terrain edits provide manual alternatives. The encounter must not require a pump unlocked only by defeating this boss.
+
+Resolution and reward
+
+Reconnecting its intended crossing and giving it a valid destination can restore a ferry service. Combat or capture yields fluid-handling components and a portable siphon or flow-manipulation ability.
+
+Prototype rejection gate
+
+If the optimal experience is standing safely beside a pump until a tank empties, revise it. Routing must create immediate movement, access, and positioning decisions.
+
+7. THE VENT CHOIR — MAKE IT ATTACK THE WRONG PLACE
+
+Premise
+
+A colony of bell-mouths, living diaphragms, and resonant organs occupies an old ventilation or pressure network. It finds disturbances through the network rather than through an omniscient view of the player.
+
+Immediate play
+
+A loud action causes a visible inhalation to travel through nearby ducts. The player throws a noisy object into another gallery or starts a machine there. A mouth turns or swells toward the inferred location and commits its discharge.
+
+The player uses that commitment to cross, attack an organ, open a route, or redirect the pressure path.
+
+Perception rules
+
+Use bounded gameplay sound events and a comprehensible duct/occlusion model. Do not implement a full acoustic wave simulator merely for this encounter. Let visible vibration, dust, diaphragm motion, and directional warnings show how the colony reached its conclusion.
+
+A decoy works because it supplies the relevant evidence. It is not a special aggro exception. The Choir can probe, change which mouth listens, or move attention after a failed attack.
+
+Automation
+
+Timed hammers, valves, machine cycles, and acoustic emitters provide decoys and signal patterns when those underlying systems exist. Quiet manual traversal and thrown objects remain sufficient.
+
+Resolution and reward
+
+A player may destroy the colony, divert its territory, or establish a stable pressure cycle that lets it coexist with a working site. Rewards include directional sensing, echo mapping, pressure controls, and useful signal devices.
+
+Accessibility and rejection gate
+
+Every essential sound cue has a visual counterpart. Do not require pitch matching, a rhythm minigame, or attacks from several unseen vents at once. Reject the concept if players cannot understand why a decoy succeeded or failed.
+
+8. THE FUNERAL SCALE — ALTER A MOVING OPPONENT'S BALANCE
+
+Premise
+
+A funerary machine carries a suspended central body between counterweighted limbs. Ground-accessible baskets, large chains, brakes, and loading chutes explain how it stands and moves.
+
+Immediate play
+
+A descending weapon begins loading one side. The player releases rubble or fluid ballast into an accessible basket. The change stalls the action, shifts a support, or forces a different stance.
+
+The opponent responds by unloading a basket, engaging a brake, moving its load, or choosing another reachable attack. This is a moving contest with several useful configurations.
+
+Player expression
+
+Use existing items, terrain, fluids, winches, or impulse tools. A player can rebalance the mechanism, damage a support, exploit its recovery, or take a direct combat route. Useful interventions happen near ordinary viewing height.
+
+Automation
+
+Feed ballast, drive a winch, or coordinate a brake with a sensor. These actions should operate the same modeled mechanisms that manual play uses.
+
+Resolution and reward
+
+Complete the interrupted lifting or burial operation, secure the machine, or dismantle it. Rewards include lifting, hauling, cranes, and a field pulley or force-transfer tool.
+
+Model and rejection gate
+
+Use a bounded mechanical model with explicit loads and energy sources. Do not build a universal rigid-body solver as a prerequisite. Never turn the encounter into finding one exact weight value. Reject it if useful interactions mostly require looking straight upward or if balance changes are visually imperceptible.
+
+9. THE GLASSWEAVER — EDIT A SPELL WHILE IT IS IN THE WORLD
+
+Premise
+
+A delicate but dangerous organism maintains a small lattice of physical prisms, anchor points, and luminous filaments. It uses that lattice as an external spell instrument.
+
+Immediate play
+
+A visible spell enters a filament, passes through an identifiable modifier, and takes a readable route. The player cuts or moves a connection, rotates an accessible prism, or inserts an allowed modifier. The next spell behaves differently.
+
+The desired moment is turning a hostile apparatus into temporary cover, a delivery route, a trap, or an attack on its maker.
+
+Rules and opposition
+
+Use the actual spell execution system, including ownership, payload costs, trigger limits, and material effects. Limit the active lattice to what a player can understand from the normal camera. Clearly show route direction and the next payload.
+
+The Weaver actively repairs, retracts, or relocates connections. It pays the same costs and follows the same routing rules. It cannot silently change all connections at once or re-aim a committed shot without a cue.
+
+Utility spells matter. A cooling payload might close a wet route; an excavation payload might sever a support; a growth payload can create a crossing only if the game's growth system and resources support it.
+
+Automation and rewards
+
+A player can build emitters, shutters, routing devices, and timed interruptions. Resolve the encounter through combat, containment, or a stable arrangement that leaves a useful relay system.
+
+Rewards extend spell routing, filtering, delayed delivery, and remote utility. Do not make the reward only a stronger damage projectile.
+
+Prototype rejection gate
+
+Reject it if it becomes shooting colored crystals in order, reflecting one compulsory beam, or visually tracing an unreadable web. Unlimited recursive splitting or cloning of a complete wand is forbidden.
+
+10. THE LAMPLIGHTER'S VACANCY — BUILD THE SHAPE THAT LIMITS ITS REACH
+
+Status: retain as a high-value prototype, with a strict readability gate.
+
+Premise
+
+An absent keeper persists as an articulated shadow cast by a moving physical lantern and a few solid relics. The lantern assembly is visible, vulnerable, and part of the world. Its projected shape appears on a supported surface before the corresponding dangerous action becomes active.
+
+Immediate play
+
+A blade-like projection extends across a wall and onto the floor. The player builds a nearer wall that catches or occludes the designated projection before it reaches the route behind it. The dangerous image is visibly confined to the nearer receiving surface. The lantern assembly moves to regain reach. The player moves the obstruction, changes the lighting arrangement, or attacks the physical source.
+
+Only the designated relic projection is living anatomy. Ordinary shadows cast by player blocks do not automatically become extra monster limbs. This is a specific fictional binding rule layered over geometric projection; communicate it visually and apply it consistently.
+
+Light changes reach and geometry; it is not simply the correct damage element.
+
+Player and automation expression
+
+Use blocks, shutters, portable lights, excavation, and interruptions of lantern motion. Powered shutters and timed lighting can hold a route open or constrain an attack, while manual placement remains useful.
+
+Define precisely which lights and surfaces participate in the magical projection. Ordinary illumination is not automatically a universal banishment rule. Secondary light can suppress or soften active areas only if that is an explicitly implemented and consistently communicated rule.
+
+Resolution and reward
+
+Restore its service route, confine it, or dismantle the lantern assembly. Useful outcomes include projection, optical sensing, light control, and a limited fictional shadow-construction ability.
+
+Prototype gate
+
+Prove active shapes are unmistakable on ordinary terrain, under the intended rendering settings, without requiring a dark unreadable room. The attack silhouette must be independent of the player's camera and have a minimum visible warning period. No invisible shadow collision and no instant damage from a tiny illumination threshold change.
+
+Start with a bounded set of relevant lights and surface patches. If the renderer and collision model cannot support fair projected geometry, keep this as an eerie world event instead of shipping an unfair boss.
+
+11. THE UNHOUSED KING — CHOOSE ITS NEXT BODY
+
+Status: retain as a high-value prototype, with a strict distinction from the Engine.
+
+Premise
+
+A displaced intelligence moves among a limited, visible class of abandoned mechanisms. Each host supplies actual movement, reach, tools, and resource requirements. The intelligence's identity persists as its body changes.
+
+Immediate play
+
+The current host begins failing. A conspicuous transfer cue identifies a candidate successor. The player can disable that candidate, isolate it, prepare a different eligible host, or attack during the transition.
+
+The distinctive strategy is to construct or modify the body that the enemy will inhabit: a powerful tool on a poorly turning base, a short-reaching arm in a prepared recess, or a fixed mechanism with a useful service function.
+
+Rules
+
+Use a small authored host set with supported module slots. Do not require a generator that can animate any arbitrary player structure. A host's restrictions must be genuine mechanical restrictions, and the player must be able to discover eligibility and transfer conditions.
+
+A transfer has a readable path and preparation time. It must not be a tiny instantaneous wisp that repeatedly attacks from behind. Keep candidate hosts within a comprehensible encounter area.
+
+Possession does not transfer inventory ownership, erase stored items, or authorize attacks on an arbitrary distant factory. Preserve the player's property and machine state correctly across control changes.
+
+Active opposition
+
+The King can reject an obviously nonfunctional host according to visible eligibility rules, protect a desirable successor, or adapt its use of a constrained body. It cannot secretly ignore restrictions whenever the player's construction is effective.
+
+Resolution and reward
+
+Destroy its viable hosts, contain it in a stable service body, or complete the task for which it was originally maintained. Rewards include host control, bounded remote operation, deployable constructs, and programmable field machinery.
+
+Prototype gate
+
+The player's central decision must be WHICH OBJECT BECOMES THE ENEMY. If it plays like the Engine's manufacturing interception, merge or redesign it rather than shipping duplicate encounters.
+
+12. IDEAS THAT SHOULD NOT BE PROMOTED INTO BOSSES YET
+
+The Surveyor: keep as a construction world encounter. It scans a bounded structure, previews a supported interpretation, and builds from finite stock. Players can manipulate what it constructs, use it to bridge a ruin, or repair its unfinished assignment. Copying inventories or rare materials is prohibited. Promote it only if active combat adds a distinctive decision.
+
+The Graft Nursery: keep as a substantial living site. Players cultivate, prune, redirect nutrients, introduce supported rival organisms, and stabilize a useful ecology. Growth should leave persistent changes and reward useful cultivation. Do not accelerate all ecology into a frantic vine fight merely to attach a boss bar.
+
+The Salt Regent: retain its material-processing ideas for a dangerous crystallization site or Ferryman-related region. Capturing concentrated fluid and choosing deposition sites can teach separation and mass accounting. A standalone boss currently overlaps fluid routing too strongly. Any solubility model must use explicitly supported substances; do not claim all salts react identically to heating.
+
+The Lodestone Pilgrim: cut the current major-boss version. Its burden manipulation overlaps the Scale. A smaller magnetic scavenger could still teach material response and sorting. Do not equate all metals with magnetic response or forcibly steal equipped items.
+
+Orbital machinery, radio interception, time manipulation, and enormous moving structures can become later world systems. Do not make them prerequisites for proving these first encounters.
+
+13. LOTS OF CONTENT WITHOUT COUNTING FILLER
+
+Use a finite content manifest with eight boss families as the proposed long-term roster. Six have the clearest first-person interaction; Vacancy and King must pass their special prototypes.
+
+A reasonable authoring target is:
+- Eight major boss families with distinct anatomy, behavior, progression roles, and resolutions.
+- Three meaningfully different site contexts per family, if each changes decisions. This is twenty-four encounter contexts, not twenty-four unique boss designs.
+- At least two lesser encounters per family that teach part of its rule through normal play.
+- Persistent projects and opportunities after resolution.
+- Independent exploration, industrial, ecological, and spell-research sites.
+
+These counts are planning targets, not completion claims. Do not produce all variants before the base encounter is good.
+
+Example Hart contexts:
+- A flooded seed vault with short connected channels: learn growth and severing.
+- A dry archive with scarce water and protected seed stores: decide where to spend material and whether to restore the site.
+- An exposed hillside conservatory with broken water supply: prepare routes and lures across open terrain while preserving access.
+
+Example Engine contexts:
+- A salvage yard with several accessible stock bins: intercept and steal a module.
+- A vertical foundry with difficult transfer access: build an interception route.
+- A damaged workshop with a feasible unfinished commission: choose restoration, controlled production, or combat.
+
+Examples of lesser encounters:
+- A rime-grazing creature that freezes a small route toward a warm object.
+- A detached service arm that assembles one visible tool.
+- A pressure mouth that commits to a thrown noise source.
+- A prism insect that routes one clearly visible projectile.
+- A small ballast walker whose stance visibly changes with load.
+- A stranded ferry fragment that only moves through connected water.
+
+Examples of post-resolution projects:
+- Restore cold storage and propagate the archived plants.
+- Operate a serviced fabrication yard with actual inputs.
+- Reopen a canal and build transport infrastructure.
+- Integrate a stable pressure colony into a workshop.
+- Recover lifting equipment for a construction project.
+- Build a spell-delivery network from recovered lattice components.
+
+Make the player's persistent world more useful and more interesting. Loot tables alone are insufficient.
+
+14. ADVENTURE, AUTOMATION, AND PROGRESSION
+
+Every major encounter needs a practical manual route. Site tools, low-tier construction, portable materials, and ordinary weapons should support discovery and initial success.
+
+Automation provides preparation, precision, throughput, repeatability, or a different outcome. It should use real machines and routing, not an exclusive interaction that bypasses the encounter with one switch.
+
+Do not lock a required basic tool behind the boss that requires that tool. If the advanced pump comes from the Ferryman, provide buckets, accessible sluices, and a low-tier alternative beforehand.
+
+Allow escape, re-entry, partial success, and persistent preparation. Do not reset the terrain to an arena template after every retreat. Define how the enemy recovers using its actual resources.
+
+Restoration, containment, relocation, and destruction are different outcomes. Where alternatives are supported, preserve access to the relevant progression capability without a later mandatory kill flag. Rewards may differ in efficiency, convenience, operating cost, or form.
+
+Repeat encounters should arise from changed sites, difficult operating conditions, optional contracts, or explicitly chosen challenges. Avoid requiring dozens of identical boss kills for routine machine components.
+
+15. MAGIC THAT SUPPORTS THE ROSTER
+
+Build on the existing spell system. If necessary, extend a small shared vocabulary of supported operations:
+- Delivery: projectile, placed emitter, contact, short-lived field, or routed filament.
+- Trigger: impact, bounded delay, observed condition, or explicit release.
+- Payload: heat transfer, excavation, impulse, growth, fluid movement, or damage.
+- Modifier: bounce, route selection, filtering, timing, or limited splitting.
+
+Only expose combinations the engine can execute predictably. Spell composition must have clear resource costs, bounded execution, and useful feedback when a combination is invalid.
+
+A utility spell should be worth carrying during a fight. Excavation can sever a crown branch, alter a canal, or remove a prism support. A heat source can influence the Hart or change a supported material state. Impulse can affect a modeled load or move a relevant object.
+
+Avoid a separate magic rule for each boss that only accepts a named key spell. Bosses should respond to effects and materials, with well-defined exceptions grounded in their bodies.
+
+No recursive free amplification. Copying, splitting, delayed triggers, stored payloads, and boss-operated emitters must retain resource and ownership accounting. Set explicit limits on nesting, spawned effects, live projectiles, world edits, and deferred work.
+
+16. SCIENCE THROUGH PLAY
+
+Keep instruments and explanation optional at the moment of action. A player should first see the consequence, then be able to inspect why it happened.
+
+- Hart: phase change, finite water supply, heat storage, work input, and heat rejection. Rime pulses are fictional.
+- Engine: production rate, power demand, finite stock, compatible materials, and bottlenecks.
+- Ferryman: connected volumes, pressure or level differences where modeled, finite mass, and transport.
+- Choir: sensing, signal propagation, ambiguity, occlusion, and pressure. The bounded gameplay model need not claim full acoustics.
+- Scale: load, torque or leverage where supported, balance, mechanical work, and potential energy.
+- Glassweaver: signal routing and energy/resource accounting. Spell payload transformations are fictional.
+- Vacancy: geometric occlusion and projection. Harmful living shadows are fictional.
+- King: control, actuation, constraints, and feedback. Transferring an intelligence is fictional.
+
+Show quantities with units when the underlying model supports them. Avoid invented scientific precision. A bestiary or instrument panel can explain the simplified model and the fantasy rule separately.
+
+17. FIRST-PERSON PRESENTATION AND CONTROL
+
+- Put essential cues on visible body structures, nearby terrain, and accessible props. A tall crown action also needs a neck, stance, ground, or sound cue.
+- Communicate origin, commitment, route, impact, and aftermath.
+- Use large readable interaction regions at ordinary play distances.
+- Provide redundant visual and audio cues; do not rely only on color or pitch.
+- Keep the view usable during particles, frost, smoke, and bloom.
+- Separate dangerous gameplay geometry from cosmetic debris.
+- Let committed attacks remain committed long enough for player reading to matter.
+- Preserve useful construction and excavation during pressure. Provide short opportunities to place or activate a portable device; do not require programming a complex panel while taking unavoidable damage.
+- Respect genuine cover and material limits. Enemies can damage appropriate obstacles through communicated capabilities, but cannot erase all construction indiscriminately.
+- Keep hit volumes, attack timing, animation, and damage sources synchronized.
+- Test walking, jumping, close views, low-angle views, backing away, looking elsewhere, and changing the terrain.
+- Do not require endless circle-strafing or impose uncontrolled sliding to communicate ice.
+
+18. ASSET AND RENDERING IMPLEMENTATION
+
+Audit the current asset path. Prefer authored meshes, UVs, textures, and a rig or named rigid parts compatible with the engine. A low-poly authoring tool is compatible with retaining raw wgpu; it does not imply adopting another engine.
+
+For the Hart:
+- First establish front, side, and three-quarter silhouettes with simple materials.
+- Build shoulder, chest, neck root, head, crown, haunch, joint, and hoof hierarchy.
+- Author a restrained pixel/material language consistent with the world.
+- Choose readable character texel density intentionally. Do not blindly impose terrain's pixel scale on a small face.
+- Animate weight-bearing idle, attention, turn, walk, braking, planting, growth, contact pulse, physical strike, interruption, venting, and resolution.
+- Root and joint motion must communicate load. Foot placement, attack volumes, and terrain contact must agree.
+- Use material changes only where state or composition warrants them.
+- Ensure pose-dependent geometry and effects receive appropriate lighting and shadows through the existing pipeline.
+- Keep distant silhouettes and major telegraphs visible through LOD changes.
+
+Do not fix the asset by adding excessive bloom, noisy surface detail, or hundreds of disconnected cubes. Profile geometry, draw calls, skinning or rigid-part updates, shadows, overdraw, and effect lights before choosing detailed budgets.
+
+Optional authoring tools such as Blockbench provide low-poly modeling, UV/texturing, and animation. Use a compatible exporter or existing format; do not create a large asset-pipeline rewrite unless it resolves an actual blocker.
+
+19. SIMULATION, OWNERSHIP, AND PERSISTENCE
+
+Use authoritative shared operations for:
+- Material and item consumption.
+- Terrain edits and chunk remeshing.
+- Fluids and thermal reservoirs.
+- Machine ports, stock, and power.
+- Spell payload execution.
+- Creature contacts, animation state, and damage.
+- Encounter resolution and reward ownership.
+
+An encounter definition should reference its assets, behavior, sensory rules, resources, effects, site requirements, outcomes, and progression capabilities. Use the codebase's existing data conventions. Avoid designing a speculative plugin framework before the first encounter works.
+
+Keep boss state and world mutations transactional enough to prevent duplicated stock, repeated rewards, or lost ownership after interruption, death, unloading, or saving.
+
+Bound AI searches, connectivity work, terrain edits, fluid updates, active effects, particles, and path replanning. Do not scan the entire world every frame. Simulate at an appropriate fixed cadence independent of rendering.
+
+Handle asynchronous mesh revisions so stale geometry cannot overwrite newer edits. Persist the difference between living attached anatomy, detached world material, installed modules, loose items, and recovered rewards.
+
+If navigation fails because the player changed the world, the creature should choose a supported alternative, attempt a communicated obstruction-breaking action, or withdraw. Do not teleport it through blocks as an invisible correction.
+
+20. DELIVERY ORDER
+
+Stage A: Establish the baseline.
+Inspect the repository, active work, asset paths, world-edit API, spells, machine systems, save migration, and current tests. Record available and missing prerequisites. Preserve unrelated changes.
+
+Stage B: Prove the Hart's interaction.
+Build a small playable scene with one wet supply, one branching growth action, one target commitment, one travelling pulse, connection severing, one physical response, and a vent. Demonstrate intentional bridge creation and severing from the normal first-person camera.
+
+Stage C: Finish the Hart.
+Replace the blockout with an authored asset and coherent animation/effects. Add the site's environmental history, a combat resolution, a supported restoration route, meaningful rewards, persistence, and performance validation.
+
+Stage D: Prove the second distinct encounter.
+Build the Unfinished Engine using real stock, a visible assembly/installation route, at least two meaningfully different modules, and a usable intercepted output. Show manual interception and a machine-assisted route.
+
+Stage E: Expand by actual dependency readiness.
+Develop Choir and Scale as their sensing and mechanics become available. Develop Ferryman after reliable bounded fluid routing. Develop Glassweaver through the shared spell system. Prototype Vacancy and King before committing full production resources.
+
+Stage F: Populate the world.
+Produce the lesser encounters, independent sites, alternate contexts, and post-resolution projects. Maintain a concrete manifest of implemented, playable, validated, and unfinished content.
+
+The target includes the broader roster. Deliver complete playable slices as the program advances. Do not stop with a list of enums, a design document, a screenshot, or an unfinished generic substitute.
+
+21. ACCEPTANCE AND REVIEW
+
+For each major boss, demonstrate:
+- Its defining interaction in normal first-person play.
+- At least two materially different approaches.
+- Direct combat that remains useful.
+- Manual access without a mandatory mature factory.
+- Active enemy responses governed by visible rules.
+- A meaningful noncombat or alternative resolution where the concept supports it.
+- Useful rewards and persistent world consequences.
+- Valid behavior after terrain edits, interruption, save/load, and leaving the area.
+- Resource and ownership accounting under attempted exploits.
+- Readable effects with reduced particle and accessibility settings.
+
+Meaningful automated checks should cover conservation, item ownership, bounded spell execution, state transitions, reward idempotence, and persistence where applicable. Do not write tests that merely repeat constants or substitute unit-test counts for visual and gameplay review.
+
+Capture matched before/after views for art review, plus short normal-camera gameplay clips for the actual interaction. Include front, side, movement, close and ordinary distance, bright and dark conditions, and edited terrain.
+
+Measure CPU and GPU cost, frame-time spikes, active geometry, effect counts, and remeshing under a stated scene, resolution, hardware, and settings. If high-refresh performance is the target, measure the entire frame with relevant shadows and effects enabled. Do not claim 144 FPS without specifying conditions and evidence.
+
+Resolve attribution of existing test failures honestly. Report completed work, actual playability evidence, measured performance, remaining limitations, and changed files. Do not claim parity with a professional production or the best shader packages solely from one attractive still.
+
+FINAL DESIGN STANDARD
+
+A tester should be able to describe an encounter by an action and an outcome:
+"I grew its antlers into a bridge and cut the attack path."
+"I stole its next arm while it was building it."
+"I built a channel and moved the monster out of the ruin."
+"I made it hear a machine instead of me."
+"I changed its balance during the swing."
+"I rewired its spell into a useful route."
+"I built the shadow that stopped its reach."
+"I chose the body it had to fight me with."
+
+If the description collapses to "I dodged until the glowing part opened," the defining design has not survived implementation.
+
+REFERENCE NOTES
+
+These sources support the broad technical and design context, not the proposed original bosses:
+- Noita official site: https://noitagame.com/ — describes crafted spells, material interactions, and simplified physical systems.
+- Blockbench official site: https://blockbench.net/ — describes low-poly/cuboid modeling, UV/texturing, and animation.
+- Khronos glTF skins tutorial: https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_020_Skins.html — relevant only if the existing engine uses or adopts a compatible skinned asset path.
+- Elden Ring official site: https://en.bandainamcoent.eu/elden-ring/elden-ring — describes exploration, adversaries with backgrounds, and multiple approaches.
+
+All encounter names, mechanics, production priorities, acceptance criteria, and content targets in this brief are original proposals for this project. Their playability must be established through the prototypes described above.
+

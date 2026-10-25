@@ -48,6 +48,9 @@ pub fn camera(player: &mut Player, cfg: &WorldSampleConfig, elapsed: f32) -> boo
 /// toward its middle. Both work for any generator version, so the same seed
 /// and mode give a before/after pair across a generator bump.
 fn view(mode: &str, cfg: &WorldSampleConfig) -> Option<(Vec3, Vec3)> {
+    if let Some(name) = mode.strip_prefix("room:") {
+        return world::dungeon::inhabited_review_view(cfg, name);
+    }
     if mode == "cosmos" {
         return world::dungeon::cosmos_review_view(cfg, Vec3::new(300.0, 0.0, 0.0));
     }

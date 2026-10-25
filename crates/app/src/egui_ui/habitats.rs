@@ -18,7 +18,7 @@ fn button(ui: &mut egui::Ui, action: &mut UiAction, text: &str, enabled: bool, c
 pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
     ui.label(RichText::new("HABITATS").color(AMBER).size(13.0));
     if view.mastered != 0 {
-        ui.label(RichText::new("Matron farming mastery earned").color(JADE));
+        ui.label(RichText::new("Matron breeding unlocked").color(JADE));
     }
     ui.label(
         RichText::new(format!(
@@ -27,8 +27,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         ))
         .color(JADE),
     );
-    ui.small("Cultivation, resident combat and paid emitters continue while you travel. Rendering distance does not authorize rewards.");
-    ui.small("Receivers exchange feed and harvested goods with a storage crate within 2.5 m; normal pipes can serve the crate.");
+    ui.small("Connect a storage crate within 2.5 m for feed and harvests.");
     if view.lantern {
         ui.label(RichText::new("Witness Lantern · collects loose essence within 6 m").color(MANA));
     } else {
@@ -48,8 +47,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         Action::ImprintMoss,
     );
     if view.sources.is_empty() {
-        ui.label("New worlds: follow the broad stair near 292, 62 to the Rootlit Hollow, cistern and silk gallery.");
-        ui.small("Existing worlds keep their original terrain.");
+        ui.label("Find habitat sources in Rootlit Hollow.");
     }
     egui::ScrollArea::vertical().id_salt("habitat_list").show(ui, |ui| {
         for (s, distance) in &view.sources {
@@ -58,18 +56,18 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
                 ui.label(RichText::new(format!("{} #{}", s.family.name(), s.id)).color(PAPER));
                 if let Some(p) = s.pos {
                     ui.label(RichText::new(format!("{:.0} m · {:.0}, {:.0}, {:.0}  |  {}", distance, p.x,p.y,p.z,s.blocker)).color(MUTED));
-                } else { ui.label("Carried viable source · place on a suitable bed"); }
+                } else { ui.label("Ready to plant"); }
                 let contract = match s.family {
-                    Family::Nursery => "Rooted soil + nearby water + biomass → nursery creature → lumen fibre and magical growth mana",
-                    Family::Spider => "Dry overhead anchor + nearby water + biomass → spider → renewable silk (lumen fibre)",
-                    Family::Matron => "Rooted soil + nearby water + 4 biomass + 32 mana → large brood pod → Orchard Matron",
+                    Family::Nursery => "Rooted soil + water + biomass → fibre + mana",
+                    Family::Spider => "Dry overhead anchor + water + biomass → silk",
+                    Family::Matron => "Rooted soil + water + 4 biomass + 32 mana → Matron",
                 };
                 ui.small(contract);
-                ui.small("Water must be 2 m beside the bed. Products consume 1 biomass / 20 s. Divide a mature source to introduce it elsewhere.");
+                ui.small("Water within 2 m; 1 biomass / 20 s. Divide mature beds to plant more.");
                 if s.resident.is_none() {
                     let ticks = match s.family { Family::Nursery => 120.0, Family::Spider => 160.0, Family::Matron => 720.0 };
                     ui.add(egui::ProgressBar::new(s.development as f32/ticks).text("Developing source"));
-                } else { ui.label(RichText::new("Living resident · harvesting products preserves it").color(JADE)); }
+                } else { ui.label(RichText::new("Ready to harvest").color(JADE)); }
                 ui.small(format!("Feed {:.1} · supplied mana {} · ready products {:.1} · harvested {:.1}",
                     s.feed as f32/64.0,s.charge,s.products as f32/64.0,s.harvested as f32/64.0));
                 ui.label(RichText::new(format!("Receiver: {} mana · {} XP",s.mana,s.xp)).color(MANA));

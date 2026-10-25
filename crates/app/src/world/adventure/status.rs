@@ -4,6 +4,8 @@
 //! pure rule set; `adventure.rs` applies it to live enemies.
 use crate::world::zones::Archetype;
 
+pub const MAX_POISON_STACKS: u8 = 5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Element {
     Fire,
@@ -70,13 +72,13 @@ impl Affix {
         match self {
             Self::Fiery => "Immune to fire. Water puts it out; frost hurts.",
             Self::Frostbound => "Immune to frost. Fire and shock cut deep.",
-            Self::Static => "Immune to shock. Wet makes it worse for everyone.",
-            Self::Toxic => "Immune to poison. Burns it clean.",
+            Self::Static => "Immune to shock. Weak to frost.",
+            Self::Toxic => "Immune to poison. Weak to fire.",
             Self::Volatile => "Detonates when it dies. Back away.",
-            Self::Armored => "Takes less from every hit, and has more to lose.",
-            Self::Regenerating => "Mends itself. Burst it down or burn the mending out.",
+            Self::Armored => "35% more health. Takes 22% less damage.",
+            Self::Regenerating => "Regenerates health. Fire stops regeneration.",
             Self::Swift => "Moves and strikes faster than its kind.",
-            Self::Warded => "Starts behind a shield that must be broken first.",
+            Self::Warded => "Shielded. Break the shield to deal damage.",
         }
     }
 
@@ -260,7 +262,7 @@ impl Status {
             }
             Element::Toxic => {
                 self.poison = (self.poison + 4.0).min(10.0);
-                self.stacks = (self.stacks + 1).min(5);
+                self.stacks = (self.stacks + 1).min(MAX_POISON_STACKS);
             }
             Element::Wet => {
                 self.wet = (self.wet + 6.0).min(10.0);

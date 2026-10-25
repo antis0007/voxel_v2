@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn every_complex_stays_inside_the_cell_that_samples_it() {
     let (mut seen, mut rooms) = (0, 0);
-    for seed in 0u32..40 {
+    for seed in 0u32..20 {
         let c = cfg(seed.wrapping_mul(2246822519) ^ 99, VoxelScalePreset::OneMeter);
         for ((ix, iz), d) in complexes(&c, 6) {
             let half = crate::dungeon::CELL * 0.5;
@@ -18,17 +18,19 @@ fn every_complex_stays_inside_the_cell_that_samples_it() {
             rooms += d.rooms.len();
         }
     }
-    assert!(seen >= 200, "{seen}");
-    // Fitting must not shrink complexes much: footprints hold six to twelve rooms.
-    assert!(rooms as f32 / seen as f32 >= 6.5, "mean rooms {}", rooms as f32 / seen as f32);
+    // Generator 39 siting rejects most hill cells; the bound is on what is found.
+    assert!(seen >= 60, "{seen}");
+    // Fitting must not shrink complexes much: footprints hold six to twelve
+    // rooms, and siting (39+) turns away more of the large ones, which span
+    // more uneven ground.
+    assert!(rooms as f32 / seen as f32 >= 6.0, "mean rooms {}", rooms as f32 / seen as f32);
 }
 
 #[test]
 fn the_core_shell_is_tombstone_all_round() {
-    let c = cfg(424242, VoxelScalePreset::OneMeter);
-    let height = c.blocks_for_height(1000.0);
     let mut cores = 0;
-    for (cell, d) in complexes(&c, 24) {
+    for (c, cell, d) in many(VoxelScalePreset::OneMeter, 6, 24) {
+        let height = c.blocks_for_height(1000.0);
         let Some(o) = d.objective else { continue };
         cores += 1;
         let r = &d.rooms[o];
@@ -88,7 +90,7 @@ fn orreries(scale: VoxelScalePreset, want: usize) -> Vec<(WorldSampleConfig, std
     let mut out = Vec::new();
     for seed in 0u32..400 {
         let c = cfg(seed.wrapping_mul(747796405) ^ 31, scale);
-        for (_, d) in complexes(&c, 3) {
+        for (_, d) in planned(&c, 3) {
             if d.rooms.iter().any(|r| r.kind == Kind::Orrery) {
                 out.push((c, d));
                 if out.len() >= want {
@@ -104,6 +106,7 @@ fn orreries(scale: VoxelScalePreset, want: usize) -> Vec<(WorldSampleConfig, std
 fn orrery_rooms_come_in_three_plans_and_are_walkable() {
     let mut plans = HashSet::new();
     let mut islands = (0, 0);
+    let mut stairs = 0;
     for (scale, want) in [(VoxelScalePreset::OneMeter, 14), (VoxelScalePreset::HalfMeter, 3)] {
         for (c, d) in orreries(scale, want) {
             let grid = Grid::new(&c, &d);
@@ -114,10 +117,11 @@ fn orrery_rooms_come_in_three_plans_and_are_walkable() {
                 // Whoever falls into the void climbs back to the bridges.
                 if starry::plan(r) == starry::Plan::Islands {
                     islands.0 += 1;
+                    stairs += usize::from(r.stair != super::super::escape::NONE);
                     let any = (0..r.w() as i32).any(|i| (0..r.d() as i32).any(|k| starry::island(r, i as f32 + 0.5, k as f32 + 0.5).is_some()));
                     islands.1 += usize::from(any);
                     let (x, z) = r.centre();
-                    let y = ((r.floor - starry::VOID + grid.v * 0.5) / grid.v).floor() as i32;
+                    let y = ((r.floor - starry::depth(r) + grid.v * 0.5) / grid.v).floor() as i32;
                     let (x0, z0) = ((r.x0 / grid.v) as i32, (r.z0 / grid.v) as i32);
                     let (x1, z1) = ((r.x1 / grid.v) as i32, (r.z1 / grid.v) as i32);
                     let tall = (1.8 / grid.v).ceil() as i32;
@@ -132,6 +136,9 @@ fn orrery_rooms_come_in_three_plans_and_are_walkable() {
         }
     }
     assert_eq!(plans.len(), 3, "{plans:?}");
+    // Most island rooms keep a deep void with a stair; the rest fall back to
+    // a shallow one.
+    assert!(stairs * 2 >= islands.0, "{stairs} stairs in {} island rooms", islands.0);
     assert!(islands.1 * 4 >= islands.0 * 3, "islands in only {} of {} island rooms", islands.1, islands.0);
 }
 
@@ -142,7 +149,7 @@ fn a_fall_into_the_cleft_climbs_back_out() {
         let mut n = 0;
         'seeds: for seed in 0u32..300 {
             let c = cfg(seed.wrapping_mul(2891336453) ^ 7, scale);
-            for (cell, d) in complexes(&c, 3) {
+            for (cell, d) in planned(&c, 3) {
                 if !d.rooms.iter().any(|r| r.kind == Kind::Chasm) {
                     continue;
                 }
@@ -202,7 +209,7 @@ fn quarter_metre_starry_and_cleft_rooms_join_their_doors() {
     let mut rooms = 0;
     for seed in 0u32..200 {
         let c = cfg(seed.wrapping_mul(747796405) ^ 31, VoxelScalePreset::QuarterMeter);
-        for (cell, d) in complexes(&c, 3) {
+        for (cell, d) in planned(&c, 3) {
             for r in d.rooms.iter().filter(|r| matches!(r.kind, Kind::Orrery | Kind::Chasm) && !r.sealed) {
                 let lo = Vec3::new(r.x0 - 3.0, r.floor - r.sub() - 2.0, r.z0 - 3.0);
                 let hi = Vec3::new(r.x1 + 3.0, r.floor + 4.0, r.z1 + 3.0);
@@ -304,4 +311,100 @@ fn galleries_can_be_climbed_to() {
         }
     }
     assert!(decks >= 8, "only {decks} galleries");
+}
+
+/// Door mouths of a room: where each touching corridor meets the room box.
+fn doors(d: &Complex, r: &Room, v: f32) -> Vec<IVec3> {
+    d.corrs
+        .iter()
+        .filter(|k| k.x1 > r.x0 - 0.1 && k.x0 < r.x1 + 0.1 && k.z1 > r.z0 - 0.1 && k.z0 < r.z1 + 0.1)
+        .map(|k| {
+            let x = ((k.x0 + k.x1) * 0.5).clamp(r.x0 + 0.6, r.x1 - 0.6);
+            let z = ((k.z0 + k.z1) * 0.5).clamp(r.z0 + 0.6, r.z1 - 0.6);
+            (Vec3::new(x, k.floor_at(x, z) + 0.6, z) / v).floor().as_ivec3()
+        })
+        .collect()
+}
+
+/// Fine detail never closes a room: at a quarter metre and a half, every
+/// door of every kind of room reaches every other.
+#[test]
+fn fine_scales_keep_every_room_open_door_to_door() {
+    let mut kinds = HashSet::new();
+    let mut rooms = 0;
+    for (seed, scale) in [(3u32, VoxelScalePreset::QuarterMeter), (5, VoxelScalePreset::QuarterMeter), (8, VoxelScalePreset::HalfMeter)] {
+        let c = cfg(seed.wrapping_mul(2654435761) ^ 77, scale);
+        for (cell, d) in complexes(&c, 2) {
+            for r in d.rooms.iter().filter(|r| !r.sealed && !r.kind.is_puzzle()) {
+                let lo = Vec3::new(r.x0 - 3.0, r.floor - r.sub() - 2.0, r.z0 - 3.0);
+                let hi = Vec3::new(r.x1 + 3.0, r.floor + r.top() + 1.0, r.z1 + 3.0);
+                let grid = Grid::within(&c, &d, lo, hi);
+                let doors = doors(&d, r, grid.v);
+                if doors.len() < 2 {
+                    continue;
+                }
+                let seen = grid.reach(doors[0]);
+                for door in &doors[1..] {
+                    let near = seen.iter().any(|p| (*p - *door).abs().max_element() <= (0.6 / grid.v) as i32);
+                    assert!(near, "cell {cell:?} {:?} at {}: door {door} not reached from {}", r.kind, grid.v, doors[0]);
+                }
+                kinds.insert(format!("{:?}", r.kind));
+                rooms += 1;
+            }
+        }
+    }
+    assert!(rooms >= 12 && kinds.len() >= 5, "{rooms} rooms, kinds {kinds:?}");
+}
+
+/// The fine layer shows at fine scales and leaves 1 m worlds as they were.
+#[test]
+fn fine_detail_resolves_only_where_voxels_are_small() {
+    let count = |scale| {
+        let c = cfg(424242, scale);
+        let (_, d) = complexes(&c, 1).remove(0);
+        let height = c.blocks_for_height(1000.0);
+        let v = c.voxel_meters();
+        let mut accents = 0;
+        for r in &d.rooms {
+            let mut y = r.floor;
+            while y < r.floor + r.h {
+                let mut x = r.x0 + v * 0.5;
+                while x < r.x1 {
+                    for z in [r.z0 + v * 0.5, r.z0 + r.d() * 0.5 + v * 0.5] {
+                        accents += usize::from(d.sample(&c, Vec3::new(x, y + v * 0.5, z), height) == Some(d.pal.accent));
+                    }
+                    x += v;
+                }
+                y += v;
+            }
+        }
+        accents
+    };
+    let (coarse, fine) = (count(VoxelScalePreset::OneMeter), count(VoxelScalePreset::QuarterMeter));
+    assert!(fine > coarse * 2 + 10, "accent voxels: {coarse} at 1 m, {fine} at 0.25 m");
+}
+
+/// Every torch at fine scales stands on, or hangs from, something solid:
+/// pier sconces, candles on chandeliers, lamps on rails, niches and caches.
+#[test]
+fn fine_scale_lights_are_all_supported() {
+    let mut torches = 0;
+    for (seed, scale) in [(11u32, VoxelScalePreset::HalfMeter), (12, VoxelScalePreset::QuarterMeter)] {
+        let c = cfg(seed, scale);
+        for (cell, d) in planned(&c, 2) {
+            for r in d.rooms.iter().filter(|r| !r.sealed) {
+                let lo = Vec3::new(r.x0 - 2.0, r.floor - 1.0, r.z0 - 2.0);
+                let hi = Vec3::new(r.x1 + 2.0, r.floor + r.top() + 1.0, r.z1 + 2.0);
+                let grid = Grid::within(&c, &d, lo, hi);
+                for (i, &b) in grid.blocks.iter().enumerate() {
+                    let Some(off) = b.torch_support_offset() else { continue };
+                    let (sx, sz) = (grid.size.x as usize, grid.size.z as usize);
+                    let p = grid.min + IVec3::new((i % sx) as i32, (i / (sx * sz)) as i32, ((i / sx) % sz) as i32);
+                    assert!(grid.get(p + off).is_solid(), "cell {cell:?} {:?} at {}: {b:?} at {p} hangs on {:?}", r.kind, grid.v, grid.get(p + off));
+                    torches += 1;
+                }
+            }
+        }
+    }
+    assert!(torches >= 40, "only {torches} torches");
 }

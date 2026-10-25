@@ -7,6 +7,7 @@
 //!   maps voxel to chunk with floor division so negative axes stay contiguous.
 //! - **metres** (`Vec3`): player, camera and physics positions; voxel = metres / scale.
 pub mod coords;
+pub mod environment;
 pub mod fast_hash;
 pub mod hash;
 pub mod material;

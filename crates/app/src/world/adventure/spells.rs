@@ -2,6 +2,8 @@ use super::*;
 use crate::simulation::sandbox::ThermalCell;
 use crate::world::BlockId as B;
 
+pub(super) const PLASMA_DIRECTIONS: [Vec3; 4] = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z];
+
 #[derive(Clone, Copy)]
 pub struct VoxelParticle {
     pub pos: Vec3,
@@ -203,21 +205,32 @@ impl Adventure {
         }
     }
 
-    /// Apply one spell's terrain changes as a single world transaction.
-    ///
-    /// Applying a `world.set` per voxel incremented the world revision and
-    /// repeated chunk bookkeeping thousands of times inside one simulation
-    /// tick. `set_many` keeps the same result while paying that bookkeeping a
-    /// bounded number of times; the dirty list still drives the immediate mesh
-    /// refresh.
-    pub(super) fn apply_terrain_edits(&mut self, world: &mut World, edits: &[(IVec3, B)]) {
-        if edits.is_empty() {
-            return;
+    /// Intentionally partial spell batch. Reserve dirty-list room before any
+    /// writes, and publish only successful cells without per-cell revisions.
+    pub(super) fn apply_terrain_edits(
+        &mut self, world: &mut World, edits: &[(IVec3, B)],
+    ) -> std::collections::HashSet<IVec3> {
+        let room = 2048usize.saturating_sub(self.dirty_voxels.len());
+        let admitted: Vec<_> = edits.iter().copied()
+            .filter(|(cell, _)| super::super::effects::admit(world, *cell).is_ok())
+            .take(room).collect();
+        let mut changed = std::collections::HashSet::new();
+        world.set_many_committed(&admitted, |cell, _, _| {
+            self.dirty_voxels.push(cell);
+            changed.insert(cell);
+        });
+        changed
+    }
+
+    fn replace_terrain_cell(&mut self, world: &mut World, cell: IVec3, old: B, new: B) -> bool {
+        if self.dirty_voxels.len() >= 2048 {
+            return false;
         }
-        world.set_many(edits);
-        for &(cell, _) in edits {
-            self.mark_voxel_dirty(world, cell);
-        }
+        let Ok(commit) = super::super::effects::replace(world, cell, old, new) else {
+            return false;
+        };
+        commit.publish_voxel(world, &mut self.dirty_voxels);
+        true
     }
 
     pub(super) fn carve_cell(&mut self, world: &mut World, cell: IVec3, harvest: bool) -> bool {
@@ -231,6 +244,12 @@ impl Adventure {
         }
         let old = world.get(cell);
         if old == B::Air || old.is_liquid() {
+            return false;
+        }
+        // Tree harvesting can publish the removed cell plus a 1024-cell canopy.
+        // Defer before changing terrain when that bounded result cannot fit.
+        let required = if harvest && old == B::Log { 1025 } else { 1 };
+        if self.dirty_voxels.len().saturating_add(required) > 2048 {
             return false;
         }
         let scale = world.voxel_scale.meters();
@@ -253,13 +272,9 @@ impl Adventure {
             for touched in blocks {
                 self.mark_voxel_dirty(world, touched);
             }
-        } else {
-            world.set(cell, B::Air);
-            if world.get(cell) != B::Air {
-                return false;
-            }
+        } else if !self.replace_terrain_cell(world, cell, old, B::Air) {
+            return false;
         }
-        self.mark_voxel_dirty(world, cell);
         // `blast_harvest` fells a tree when the removed block is a log, so the
         // caller does not run the canopy search a second time.
         self.spawn_voxel_burst(center, col, 4, 1.8, 0.036);
@@ -304,7 +319,7 @@ impl Adventure {
         payload: Option<u32>,
     ) {
         let scale = world.voxel_scale.meters();
-        let max_dist = 6.8 * mods.speed_mul.clamp(0.7, 1.5);
+        let max_dist = wands::card_rules::DRILL_REACH * mods.speed_mul.clamp(0.7, 1.5);
         let step = (scale * 0.35).clamp(0.08, 0.25);
         let steps = (max_dist / step).ceil() as usize;
         let start = eye + dir * 0.36;
@@ -414,9 +429,11 @@ impl Adventure {
                 }
             }
         }
-        self.apply_terrain_edits(world, &edits);
+        let committed = self.apply_terrain_edits(world, &edits);
         for (cell, state) in thermal {
-            world.sandbox.set(cell, state);
+            if committed.contains(&cell) {
+                world.sandbox.set(cell, state);
+            }
         }
         for e in &mut self.enemies {
             if e.health > 0.0 && (e.center() - center).length() < radius_m + 0.8 {
@@ -487,9 +504,11 @@ impl Adventure {
                 }
             }
         }
-        self.apply_terrain_edits(world, &edits);
+        let committed = self.apply_terrain_edits(world, &edits);
         for (cell, state) in thermal {
-            world.sandbox.set(cell, state);
+            if committed.contains(&cell) {
+                world.sandbox.set(cell, state);
+            }
         }
         for e in &mut self.enemies {
             let d = (e.center() - center).length();
@@ -749,9 +768,9 @@ impl Adventure {
         }
         for pos in spore_seeds {
             let cell = ((pos - Vec3::Y * 0.25) / scale).floor().as_ivec3();
-            if matches!(world.get(cell), B::Dirt | B::Grass) {
-                world.set(cell, B::FungalSoil);
-                self.mark_voxel_dirty(world, cell);
+            let old = world.get(cell);
+            if matches!(old, B::Dirt | B::Grass) {
+                self.replace_terrain_cell(world, cell, old, B::FungalSoil);
             }
             self.spawn_voxel_burst(pos + Vec3::Y * 0.35, spell_color(5), 6, 0.9, 0.038);
         }
@@ -759,6 +778,9 @@ impl Adventure {
     }
 
     pub(super) fn cast_timberfall(&mut self, world: &mut World, eye: Vec3, dir: Vec3) {
+        if self.dirty_voxels.len().saturating_add(1024) > 2048 {
+            return;
+        }
         let hit = wands::aim_cell(world, eye, dir, 28.0);
         let Some((hit_cell, _)) = hit else {
             self.effect(eye + dir * 1.5, spell_color(24), 0.5);
@@ -945,7 +967,7 @@ impl Adventure {
                 1.3 * fade,
                 0.4 * fade,
             );
-            for dir in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z] {
+            for dir in PLASMA_DIRECTIONS {
                 let tip = cross.pos + rot * (dir * 1.75 * fade);
                 m.beam(cross.pos, tip, 0.016 * fade, c_col, 1.2 * fade);
                 m.glow_beam(cross.pos, tip, 0.04 * fade, c_col, 1.15 * fade, 0.32 * fade);

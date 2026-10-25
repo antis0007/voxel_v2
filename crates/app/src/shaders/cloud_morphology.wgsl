@@ -36,6 +36,22 @@ fn broad_cloud_mass(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
         for (var x = -1; x <= 1; x += 1) {
             let id = cell + vec2<i32>(x, z);
             let seed = hash_cell1(id, 2203);
+            // Presence is independent of the geometry. Reject absent banks
+            // before hashing their centre, axes and support, retaining the
+            // original traversal order of the smooth-max accumulation.
+            let presence = smoothstep(seed - 0.08, seed + 0.08, odds);
+            if presence <= 0.001 { continue; }
+            // The centre lies inside this cell and no ellipse axis exceeds
+            // .68 cell widths. Distance to the cell rectangle therefore bounds
+            // every possible horizontal quadratic from below. Vertical and
+            // taper terms only decrease the field. A bank at least .30 below
+            // the accumulator contributes exactly zero to its smooth maximum.
+            let cell_delta = max(max(vec2<f32>(id) * cell_size - xz,
+                xz - (vec2<f32>(id) + vec2<f32>(1.0)) * cell_size), vec2<f32>(0.0));
+            let max_support = cell_size * 0.68;
+            let cell_upper = 1.0 - dot(cell_delta, cell_delta) / (max_support * max_support)
+                - (1.0 - presence) * 4.0;
+            if cell_upper + 0.001 <= field - 0.30 { continue; }
             let jitter = hash_cell2(id, 901);
             let center = (vec2<f32>(id) + jitter) * cell_size;
             let local = xz - center;
@@ -51,15 +67,6 @@ fn broad_cloud_mass(xz: vec2<f32>, h: f32, coverage: f32, bank: f32, storm: f32,
             // Beyond 1.45 axis lengths the dome is below -1.1: nothing visible.
             let cutoff = support * 1.45;
             if dot(local, local) > cutoff * cutoff { continue; }
-            // Coverage raises the odds. It does not turn every cell on, so a
-            // deck still has corridors and one-sided storms stay one-sided.
-            // Weather varies at every sample, even within one lobe. A binary
-            // lottery removed a still-positive dome at seed == odds, slicing
-            // clouds along weather contours. Move its signed field continuously
-            // out of the density range instead; do not multiply a signed field
-            // toward zero (which would manufacture density outside the lobe).
-            let presence = smoothstep(seed - 0.08, seed + 0.08, odds);
-            if presence <= 0.001 { continue; }
             // A mass is never much taller than it is wide: narrow cells with a
             // tall draw stood up as kilometre-high pillars.
             let height = min(mix(0.18, 0.72, hash_cell1(id, 44)) + storm * 0.22,
@@ -355,14 +362,14 @@ fn photographic_low_density(
     // Preserve zero coverage and avoid a second uniform blanket in storms.
     let coverage = saturate1(weather.coverage * macro_bias
         + (bank - 0.5) * 0.72 * smoothstep(0.025, 0.20, weather.coverage));
-    let size = mix(760.0, 380.0, saturate1(light.weather_globals[2].x));
+    let size = mix(1120.0, 640.0, saturate1(light.weather_globals[2].x));
     let storm = weather.storm;
     let convective = smoothstep(0.12, 0.55, weather.cloud_type);
 
     // Both view and shadow rays resolve the same medium-scale lobes. Smaller
     // texture periods provide actual meter-scale detail instead of magnifying
     // a blurred 64-texel volume across a kilometer.
-    let shape_freq = 0.0038;
+    let shape_freq = 0.0018;
     let shape_lod = footprint_texel_lod(footprint, shape_freq, SHAPE_TEX_SIZE, 6.0);
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0);
@@ -391,7 +398,7 @@ fn photographic_low_density(
     let floor_noise = weather_bank_noise(xz / 150.0 + vec2<f32>(3.3, 8.1));
     let floor_lift = (floor_noise * 0.7 + shape.r * 0.3) * 0.12 * convective;
     if convective == 1.0 && (shaped_h <= floor_lift || shaped_h >= 1.0) { return 0.0; }
-    let lobes = (shape.r - 0.5) * 1.18 + (shape.g - 0.5) * 0.48;
+    let lobes = (shape.r - 0.5) * 0.76 + (shape.g - 0.5) * 0.18;
     var field = 0.0;
     if convective > 0.0 {
         // Evaluate the broad mass first: a thermal below mass - .24 cannot
@@ -459,8 +466,8 @@ fn photographic_low_density(
         let far = smoothstep(1.0, 6.0, footprint);
         let erosion_w = mix(vec3<f32>(0.62, 0.30, 0.08), vec3<f32>(0.90, 0.10, 0.0), far);
         let erosion = (1.0 - dot(detail.rgb, erosion_w))
-            * light.weather_globals[1].w * light.weather_globals[2].y * 0.46
-            * (1.0 + 1.5 * far);
+            * light.weather_globals[1].w * light.weather_globals[2].y * 0.26
+            * (1.0 + 0.5 * far);
         field -= erosion * detail_keep;
     }
     // At range the mip-filtered textures above average to a constant, so a

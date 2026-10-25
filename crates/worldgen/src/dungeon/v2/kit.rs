@@ -2,7 +2,7 @@
 //! and corridors. Pure functions of a point in metres; sample points are voxel
 //! centres, so every feature is at least one voxel thick at any scale.
 use super::index::CORR_BIT;
-use super::{Ceiling, Complex, Corr, Kind, LEVEL, Outline, Room, dress, gallery, outline, passage, starry};
+use super::{Ceiling, Complex, Corr, Kind, LEVEL, Outline, Room, dress, fine, gallery, outline, passage, starry};
 use crate::{BlockId as B, hash3};
 use glam::Vec3;
 
@@ -68,6 +68,13 @@ fn around(r: &Room, rx: f32, rz: f32) -> f32 {
 /// Stone for walls and ceilings: alternating courses with a scatter of the
 /// second stone, so large surfaces stay quiet but not flat.
 pub fn stone(c: &Complex, m: Vec3, v: f32) -> B {
+    if c.version >= 45 {
+        // Repairs occupy whole masonry bays, not independent random voxels.
+        let bay = (m / Vec3::new(5.0, 3.0, 5.0)).floor().as_ivec3();
+        return if hash3(bay.x, bay.y, bay.z, c.seed.wrapping_add(13)) > 0.92 {
+            c.pal.alt
+        } else { c.pal.wall };
+    }
     let p = (m / v).floor().as_ivec3();
     let course = ((m.y / 2.0).floor() as i32).rem_euclid(2) == 1;
     if course ^ (hash3(p.x, p.y, p.z, c.seed.wrapping_add(13)) > 0.85) { c.pal.alt } else { c.pal.wall }
@@ -90,17 +97,27 @@ pub fn shell(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     if dress::breach_hole(r, rx, rz, fy) {
         return if fy < 0.4 { B::Gravel } else { B::Air };
     }
-    let frame = c.index.at(m.x, m.z).iter().filter(|id| *id & CORR_BIT != 0).any(|&id| {
-        let k = &c.corrs[(id & !CORR_BIT) as usize];
+    let framing = c.index.at(m.x, m.z).iter().filter(|id| *id & CORR_BIT != 0).map(|&id| &c.corrs[(id & !CORR_BIT) as usize]).find(|k| {
         m.x >= k.x0 - 0.8 && m.x < k.x1 + 0.8 && m.z >= k.z0 - 0.8 && m.z < k.z1 + 0.8 && {
             let f = k.floor_at(m.x, m.z);
             m.y >= f - 0.5 && m.y < f + k.h + 0.8
         }
     });
+    if c.version >= fine::VERSION
+        && let Some(k) = framing
+    {
+        let across = if k.along_x { m.z - (k.z0 + k.z1) * 0.5 } else { m.x - (k.x0 + k.x1) * 0.5 };
+        return fine::voussoir(c, across, m.y - k.floor_at(m.x, m.z) - k.h, v);
+    }
+    let frame = framing.is_some();
     if frame || (fy >= -v && fy < 0.6) || (fy >= r.h - 0.6 && fy < r.h) {
         c.pal.trim
     } else {
-        stone(c, m, v)
+        // Inlaid panels on the wall's inner face between the piers.
+        let out = (-rx).max(rx - r.w()).max(-rz).max(rz - r.d());
+        let along = if rx < 0.0 || rx >= r.w() { rz } else { rx };
+        let panel = if c.version >= fine::VERSION && out < v { fine::panel(c, r, along, fy, v) } else { None };
+        panel.unwrap_or_else(|| stone(c, m, v))
     }
 }
 
@@ -153,7 +170,10 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     let across = if w <= d { rx } else { rz };
     if fy >= ceil - 0.6 && fy >= r.h - 0.6 {
         match r.ceiling {
-            Ceiling::Ribbed | Ceiling::Corbel if near_line(along, bay, v, 0.0) => return c.pal.trim,
+            Ceiling::Ribbed | Ceiling::Corbel if near_line(along, bay, v, 0.0) => {
+                let boss = if c.version >= fine::VERSION { fine::boss(c, r, across, v) } else { None };
+                return boss.unwrap_or(c.pal.trim);
+            }
             Ceiling::Beams if near_line(along, bay, v, 0.0) && r.kind != Kind::Labyrinth => return c.pal.trim,
             _ => {}
         }
@@ -169,6 +189,14 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     {
         return b;
     }
+    // From generator 48 a gallery's stair and deck outrank the piers: a pier
+    // sconce reaches two metres in at 1 m and used to block the first step.
+    if c.version >= fine::VERSION
+        && gallery::has(c, r)
+        && let Some(b) = gallery::sample(c, r, rx, rz, fy, v)
+    {
+        return b;
+    }
     // Piers at every bay, skipping the corners; a sconce on every other one.
     let pd = v.max(0.6);
     if dwall < pd + v && !r.kind.is_puzzle() && fy < r.h {
@@ -179,7 +207,10 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
                 return if fy < 0.6 || (fy >= r.h - 1.0) { c.pal.trim } else { stone(c, m, v) };
             }
             let k = ((wall_along - v * 0.5) / bay).round() as i32;
-            if k.rem_euclid(2) == 0 && r.kind != Kind::Cells {
+            // One torch per pier at every scale. The pier is wider than a
+            // quarter-metre voxel; filling its whole face duplicates lamps.
+            let lamp_cell = c.version < 46 || near_line(wall_along, bay, v, 0.0);
+            if k.rem_euclid(2) == 0 && r.kind != Kind::Cells && lamp_cell {
                 if (2.4..2.4 + v).contains(&fy) {
                     return c.pal.trim;
                 }
@@ -189,7 +220,11 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
             }
         }
     }
-    let _ = across;
+    if c.version >= fine::VERSION
+        && let Some(b) = fine::room(c, r, rx, rz, fy, v, dwall)
+    {
+        return b;
+    }
     if gallery::has(c, r)
         && let Some(b) = gallery::sample(c, r, rx, rz, fy, v)
     {
@@ -201,9 +236,28 @@ pub fn room(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
 fn floor_block(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     let (rx, rz) = (m.x - r.x0, m.z - r.z0);
     // A border of trim and a field of floor stone.
-    let dwall = rx.min(r.w() - rx).min(rz).min(r.d() - rz);
+    let dwall = if c.version >= 44 {
+        outline::depth(r, rx, rz)
+    } else {
+        rx.min(r.w() - rx).min(rz).min(r.d() - rz)
+    };
     if r.sealed && r.kind == Kind::Core {
         return B::TombStone;
+    }
+    if c.version >= 46 {
+        let border = dwall < 1.0;
+        match r.kind {
+            Kind::Library | Kind::Scriptorium => return if border { B::CarvedStone } else { B::Planks },
+            Kind::Infirmary => return if border { B::CarvedStone } else { B::GlazedTiles },
+            Kind::Refectory => return if border { B::CarvedStone } else { B::Cobblestone },
+            Kind::Armory => return if border { B::CarvedStone } else { B::StoneBricks },
+            _ => {}
+        }
+    }
+    if c.version >= fine::VERSION
+        && let Some(b) = fine::floor(c, r, rx, rz, v, dwall)
+    {
+        return b;
     }
     if dwall < 1.0 || near_line(rx, c.job.bay() * 2.0, v, 0.0) && near_line(rz, c.job.bay() * 2.0, v, 0.0) {
         c.pal.trim
@@ -247,6 +301,17 @@ pub fn corridor(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
     let f = k.floor_at(m.x, m.z);
     let fy = m.y - f;
     if fy < 0.0 {
+        if c.version >= 44 && fy >= -v {
+            let across = if k.along_x {
+                (m.z - (k.z0 + k.z1) * 0.5).abs()
+            } else {
+                (m.x - (k.x0 + k.x1) * 0.5).abs()
+            };
+            let half = if k.along_x { (k.z1 - k.z0) * 0.5 } else { (k.x1 - k.x0) * 0.5 };
+            // Continuous edge courses follow the ramp as well as level halls.
+            // The walking surface stays flat and retains its original height.
+            return if half - across < v.max(0.5) { c.pal.trim } else { c.pal.floor };
+        }
         return if fy >= -v { c.pal.floor } else { stone(c, m, v) };
     }
     let (along, across, half) = if k.along_x {
@@ -300,6 +365,31 @@ pub fn shaft(c: &Complex, m: Vec3, v: f32) -> Option<B> {
     }
     let entry = &c.rooms[c.entry];
     if m.y < entry.floor || m.y >= top + 0.5 {
+        return None;
+    }
+    if c.version >= 39 {
+        // Continuous helical stair on a solid central pier. The previous
+        // isolated dots had metre-high gaps and read as floating footholds.
+        let radius = dx.hypot(dz);
+        if radius < 0.65 && m.y >= entry.floor + v { return Some(c.pal.trim); }
+        if radius < 2.25 {
+            let angle = dx.atan2(dz).rem_euclid(std::f32::consts::TAU);
+            let riser = v.max(0.5);
+            let pitch = 6.0;
+            let phase = (angle / std::f32::consts::TAU * pitch / riser).floor() * riser;
+            let below_tread = (top - m.y - phase).rem_euclid(pitch);
+            if radius >= 0.65 && below_tread < v.max(0.35) && m.y >= entry.floor + v {
+                return Some(if radius > 1.95 { c.pal.trim } else { c.pal.floor });
+            }
+            return Some(B::Air);
+        }
+        // Retaining sleeve and regularly spaced inset light, never in the
+        // walking ring. The entry-room opening stays unobstructed.
+        if m.y >= entry.floor + entry.top() && m.y < top - 1.0 {
+            let lamp = dx.abs() < v.max(0.35) && dz > 2.25
+                && (top - m.y).rem_euclid(6.0) < v;
+            return Some(if lamp { B::GlowCap } else { stone(c, m, v) });
+        }
         return None;
     }
     if dx.abs() < 1.6 && dz.abs() < 1.6 {

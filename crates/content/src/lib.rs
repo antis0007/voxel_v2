@@ -1,4 +1,6 @@
 mod size_class;
+pub mod descriptions;
+pub mod environment;
 mod reactions;
 mod sim_traits;
 mod validate;
@@ -300,6 +302,10 @@ block_ids! {
     TombStone,
     AmberCap,
     UmberCap,
+    GroveMoss,
+    Bookcase,
+    CarvedStone,
+    GlazedTiles,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -418,11 +424,13 @@ impl BlockId {
             Self::Ice => 9,
             Self::Lava => 10,
             Self::Planks => 11,
+            Self::Bookcase => 45,
+            Self::CarvedStone | Self::GlazedTiles => 12,
             Self::StoneBricks => 12,
             Self::Cobblestone => 13,
             Self::CoalOre => 14,
             Self::IronOre => 15,
-            Self::FungalSoil => 16,
+            Self::FungalSoil | Self::GroveMoss => 16,
             Self::MushroomStem => 17,
             Self::GlowCap => 18,
             Self::RedCap => 19,

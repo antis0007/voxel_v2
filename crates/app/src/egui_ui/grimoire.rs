@@ -4,14 +4,44 @@ use egui::{Color32 as C, Painter, Rect, pos2, vec2};
 pub const RECESS: C = C::from_rgb(0x12, 0x15, 0x19);
 pub const LEATHER: C = C::from_rgb(0x29, 0x22, 0x1f);
 pub const GOLD_DARK: C = C::from_rgb(0x65, 0x47, 0x28);
-pub const GOLD: C = C::from_rgb(0xb5, 0x8a, 0x42);
-pub const GOLD_LIGHT: C = C::from_rgb(0xf1, 0xd6, 0x8a);
-pub const SILVER_DARK: C = C::from_rgb(0x4b, 0x56, 0x63);
-pub const SILVER: C = C::from_rgb(0xaa, 0xb8, 0xc5);
-pub const SILVER_LIGHT: C = C::from_rgb(0xea, 0xf0, 0xeb);
+pub const GOLD: C = super::pixel_art::GOLD;
+pub const GOLD_LIGHT: C = super::pixel_art::HIGHLIGHT;
+pub const SILVER_DARK: C = C::from_rgb(74, 81, 81);
+pub const SILVER: C = C::from_rgb(160, 180, 174);
+pub const SILVER_LIGHT: C = super::pixel_art::PAPER;
 pub const SLOT: f32 = 18.0;
 pub const GAP: f32 = 2.0;
 pub const ICON: f32 = 14.0;
+
+/// Whole-label navigation: integer accents, readable type and stable hit areas.
+pub fn tab(ui: &mut egui::Ui, text: &str, selected: bool, compact: bool) -> egui::Response {
+    let label = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(if compact { 11.0 } else { 13.0 }),
+        super::presentation::PAPER,
+    );
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(label.size().x + 14.0, if compact { 24.0 } else { 28.0 }),
+        egui::Sense::click(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(
+        egui::WidgetType::Button, ui.is_enabled(), text,
+    ));
+    if selected || response.hovered() || response.has_focus() {
+        ui.painter().rect_filled(rect, 0, if selected {
+            C::from_rgb(65, 59, 45)
+        } else {
+            C::from_rgb(43, 62, 61)
+        });
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.left_bottom() - vec2(0.0, 2.0), vec2(rect.width(), 2.0)),
+            0,
+            if selected { GOLD } else { super::pixel_art::TEAL },
+        );
+    }
+    ui.painter().galley(rect.center() - label.size() * 0.5, label, super::presentation::PAPER);
+    response
+}
 
 /// Move the paint only. Hit targets, drag coordinates and layout stay fixed.
 pub fn react(response: &egui::Response, r: Rect, selected: bool) -> Rect {
@@ -50,6 +80,7 @@ pub fn review_page() -> Option<u32> {
         || match std::env::var("VOXEL_GRIMOIRE_REVIEW").ok().as_deref() {
             Some("inventory") => Some(2),
             Some("wands") => Some(1),
+            Some("production") => Some(7),
             _ => None,
         },
     )
@@ -240,10 +271,12 @@ pub fn slot(p: &Painter, r: Rect, selected: bool) {
     let (w, h) = (r.width(), r.height());
     p.rect_filled(r, 0, RECESS);
     let metal = if selected { GOLD } else { SILVER_DARK };
+    // Brass belongs to selection and fittings; empty cavities stay quiet.
+    let shadow = if selected { GOLD_DARK } else { C::from_rgb(35, 40, 41) };
     pixel(p, r, 1.0, 0.0, w - 2.0, 1.0, metal);
     pixel(p, r, 0.0, 1.0, 1.0, h - 2.0, metal);
-    pixel(p, r, w - 1.0, 1.0, 1.0, h - 2.0, GOLD_DARK);
-    pixel(p, r, 1.0, h - 1.0, w - 2.0, 1.0, GOLD_DARK);
+    pixel(p, r, w - 1.0, 1.0, 1.0, h - 2.0, shadow);
+    pixel(p, r, 1.0, h - 1.0, w - 2.0, 1.0, shadow);
     if selected {
         // Two corner teeth and a lower notch distinguish selection in grayscale.
         for x in [1.0, w - 4.0] {

@@ -1661,6 +1661,9 @@ impl ChunkStreamer {
                     } else {
                         chunk_data.water_levels.remove(&block);
                     }
+                    let deficit = snapshot.water_levels.deficit(block);
+                    if deficit > 0 { chunk_data.water_deficit.insert(block,deficit); }
+                    else { chunk_data.water_deficit.remove(&block); }
                 }
             }
             chunk_data.refresh_allocation_size();
@@ -1745,7 +1748,8 @@ impl ChunkStreamer {
             let block = chunk_data.blocks[0];
             if (block.is_empty()
                 || block.is_opaque()
-                || (block == crate::world::BlockId::Water && chunk_data.water_levels.is_empty()))
+                || (block == crate::world::BlockId::Water && chunk_data.water_levels.is_empty()
+                    && chunk_data.water_deficit.is_empty()))
                 && chunk_data.blocks.iter().all(|&b| b == block)
                 && self.ready_meshes.len() < MAX_READY_MESHES
             {
@@ -2043,6 +2047,7 @@ mod coverage_tests {
 fn apply_snapshot_edits_cubic(chunk_data: &mut GeneratedChunk, snapshot: &WorldSnapshot) {
     let min = chunk_data.origin();
     let max = min + IVec3::splat(PADDED_CHUNK_SIZE);
+    chunk_data.water_deficit = snapshot.water_levels.precision.in_box(min,max).collect();
     chunk_data.water_levels = snapshot
         .water_levels
         .in_box(min, max)

@@ -43,6 +43,49 @@ pub(super) fn lanes(c: &Complex, r: &Room, rx: f32, rz: f32, half: f32) -> bool 
     })
 }
 
+/// From generator 48, how deep an island room's void goes: as far as its
+/// wall ledge can descend from the bridges, whole metres, two to `VOID`.
+/// Before 48 every void was `VOID` deep and a room crowded with bridges left
+/// its ledge too high to step onto from the bottom.
+pub fn void_depth(corrs: &[super::Corr], r: &Room) -> f32 {
+    let mut deepest = 0.0f32;
+    let (mut x, step) = (0.25, 0.5);
+    while x < r.w() {
+        let mut z = 0.25;
+        while z < r.d() {
+            let dwall = super::outline::depth(r, x, z);
+            if (0.3..2.2).contains(&dwall) {
+                deepest = deepest.max(bridge_gap(corrs, r, x, z));
+            }
+            z += step;
+        }
+        x += step;
+    }
+    deepest.floor().clamp(1.0, VOID)
+}
+
+/// The void's depth in a room: its own from generator 48, else `VOID`.
+pub fn depth(r: &Room) -> f32 {
+    if r.rift > 0.0 { r.rift } else { VOID }
+}
+
+/// Distance across to the nearest bridge band: the aisle cross (one metre
+/// either side of the centre lines) and every door walkway over the room.
+fn bridge_gap(corrs: &[super::Corr], r: &Room, rx: f32, rz: f32) -> f32 {
+    let (w, d) = (r.w(), r.d());
+    let band = |p: f32, lo: f32, hi: f32| (lo - p).max(p - hi).max(0.0);
+    let (mx, mz) = (rx + r.x0, rz + r.z0);
+    let mut gap = band(rx, w * 0.5 - 1.0, w * 0.5 + 1.0).min(band(rz, d * 0.5 - 1.0, d * 0.5 + 1.0));
+    for k in corrs {
+        if k.along_x && k.x1 > r.x0 && k.x0 < r.x1 {
+            gap = gap.min(band(mz, k.z0, k.z1));
+        } else if !k.along_x && k.z1 > r.z0 && k.z0 < r.z1 {
+            gap = gap.min(band(mx, k.x0, k.x1));
+        }
+    }
+    gap
+}
+
 /// The island in the quadrant of the aisle cross holding a point, if that
 /// quadrant has one: centred in the space between the aisles and the wall
 /// ledges, as large as fits, nudged by hash. One quadrant in five is open void.
@@ -75,12 +118,19 @@ pub fn below(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32, dwall: f3
         }
         Plan::Islands => {
             let bottom = |fy: f32| {
-                if fy < -VOID {
+                if fy < -depth(r) {
                     Some(if hash3((rx / v) as i32, (fy / v) as i32, (rz / v) as i32, r.salt) > 0.85 { B::StarGlass } else { c.pal.wall })
                 } else {
                     Some(B::Air)
                 }
             };
+            // From generator 48, the escape stair beside an aisle: steps,
+            // and open void over them up to the floor line.
+            if c.version >= super::fine::VERSION
+                && let Some(top) = super::escape::top(r, rx, rz, depth(r), v)
+            {
+                return Some(if fy < top { c.pal.trim } else { B::Air });
+            }
             // Bridges: one metre slabs with a star-glass kerb.
             if lanes(c, r, rx, rz, 1.0) {
                 return if fy >= -1.0 { None } else { bottom(fy) };
@@ -106,8 +156,15 @@ pub fn below(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32, dwall: f3
             // meet the aisles at floor level: one step per voxel, so the low end is
             // always within a few metres of an aisle and clear of the corners.
             if dwall < 2.2 {
-                let off = (rx - w * 0.5).abs().min((rz - d * 0.5).abs()) - 1.0;
-                let top = -((off.max(0.0) / v).ceil() * v).min(VOID);
+                // From generator 48 the ledge rises to the nearest bridge of
+                // any kind; before, a door walkway beside an aisle could leave
+                // the ledge's top step three metres under the slab.
+                let off = if c.version >= super::fine::VERSION {
+                    bridge_gap(&c.corrs, r, rx, rz)
+                } else {
+                    (rx - w * 0.5).abs().min((rz - d * 0.5).abs()) - 1.0
+                };
+                let top = -((off.max(0.0) / v).ceil() * v).min(depth(r));
                 return (fy < top).then_some(c.pal.trim).or(bottom(fy));
             }
             bottom(fy)

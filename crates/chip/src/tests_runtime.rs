@@ -121,3 +121,48 @@ fn defer_applies_a_due_output_and_never_stalls() {
     assert!(s.output && s.pending.is_none());
     assert!(s.due() > 6);
 }
+
+#[test]
+fn a_brownout_hangs_a_core_without_a_watchdog_and_not_one_with() {
+    let r = reg();
+    for (design, recovers) in [(sentinel(&r), false), (twin_watch(&r), true)] {
+        let model = compile(&design, &r).report.unwrap().model;
+        assert_eq!(model.recovers, recovers);
+        let mut s = State::new(0);
+        let mut t = 0;
+        for _ in 0..4 {
+            s.service(&model, t, true, |_| 100);
+            t = s.due();
+        }
+        assert_eq!(s.phase, Phase::Running);
+        s.service(&model, t, false, |_| 100);
+        t = s.due();
+        s.service(&model, t, true, |_| 100);
+        let expected = if recovers { Phase::Booting } else { Phase::Hung };
+        assert_eq!(s.phase, expected, "{}", design.name);
+        for _ in 0..4 {
+            t = s.due();
+            s.service(&model, t, true, |_| 100);
+        }
+        assert_eq!(s.phase == Phase::Hung, !recovers);
+        assert_eq!(s.output, recovers, "a hung core holds its machine off");
+        if !recovers {
+            s.reset(t);
+            for _ in 0..4 {
+                s.service(&model, t, true, |_| 100);
+                t = s.due();
+            }
+            assert_eq!(s.phase, Phase::Running, "reset brings it back");
+        }
+    }
+}
+
+#[test]
+fn heat_guard_compiles_on_the_small_core() {
+    let r = reg();
+    let mut d = sentinel(&r);
+    d.firmware.task = crate::firmware::Task::HeatGuard;
+    let c = compile(&d, &r);
+    assert!(c.ok(), "{:?}", c.diagnostics);
+    assert_eq!(c.report.unwrap().model.task, crate::firmware::Task::HeatGuard);
+}

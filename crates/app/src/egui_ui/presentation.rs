@@ -1,50 +1,24 @@
 //! Shared game styling and control reference, separate from renderer diagnostics.
 use egui::{Color32, RichText};
 
-pub(super) const INK: Color32 = super::grimoire::RECESS;
-pub(super) const PAPER: Color32 = Color32::from_rgb(0xe6, 0xd8, 0xb8);
-pub(super) const MUTED: Color32 = Color32::from_rgb(173, 157, 139);
+pub(super) const INK: Color32 = super::pixel_art::OUTLINE;
+pub(super) const PAPER: Color32 = super::pixel_art::PAPER;
+pub(super) const MUTED: Color32 = Color32::from_rgb(174, 176, 164);
 pub(super) const EDGE: Color32 = super::grimoire::SILVER_DARK;
-pub(super) const JADE: Color32 = Color32::from_rgb(211, 183, 125);
-pub(super) const AMBER: Color32 = super::grimoire::GOLD;
+pub(super) const JADE: Color32 = super::pixel_art::TEAL;
+pub(super) const AMBER: Color32 = super::pixel_art::GOLD;
 pub(super) const DANGER: Color32 = Color32::from_rgb(225, 105, 91);
-pub(super) const MANA: Color32 = Color32::from_rgb(0x70, 0xc9, 0xcf);
+pub(super) const MANA: Color32 = super::pixel_art::TEAL;
 
 
 pub(super) fn apply_theme(ctx: &egui::Context) {
     ctx.tessellation_options_mut(|o| {
-        o.feathering = false;
+        o.feathering = true;
         o.round_text_to_pixels = true;
         o.round_line_segments_to_pixels = true;
         o.round_rects_to_pixels = true;
     });
-    // Tiny5 for interface text, PixelCode for figures and keys. Both are embedded
-    // so a build does not depend on the launch directory. end_frame sets the
-    // font atlas to nearest sampling; begin_frame resolves integer scaling.
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "tiny5".into(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../../../assets/fonts/Tiny5.ttf"
-        ))),
-    );
-    fonts.font_data.insert(
-        "pixel-code".into(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../../../assets/fonts/PixelCode.ttf"
-        ))),
-    );
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, "tiny5".into());
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .insert(0, "pixel-code".into());
-    ctx.set_fonts(fonts);
+    super::typography::apply(ctx);
     // HUD panels are dark even on a light Windows desktop. Pin the preference
     // so the first native theme event cannot replace their readable text style.
     ctx.set_theme(egui::ThemePreference::Dark);
@@ -54,13 +28,24 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     style.visuals = egui::Visuals::dark();
     style.visuals.window_fill = INK;
     style.visuals.panel_fill = INK;
-    style.visuals.extreme_bg_color = Color32::from_rgb(17, 15, 20);
+    style.visuals.extreme_bg_color = super::grimoire::RECESS;
     style.visuals.override_text_color = Some(PAPER);
-    style.visuals.selection.bg_fill = Color32::from_rgb(93, 73, 48);
-    style.visuals.selection.stroke = egui::Stroke::new(1.0, JADE);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(55, 46, 43);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(83, 67, 51);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgb(100, 78, 52);
+    style.visuals.selection.bg_fill = Color32::from_rgb(65, 59, 45);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, AMBER);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(42, 46, 47);
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, EDGE);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(43, 62, 61);
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, JADE);
+    style.visuals.widgets.active.bg_fill = Color32::from_rgb(65, 59, 45);
+    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, AMBER);
+    for widget in [
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.fg_stroke = egui::Stroke::new(1.0, PAPER);
+    }
     style.visuals.window_shadow = egui::epaint::Shadow::NONE;
     style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
     style.visuals.window_corner_radius = egui::CornerRadius::same(0);
@@ -77,20 +62,18 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(6.0, 6.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.interact_size.y = 30.0;
-    // Solid scrollbars and a bordered tooltip/popup frame, as in Minecraft's
-    // GUI, so lists read as lists and hover text reads as a box.
+    // Solid scrollbars and bordered tooltip frames keep small controls clear.
     style.spacing.scroll = egui::style::ScrollStyle::solid();
-    style.visuals.window_stroke = egui::Stroke::new(2.0, EDGE);
-    // Tiny5 is drawn on a 10px grid; body text sits at 13 so it stays legible
-    // at the default UI scale. PixelCode stays on the monospace family for
-    // counts and keycaps, at its own 12px grid.
+    style.visuals.window_stroke = egui::Stroke::new(1.0, EDGE);
+    // Typography selects font families and atlas sampling independently of
+    // physical voxel size and world render resolution.
     style
         .text_styles
-        .insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
+        .insert(egui::TextStyle::Heading, egui::FontId::new(20.0, egui::FontFamily::Name("PixelAccent".into())));
     for (kind, size) in [
-        (egui::TextStyle::Body, 13.0),
-        (egui::TextStyle::Button, 13.0),
-        (egui::TextStyle::Small, 11.5),
+        (egui::TextStyle::Body, 14.0),
+        (egui::TextStyle::Button, 14.0),
+        (egui::TextStyle::Small, 12.0),
     ] {
         style
             .text_styles
@@ -110,6 +93,7 @@ pub(super) fn controls(ui: &mut egui::Ui) {
             for (key, action) in [
                 ("W A S D", "Move"),
                 ("F", "Use station / open cache / harvest plant"),
+                ("L", "Toggle Lumen Lantern"),
                 (
                     "Alt + left mouse",
                     "Bore ore or rock (requires upgraded bore)",
@@ -144,7 +128,7 @@ pub(super) fn controls(ui: &mut egui::Ui) {
                 ("Esc", "Close panel / pause / resume"),
                 ("F1 / F3 / F11", "HUD / diagnostics / fullscreen"),
             ] {
-                ui.label(RichText::new(key).color(Color32::from_rgb(186, 222, 171)));
+                ui.label(RichText::new(key).color(JADE));
                 ui.label(action);
                 ui.end_row();
             }
@@ -154,7 +138,7 @@ pub(super) fn controls(ui: &mut egui::Ui) {
 pub(super) fn hud_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(INK)
-        .stroke(egui::Stroke::new(2.0, EDGE))
+        .stroke(egui::Stroke::new(1.0, EDGE))
         .corner_radius(0)
         .inner_margin(egui::Margin::symmetric(10, 7))
 }

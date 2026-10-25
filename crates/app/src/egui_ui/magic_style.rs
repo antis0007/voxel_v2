@@ -196,6 +196,7 @@ pub fn world_uniform() -> [[f32; 4]; 5] {
 }
 
 pub fn panel(ui: &mut egui::Ui) {
+    if std::env::var("VOXEL_GRIMOIRE_REVIEW").is_err() { return; }
     egui::CollapsingHeader::new("Magic materials")
         .default_open(std::env::var("VOXEL_GRIMOIRE_REVIEW").is_ok_and(|v| v == "magic"))
         .show(ui, |ui| {

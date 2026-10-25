@@ -1,0 +1,502 @@
+DUNGEON QUALITY OVERHAUL — ART, ENEMIES, SPACES AND SYSTEMIC PLAY
+21 October 2026
+Target: existing Rust + raw WGPU voxel game. No Bevy.
+
+DELIVERABLE AND EVIDENCE
+
+This is a critical design assessment and an implementation prompt pack. All six supplied dungeon images were inspected locally. The concept board generated in this conversation is an art-direction target, not an in-engine capture or performance result. No current repository or executable was supplied in this workspace.
+
+Image evidence:
+- image(9).png: broad combat view, purple overhead clusters, torches, Aether Moth target panel, floor circle and distant humanoid.
+- image(10).png: Undertow Knot on a simple plinth with the instruction "Defeat the guardians to unseal".
+- image(20261021-110948).png: close view of the Sanctum Warden.
+- image(20261021-111039).png: repeated purple ceiling clusters and cyan/red patterned shelves separated by gaps.
+- image(20261021-111056).png: large crystal/root-like form, hovering/standing crystalline form and a low crab-like creature.
+- image(20261021-111104).png: pause menu.
+
+The screenshots establish appearance. They do not establish attack timing, pathfinding, procedural layout distributions, light propagation, actual emissive material behavior or persistence. The user's report establishes that the rooms feel boring and repetitive; runtime inspection must determine the causes.
+
+Preserve the existing astral/cosmos and phantom-floor concepts where they are intentional. The suspended forms and gaps may have mechanics. Identify them before replacing their presentation.
+
+1. CRITICAL ASSESSMENT
+
+The dungeon reads as patterned blocks and encounter objects inside a dark box. The room envelope, construction and purpose are weakly expressed. Bright repeated motifs carry more visual weight than entrances, threat silhouettes or the principal objective.
+
+Architecture:
+- Large floor and ceiling planes have little internal hierarchy. The visible ceiling is a brown slab with irregular downward blocks and repeated purple clusters.
+- Supports, changes in span, circulation and damage do not form a clear construction language in these views.
+- Several images provide little visual information about the far wall, exits or overall volume.
+- Scattered steps, shelves and platforms do not by themselves establish meaningful elevation or route choice.
+- The solution is a coherent structure with deliberate circulation and focal points, followed by selective detail.
+
+Ceiling:
+- Similar purple star clusters repeat at similar importance, creating a ceiling-wide decorative field.
+- Their suspension is not visually explained by a containment device, support or framed opening.
+- Their brightness draws attention upward without reliably helping the player understand the room.
+- A ceiling needs bays, beams/ribs, piers, recesses and exceptional focal features. It should vary with room role.
+
+Materials:
+- The cyan and red repeated cross patterns read like printed wrapping paper. They repeat over broad faces, thin strips and disconnected shapes without describing a clear substance.
+- Purple star patterns occur so frequently that a potentially special material loses significance.
+- Quiet base surfaces, structural divisions, restrained state marks and localized wear would provide more identity than increased texture resolution or more random noise.
+- Preserve cosmic materials in important places. Do not erase the intended magical identity.
+
+Lighting:
+- The foreground is readable, while large enclosure surfaces disappear. Bright small objects often do not communicate the volume around them.
+- Determine whether this results from light placement, missing/weak local lighting, shadow/ambient behavior, exposure or geometry. Do not assume that every bright texture is a working light emitter.
+- Reveal selected doorway edges, wall planes, ribs and vertical connectors with authored practical light. Preserve dark recesses and atmosphere.
+- A global ambient boost would flatten the room. Unlimited dynamic lights and bloom would add cost and visual interference.
+
+Focal object:
+- The Undertow Knot resembles a luminous wireframe tent on stacked blocks.
+- Give it an intentional base, containment frame, connection to the room and visible state language.
+- Locked, powered, disrupted and claimed states should be understandable on the object. Text supplies detail rather than the entire meaning.
+- The visible instruction proves one combat gate. It does not prove every dungeon objective is a kill-all gate.
+
+Enemies:
+- The Warden has a broad tan slab body, weak head definition, thin legs, a simple weapon and a flat dark shield. Its shape poorly explains mass, joints, protection and attack direction. A thin overhead strip is also visible; verify whether it is model geometry or world-space UI.
+- The crab-like creature reads as horizontal rails on thin legs, with limited shell volume or distinction between working claws and locomotion.
+- Small airborne forms are difficult to distinguish from pickups or particles.
+- Verify the actual model-to-archetype mapping. The large crystal/root form must not silently become an invented fourth enemy.
+- Screenshots cannot prove broken AI. Require motion evidence for behavioral criticism.
+
+UI:
+- The pause screen is comparatively coherent and readable. Its thematic frame can be improved by the existing UI owner.
+- Target panels and the Knot instruction compete with the world, while the corresponding objects need stronger visual identity.
+- Retain the requested pixel-perfect gold/silver bookbinding and magitech direction. Avoid launching a second HUD redesign during the architectural work.
+
+2. QUALITY BENCHMARKS
+
+Noita:
+Its official description connects spells to materials, including burning, melting, freezing and other simulated interactions. The transferable requirement is that environmental changes alter available actions. A fire particle effect with no effect on the surrounding material does not establish this quality.
+
+Minecraft:
+Mojang's Warden design account describes a deliberately nontraditional threat centered on avoidance, stealth and player-caused escalation. The transferable requirement is an enemy whose rules are legible and whose presence changes navigation and choices. Our Sanctum Warden should remain an original design with its own role.
+
+FTL:
+Subset's description presents several responses to the same system failure, including power redistribution, escape, increased attack and boarding. The transferable requirement is a setback that changes decisions and resource costs. A dungeon should support adaptation instead of routinely demanding a prescribed action sequence.
+
+Factorio:
+The developers describe designing enemy traversal and pollution-source targeting to change defensive choices, while extending and optimizing existing movement systems. The transferable requirement is a visible relationship between infrastructure, enemy behavior and player decisions.
+
+These are design lessons. None of the sources establishes that those games use the exact dungeon-generation method proposed here. Overall parity or superiority requires repeated play, content breadth, stability and performance evidence beyond one screenshot or one encounter.
+
+3. ART DIRECTION: REBUILD THE EXISTING ASTRAL SANCTUM
+
+Interpret the place as an underground astronomical archive and working magitech institution that has been damaged, altered and partly occupied.
+
+Retain current in-game names and IDs unless a deliberate content migration is needed. "Astral Sanctum" is the direction for this pass, not a request to rename the game or add another biome.
+
+Material roles:
+- Primary mass: restrained warm-gray or violet-gray stone, with broad quiet areas.
+- Secondary mass: dark structural metal and selected worn ivory/stone plates.
+- Important fittings: aged gold/brass clasps and silver guides, rims and precision parts.
+- Utility lighting: warm amber lamps mounted to usable circulation and work areas.
+- Active equipment: limited cool indications with recognizable shape and motion.
+- Astral feature: concentrated violet star-glass in one aperture, contained floor, device or recess.
+- Wear: soot at heat sources, deposits below leaks, polish along contact surfaces, fractures following construction and damage.
+
+Gold signals selected importance; it should not cover every wall. Silver makes connections and working parts legible. The UI and environment should share this language without making every architectural feature resemble a literal book.
+
+Texture requirements:
+- Consistent world-space texel density across related assets.
+- Material-specific pattern scale and orientation.
+- Structural divisions at a larger scale than pixel detail.
+- Sparse symbols with meaning.
+- Filtered distant detail and stable normal/roughness response.
+- No identical tiny cross applied to every face as the primary material identity.
+- Avoid baking directional illumination into base color.
+
+Composition:
+- One dominant spatial form per room.
+- One primary focal object or destination.
+- Useful subordinate landmarks.
+- Quiet surfaces around threats and interactables.
+- Deliberate compression before a major reveal.
+- Visible relationships between floor levels, exits and ceiling height.
+
+4. ROOM AND CEILING KIT
+
+Build a small reusable construction kit over the current voxel generator:
+- Plain wall bay with clear top and bottom termination.
+- Pier/capital and supported beam.
+- Doorway/lintel and service opening.
+- Stair/landing and balcony/railing.
+- Maintenance trench and appropriate cover.
+- Straight ceiling/coffer.
+- Stepped vault rib and infill.
+- Framed oculus or suspended-apparatus mount.
+- Existing-material damage variants.
+- Purposeful transition between constructed stone and natural cave.
+
+Select bay dimensions in physical world units, then quantize to the supported voxel scale. Use actual player and enemy clearance profiles. A visually broad Warden must fit its assigned approach. A decorative beam must not silently remove required headroom.
+
+Ceiling choices follow room roles:
+
+Service vestibule
+- Compressed height, supported beams or shallow coffers.
+- Service lines lead to equipment.
+- Warm light establishes safe first footing and an intelligible route.
+
+Gallery
+- Repeated ribs ending at wall piers, interrupted by alcoves and overlooks.
+- A visible destination through the gallery.
+- Height and cover create a distinct tactical situation.
+
+Workshop
+- Taller central bay with a balcony and meaningful machinery.
+- Hoists/rails or restraints have attachment points.
+- Maintenance access connects to the device it serves.
+
+Binding chamber
+- Monumental stepped/corbel vault.
+- One framed star-glass aperture or contained suspended resonator.
+- Quiet surrounding mass increases the feature's importance.
+- The ceiling composition leads toward the objective.
+
+Phantom-floor chamber
+- Preserve the intended puzzle/traversal rule.
+- Use a small number of readable route groups and meaningful gaps.
+- Indicate stable, changing and absent states using shape, value, motion, sound and optional symbols; do not rely only on color.
+- Provide a preview or safe demonstration of the rule.
+- Give unintended falls a credible recovery route where this encounter's design permits it.
+- A jump that visually reads as possible must agree with collision and supported movement.
+
+Natural breach
+- A deliberately irregular opening breaks the institutional structure.
+- Debris follows a plausible source, water marks have an origin, and light/sound communicate the connection.
+- This supplies contrast without making every room noisy.
+
+Suspended magical objects can remain. Frame their suspension through restraints, pylons, an energized aperture or another legible mechanism. Use a few selected objects; do not make decorative scatter the entire ceiling system.
+
+Decorative pieces can be static meshed/instanced geometry. Anything presented as walkable, blocking, destructible or mechanically active must use authoritative collision/state. Full dynamic structural collapse is not a prerequisite; unsupported decorative debris should not claim physical behavior that does not exist.
+
+5. THREE ENEMY ROLES
+
+FIRST: SANCTUM WARDEN — LANE CONTROL
+
+Visual construction:
+A compact stone/ivory reliquary body over a dark articulated frame. Layered plates, a recessed head/core, broad knees and substantial feet. A thick stepped shield with binding-clasp corner mounts and a visible forearm/grip. Verify whether the existing overhead strip belongs to the model or to world-space UI. A crown or crest is an optional new design choice; do not interpret an interface element as existing anatomy. Keep its defensive side obvious.
+
+Behavior:
+A deliberate shield-leading approach, planted brace, committed short bash and exposed recovery. It holds a useful lane rather than converting its shield into omnidirectional damage reduction.
+
+Counterplay:
+Change angle, bait the committed attack, use cover, exploit the exposed flank/core during recovery, or alter terrain. Early tracking can be limited; committed direction and active damage interval must be readable.
+
+Rules:
+The oriented shield blocks through its actual pose and material. A hit on the back is not a front-shield hit. Projectiles meet a consistent collision rule; friendly or hostile ownership should not silently make matter intangible. Any deliberate team exception needs an explicit design rationale.
+
+Reward proposal:
+Recover a shield component that becomes usable cover through existing equipment/placement systems. Reuse the same meaningful blocking behavior rather than creating an unrelated percentage bonus. Give placement an honest cost and persistent item identity.
+
+SECOND: AETHER MOTH — AERIAL PRESSURE AND DISTRACTION
+
+Visual construction:
+Recognizable paired angular wings, a compact thorax, abdomen and antennae. Use broad planes and negative space. Concentrate emission in a small core/lens. The outline must read as a creature before it reads as a pickup.
+
+Behavior:
+Transit, braking hover, visible preparation, limited aimed burst/dart and recovery/reposition. Body banking and wing pose communicate the action. Keep it distinguishable from the Warden in movement and attack geometry.
+
+Counterplay:
+Break line of sight during preparation, exploit the open pose, use ceiling clearance, or influence attention through supported light/noise stimuli.
+
+Rules:
+Light seeking queries logical emitter/stimulus data. It does not read screen brightness, bloom or exposure. Search locally with bounded work. Physical walls block its route/projectiles. A sealed compartment should not receive an unexplained attack from an omniscient flyer.
+
+If regeneration remains, expose an interruptible source or action. The screenshot's REGENERATING label does not establish how it currently works.
+
+Reward proposal:
+A recovered lens becomes a usable light/lure through the same emitter/stimulus system. Establish one working use rather than adding an unused crafting ingredient.
+
+THIRD: EXISTING CRAB-LIKE ARCHETYPE — LOW FLANKING PRESSURE
+
+Visual construction:
+An arched layered shell, thick leg roots, clear joints, planted tips and recognizable working claws. Preserve a contrasting sensor and accessible face/underside. Use a low broad silhouette distinct from upright Warden and airborne moth.
+
+Behavior:
+Lateral movement, planted claw preparation, a short committed lunge and recovery. It seeks useful flanking space.
+
+Counterplay:
+Bait the lunge, exploit recovery, use hard cover, change elevation or alter its support. Its shell protection and exposed region should be spatially understandable.
+
+Optional extension within the existing damage system:
+A bounded local chipping action can open a weak obstacle. Respect material hardness, per-action work, local route feasibility and persistent edits. This must not become unrestricted tunneling toward the player. If the current terrain-damage operation cannot support it coherently, finish the core flanking encounter first and report the dependency.
+
+Reward proposal:
+A mandible/tool part supplies the same limited chipping capability through existing tools/augments. Complete one acquisition-to-use loop.
+
+If chipping is deferred, defer its player-tool reward as well. Use an existing functional reward for that iteration and report the missing capability. Do not implement a player-only imitation while claiming it reuses the creature's action.
+
+Shared enemy standards:
+- Simulation owns wind-up, commitment, active hit interval, recovery and interruption.
+- Rendering interpolates authoritative state.
+- Evaluated pose informs hit regions and weapon/shield geometry.
+- Evaluate action-driven weapon, shield and hit-region transforms on simulation ticks. Rendering interpolates those same poses; simulation never reads render-interpolated transforms back. Sweep fast geometry between previous and current authoritative poses.
+- Use a few meaningful collision volumes, not collision for every decorative voxel.
+- Swept movement/projectiles prevent fast actions tunneling through newly placed walls.
+- Footing, stairs and ledges agree with the visible body.
+- Reuse rigid-part hierarchy and existing animation/entity systems; no new heavyweight engine or mandatory skinning pipeline.
+- Prepare geometry once and update transforms/instances. Avoid per-frame mesh rebuilding.
+- Use distinct animation and spatial sound cues, with visual equivalents for critical information.
+- Test each alone before combining them.
+
+Terrain edits must reach movement/projectile collision through authoritative occupancy, an immediate local collision patch or a coherent collider publication step. Marking a navigation path dirty is insufficient if the next movement check still uses obsolete collision.
+
+Reward pickup and placement transfer one persistent item instance between world and inventory ownership. Resolve death/drop/claim once across reload; do not create a second instance during the transfer.
+
+Pairings:
+- Warden + moth: lane control plus exposed-peek pressure; physical cover remains useful.
+- Warden + crab: front pressure and a changing flank.
+- Moth + crab: vertical attention plus low approach; off-screen cues become important.
+
+Begin with modest encounter density. More enemies, simultaneous unavoidable attacks and larger health bars are not substitutes for better decisions.
+
+6. A COMPLETE FIRST SITE
+
+Use the existing expedition/site system. The following is a proposed reference arrangement, not a new quest framework or a requirement to rebuild all generated dungeons.
+
+Entrance overlook:
+The player sees the principal apparatus and can inspect a threat before committing. Provide safe first footing and understandable retreat.
+
+Upper gallery:
+A shorter exposed approach with the Warden controlling a useful lane. Piers provide real cover. Its destination remains visible intermittently.
+
+Service works:
+A longer lower route that reveals the apparatus's actual connections. It offers an existing-system interaction, a material opportunity or a resource cost distinct from the upper route.
+
+Binding chamber:
+The redesigned Knot has an authored base and clear state. The main objective is visible in the world. Spatial circulation allows more than shooting straight ahead.
+
+Recovery route:
+Connect the lower part of a traversal/puzzle chamber back into the site. It provides a consequence and altered route after a mistake, rather than automatic objective failure.
+
+Return connector:
+A lift, stair, repaired bridge or opened passage creates a shorter return route and a new view of the entrance. Use a connector the current engine can implement fully.
+
+Proposed connectivity:
+- Entrance reaches upper gallery and service works.
+- Both routes reach the binding chamber through different situations.
+- The lower recovery route reconnects to service works.
+- A changed/activated return connector links the objective area to the entrance.
+- Actual digging, building and destruction may create other routes.
+
+Use these relationships, not this exact shape, to vary seeds. A mirrored room with different props is not sufficient variation. Vary approach elevation, observation angle, route cost, threat placement, system state and shortcut location while preserving coherent construction.
+
+The graph describes initial intent. Runtime voxel geometry and collision remain authoritative after player changes.
+
+7. FUNCTIONAL CHOICES AND CONSEQUENCES
+
+Choose a few interactions already supported by the current game, then complete them thoroughly.
+
+A suitable first power-based situation:
+- The containment apparatus, work lights and an existing service mechanism have visible connections.
+- Isolating a shared supply can disable containment while also disabling the connected lights/mechanism.
+- That changes access and retreat costs. Emergency/readability lighting and a viable physical way out remain.
+- Restoring an alternate supply or taking the longer route are possible responses when supported.
+- Each effect follows the actual power graph and state; a painted cable plus a scripted room flag does not satisfy the requirement.
+
+A terrain-based situation:
+- A weak partition, destructible support or buildable gap provides an alternate approach.
+- Mining/building uses the same material/tool operations as elsewhere.
+- Costs follow visible rules: time, tools, noise, material expenditure or a changed encounter.
+- Accept a legitimate bypass. Do not turn every wall indestructible or add a punishment whenever the player avoids a planned fight.
+
+A creature-based situation:
+- A real light/lure influences the moth.
+- An enemy's physical shield can become cover.
+- A limited chipping action changes a local route.
+- These capabilities also work outside the specific demonstration room where their shared rules allow it.
+
+Use water, heat, combustion or other reactions only through implemented authoritative systems. If such a system is missing, do not substitute particles and claim systemic behavior, or launch a new fluid/chemistry engine as a prerequisite to this dungeon pass.
+
+Outcome policy:
+- Explicitly declare whether the reference site's alternative approach changes physical access, changes how guardians are defeated, or satisfies a separate environmental objective. Knot appearance, instruction text, unsealing and claim eligibility must agree. A legacy guardian-gated reward retains that requirement; a noncombat outcome uses an explicit supported objective configuration.
+- Discovery rewards, combat objectives and environmental objectives have distinct eligibility.
+- Preserve valid legacy sanctum claims and guardian membership.
+- An alternate objective route must not fabricate guardian deaths.
+- A killed guardian falling into a pit still resolves through its stable identity; unloading is not death.
+- Persist claimed rewards, terrain changes, mechanism state and relevant encounter state.
+- When a rare reward object is destroyed or its location becomes inaccessible, use the established recovery/claim policy rather than duplicating it or silently losing it.
+- Ordinary traversal and exploration should not require every nearby enemy to die.
+
+FTL-like pressure comes from connected constraints and recoverable setbacks. Define the state change and new choices after an alarm, broken machine, failed jump or lost resource. Reserve hard failure for explicit rules communicated beforehand.
+
+8. IMPLEMENTATION PROMPTS
+
+Use the shared contract once. Send each prompt to the relevant existing owner. The architecture owner and generation owner must coordinate edits to shared generation files. Enemy art/behavior can proceed independently after physical profiles and room-clearance contracts are agreed. Integrate through one owner for shared world state, materials and GPU interfaces.
+
+SHARED CONTRACT
+
+Work in the actual Rust + raw WGPU repository. Read repository instructions, Cargo.lock, the current working tree and the latest relevant implementation before editing. Preserve other agents' changes and existing supported saves. Identify actual files and ownership; proposed path names in older briefs are leads.
+
+Reuse the existing renderer, voxel generator, entities, primitive models, wand/effect evaluation, terrain-damage operations, machine state and save identities where appropriate. Add small concrete data structures only where they solve a demonstrated need. Do not introduce Bevy, another renderer, a second spell evaluator or a general-purpose procedural framework.
+
+Continue the existing expedition and world-generation efforts rather than creating competing versions. Earlier reports and passing test counts are context, not runtime evidence.
+
+The concept board is a visual target. Derive implementable block/rigid-part forms and materials from it. Do not present it as a captured result.
+
+Complete work through a playable reference site, then controlled procedural variants. Record implemented, compiled, visually verified, gameplay-verified and performance-measured status separately.
+
+For the first reference site, build only the construction pieces actually used, one principal attack with readable recovery per enemy, and two approaches supported by existing world operations. Complete those loops before optional regeneration variants, excavation, additional machinery or further kit pieces. The later examples define the direction rather than simultaneous prerequisites.
+
+PROMPT 1 — CONSTRUCT A COHERENT DUNGEON AND CEILING LANGUAGE
+
+Act as environment artist and level architect for the existing astral/cosmos dungeon family.
+
+Inspect the six supplied screenshots. Preserve intended phantom-floor/cosmos mechanics, but remove the visual dependence on repeated cyan/red cross wallpaper and evenly scattered purple overhead clusters.
+
+First build a connected three-space benchmark using current site/generation facilities: a compressed entrance/service space, a gallery or workshop with an overlook, and a tall binding chamber. Establish one clear spatial identity, focal feature and circulation pattern for each. Include an actual visible ceiling envelope, readable exits and intentional elevation changes.
+
+Create the compact wall/pier/door/stair/balcony/trench/beam/vault/oculus kit described in this brief. Quantize to supported voxel scale and validate actual collider clearance. Generate supports, vault springing and enclosure together. Make damage modify that construction language.
+
+Use quiet stone, dark structure, selected ivory plates, aged gold/brass and silver fittings. Concentrate violet star-glass at a few important features. Replace full-face repeated crosses with structural material detail and sparse meaningful symbols. Preserve consistent texel scale and filter distant texture detail.
+
+Redesign the Undertow Knot as a substantial object: functional plinth, containment frame, core and legible powered/locked/disrupted/claimed states. Connect it visually to its real room systems. Give it enough identity to remain recognizable with its text panel hidden.
+
+Coordinate lighting with the existing renderer owner. Reveal route edges, major wall planes, supports and focal machinery through authored local sources. Keep dark recesses. Determine which bright materials are intended to emit light, and diagnose why the overall lighting does not reveal the room's volume. Correct the relevant source placement, material response, exposure or rendering path without turning every bright decorative surface into a dynamic light. Do not globally brighten all underground space or assign an expensive light to every decorative voxel.
+
+The phantom-floor room must retain its intended rules. Compose a few readable route groups, communicate state changes through multiple cues and show a recoverable lower connection where the encounter permits it.
+
+Deliver matched eye-level and upward before/after captures in the real game, followed by a walking route through all three spaces. With debug labels hidden, the primary route, focal object, room height and exit framing should be understandable. Keep decorative meshes, shadow casters and light counts bounded and measured.
+
+PROMPT 2 — REBUILD THREE ENEMIES AS DISTINCT PHYSICAL AND TACTICAL DESIGNS
+
+Act as creature artist, animator and combat designer. Identify the actual Warden, Aether Moth and crab-like archetype before editing. Do not assume the large crystal/root form is the moth.
+
+Rebuild the Warden around a planted, asymmetrical shield-bearing silhouette; the moth around unmistakable articulated wings and a small luminous core; and the crab around an arched shell, working claws and clear low locomotion.
+
+Use the detailed roles in Section 5:
+- Warden: lane control, brace, committed bash, exposed recovery.
+- Moth: aerial positioning, visible preparation, limited attack and reposition; supported light/stimulus manipulation.
+- Crab: low flanking pressure, committed lunge and honest recovery; optional bounded chipping through existing terrain damage.
+
+For each, complete locomotion, orientation, preparation, commitment, hit, miss, interruption where supported, recovery, damage and death. Pose and sound should communicate intent at normal combat distance.
+
+Simulation owns action timing and damage. Make the rendered pose, shield/weapon transforms and hit regions agree. Empty space between appendages is not an invisible solid box. Use swept collision for fast motion and verify attacks against walls placed during preparation.
+
+Respect actual clearance, footing and current terrain. Invalidate affected navigation locally after edits, validate the next movement segment and bound replanning. If a path disappears, use an honest supported behavior: guard, seek another route, retreat, fall or perform the defined excavation. Do not teleport or phase to hide path failures.
+
+Use local logical stimulus queries rather than rendered brightness for moth attention. If regeneration/toxicity remains, make its source, application and counterplay understandable without a giant status panel.
+
+Finish one useful recovered capability per creature through current item/tool/placement systems where those paths exist: shield cover, light/lure lens, limited chipping tool. Avoid unused drops and speculative recipe trees.
+
+Reuse shared geometry/material resources and a small rigid-part pose hierarchy. Do not rebuild meshes per frame or require a new skinning/behavior-tree framework.
+
+Prove each enemy alone, then each relevant pair, in rooms that support its role. Show silhouette and neutral/preparation/recovery poses at gameplay distance, plus short real combat recordings including missed attacks and terrain changes. Profile actual encounter and declared stress populations.
+
+PROMPT 3 — GENERATE CONNECTED PLACES WITH FUNCTIONAL CHOICES
+
+Act as level-generation and gameplay-systems owner. Extend the current dungeon/site/expedition planning rather than replacing it.
+
+Use the approved three-space construction benchmark as the visual kit. Build one complete site using existing room roles with an entrance overlook, meaningful route split, vertical connection, principal objective, recovery route and return shortcut. The reference arrangement in Section 6 is a starting case, not a universal fixed layout.
+
+Keep spatial relationships and functional connections explicit in small domain-specific planning data. Select room purpose, elevation, openings, wall thickness, supports, significant sightlines and infrastructure before dressing.
+
+Validate actual voxel geometry and player/enemy profiles: clearance, landing space, stairs/jumps, interaction reach, safe first footing, required connectors, reachable objective and exit. Use bounded generation retries and report failures. Repair or reject bad candidates rather than hiding unreachable content with teleportation.
+
+Introduce variation through relationships and costs: approach side/elevation, observation angle, branch connection, landmark placement, system state and shortcut location. Palette swaps, mirrored identical arenas and randomized clutter do not satisfy diversity.
+
+Provide at least two materially different approaches through the first site using current capabilities. They may involve combat, terrain modification, building, a service route, supported stimulus manipulation or an actual machine-state change. Do not require three bespoke solutions for every prop.
+
+Connect the Knot and service machinery to implemented state. A power cut must affect actual connected consumers. Material changes must affect actual geometry/collision. Objective checks should recognize the desired outcome rather than a prescribed switch sequence.
+
+Preserve separate discovery, combat and environmental claim policies. Keep legacy guardian progression valid. Never invent defeated guardians to authorize an unrelated reward. Persist mechanism state, edits, claims and relevant encounter identities.
+
+Player-created breaches and bridges are ordinary world changes. The generated room graph cannot overrule a traversable modified world. Avoid universally indestructible dungeon shells.
+
+Give failure a state change and a viable next decision where appropriate. A pit can lead to a lower route; a disabled mechanism can change access; an alarm can alter threat behavior. Do not silently reset the site or make every setback an instant failure.
+
+Prove the same seed completed through two different approaches, one recovery from a mistake, and one improvised terrain change. Then inspect a small fixed seed set for functional/spatial diversity. Do not increase room catalogue size until the reference site works.
+
+PROMPT 4 — INTEGRATE, PLAYTEST AND OPTIMIZE THE ACTUAL EXPERIENCE
+
+Act as integrator and critical playtest owner. Merge the environment, enemy and generation work with the active material/UI/horizon work under explicit shared-file ownership.
+
+Test ordinary play before photo-mode presentation:
+- Enter safely and understand the major space.
+- Identify the Knot and a likely route without relying on a full-screen instruction.
+- Read enemy preparation and recover from an attack that misses.
+- Use cover, a second route and a supported environmental interaction.
+- Cross the phantom-floor room using its actual rules.
+- Make a terrain edit that changes movement.
+- Complete the objective, claim one reward and use it.
+- Open/use the return route.
+- Save, reload, leave and return without restoring mined terrain, duplicating rewards or corrupting guardian membership.
+
+Coordinate with the UI owner rather than replacing their work. Use the gold/silver bookbinding language consistently; keep ordinary target information compact; make object state visible in-world; preserve the pause menu's readable hierarchy.
+
+Keep the scene readable at the declared lower quality preset. Critical cues must survive reduced bloom/particles/shadow quality, and color must not be the only state signal. Gameplay stimuli and attack timing must remain independent of graphics settings.
+
+Profile a declared ordinary encounter and stress scene, including active projectiles, effects and terrain edits. Separate AI/navigation, pose update, generation/remeshing, upload, shadow, lighting and total GPU/CPU costs where available. Record frame-time percentiles and streaming spikes, draw/instance counts, light/shadow counts and memory. Use actual hardware/settings; do not invent targets or measurements.
+
+Reuse static/instanced kit geometry and shared enemy resources. Bound perception queries, replans, active effects and upload work. Culling/LOD must not hide a nearby threat or allow a visible attack to be simulated at unusable fidelity. Simulation cannot be disabled simply because an actor is off-screen while it still affects the encounter.
+
+Use meaningful regression checks for reachability/clearance, stale navigation after edits, pose-hit agreement, objective identity and save/reload. Keep visual and gameplay acceptance separate from compilation and unit tests.
+
+Deliver the playable reference site, matched captures, real motion evidence, a concise root-cause/change report, measured performance, and honest remaining limits. If runtime cannot be launched, explicitly mark those acceptance gates unverified and give exact reproduction steps.
+
+9. ACCEPTANCE SCORECARD
+
+Architecture and ceiling:
+- A doorway view communicates the main volume, route, focal object and likely exits.
+- Upward views show construction, rhythm and one or a few special features.
+- Large surfaces remain quiet enough for threats and interactables to stand out.
+- Supports and magical suspension have visible logic.
+
+Enemies:
+- Warden, moth and crab are recognizable by silhouette and movement before reading a nameplate.
+- Their threats demand different responses.
+- Preparation, commitment and recovery are readable.
+- Collision, protection, footing and terrain interaction match visible construction.
+- Their recovered capabilities have at least one completed useful application where included.
+
+Layouts:
+- The first site includes a meaningful loop/alternative, useful elevation, observation before commitment and a return connection.
+- Generated candidates pass actual geometry/clearance checks.
+- Seed variation changes navigation or decisions, not just ornament.
+- Legitimate digging/building remains useful.
+
+Systemic play:
+- The same outcome can be reached through two substantially different approaches in the reference site.
+- One mistake produces an altered but playable situation.
+- Machinery and materials change actual shared state.
+- Legacy claims and guardian identities remain correct.
+- Edits and rewards persist without duplication.
+
+Presentation and performance:
+- Lighting shows chosen depth cues without uniformly washing the room.
+- Phantom-floor states are understandable and agree with collision.
+- Critical cues survive reduced effects and color-independent inspection.
+- Runtime captures establish the result; generated concept art is not evidence.
+- Performance is measured with the integrated scene and active gameplay systems.
+
+A useful first playtest task is: enter without directions, identify the objective and an exit, explain the threat, choose an approach, recover from one setback, and use a reward in the next situation. Record where the player hesitates or misunderstands. Do not infer fun or comprehension from test counts alone.
+
+10. SOURCES AND CONTINUITY
+
+Primary reference sources:
+- Noita official description and FAQ: https://noitagame.com/
+- Subset Games' FTL description: https://store.steampowered.com/app/212680/FTL_Faster_Than_Light/
+- Mojang, Meet the Warden: https://www.minecraft.net/en-us/article/meet-warden
+- Factorio, Friday Facts #425 — Behind the Legs: https://www.factorio.com/blog/post/fff-425
+- Petri Purho, Exploring the Tech and Design of Noita (GDC abstract): https://www.gdcvault.com/play/1025695/Exploring-the-Tech-and-Design/
+- Subset Games, Designing Without a Pitch: FTL Postmortem (GDC abstract): https://www.gdcvault.com/play/1019036/Designing-Without-a-Pitch-FTL
+
+The GDC abstracts are background references, not full transcripts or proof of a specific generation algorithm.
+
+Prior project context inspected:
+- expedition_implementation_brief.txt, revision 19 October: explicitly proposed work, with existing-system constraints, loop/route goals and separate legacy sanctum claim behavior.
+- voxel_worldgen_magitech_master_prompt.txt, 21 October: raw WGPU constraint, reported power/machine baseline, current-agent ownership requirements and integrated world goals.
+- The prior visual/physics prompt pack and horizon continuity follow-up.
+
+Earlier plans are integration context. Verify actual implementation in the current checkout before assuming any proposed feature exists.
+
+11. CONCEPT BOARD INTENT
+
+The generated board shows a supported stepped vault, a single framed astral aperture, a substantial central mechanism, balconies/stairs, warm practical light and three distinct enemy constructions.
+
+Use its hierarchy and material grouping. Simplify small trim, books, fittings and creature subdivisions to the measured runtime budget. Do not make every room this tall or ornate. Lower service spaces and quiet connectors provide the contrast that makes a major chamber effective.
+
+The board's visible architecture is a visual proposal; it does not prove collider clearance, route connectivity, machinery function, gameplay quality or WGPU cost. The prompts above make those properties acceptance requirements in the actual game.
+

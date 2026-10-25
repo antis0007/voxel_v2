@@ -14,6 +14,8 @@ use glam::{IVec2, IVec3, Vec3};
 const BUILD_COST: &[(u8, u32)] = &[(8, 8), (6, 4)];
 const ORDER_COST: &[(u8, u32)] = &[(6, 4), (5, 1)];
 const CARGO: &[(u8, u32)] = &[(15, 8), (12, 4)];
+const RECOVERY_COST: &[(u8,u32)] = &[(15,2),(12,1)];
+const RECOVERY_CARGO: &[(u8,u32)] = &[(12,6),(5,2)];
 const FLIGHT_DAYS: f64 = 0.012;
 
 #[derive(Clone, Copy)]
@@ -22,12 +24,14 @@ pub enum Action {
     Order,
     Collect,
     Restore,
+    RecoverRelay,
 }
 
 #[derive(Default)]
 pub struct State {
     pub anchor: Option<IVec3>,
-    /// 0: uncommissioned; 1: paid shipment; 2: claimed permanently.
+    /// Monotone ledger: 0 uncommissioned, 1 commissioning paid, 2 commissioned,
+    /// 3 relay recovery paid, 4 both contracts claimed permanently (save v30).
     pub stage: u32,
     pub due_day: u32,
     pub due_time: f32,
@@ -49,7 +53,7 @@ impl State {
             push(self.due_time.to_bits());
         }
     }
-    pub fn decode(read: &mut impl FnMut() -> anyhow::Result<u32>) -> anyhow::Result<Self> {
+    pub fn decode(read: &mut impl FnMut() -> anyhow::Result<u32>,version:u8) -> anyhow::Result<Self> {
         let present = read()?;
         anyhow::ensure!(present <= 1, "Invalid receiver flag");
         if present == 0 {
@@ -63,7 +67,7 @@ impl State {
             p.x.unsigned_abs() <= 1_024_000
                 && p.z.unsigned_abs() <= 1_024_000
                 && p.y.unsigned_abs() <= 65536
-                && stage <= 2
+                && stage <= (if version>=30 {4} else {2})
                 && due_time.is_finite()
                 && (0.0..1.0).contains(&due_time),
             "Invalid receiver ledger"
@@ -87,6 +91,8 @@ pub struct View {
     pub can_order: bool,
     pub can_collect: bool,
     pub can_restore: bool,
+    pub can_recover: bool,
+    pub recovery_status: &'static str,
 }
 
 fn affordable(world: &World, cost: &[(u8, u32)]) -> bool {
@@ -201,22 +207,27 @@ pub fn view(world: &World, day: &DayNightCycle, player: &Player) -> View {
     let state = &world.orbital.receiver;
     let local = near(world, player);
     let live = local && intact(world);
+    let uplink=super::radio::orbital_uplink(world,day,player);
+    let relay_visible=live && state.stage==2 && uplink && super::megastructures::contacts(world.seed,day,player.pos*world.voxel_scale.meters())
+        .iter().any(|c|c.site.kind==super::megastructures::Kind::DeadRelay && c.elevation_deg>=15.0);
     View {
         position: position(world),
         status: if state.anchor.is_none() {
             "No ground receiver registered"
+        } else if state.stage == 4 {
+            "Both receiver contracts completed; recovery ledger closed"
         } else if state.stage == 2 {
             "Commissioning delivery completed · ledger closed"
         } else if local && !live {
             "Console unavailable · cargo entitlement retained"
-        } else if state.stage == 1 && calendar(day) >= state.due() {
+        } else if pending(state.stage) && calendar(day) >= state.due() {
             "Cargo secured · ready for collection"
-        } else if state.stage == 1 {
+        } else if pending(state.stage) {
             "Shipment paid · awaiting orbital handoff"
         } else {
             "Receiver ready · commissioning contract available"
         },
-        minutes: if state.stage == 1 {
+        minutes: if pending(state.stage) {
             ((state.due() - calendar(day)).max(0.0) * 1440.0).ceil() as u32
         } else {
             0
@@ -230,7 +241,16 @@ pub fn view(world: &World, day: &DayNightCycle, player: &Player) -> View {
             && affordable(world, BUILD_COST)
             && deployment(world, player).is_ok(),
         can_order: live && state.stage == 0 && affordable(world, ORDER_COST),
-        can_collect: live && state.stage == 1 && calendar(day) >= state.due(),
+        can_collect: live && pending(state.stage) && calendar(day) >= state.due(),
+        can_recover: live && state.stage==2 && uplink && relay_visible && affordable(world,RECOVERY_COST),
+        recovery_status: if state.stage<2 {"Complete commissioning to unlock relay recovery."}
+            else if state.stage==3 {"Relay recovery booked. Cargo arrives through the scheduled Meridian service."}
+            else if state.stage==4 {"Relay recovery completed. This world entitlement is exhausted."}
+            else if !live {"Operate the intact ground receiver within six metres to commission recovery."}
+            else if !uplink {"Requires a nearby calibrated level-4 dish, tracking knowledge and clear overhead space."}
+            else if !relay_visible {"Wait for the derelict relay to pass above 15 degrees; consult Pass forecast."}
+            else if !affordable(world,RECOVERY_COST) {"Survey window open. Recovery requires 2 steel ingots and 1 ancient circuit."}
+            else {"Recovery window open: survey the derelict and commission a sealed recovery capsule."},
         can_restore: local
             && state
                 .anchor
@@ -238,6 +258,8 @@ pub fn view(world: &World, day: &DayNightCycle, player: &Player) -> View {
             && affordable(world, &[(8, 2)]),
     }
 }
+
+fn pending(stage:u32)->bool {matches!(stage,1|3)}
 
 /// Choose an existing hold or reserve a free descent. An occupied booking at
 /// another corridor is preserved; in that case use this corridor's next service.
@@ -323,11 +345,12 @@ pub fn action(
                 }
             }
         }
-        Action::Order
-            if near(world, player)
+        Action::Order | Action::RecoverRelay
+            if (matches!(action,Action::Order) && near(world, player)
                 && intact(world)
                 && world.orbital.receiver.stage == 0
-                && affordable(world, ORDER_COST) =>
+                && affordable(world, ORDER_COST))
+                || (matches!(action,Action::RecoverRelay) && view(world,day,player).can_recover) =>
         {
             let (due, book) = forecast(world, day, player);
             if book {
@@ -339,28 +362,33 @@ pub fn action(
                     Channel::Radio,
                 );
             }
-            pay(world, ORDER_COST);
+            let recovery=matches!(action,Action::RecoverRelay);
+            pay(world, if recovery {RECOVERY_COST} else {ORDER_COST});
             let state = &mut world.orbital.receiver;
-            state.stage = 1;
+            state.stage = if recovery {3} else {1};
             state.due_day = due.floor() as u32;
             state.due_time = due.fract() as f32;
-            "Contract ML-C01 accepted: 4 copper ingots and 1 crystal paid. A sealed capsule will deliver 8 steel ingots and 4 ancient circuits."
+            if recovery {"Recovery ordered: 2 steel + 1 circuit paid. Delivery: 6 circuits + 2 crystals."}
+            else {"Shipment ordered: 4 copper + 1 crystal paid. Delivery: 8 steel + 4 circuits."}
         }
         Action::Collect
             if near(world, player)
                 && intact(world)
-                && world.orbital.receiver.stage == 1
+                && pending(world.orbital.receiver.stage)
                 && calendar(day) >= world.orbital.receiver.due() =>
         {
             let mut inventory = world.inventory.clone();
-            let fits = CARGO
+            let recovery=world.orbital.receiver.stage==3;
+            let cargo=if recovery {RECOVERY_CARGO} else {CARGO};
+            let fits = cargo
                 .iter()
                 .all(|&(i, n)| inventory.try_insert(ItemStack::new(Item::Resource(i), n)).1 == 0);
             if fits {
                 world.inventory = inventory;
-                world.orbital.receiver.stage = 2;
+                world.orbital.receiver.stage = if recovery {4} else {2};
                 world.sync_from_inventory();
-                "ML-C01 completed: 8 steel ingots and 4 ancient circuits collected. This commissioning grant is now closed."
+                if recovery {"Collected 6 circuits + 2 crystals. Recovery complete."}
+                else {"Collected 8 steel + 4 circuits. Shipment complete."}
             } else {
                 "Make room for the complete shipment. Your sealed cargo will remain in the receiver."
             }
@@ -377,7 +405,7 @@ pub fn action(
             }
         }
         _ => {
-            "Use the intact receiver within six metres; check materials, shipment status and the closed contract ledger."
+            "Use an intact receiver within 6 m. Check order requirements."
         }
     };
     world.expedition.say(message);
@@ -388,7 +416,7 @@ pub fn action(
 /// temporary mesh. Missing a descent never loses already paid cargo.
 pub fn capsule(world: &World, day: &DayNightCycle) -> Option<(Vec3, Vec3, f32)> {
     let state = &world.orbital.receiver;
-    if state.stage != 1 {
+    if !pending(state.stage) {
         return None;
     }
     let pad = position(world)? + Vec3::Y * 1.1;

@@ -141,7 +141,9 @@ impl ChunkCache {
             if seen.insert(q) {wanted_order.push(q);}
         }
         let water_changed:HashSet<_>=self.quality_proxies.previous_water.as_ref().map_or_else(HashSet::new,|old|
-            snapshot.water_levels.changed_chunks(old).filter(|(_,a,b)|a!=b).map(|(q,_,_)|q).collect());
+            snapshot.water_levels.changed_chunks(old)
+                .filter(|(q,a,b)|a!=b || snapshot.water_levels.precision.changed(&old.precision,*q))
+                .map(|(q,_,_)|q).collect());
         self.quality_proxies.previous_water=Some(Arc::clone(&snapshot.water_levels));
         let mut retire=Vec::new();
         for (&key,c) in &mut self.quality_proxies.columns {

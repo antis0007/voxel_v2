@@ -25,6 +25,7 @@ pub enum Outcome {
     Overheating,
     BufferFull,
     Meltdown,
+    Held,
 }
 
 impl Outcome {
@@ -35,6 +36,7 @@ impl Outcome {
             Self::Overheating => "Overheating",
             Self::BufferFull => "Buffer full",
             Self::Meltdown => "Meltdown",
+            Self::Held => "Held by controller",
         }
     }
 }
@@ -48,6 +50,17 @@ pub fn cool_idle(n: &mut Node) {
     if n.kind == Kind::Generator {
         n.progress = n.progress.saturating_sub(if n.enabled { 1 } else { 2 });
     }
+}
+
+/// One tick with the rods held in by a controller: coolant still works and
+/// the core cools as when demand is satisfied.
+pub fn hold(n: &mut Node) -> Outcome {
+    if n.water >= COOLANT && n.progress > 0 {
+        n.water -= COOLANT;
+        n.progress = n.progress.saturating_sub(COOLANT_REMOVES);
+    }
+    n.progress = n.progress.saturating_sub(1);
+    Outcome::Held
 }
 
 /// Advance one 0.25 s tick for an enabled pile.

@@ -1,0 +1,213 @@
+VOXEL BIOME IMPLEMENTATION PLAN — ART REFERENCE TRANSLATION
+Prepared October 23, 2026
+
+Scope: design and implementation proposal for the existing Rust + WGPU voxel game. No repository was inspected for this brief; names below describe responsibilities, not verified existing files or APIs. Reuse current systems after auditing them. All dimensions and performance allocations are starting targets to validate in game.
+
+1. THE VISUAL TARGET
+
+Translate the references through composition, scale, material grouping, atmosphere, and purposeful landmarks. More vegetation and more noise alone will not produce this look.
+
+Reference 005636: flooded dead forest. Tall sparse trunks frame a calm dark water corridor; distant trunks disappear in gray mist. Acid-green hanging lights and small yellow motes punctuate an otherwise restrained palette. The central silhouette establishes scale and threat.
+Reference 005820: alpine lake. A dominant asymmetric snowy peak anchors the vista. Low shoreline vegetation, a dark conifer belt, and layered mountains create depth. The pale angular water feature can inspire an optional magical landmark; its exact nature is ambiguous in the image.
+Reference 005911: inhabited green basin. Large open fields alternate with forest masses, winding rivers, roads, and settlements. Mountain walls contain the entire region. Moving cloud shadows divide the land into broad light and dark areas.
+Reference 005928: cold cliff fortress. A pale castle contrasts against huge dark rock faces. The winding blue river directs attention toward the structure. Snow gathers in sheltered patches; foreground branches frame the scene. The castle's cliff relationship is more important than ornament.
+Reference 005939: luminous old-growth forest. Massive twisting trunks and roots enclose an inviting route. Cool cyan depth contrasts with warm mushroom undersides. Foliage forms broad masses with openings, rather than a uniformly cluttered wall.
+
+Shared rules:
+- Establish large silhouettes first, medium structures second, small material detail last.
+- Preserve quiet areas: open water, meadows, exposed cliff faces, navigable clearings.
+- Make foreground, middle distance, and background legible as different depth layers.
+- Keep voxel surfaces and deliberate stepped silhouettes visible. Use finer geometry selectively around roots, shoreline edges, ruins, and interactive features.
+- Group material colors across surfaces; avoid independently randomized face colors, excessive normal noise, and uniformly strong ambient occlusion.
+- Use restrained glow. Emission should identify a resource, route, organism, or mechanism.
+- Every important vista must lead into a playable place. Mountains, castle ledges, and giant roots must remain coherent when approached or modified.
+
+2. FIVE BIOMES WITH DISTINCT PLAY IDENTITIES
+
+A. WISP FEN — flooded deadwood forest
+
+Terrain: shallow irregular basins, narrow raised peat banks, drowned channels, occasional deeper pools. First test area: approximately 250 x 250 m. Start with 0.15–0.8 m shallows, with deeper channels clearly marked by bank shape and vegetation. These are gameplay tuning ranges, not simulation requirements.
+Vegetation: tall bare trees with uneven spacing, buttressed roots, fallen trunks, sparse reeds and floating plants. Cluster trees along slightly higher ground. Leave long water corridors open.
+Palette: charcoal water, gray-green bark, desaturated moss, gray atmospheric depth, sparse lime/amber lights.
+Signature: hanging living lanterns and reflections near a half-submerged pumping shrine.
+Play: inspect lantern rhythms to identify safe paths; divert water or restore a pump to expose a ruin. Alternatives include building a walkway, swimming a dangerous channel, or approaching through root tunnels.
+Resources: peat, resin, bog iron, luminous reagents. Tie these to existing recipes only after auditing progression.
+Hazards: soft ground, lurking creatures, reactive gas pockets if supported. Telegraph hazards visually and audibly; do not make darkness itself the entire challenge.
+Acceptance: recognizable with particles disabled. Water, tree spacing, and fog must already establish identity. A safe traversal route remains readable without high bloom.
+
+B. SKYGLASS TARN — alpine lake and mountain amphitheater
+
+Terrain: one dominant peak, secondary ridges, a broad glacial basin, a clear outlet, scree fans, meadow shelves, and a conifer belt. Use directional ridge structure, not a field of equal noise peaks.
+Snow: accumulation tied to elevation, slope, exposure, and sheltered ledges. Avoid one horizontal white altitude stripe. Preserve exposed dark rock on steep faces.
+Palette: cool blue water and distant peaks, cream sunlight, muted green meadows, dark conifer silhouettes.
+Signature: a rare angular water or ice formation above a partially submerged observatory. Build a static version first; animate only if the visual and gameplay value justify it.
+Play: read the observatory from shore, reach it by boat/swimming/constructed crossing, then align a mechanism that reveals a route through the ridge. Mountain shelves reward traversal without requiring every slope to be climbable.
+Resources: quartz, clean water, cold-adapted plants, exposed mineral seams. Do not imply that quartz alone produces semiconductor-grade silicon.
+Acceptance: peak silhouette reads at thumbnail size; lake shore stays coherent during approach; the landmark is recognizable without a quest marker.
+
+C. GREENWARD BASIN — productive temperate valley
+
+Terrain: broad rolling land bounded by mountains, connected river and tributary network, floodplain terraces, meadow/forest patches, and road corridors. Keep a substantial share of low-gradient buildable land.
+Vegetation: forests as coherent stands, hedgerows around settled fields, riparian trees along waterways, and open grazing areas. Avoid evenly sprinkled trees.
+Palette: several restrained greens separated into large patches, warmer fields, pale roads, blue-gray distant ranges.
+Signature: an old aqueduct or mill complex connects river, settlement, and a workshop ruin.
+Play: strongest base-building biome. Choose between access to water, transport routes, timber, and mineral outcrops. Restore machinery, reroute transport, or establish an independent production site.
+Settlement placement: generate only where slope, flood risk, water access, and route connectivity pass explicit checks. Fields and roads must respond to terrain.
+Acceptance: looks intentional from a hilltop and remains interesting on foot. Do not fill every meadow with encounters; open land supports building and visual scale.
+
+D. FROSTBOUND GORGE — river canyon and cliff citadel
+
+Terrain: deeply incised river, asymmetric fractured cliffs, shelves and ravines, talus, isolated snow patches. Give the fortress a supported terrace with a believable approach.
+Palette: dark slate rock, pale masonry, blue water and fog, muted ochre grass.
+Signature: a tall citadel whose lower foundations merge into the cliff, with a bridge, drainage outlet, and exterior maintenance route.
+Play: three planned approaches: guarded bridge, exposed ledge climb, and river-side machinery/drainage entrance. Integrate traps and machinery into the spatial layout rather than spawning unrelated puzzle rooms.
+Destruction: allow tunneling where materials permit it. Excavation changes guard response, flooding, structural support, or resource costs. Any warded or unusually resistant material must be local, visible, explainable, and potentially disableable.
+Resources: stone, metal-bearing seams, salvage, mechanisms, and advanced components found in the ruin.
+Acceptance: the castle is a traversable structure rather than a distant decorative mesh. Interior lighting makes doors, stairs, hazards, and mechanisms readable; cold exterior lighting must not make the dungeon uniformly black.
+
+E. AMBERROOT WILDWOOD — luminous ancient forest
+
+Terrain: sheltered moist hollows, streamlets, root-covered slopes, small terraces and clearings. Use multiple canopy heights.
+Vegetation: a small set of strong tree archetypes with twisting trunks, buttress roots, connected canopy masses, giant mushrooms, ferns, and low plants. Vary age, lean, crown shape, and damage rather than merely scaling one tree.
+Palette: deep blue-violet shade, cyan atmospheric depth, mossy green paths, localized amber mushroom undersides.
+Signature: a colossal root arch framing a warm fungal grove, with a hollow tree leading underground.
+Play: cultivate organisms that create bridges or climbable shelves; learn spore reactions; redirect water/light to alter a living route. Use existing magic/material interactions where possible.
+Resources: wood, fibres, resins, spores, and cultivation stock. Assign useful material properties rather than five interchangeable colored ingredients.
+Acceptance: recognizable with bloom off. Warm light pools illuminate nearby ground and roots; the whole forest must not become saturated blue fog with orange dots.
+
+3. WORLD STRUCTURE AND GENERATION ORDER
+
+Build a connected geographic region, not five independent decorations selected by a biome enum.
+
+First create a coarse region plan containing ridge chains, watershed basins, drainage outlets, major valleys, and landmark candidates. Then derive local terrain and ecological variation.
+
+Proposed ordering:
+1) Region seed and generator version.
+2) Ridge/basin macro layout and drainage graph.
+3) River routes, lake levels and outlets; explicitly identify closed basins where intended.
+4) Climate fields: moisture, temperature/elevation effects, exposure and soil/wetness.
+5) Biome weights and local ecological patches.
+6) Landmark envelopes, approaches and protected composition corridors.
+7) Voxel density, strata, caves and local terrain shaping.
+8) Structure placement, vegetation, surface details and encounter anchors.
+9) Render proxies and far-field summaries derived from the same plan.
+
+Climate selects compatible regions; authored shape rules give each region identity. Ordinary multi-octave noise is appropriate for variation within a planned landform, not as a substitute for the entire landform.
+
+Suggested natural connections: alpine lake drains through the fortress gorge into the green basin; slow floodplain water forms the fen; wet sheltered slopes support the old-growth forest. Do not require this exact sequence in every seed.
+
+Blend ecological attributes, not contradictory geometry. A cliff may be a sharp physical boundary while moisture and plant density change gradually. Start testing transitions over tens to hundreds of meters according to feature scale; do not impose one universal blend width.
+
+Respect edits: immutable procedural base plus persistent player changes. Generation must never regenerate over a drained swamp, removed tree, excavated castle wall, or established factory. Persist generator version with the world. Define migration or retain legacy generation for existing saves.
+
+4. COMPOSITION AS GENERATION DATA
+
+For important landmarks, store an envelope, orientation, dominant silhouette, approach corridors, one or more reveal locations, and vegetation exclusion masks.
+
+A reveal location is a proposed vantage point, not a forced camera. Evaluate actual visibility from a small area and sample multiple player headings. Frame a fortress with canyon walls, reveal a mountain across open water, and frame a grove with root arches.
+
+Keep at least one clear path through each landmark area and useful alternate routes. Avoid vegetation blocking entrances, mushroom caps intercepting every projectile, or terrain intersections sealing an approach.
+
+Use bounded candidate search with scored constraints: visibility, terrain suitability, route connectivity, structure support, minimum spacing, and compatibility with hydrology. If no candidate fits, choose a smaller archetype or omit the landmark. Never loop indefinitely or force an invalid placement.
+
+5. RENDERING WORK THAT ENABLES THE ART
+
+Audit current terrain, vegetation, water, fog, shadows, exposure, and horizon code before adding features. Measure the current frame first. Do not replace the renderer just to implement biomes.
+
+Geometry and LOD:
+- Keep macro terrain and landmark silhouettes consistent across near geometry and distant proxies.
+- Derive all levels from the same region/feature description and shared coordinate conventions. Matching inputs alone is insufficient: validate boundary sampling and actual mesh seams.
+- Preserve cliff tops, major tree crowns, and fortress towers longer than small foliage detail.
+- Heightfields cannot represent castle bridges, caves, root arches or overhangs; give important non-heightfield features their own simplified proxies.
+- Track edited areas in proxy invalidation. Do not resurrect felled forests or demolished landmarks at a distance.
+- Use a resident mesh or valid fallback for every visible region while streaming. Avoid holes, duplicate water surfaces, and unsupported horizon-only silhouettes.
+
+Vegetation:
+- Separate visual foliage density from collision and gameplay complexity.
+- Batch repeated decorative forms. Keep interactive trunks, harvestable growth and structural roots in the existing authoritative world representation.
+- Promote only nearby/relevant fragments to physical simulation when damaged; impose caps and sleep rules. Preserve material and inventory accounting when fragments simplify.
+- Ensure foliage LODs preserve crown coverage and shade rather than abruptly removing the forest's roof.
+
+Lighting:
+- Begin with stable sun/sky illumination, contact shading and conservative exposure. Validate in motion before adding stronger effects.
+- Use canopy occlusion to create shade without eliminating readable paths and enemy silhouettes.
+- Render all appropriate emissive surfaces, but select a bounded subset of local lights by screen contribution, distance and gameplay relevance. Add hysteresis to prevent light selection flicker.
+- A glowing mushroom needs restrained nearby illumination; bloom alone does not light the ground. Never attach a shadow-casting light to every mote.
+- Cloud shadows should form broad slow patches in the valley, not flickering high-frequency terrain noise.
+
+Atmosphere and water:
+- Fen fog follows low wet areas; alpine air remains relatively clear; gorge mist collects near water; forest depth depends on canopy and humidity.
+- Blend bounded atmosphere parameters using camera position and region weights. Avoid abrupt exposure or color-grade changes at chunk boundaries.
+- Start with inexpensive height/distance fog and localized masks if that is what the renderer supports. Add volumetric effects only after measurement demonstrates headroom.
+- Calm fen water and breezy alpine water need different roughness/wave settings. Preserve readable banks and depth cues.
+- Make reflections degrade gracefully with the current renderer. Do not make a biome depend on screen-space reflections being correct for offscreen objects.
+
+6. DATA AND OWNERSHIP
+
+Use a small collection of plain data structures integrated with existing modules:
+- RegionPlan: macro landforms, water graph, landmark seeds and generator version.
+- BiomeProfile: palette, material distributions, ecological constraints, vegetation families, atmosphere parameters and spawn/resource rules.
+- LandmarkPlan: bounds, orientation, foundations, entrances, approach corridors and reveal candidates.
+- ChunkGenerationContext: immutable region samples plus neighboring feature references.
+- Persistent world edits: authoritative changes keyed to stable coordinates/object identifiers.
+- Render summaries: derived/cacheable geometry, vegetation coverage, atmosphere samples and proxy revisions.
+
+Keep generation deterministic. Seed features from stable world coordinates, feature kind and world seed; do not depend on chunk request order or thread scheduling. Give cross-chunk features one canonical owner. Bound their spatial influence and query neighbor plans through explicit halos.
+
+Do coarse region work once and cache it. Avoid rerunning river planning or whole-region vegetation searches per voxel or chunk. Invalidate only dependencies touched by edits.
+
+7. IMPLEMENTATION SEQUENCE WITH STOPPING GATES
+
+Phase 0 — Audit and baseline
+Map the current generation/render/edit pipeline, identify reuse points, capture representative CPU/GPU timings and memory, and document existing save compatibility. Establish fixed camera routes and test seeds. Deliver a short evidence-backed change list before coding large replacements.
+
+Phase 1 — Amberroot reference slice
+Create one approximately 200–300 m playable grove with explicit authored placement using production asset/material paths. Include giant roots, an open route, a warm mushroom focal area, cool background depth, one hollow-tree entrance and one interactive organism. Establish the desired look before procedural generalization.
+Gate: recognizable in grayscale and without bloom; readable on foot, from above, at dusk, and in motion. Frame cost is measured. If it fails, fix form and lighting before increasing density.
+
+Phase 2 — Macro landscape slice
+Implement a shared alpine lake/valley/gorge region plan with ridge and drainage coherence. Build terrain and large landmark blockouts without dense dressing.
+Gate: strong horizon composition, coherent water outlets, traversable routes, no near/far mismatch during approach, and deterministic output under shuffled chunk requests.
+
+Phase 3 — Biome rules and transitions
+Turn successful slice rules into reusable profiles; add fen and forest placement rules. Generate candidate patches with bounded density and composition masks.
+Gate: each biome is distinguishable without UI labels, with no visible chunk-aligned distribution changes. Transition areas look like plausible habitats.
+
+Phase 4 — Playable landmarks and systems
+Add one complete landmark per biome with routes, interactions, hazards, resources, clear lighting and persistent modification. Integrate existing factory/magic/cultivation systems rather than implementing five unrelated minigames.
+Gate: each landmark offers a visible goal, at least two practical approaches where appropriate, and a persistent outcome. No sealed entrances or mandatory invisible ward walls.
+
+Phase 5 — Streaming, edits and performance
+Optimize measured bottlenecks; tune density tiers, geometry simplification, light selection and effects. Test high-speed travel, return visits, excavation, fire, water edits where supported, save/load and distant proxy updates.
+Gate: existing frame-time and memory targets remain satisfied on named hardware, and no visible holes or lost edits occur. A screenshot-only success is insufficient.
+
+Phase 6 — Expansion
+Only after the first five complete examples pass, add regional variants, weather/season changes, more landmark grammars, and rare events. Expand variation through combinations of tested rules rather than adding many near-identical biome names.
+
+8. VERIFICATION AND PERFORMANCE CONTRACT
+
+If 60 fps is the agreed target, the whole frame is 16.67 ms; biome work receives only the headroom measured after baseline. Set separate budgets for CPU generation, main-thread uploads, GPU terrain/foliage, transparency, lighting and memory. Report median and tail frame times, not average FPS alone. Record hardware, resolution, settings, seed and camera path.
+
+Performance tiers should first reduce small foliage, particle counts, expensive reflections and secondary shadow contributors. Preserve terrain shape, major tree masses, routes, landmark silhouettes and hazard cues.
+
+Required functional checks:
+- Same seed and generator version produce equivalent output regardless of chunk load order.
+- Cross-chunk rivers, structures and trees have consistent boundaries and no duplicates.
+- Landmark entrances and selected routes are reachable under the game's actual movement rules.
+- River/lake plans satisfy chosen outlet and level constraints.
+- Save/load retains harvested trees, excavations, drained areas where supported and altered structures.
+- Edited landmarks and forests update distant representation.
+- Bounded generation failure paths work for unsuitable terrain.
+
+Required visual routes:
+- Fen water-level approach, fog boundary crossing and lantern encounter.
+- Alpine shore to high overlook, including far-to-near peak transition.
+- Valley overview followed by ground-level travel through a settlement edge.
+- Gorge approach, bridge, alternate entrance and lit interior.
+- Wildwood path under the canopy, warm grove and root tunnel.
+
+Capture reference views at fixed exposure for comparison, then verify gameplay exposure, day/night transitions, weather, and motion separately. Review shadow crawl, foliage shimmer, transparency overdraw, water seams, light popping and missing proxies. Automated tests cannot determine whether the art succeeds; visual inspection is a release gate.
+
+9. FIRST CODING TASK
+
+Audit the existing Rust/WGPU project and implement the Amberroot reference slice using current terrain, material, lighting and interaction systems. Produce strong tree/root silhouettes, navigable negative space, a cool layered background and restrained amber mushroom illumination. Include one meaningful interaction and one lit hollow-tree entrance. Preserve the game's voxel style, editability and save behavior. Add only the supporting abstractions that the slice requires. Supply before/after captures from fixed cameras, an in-motion walkthrough, measured frame costs and a concise list of remaining visual shortcomings. Do not claim the biome system is complete from compilation or screenshots alone.

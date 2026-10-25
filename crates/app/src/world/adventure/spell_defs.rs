@@ -1,11 +1,12 @@
-//! The spell table: one row per spell, and the only place a spell's numbers,
-//! text, colour, sound, classification and unlock rule are written down.
+//! The spell table owns base numbers, names, colour, sound, class and unlocks.
+//! Functional copy lives in the shared, validated description catalog.
 //!
 //! The old per-field `match` functions (`spell_name`, `spell_cost`,
 //! `spell_cooldown`, ...) now look rows up here. Adding a spell is one new row,
 //! kept sorted by id, plus any new behaviour in the cast and flight code. Tests
 //! check that ids are sorted and unique and that every row is complete.
 use super::*;
+pub mod card;
 
 /// What a spell is, for the evaluator and the wand palette.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -40,10 +41,6 @@ pub struct SpellDef {
     pub id: u32,
     #[serde(deserialize_with = "leak")]
     pub name: &'static str,
-    #[serde(deserialize_with = "leak")]
-    pub flavor: &'static str,
-    #[serde(deserialize_with = "leak")]
-    pub hint: &'static str,
     /// Badge shown on the hover card ("PROJECTILE", "MODIFIER", ...).
     #[serde(deserialize_with = "leak")]
     pub tag: &'static str,
@@ -61,12 +58,16 @@ pub struct SpellDef {
 }
 
 /// Shown for ids that are not in the table.
-const UNKNOWN_FLAVOR: &str = "A spell. Nobody has written down what it does yet.";
 const UNKNOWN_HINT: &str = "Empty wand slot.";
 
 /// Every spell, sorted by id, loaded once from `assets/spells.ron`.
 pub static SPELLS: std::sync::LazyLock<Vec<SpellDef>> = std::sync::LazyLock::new(|| {
-    ron::from_str(SPELLS_RON).unwrap_or_else(|error| panic!("assets/spells.ron: {error}"))
+    let spells: Vec<SpellDef> = ron::from_str(SPELLS_RON)
+        .unwrap_or_else(|error| panic!("assets/spells.ron: {error}"));
+    for spell in &spells {
+        assert!(card::description(spell.id).is_some(), "missing spell_{} in assets/descriptions.ron", spell.id);
+    }
+    spells
 });
 const SPELLS_RON: &str = include_str!("../../../../../assets/spells.ron");
 #[cfg(test)]
@@ -93,12 +94,8 @@ pub fn spell_name(spell: u32) -> &'static str {
     def(spell).map_or("Unknown spell", |d| d.name)
 }
 
-pub fn spell_flavor(spell: u32) -> &'static str {
-    def(spell).map_or(UNKNOWN_FLAVOR, |d| d.flavor)
-}
-
 pub fn spell_hint(spell: u32) -> &'static str {
-    def(spell).map_or(UNKNOWN_HINT, |d| d.hint)
+    card::description(spell).map_or(UNKNOWN_HINT, |entry| entry.text.as_str())
 }
 
 pub fn spell_kind_tag(spell: u32) -> &'static str {
@@ -199,7 +196,7 @@ mod tests {
         for d in SPELLS.iter() {
             assert!(d.id <= MAX_SPELL_ID, "{} is above MAX_SPELL_ID", d.name);
             assert_eq!(def(d.id).map(|row| row.id), Some(d.id), "lookup of {}", d.name);
-            assert!(!d.name.is_empty() && !d.flavor.is_empty() && !d.tag.is_empty());
+            assert!(!d.name.is_empty() && !d.tag.is_empty());
             assert!(d.cost.is_finite() && d.cost >= 0.0, "{} cost", d.name);
             assert!(d.cooldown.is_finite() && d.cooldown >= 0.0, "{} cooldown", d.name);
             assert!(d.speed.is_finite() && d.speed > 0.0, "{} speed", d.name);

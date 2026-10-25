@@ -3,6 +3,7 @@ use super::*;
 use crate::player::Player;
 use crate::simulation::residency::Residency;
 use crate::world::chunk_coord_from_world_block;
+use crate::world::effects::{self, Failure, WaterDirection};
 use crate::simulation::Budget;
 
 pub const WATER_CAPACITY: u32 = 8192;
@@ -165,6 +166,13 @@ pub(crate) fn tick_world(
             world.factory.nodes.insert(p, n);
             continue;
         }
+        if !world.factory.chips.allows(p) {
+            // The controller's output is off: no intake, and no time credit.
+            n.work_clock = 0.0;
+            n.status = "Held by controller";
+            world.factory.nodes.insert(p, n);
+            continue;
+        }
 
         let interval = if n.kind == Kind::Pump {
             0.25 / (n.upgrade + 1) as f32
@@ -189,12 +197,15 @@ pub(crate) fn tick_world(
             if n.kind == Kind::Pump {
                 // Intake is the one-metre footprint immediately underneath.
                 let quantum = 64 / (size * size * size) as u32;
-                if n.water > WATER_CAPACITY - quantum {
+                let exact = crate::world::environment::State::enabled(world.generator_version);
+                let minimum = if exact { 1 } else { quantum };
+                if n.water > WATER_CAPACITY - minimum {
                     n.status = "Tank full";
                     break;
                 }
                 let mut pumped = false;
                 let mut waiting = false;
+                let mut sediment_blocked = false;
                 let mut budget = 128;
                 for z in 0..size {
                     for x in 0..size {
@@ -207,9 +218,13 @@ pub(crate) fn tick_world(
                             continue;
                         }
                         let old = sources.read(world, q).unwrap().1;
-                        let take = (old as u32)
-                            .min((WATER_CAPACITY - n.water) / quantum)
-                            .min(budget / quantum) as u8;
+                        let available = if exact {
+                            (world.environment.exact_water(q, old) / effects::WATER_UNIT_UL) as u32
+                        } else { u32::from(old) * quantum };
+                        let intake = crate::world::environment::inspect::intake_units(world, q);
+                        if intake == 0 && old > 0 { sediment_blocked = true; }
+                        let take = available.min(u32::from(intake) * quantum)
+                            .min(WATER_CAPACITY - n.water).min(budget);
                         if take == 0 {
                             continue;
                         }
@@ -217,20 +232,21 @@ pub(crate) fn tick_world(
                             waiting = true;
                             continue;
                         }
-                        world.set_water_volume(q, old - take);
-                        let actual = old.saturating_sub(world.water_volume(q));
+                        let actual = match effects::exchange_water(world, q, &mut n.water,
+                            WATER_CAPACITY, take, WaterDirection::IntoBuffer) {
+                            Ok(commit) => commit.publish(world, blocks, chunks),
+                            Err(Failure::Deferred) => { waiting = true; 0 }
+                            Err(_) => 0,
+                        };
                         if actual > 0 {
-                            n.water += actual as u32 * quantum;
-                            budget -= actual as u32 * quantum;
+                            budget -= actual;
                             pumped = true;
-                            blocks.insert(q);
-                            mark_chunk_and_neighbors_dirty(chunks, q);
                         }
-                        if budget < quantum {
+                        if budget < minimum {
                             break;
                         }
                     }
-                    if budget < quantum {
+                    if budget < minimum {
                         break;
                     }
                 }
@@ -243,7 +259,7 @@ pub(crate) fn tick_world(
                     n.status = "Waiting for world data";
                     break;
                 } else {
-                    n.status = "Intake dry";
+                    n.status = if sediment_blocked { "Intake clogged: clear sediment or relocate pump" } else { "Intake dry" };
                 }
             } else {
                 let width = 3 * size;
@@ -316,10 +332,14 @@ pub(crate) fn tick_world(
                     n.status = "Waiting for world data";
                     break;
                 }
-                world.set(q, B::Air);
-                if world.get(q) != B::Air {
-                    n.status = "Excavation unavailable";
-                    break;
+                match effects::replace(world, q, b, B::Air) {
+                    Ok(commit) => { commit.publish(world, blocks, chunks); }
+                    Err(Failure::Deferred) => {
+                        n.work_clock = (n.work_clock + interval).min(0.5);
+                        n.status = "Waiting for excavation";
+                        break;
+                    }
+                    Err(_) => { n.status = "Excavation unavailable"; break; }
                 }
                 if let Some(i) = resource {
                     n.output[i] += yield_n;
@@ -333,8 +353,6 @@ pub(crate) fn tick_world(
                 n.burn -= 1;
                 n.excavation += 1;
                 n.status = "Processing";
-                blocks.insert(q);
-                mark_chunk_and_neighbors_dirty(chunks, q);
             }
         }
         world.factory.nodes.insert(p, n);
@@ -352,13 +370,15 @@ fn drain(
 ) {
     let size = step(world);
     let quantum = 64 / (size * size * size) as u32;
+    let exact = crate::world::environment::State::enabled(world.generator_version);
+    let minimum = if exact { 1 } else { quantum };
     let mut changed = 0;
     let mut waiting = false;
     // Drain through every face into free neighbouring voxels, never replacing solids.
     for d in DIRS {
         for a in 0..size {
             for b in 0..size {
-                if changed >= 16 || n.water < quantum || !deadline.has_time() {
+                if changed >= 16 || n.water < minimum || !deadline.has_time() {
                     break;
                 }
                 let q = if d.x != 0 {
@@ -382,22 +402,26 @@ fn drain(
                 {
                     continue;
                 }
+                // Preview against the prepared source cache before promoting
+                // a full destination into editable residency. Commit rechecks.
                 let old = sources.read(world, q).unwrap().1;
-                let amount = (n.water / quantum).min((8 - old) as u32) as u8;
-                if amount == 0 {
-                    continue;
-                }
+                let room = if exact {
+                    (world.environment.water_capacity_ul(q)
+                        .saturating_sub(world.environment.exact_water(q, old)) / effects::WATER_UNIT_UL) as u32
+                } else { u32::from(8 - old) * quantum };
+                if room.min(n.water) < minimum { continue; }
                 if !sources.prepare(world, &[q]) {
                     waiting = true;
                     continue;
                 }
-                world.set_water_volume(q, old + amount);
-                let actual = world.water_volume(q).saturating_sub(old);
-                n.water -= actual as u32 * quantum;
+                let actual = match effects::exchange_water(world, q, &mut n.water,
+                    WATER_CAPACITY, u32::MAX, WaterDirection::IntoWorld) {
+                    Ok(commit) => commit.publish(world, blocks, chunks),
+                    Err(Failure::Deferred) => { waiting = true; 0 }
+                    Err(_) => 0,
+                };
                 if actual > 0 {
                     changed += 1;
-                    blocks.insert(q);
-                    mark_chunk_and_neighbors_dirty(chunks, q);
                 }
             }
         }

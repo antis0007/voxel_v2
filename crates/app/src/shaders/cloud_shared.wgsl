@@ -17,6 +17,10 @@ struct CloudLayerBounds {
     high_top  : f32,
 };
 
+// Reconstruction must classify distant geometry against the march's actual
+// reach, so orbital silhouettes and surrounding sky share one cloud column.
+const CLOUD_MAX_DISTANCE_M: f32 = 16000.0;
+
 // Atmosphere height is independent of the editable voxel world's ceiling.
 // Keeping cloud bases at 80-140 m put ordinary hills inside every weather deck.
 const CLOUD_LOW_ALTITUDE_OFFSET_M: f32 = 600.0;

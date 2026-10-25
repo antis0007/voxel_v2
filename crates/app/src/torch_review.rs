@@ -170,6 +170,8 @@ fn factory_review_focus() -> Option<IVec3> {
         "transformer" => IVec3::new(5, 0, 2),
         "assembler" => IVec3::new(-5, 0, -1),
         "cable" => IVec3::new(5, 0, 1),
+        "pump" => IVec3::new(3, 0, 0),
+        "pile" => IVec3::new(-4, 0, 2),
         _ => return None,
     })
 }
@@ -285,6 +287,9 @@ fn install_factory(world: &mut World) {
         a.energy = 40;
     }
     world.factory.focus = factory_review_focus().map(|p| at(p.x, p.y, p.z));
+    if std::env::var("VOXEL_REVIEW_FOCUS").is_ok_and(|f| f == "pump" || f == "pile") {
+        factory::chips::review_fixture(world, at(3, 0, 0), at(3, 0, 2), at(-4, 0, 2));
+    }
 }
 
 pub fn install(world: &mut World) {

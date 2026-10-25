@@ -1,5 +1,15 @@
-# Lockstep networking (1500 Archers on a 28.8)
-Source: Paul Bettner and Mark Terrano, "1500 Archers on a 28.8: Network Programming in Age of Empires and Beyond", GDC 2001 (https://www.gamedeveloper.com/programming/1500-archers-on-a-28-8-network-programming-in-age-of-empires-and-beyond, read via article summary).
-Adopt: Send only player commands, run the identical deterministic sim on every machine, schedule commands two turns ahead; checksum world, pathing and targeting state; keep RNG call counts identical; use the desync-trace approach.
-Reject: Sending per-unit state (paper: caps at about 250 moving units); the 1990s UDP resend scheme and 8-player 28.8 targets.
-Why: Command-only lockstep suits our integer-only cellular and factory state, but any float or thread-order dependence in the tick would break it.
+# Lockstep and replay
+
+Reviewed 2026-10-24; C01/C15/C20/T04. Bettner/Terrano's [original article](https://www.gamedeveloper.com/programming/1500-archers-on-a-28-8-network-programming-in-age-of-empires-and-beyond) describes synchronized commands and simulation, including determinism challenges. Its networking turnaround is not the engine's two-CA-tick authority contract.
+
+## What we adopt
+
+Version command streams, tick assignment, canonical state hashes and first-divergence reports. Pin hash algorithms, iteration order, worker commit order and bounded service quotas, including behavior at saves and paging boundaries.
+
+## What we reject
+
+Command-only transmission does not create determinism. Do not assume integer arithmetic is sufficient when wall-clock budgets, overflow, unordered containers or thread completion can alter the result; network multiplayer remains deferred scope.
+
+## What we improve
+
+C15 separates simulation time from host scheduling and records every authoritative action. Exact checkpoint/resume includes pending work and publication history. Replay acceptance is a proposed gate, not established by a headless driver existing.

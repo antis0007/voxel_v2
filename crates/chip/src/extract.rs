@@ -62,15 +62,15 @@ pub fn extract(design: &Design, registry: &Registry) -> Extraction {
         for path in &net.paths {
             for (k, &s) in path.iter().enumerate() {
                 if !inside(s) {
-                    bad = Some("leaves the die or the layer stack");
+                    bad = Some("Off Die");
                     break;
                 }
                 if s.layer == 0 && design.part_at(registry, s.x, s.y).is_some() && !pins.contains(&s) {
-                    bad = Some("runs through a module body on the contact layer");
+                    bad = Some("Through Module");
                     break;
                 }
                 if k > 0 && !path[k - 1].adjacent(s) {
-                    bad = Some("jumps: steps must be adjacent sites or a via");
+                    bad = Some("Gap");
                     break;
                 }
                 let i = index(s);

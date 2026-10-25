@@ -29,12 +29,16 @@ mod gen_probe;
 mod horizon_agreement;
 mod generation_cache;
 pub mod landscape;
+pub mod ecology;
+pub mod drainage;
 pub mod lore;
 mod ore_geology;
 pub mod prism_sanctum;
 pub mod sites;
 pub mod surface;
 pub mod terrain_variety;
+mod terrain_detail;
+mod landforms;
 pub mod toll_crossing;
 pub mod trees;
 pub mod undercrown;
@@ -121,6 +125,7 @@ pub struct BushProfile {
 /// removes four 2D noise evaluations from every underground voxel.
 #[derive(Clone, Copy, Default)]
 pub struct CaveColumn {
+    opening: landforms::Opening,
     height_above_water: f32,
     ravine: f32,
     ravine_center: f32,
@@ -143,6 +148,7 @@ pub fn cave_column(cfg: &WorldSampleConfig, x: i32, z: i32, height: i32) -> Cave
     let mx = cfg.world_x(x);
     let mz = cfg.world_z(z);
     CaveColumn {
+        opening: landforms::opening(cfg, mx, mz),
         height_above_water: (height - cfg.water_level()) as f32 * cfg.voxel_meters(),
         ravine: ridge(value_noise2(mx * 0.010, mz * 0.010, seed.wrapping_add(571))),
         ravine_center: cfg.world_y(height)
@@ -570,6 +576,9 @@ pub fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column: &ColumnSample) -> 
     let seed = cfg.seed;
     let depth = (column.height - p.y) as f32 * cfg.voxel_meters();
     let height_above_water = column.cave.height_above_water;
+    if cfg.generator_version >= 39 && column.cave.opening.carves(depth, height_above_water) {
+        return true;
+    }
     // Protect beaches, shorelines, and shallow lowland turf from surface-breaking
     // cave slits and flooded sinkholes; only high hills/mountains allow cave mouths.
     if height_above_water < 9.0 && depth < 5.5 {
@@ -893,7 +902,12 @@ impl Profiles for CachedProfiles {
         bush_profile_for_cell(cfg, cell_x, cell_z)
     }
     fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
-        valley::river_top(cfg, cfg.world_x(x), cfg.world_z(z))
+        let inherited = valley::river_top(cfg, cfg.world_x(x), cfg.world_z(z));
+        let regional = drainage::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
+        match (inherited, regional) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 

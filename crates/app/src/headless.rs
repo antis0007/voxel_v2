@@ -10,9 +10,9 @@
 use crate::{
     fluid::VoxelScalePreset,
     material::{ALL_BLOCK_IDS, BlockId},
-    player::{Input, Player, update_player},
-    simulation::{Budget, STEP_SECONDS, WorldSimulation},
-    world::{self, DEFAULT_DAY_LENGTH_SECONDS, DEFAULT_START_TIME_OF_DAY, DayNightCycle, World, WorldType},
+    player::{Input, Player},
+    simulation::{Budget, WorldSimulation, fixed, cpu_region},
+    world::{DEFAULT_DAY_LENGTH_SECONDS, DEFAULT_START_TIME_OF_DAY, DayNightCycle, World, WorldType},
 };
 use glam::{IVec3, Vec3};
 use serde::Deserialize;
@@ -57,6 +57,10 @@ pub enum Step {
     Place { offset: [i32; 3], block: String },
     /// Set a block at an absolute voxel coordinate.
     PlaceAt { at: [i32; 3], block: String },
+    /// Exact development-region water volume (0..=64), without legacy rounding.
+    Water64 { at: [i32; 3], volume: u8 },
+    /// Print the published exact cell and its real CA tick to stderr.
+    InspectCell { at: [i32; 3] },
     /// Move the player (metres).
     Teleport { to: [f32; 3] },
     Expect(Check),
@@ -121,30 +125,21 @@ impl Session {
     /// One fixed simulation step, in the same order as the windowed game
     /// (`main.rs`: expedition, factory, player, adventure, cellular/rigid, day).
     pub fn tick(&mut self) {
-        let dt = STEP_SECONDS;
+        if !self.sim.prepare_step() { return; }
         let world = &mut self.world;
-        world.expedition.tick(dt);
-        let machine_size = world::factory::step(world);
-        world.factory.tick(dt, machine_size);
-        let mut input = self.input.clone();
-        update_player(&mut self.player, &mut input, world, dt);
-        world::adventure::tick(world, &mut self.player, dt, self.input.cast_spell, false, false);
-        self.sim.update(
-            world,
-            &self.player,
-            dt,
-            &mut self.dirty_blocks,
-            &mut self.dirty_chunks,
-            Budget::UNBOUNDED,
-        );
-        self.sim.settle(world);
-        self.day_night.advance(dt);
-        self.ticks += 1;
+        fixed::gameplay(world, &mut self.player, &mut self.input, true, |_, _, _, input| {
+            fixed::Actions { cast: input.cast_spell || input.cast_pressed,
+                cycle: input.cycle_spell, melee: false }
+        });
+        fixed::finish(&mut self.sim, world, &self.player, &mut self.day_night,
+            &mut self.dirty_blocks, &mut self.dirty_chunks, Budget::UNBOUNDED, true, true);
+        self.ticks = self.sim.player_tick.0;
     }
 
     pub fn advance(&mut self, ticks: u32) {
         for _ in 0..ticks {
             self.tick();
+            if self.sim.authority_error.is_some() { break; }
         }
     }
 
@@ -161,6 +156,10 @@ impl Session {
                 h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3);
             }
         };
+        if let Some(view) = &self.world.ca_view {
+            feed(&view.tick.to_le_bytes());
+            feed(bytemuck::cast_slice(&view.cells[..]));
+        }
         let mut coords: Vec<IVec3> = self.world.chunks.keys().copied().collect();
         coords.sort_unstable_by_key(|c| (c.y, c.z, c.x));
         for c in coords {
@@ -201,6 +200,7 @@ pub struct Outcome {
     pub ticks: u64,
     pub hash: u64,
     pub failures: Vec<String>,
+    pub ca: Option<String>,
 }
 
 impl Outcome {
@@ -212,18 +212,28 @@ impl Outcome {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"scenario\":\"{}\",\"ticks\":{},\"hash\":\"{:016x}\",\"failed\":{},\"failures\":[{}]}}",
+            "{{\"scenario\":\"{}\",\"ticks\":{},\"hash\":\"{:016x}\",\"failed\":{},\"failures\":[{}]{}}}",
             self.name,
             self.ticks,
             self.hash,
             self.failures.len(),
-            failures
+            failures,
+            self.ca.as_ref().map_or(String::new(), |ca| format!(",{ca}"))
         )
     }
 }
 
 pub fn run_scenario(scenario: &Scenario) -> Result<Outcome, String> {
+    run_with_region(scenario, None)
+}
+
+fn run_with_region(scenario: &Scenario, origin: Option<IVec3>) -> Result<Outcome, String> {
     let mut s = Session::new(scenario.world, scenario.scale, scenario.seed, scenario.generator_version);
+    if let Some(origin) = origin {
+        let region = cpu_region::Region::import(&s.world, origin)?;
+        s.world.ca_view = Some(region.published.clone());
+        s.sim.cpu_region = Some(region);
+    }
     let mut failures = Vec::new();
     for (index, step) in scenario.steps.iter().enumerate() {
         match step {
@@ -248,12 +258,31 @@ pub fn run_scenario(scenario: &Scenario) -> Result<Outcome, String> {
                 } else {
                     IVec3::from(*offset)
                 };
-                if id == BlockId::Water {
+                if let Some(region) = s.sim.cpu_region.as_mut() {
+                    let cell = if id == BlockId::Air { engine_sim::Cell::EMPTY } else { engine_sim::Cell::filled(id as u8) };
+                    let receipt = region.submit(s.ticks, at, cell).map_err(|e| format!("step {index}: {e}"))?;
+                    eprintln!("[ca-accepted] sequence={} player_tick={} earliest_ca_tick={}",
+                        receipt.sequence, receipt.submitted_player_tick, receipt.earliest_ca_tick);
+                } else if id == BlockId::Water {
                     // Water lives in the volume map (0-8 per cell), not in the block id.
                     s.world.set_water_volume(at, 8);
                 } else {
                     s.world.set(at, id);
                 }
+            }
+            Step::Water64 { at, volume } => {
+                let region = s.sim.cpu_region.as_mut().ok_or("Water64 requires --ca-cpu-region")?;
+                let cell = if *volume == 0 { engine_sim::Cell::EMPTY } else {
+                    engine_sim::Cell { volume: *volume, ..engine_sim::Cell::filled(BlockId::Water as u8) }
+                };
+                let receipt = region.submit(s.ticks, IVec3::from(*at), cell).map_err(|e| format!("step {index}: {e}"))?;
+                eprintln!("[ca-accepted] sequence={} player_tick={} earliest_ca_tick={}",
+                    receipt.sequence, receipt.submitted_player_tick, receipt.earliest_ca_tick);
+            }
+            Step::InspectCell { at } => {
+                let view = s.world.ca_view.as_ref().ok_or("InspectCell requires --ca-cpu-region")?;
+                let cell = view.cell(IVec3::from(*at)).ok_or("cell outside CPU region and halo")?;
+                eprintln!("[ca-cell] published_tick={} at={at:?} cell={cell:?}", view.tick);
             }
             Step::Teleport { to } => {
                 s.player.pos = Vec3::from(*to);
@@ -266,8 +295,10 @@ pub fn run_scenario(scenario: &Scenario) -> Result<Outcome, String> {
                 }
             }
         }
+        if let Some(error) = &s.sim.authority_error { return Err(error.clone()); }
     }
-    Ok(Outcome { name: scenario.name.clone(), ticks: s.ticks, hash: s.hash(), failures })
+    let ca = s.sim.cpu_region.as_ref().map(cpu_region::Region::summary);
+    Ok(Outcome { name: scenario.name.clone(), ticks: s.ticks, hash: s.hash(), failures, ca })
 }
 
 fn evaluate(s: &Session, check: &Check) -> Option<String> {
@@ -307,7 +338,21 @@ pub fn load(path: &str) -> Result<Scenario, String> {
 
 /// Entry for `--headless=<path>`. Prints the JSON summary; returns the exit code.
 pub fn main(path: &str) -> i32 {
-    match load(path).and_then(|s| run_scenario(&s)) {
+    let origin = std::env::args().find_map(|a| a.strip_prefix("--ca-cpu-region=").map(str::to_owned));
+    let run = || {
+        if origin.is_none() && std::env::args().any(|a| a.starts_with("--ca-cpu-region")) {
+            return Err("expected --ca-cpu-region=x,y,z".into());
+        }
+        let origin = origin.map(|text| {
+            let values: Result<Vec<i32>, _> = text.split(',').map(str::parse).collect();
+            let values = values.map_err(|_| "invalid --ca-cpu-region=x,y,z")?;
+            if values.len() != 3 { return Err("expected --ca-cpu-region=x,y,z"); }
+            Ok(IVec3::new(values[0], values[1], values[2]))
+        }).transpose()?;
+        let scenario = load(path)?;
+        if origin.is_some() { run_with_region(&scenario, origin) } else { run_scenario(&scenario) }
+    };
+    match run() {
         Ok(outcome) => {
             println!("{}", outcome.json());
             i32::from(!outcome.failures.is_empty())

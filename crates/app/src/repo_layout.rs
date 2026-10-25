@@ -155,6 +155,8 @@ mod tests {
                 } else if path.extension().is_some_and(|e| e == "md")
                     // Roadmaps name recipes and paths that do not exist yet.
                     && path.file_name().is_some_and(|n| !["AUDIT.md", "PLAN2.md", "ENGINE_CORE.md", "MASTER_PLAN.md"].contains(&n.to_str().unwrap_or("")))
+                    // So do the proposed `*_V2.md` specifications.
+                    && path.file_name().is_some_and(|n| !n.to_str().unwrap_or("").ends_with("_V2.md"))
                 {
                     files.push(path);
                 }
@@ -180,10 +182,23 @@ mod tests {
                     missing.push(format!("{name}: path `{token}`"));
                 }
             }
+            let (mut open, mut fenced) = (false, false);
             for line in text.lines() {
+                if let Some(tag) = line.trim_start().strip_prefix("```") {
+                    open = !open;
+                    // Text and markdown fences hold prose, not commands.
+                    fenced = open && !["text", "md", "markdown"].contains(&tag.trim());
+                    continue;
+                }
                 let mut rest = line;
                 while let Some(i) = rest.find("just ") {
+                    // A command opens inline code or a fenced code line; prose "just" does neither.
+                    let command = rest[..i].ends_with('`')
+                        || (fenced && line.len() - rest.len() + i == line.len() - line.trim_start().len());
                     rest = &rest[i + 5..];
+                    if !command {
+                        continue;
+                    }
                     let cmd: String =
                         rest.chars().take_while(|c| c.is_ascii_lowercase() || *c == '_' || *c == '-').collect();
                     let cmd = cmd.trim_end_matches('-');

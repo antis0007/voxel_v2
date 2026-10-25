@@ -11,6 +11,8 @@ engine_content = { path = "../content" }
 engine_audio = { path = "../audio" }
 engine_voxel = { path = "../voxel" }
 engine_worldgen = { path = "../worldgen" }
+engine_sim = { path = "../sim" }
+engine_chip = { path = "../chip" }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 env_logger = "0.11"

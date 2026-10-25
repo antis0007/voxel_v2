@@ -14,8 +14,9 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-const MAGIC: &[u8; 8] = b"VXPRF008";
-const WORDS: usize = 26 + crate::egui_ui::magic_style::WORDS;
+const MAGIC: &[u8; 8] = b"VXPRF009";
+const FONT_OFFSET: usize = 26 + crate::egui_ui::magic_style::WORDS;
+const WORDS: usize = FONT_OFFSET + crate::egui_ui::typography::WORDS;
 const CLOUDS_OFF_BIT: u32 = 8;
 /// Bit 9 of the same word: automatic quality switched off (so old files keep it on).
 const AUTO_QUALITY_OFF_BIT: u32 = 9;
@@ -72,6 +73,7 @@ pub struct Preferences {
     pub ui_scale: f32,
     pub hotbar_scale: f32,
     pub magic: crate::egui_ui::magic_style::Settings,
+    pub typography: crate::egui_ui::typography::Settings,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -109,6 +111,7 @@ impl Default for Preferences {
             ui_scale: UI_SCALE_DEFAULT,
             hotbar_scale: 1.0,
             magic: Default::default(),
+            typography: Default::default(),
         }
     }
 }
@@ -166,6 +169,7 @@ impl Preferences {
         ui.ui_scale = self.ui_scale;
         ui.hotbar_scale = self.hotbar_scale;
         crate::egui_ui::magic_style::set(&ui.ctx, self.magic);
+        crate::egui_ui::typography::set(&ui.ctx, self.typography);
     }
     pub fn capture(
         ui: &EguiUi,
@@ -220,6 +224,7 @@ impl Preferences {
             ui_scale: ui.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX),
             hotbar_scale: ui.hotbar_scale.clamp(0.7, 1.6),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
+            typography: crate::egui_ui::typography::get(&ui.ctx),
         }
     }
     fn words(self) -> [u32; WORDS] {
@@ -256,12 +261,15 @@ impl Preferences {
         ];
         let mut words = [0; WORDS];
         words[..26].copy_from_slice(&base);
-        words[26..].copy_from_slice(&self.magic.words());
+        words[26..FONT_OFFSET].copy_from_slice(&self.magic.words());
+        words[FONT_OFFSET..].copy_from_slice(&self.typography.words());
         words
     }
     fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             (bytes.len() == 8 + WORDS * 4 + 8 && bytes.get(..8) == Some(MAGIC.as_slice()))
+                || (bytes.len() == 8 + FONT_OFFSET * 4 + 8
+                    && bytes.get(..8) == Some(b"VXPRF008".as_slice()))
                 || (bytes.len() == 8 + 26 * 4 + 8
                     && bytes.get(..8) == Some(b"VXPRF007".as_slice()))
                 || (bytes.len() == 8 + 24 * 4 + 8
@@ -314,6 +322,7 @@ impl Preferences {
             // silently pin upgraded installations to the broken 512 MiB cap.
             gpu: if w[13] == 0
                 || (bytes.get(..8) != Some(MAGIC.as_slice())
+                    && bytes.get(..8) != Some(b"VXPRF008".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF007".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF006".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF005".as_slice())
@@ -343,8 +352,10 @@ impl Preferences {
             ui_scale: w
                 .get(24)
                 .map(|n| f32::from_bits(*n))
-                // 1.0 was the old default, so it counts as unchosen.
-                .filter(|n| n.is_finite() && (*n - 1.0).abs() > 1.0e-6)
+                // Preserve a deliberate 100% selection in the font-capable
+                // format; retain the former default migration for older files.
+                .filter(|n| n.is_finite() && (bytes.get(..8) == Some(MAGIC.as_slice())
+                    || (*n - 1.0).abs() > 1.0e-6))
                 .unwrap_or(UI_SCALE_DEFAULT)
                 .clamp(UI_SCALE_MIN, UI_SCALE_MAX),
             hotbar_scale: w
@@ -353,7 +364,8 @@ impl Preferences {
                 .filter(|n| n.is_finite())
                 .unwrap_or(1.0)
                 .clamp(0.7, 1.6),
-            magic: crate::egui_ui::magic_style::Settings::decode(w.get(26..).unwrap_or(&[])),
+            magic: crate::egui_ui::magic_style::Settings::decode(w.get(26..FONT_OFFSET).unwrap_or(&[])),
+            typography: crate::egui_ui::typography::Settings::decode(w.get(FONT_OFFSET..).unwrap_or(&[])),
         })
     }
     fn bytes(self) -> Vec<u8> {
@@ -555,8 +567,15 @@ mod tests {
     fn a_saved_one_point_zero_scale_migrates_to_the_default() {
         let mut preferences = Preferences::default();
         preferences.ui_scale = 1.0;
-        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        let bytes = preferences.bytes();
+        let mut body = bytes[..8 + FONT_OFFSET * 4].to_vec();
+        body[..8].copy_from_slice(b"VXPRF008");
+        body.extend_from_slice(&hash(&body).to_le_bytes());
+        let decoded = Preferences::decode(&body).expect("version eight preferences must decode");
         assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
+        // The font-capable format keeps a deliberate 100% selection.
+        let current = Preferences::decode(&bytes).expect("preferences must decode");
+        assert_eq!(current.ui_scale, 1.0);
     }
 
     #[test]

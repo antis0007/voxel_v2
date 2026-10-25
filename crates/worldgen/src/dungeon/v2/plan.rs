@@ -86,6 +86,33 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
             Kind::Core
         } else if Some(i) == ante {
             job.guard_puzzle(h(1))
+        } else if version >= 46 {
+            // Rotate a job-specific programme rather than independently
+            // rolling the same room repeatedly. Special graph nodes above
+            // retain the entrance, reveal and sealed-objective contracts.
+            let programme = super::inhabited::programme(job);
+            let used = rooms.iter().filter(|r| programme.contains(&r.kind)).count();
+            programme[(used + (r(19) * programme.len() as f32) as usize) % programme.len()]
+        } else if version >= 41 {
+            // Public/work rooms near arrival, services on side branches,
+            // ceremonial and dangerous spaces deeper in the complex.
+            // Special rooms above retain their objective/puzzle contract.
+            let leaf = neighbours(i, &tree).len() == 1;
+            match (job, leaf, hops[i] <= 2) {
+                (_, true, _) => match job {
+                    Job::Catacombs | Job::Sanctum => Kind::Crypt,
+                    Job::Orrery => Kind::Library,
+                    Job::HollowFloor => Kind::Chasm,
+                    _ => Kind::Store,
+                },
+                (Job::Catacombs, _, true) => Kind::Ossuary,
+                (Job::Undercroft, _, true) => Kind::Sluice,
+                (Job::ForgeHalls, _, true) => Kind::Forge,
+                (Job::Quarantine, _, true) => Kind::Barracks,
+                (Job::Orrery, _, true) => Kind::Library,
+                (Job::Sanctum, _, true) => Kind::Shrine,
+                _ => kinds[(h(2) * kinds.len() as f32) as usize % kinds.len()],
+            }
         } else {
             kinds[(h(2) * kinds.len() as f32) as usize % kinds.len()]
         };
@@ -108,7 +135,7 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
             Kind::Pitfall => 5.5 + h(7),
             Kind::Cells => 4.4,
             Kind::Orrery => 9.0 + h(7) * 2.0,
-            Kind::Forge | Kind::Foundry | Kind::Cistern | Kind::Library => 6.0 + h(7) * 2.5,
+            Kind::Forge | Kind::Foundry | Kind::Cistern | Kind::Library | Kind::Scriptorium => 6.0 + h(7) * 2.5,
             Kind::Core => 6.5,
             _ => 4.6 + h(7) * 2.0,
         };
@@ -139,6 +166,7 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
             outline: Outline::roll(kind, h(11)),
             rift: 0.0,
             cache: false,
+            stair: 0,
             sealed: kind == Kind::Core || (Some(i) == ante && sealed_ante),
             salt: seed.wrapping_add((i as u32).wrapping_mul(0x9e37_79b9)),
         });
@@ -172,6 +200,23 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
         let (pa, pb) = (port(&rooms[a], rooms[b].level), port(&rooms[b], rooms[a].level));
         (pa - pb).abs() <= (gap(&rooms[a], &rooms[b]) - 4.0) * 0.75
     });
+    if version >= 41 && extra.is_empty() {
+        // Level assignment can invalidate every proposed loop. Recover a
+        // buildable return route when the footprint permits one, without
+        // bypassing the core or its sealed puzzle antechamber.
+        let candidate = edges.iter()
+            .filter(|&&(_, a, b)| !tree.contains(&(a, b)))
+            .filter(|&&(_, a, b)| {
+                let touches = |i: Option<usize>| i.is_some_and(|i| a == i || b == i);
+                !(touches(objective) || sealed_ante && touches(ante))
+            })
+            .filter(|&&(_, a, b)| {
+                let (pa, pb) = (port(&rooms[a], rooms[b].level), port(&rooms[b], rooms[a].level));
+                (pa - pb).abs() <= (gap(&rooms[a], &rooms[b]) - 4.0) * 0.75
+            })
+            .max_by_key(|&&(_, a, b)| (hops[a].abs_diff(hops[b]), hops[a] + hops[b]));
+        if let Some(&(_, a, b)) = candidate { extra.push((a, b)); }
+    }
 
     // States: the hazard is the job gone wrong.
     let odds = job.odds();
@@ -217,6 +262,17 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
     }
     for room in rooms.iter_mut().filter(|r| r.kind == Kind::Chasm) {
         room.rift = super::chasm::depth(&corrs, room);
+    }
+    for room in &mut rooms {
+        room.stair = super::gallery::choose(version, room, &corrs);
+        if version >= super::fine::VERSION && room.kind == Kind::Orrery && super::starry::plan(room) == super::starry::Plan::Islands {
+            room.rift = super::starry::void_depth(&corrs, room);
+            room.stair = super::escape::choose(&corrs, room, room.rift);
+            if room.stair == super::escape::NONE {
+                // Walkways everywhere: a void one step deep needs no stair.
+                room.rift = 1.0;
+            }
+        }
     }
 
     let (ex, ez) = rooms[entry].centre();

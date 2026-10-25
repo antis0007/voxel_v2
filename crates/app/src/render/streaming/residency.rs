@@ -95,6 +95,7 @@ impl Drop for ResidentChunk {
         // Free the actual array before making its budget available again.
         drop(std::mem::take(&mut self.data.blocks));
         drop(std::mem::take(&mut self.data.water_levels));
+        drop(std::mem::take(&mut self.data.water_deficit));
         self.allocations.0.fetch_sub(self.bytes, Ordering::Relaxed);
     }
 }

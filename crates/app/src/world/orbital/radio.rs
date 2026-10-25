@@ -16,7 +16,7 @@ pub const COST_TEXT: [&str; 6] = ["", "2 copper + 1 crystal", "4 copper + 2 iron
 #[derive(Default)]
 pub struct State { pub level: u32, pub knowledge: u32, pub dish: Option<IVec3>, pub target: Option<IVec2> }
 #[derive(Clone, Copy)]
-pub enum Action { Upgrade, Listen, Handshake, BuildDish, RepairDish, Aim(IVec2) }
+pub enum Action { Upgrade, Listen, Handshake, BuildDish, RepairDish, Aim(IVec2), TrackRelay }
 #[derive(Clone, Copy, Default)]
 pub struct Link { pub receive: bool, pub transmit: bool, pub quality: f32, pub directional: bool }
 #[derive(Clone, Default)]
@@ -56,6 +56,23 @@ fn open_sky(w: &World) -> bool {
     // This bounded local clearance check never reads a region from disk.
     (1..=h).all(|y| known(w,a+IVec3::Y*y).is_some_and(|b|b.is_empty()))
 }
+/// Orbital survey uses a calibrated dish, not the portable set's 6 km service
+/// range. The backend rechecks hardware, clearance and weather for every order.
+pub fn orbital_uplink(w:&World,day:&DayNightCycle,p:&Player)->bool {
+    let r=&w.orbital.radio;
+    let weather=day.cloud_controls();
+    let loss=(weather.cumulonimbus*weather.storm_thickness*1.3).clamp(0.0,1.0);
+    r.level>=4 && r.knowledge&4!=0 && r.target.is_none() && near(w,p) && intact(w) && open_sky(w)
+        && 1.0-loss*if r.level>=5 {0.08} else {0.7}>=0.4
+}
+pub fn orbital_target(w:&World,day:&DayNightCycle)->Option<Vec3> {
+    let r=&w.orbital.radio;
+    if r.level<4 || r.knowledge&4==0 || r.target.is_some() {return None;}
+    let viewer=(r.dish?.as_vec3()+Vec3::splat(0.5))*w.voxel_scale.meters();
+    super::megastructures::contacts(w.seed,day,viewer).into_iter()
+        .find(|c|c.site.kind==super::megastructures::Kind::DeadRelay && c.elevation_deg>=15.0)
+        .map(|c|c.site.position)
+}
 pub fn link(w: &World, day: &DayNightCycle, p: &Player, site: Site) -> Link {
     let r=&w.orbital.radio;
     if r.level==0 {return Link::default()}
@@ -86,6 +103,7 @@ pub fn view(w: &World, day: &DayNightCycle, p: &Player) -> View {
             else if r.level>=4 && !intact(w) {"Dish console unavailable; knowledge retained. Portable set remains usable."}
             else if r.level>=4 && local && !open_sky(w) {"Dish needs twelve metres of clear overhead space."}
             else if r.level>=4 && !local {"Operate within 8 m of the dish for directional gain. Portable set active."}
+            else if r.level>=4 && r.knowledge&4!=0 && r.target.is_none() {"Tracking derelict relay above 15 degrees."}
             else {"Public service band · private messages remain encrypted"},
         can_upgrade:r.level<5 && prerequisite(r) && affordable(w,COSTS[(r.level+1).min(5) as usize])
             && (r.level!=4 || local && intact(w)),
@@ -118,20 +136,25 @@ pub fn action(w: &mut World, day: &DayNightCycle, p: &Player, action: Action) ->
     let mut changed=Vec::new();
     let v=view(w,day,p);
     let message=match action {
+        Action::TrackRelay if w.orbital.radio.level>=4 && w.orbital.radio.knowledge&4!=0
+            && near(w,p) && intact(w) => {
+            w.orbital.radio.target=None;
+            "Tracking derelict relay above 15 degrees. Select a contact to switch targets."
+        }
         Action::Upgrade if v.can_upgrade => {
             let next=(v.level+1) as usize; pay(w,COSTS[next]); w.orbital.radio.level+=1;
-            "Radio upgraded. Equipment and communication knowledge are saved with this world."
+            "Radio upgraded."
         }
         Action::Listen if v.can_listen => {w.orbital.radio.knowledge|=1;
-            "Public beacon decoded: carrier waves and published service timetables learned. No private traffic was decrypted."}
+            "Beacon decoded. Timetables unlocked."}
         Action::Handshake if v.can_handshake => {
             w.orbital.radio.knowledge|=2;
             if v.links.iter().any(|(_,l)|l.directional && l.transmit) {w.orbital.radio.knowledge|=4;}
-            "Acknowledgement verified. Modulation learned; a successful aimed dish link also teaches directional tracking."
+            "Connected. Modulation learned. Aim a dish to learn tracking."
         }
         Action::Aim(cell) if v.near_dish && intact(w) && super::site(w.seed,cell).is_some()
             && v.links.iter().any(|(c,_)| *c==cell) => {
-            w.orbital.radio.target=Some(cell); "Dish pointed at the selected corridor's upper relay. Establish a handshake to calibrate tracking."
+            w.orbital.radio.target=Some(cell); "Dish aimed. Connect to calibrate tracking."
         }
         Action::BuildDish if v.can_build => {
             let a=match deployment(w,p) {Ok(a)=>a,Err(e)=>{w.expedition.say(e);return changed}};
@@ -154,7 +177,7 @@ pub fn action(w: &mut World, day: &DayNightCycle, p: &Player, action: Action) ->
             if w.get(a)==B::Workbench {pay(w,&[(8,2)]);changed.push(a);}
             "Dish console restored; research and upgrades retained."
         }
-        _ => "Radio action unavailable. Check knowledge, materials, range, signal and dish clearance.",
+        _ => "Unavailable. Check requirements.",
     };
     w.expedition.say(message); changed
 }

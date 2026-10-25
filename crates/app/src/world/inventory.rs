@@ -1,6 +1,10 @@
 //! Persistent survival inventory: item stacks with stack limits, 9-slot hotbar,
 //! 27-slot backpack, 4 equipment slots, 2×2 hand-crafting grid, and lossless transfers.
 use super::{BlockId, expedition, factory};
+mod crafting;
+mod descriptions;
+pub mod resources;
+pub use crafting::CraftBlocker;
 
 pub const HOTBAR_SLOTS: usize = 9;
 pub const PACK_SLOTS: usize = 27;
@@ -9,6 +13,18 @@ pub const EQUIP_SLOTS: usize = 4;
 /// (slots 0, 1, 3, 4) is usable, as in Minecraft's inventory.
 pub const CRAFT_SLOTS: usize = 9;
 pub const HAND_GRID: [usize; 4] = [0, 1, 3, 4];
+
+/// Base melee damage, shared by combat and item stats before modifiers.
+pub fn weapon_damage(tier: u32) -> f32 {
+    match tier {
+        1 => 22.0,
+        2 => 32.0,
+        3 => 38.0,
+        4 => 28.0,
+        5 => 44.0,
+        _ => 14.0,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
@@ -223,12 +239,12 @@ impl Item {
         match self {
             Self::PowerKit(_) => "Packed power assembly",
             Self::Block(b) if b.is_torch() => "Lighting block",
-            Self::Block(b) if factory::Kind::from_block(b).is_some() => "Machine assembly",
+            Self::Block(b) if factory::Kind::from_block(b).is_some() => "Machine",
             Self::Block(BlockId::Workbench | BlockId::Smelter) => "Crafting station",
             Self::Block(_) => "Building block",
             Self::Resource(0..=5 | 13) => "Raw material",
             Self::Resource(_) => "Refined component",
-            Self::Food(_) => "Provision · Edible",
+            Self::Food(_) => "Food",
             Self::Weapon(_) => "Melee weapon",
             Self::Armor(slot, _) => match slot {
                 EquipSlot::Head => "Equipment · Head",
@@ -239,42 +255,6 @@ impl Item {
             Self::Tool(1 | 2) => "Excavation tool",
             Self::Tool(_) => "Arcane focus",
             Self::Wand { .. } => "Wand",
-        }
-    }
-
-    // Concise stat line for tooltip (detailed mechanics documented in code comments).
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::PowerKit(_) => "Charge and installed upgrades retained · Place to restore",
-            Self::Block(b) if b.is_torch() => "Light 14 · Wall / Floor",
-            Self::Block(BlockId::Workbench) => "[F] Engineering & Arcane station",
-            Self::Block(BlockId::Smelter) => "[F] Smelts ore + 0.25 coal",
-            Self::Block(b) if factory::Kind::from_block(b).is_some() => "1m³ Machine assembly",
-            Self::Block(_) => "Placeable block",
-            Self::Resource(3) => "Fuel · Smelting & Power",
-            Self::Resource(4) => "Luminescent · Bore fuel",
-            Self::Resource(5) => "Crystal · Circuits, essence & infused materials",
-            Self::Resource(13) => "Biomass · Rations & Bioreactor",
-            Self::Resource(19) => "Coke · 800 kJ fuel & blast furnace reductant",
-            Self::Resource(20) => "Creosote · 300 kJ liquid fuel",
-            Self::Resource(21) => "Bio-ethanol · 600 kJ liquid fuel",
-            Self::Resource(_) => "Crafting material",
-            Self::Food(FoodKind::FungalRation) => "+38 Hunger · +8 HP",
-            Self::Food(FoodKind::RoastedCap) => "+24 Hunger · +4 HP",
-            Self::Food(FoodKind::Trailcake) => "+32 Hunger · +6 HP",
-            Self::Weapon(1) => "22 DMG · Melee",
-            Self::Weapon(3) => "38 DMG · Flame cleave finisher · +8 MP",
-            Self::Weapon(4) => "28 DMG · Chill, shatter & freezing shards",
-            Self::Weapon(5) => "44 DMG · Finisher launches rigid assemblies",
-            Self::Weapon(_) => "32 DMG · Cleave",
-            Self::Armor(EquipSlot::Head, ArmorTier::Lumen) => "+12% DEF · Lantern beam",
-            Self::Armor(_, ArmorTier::Lumen) => "+12% DEF",
-            Self::Armor(_, ArmorTier::Copper) => "+8% DEF",
-            Self::Armor(_, ArmorTier::Steel) => "+14% DEF",
-            Self::Tool(1) => "1.6m Seam bore [Alt+LMB]",
-            Self::Tool(2) => "2.8m Seam bore [Alt+LMB]",
-            Self::Tool(_) => "Spell focus [R / T]",
-            Self::Wand { .. } => "Select in the hotbar to hold · [R] cast · [T] cycle",
         }
     }
 
@@ -1564,29 +1544,10 @@ impl SurvivalInventory {
     /// Crafts 1 batch from `craft_grid` onto `self.cursor` (or into inventory if `shift_to_pack`).
     /// Never consumes ingredients unless the output is guaranteed to fit without loss.
     pub fn craft_from_grid(&mut self, shift_to_pack: bool, bench: bool) -> Option<ItemStack> {
-        let (recipe, max_batches) = self.matching_grid_recipe(bench)?;
+        let batches_to_craft = self.grid_craft_batches(shift_to_pack, bench).ok()?;
+        let (recipe, _) = self.matching_grid_recipe(bench)?;
         let out = recipe.output;
         let max_stack = self.stack_limit(out.item);
-
-        let batches_to_craft = if shift_to_pack {
-            let cap = self.remaining_capacity_for(out.item);
-            (cap / out.count).min(max_batches)
-        } else {
-            match self.cursor {
-                None => 1,
-                Some(cursor)
-                    if cursor.item == out.item && cursor.count + out.count <= max_stack =>
-                {
-                    1
-                }
-                _ => 0,
-            }
-        };
-
-        if batches_to_craft == 0 {
-            return None;
-        }
-
         // Deduct ingredients from craft_grid.
         for &(req_item, req_count) in recipe.ingredients {
             let mut needed = req_count * batches_to_craft;
@@ -1636,6 +1597,13 @@ impl SurvivalInventory {
     /// grid (the 2 × 2 corner away from a bench, all nine slots at one).
     /// Returns `true` if all ingredients were available and staged.
     pub fn stage_recipe_into_grid(&mut self, recipe: &CraftingRecipe, bench: bool) -> bool {
+        let mut staged = self.clone();
+        if !staged.stage_recipe_in_place(recipe, bench) { return false; }
+        *self = staged;
+        true
+    }
+
+    fn stage_recipe_in_place(&mut self, recipe: &CraftingRecipe, bench: bool) -> bool {
         if recipe.needs_bench() && !bench {
             return false;
         }
@@ -1691,8 +1659,7 @@ impl SurvivalInventory {
                 match free.next() {
                     Some(slot) => self.craft_grid[slot] = Some(ItemStack { item, count: n }),
                     None => {
-                        // Out of slots: hand the rest back rather than lose it.
-                        let _ = self.try_insert_pack_first(ItemStack { item, count: n });
+                        return false;
                     }
                 }
             }

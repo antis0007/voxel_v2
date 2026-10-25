@@ -190,7 +190,7 @@ pub(super) fn step(
     }
     if b == B::Ice && c.temperature >= 35.0 {
         replace = Some(B::Water);
-        c.gas = 8;
+        c.gas = if crate::world::environment::State::enabled(w.generator_version) && c.gas > 0 { c.gas } else { 8 };
         c.temperature = 12.0;
     }
     if b == B::Water && c.temperature >= 100.0 {
@@ -277,7 +277,19 @@ pub(super) fn step(
             } else {
                 c.gas.saturating_sub(amount) / 2
             };
+            let exact = b == B::Steam && crate::world::environment::State::enabled(w.generator_version);
+            let source_ul = w.environment.exact_water(p, c.gas);
+            let target_ul = w.environment.exact_water(q, amount);
+            let moved_ul = source_ul * u64::from(moved) / u64::from(c.gas.max(1));
+            let mut affected = [p; 14];
+            for (i, at) in [p, q].into_iter().enumerate() {
+                for (j, d) in std::iter::once(IVec3::ZERO).chain(DIRS).enumerate() {
+                    affected[i * 7 + j] = at + d;
+                }
+            }
             if moved == 0
+                || (exact && !w.environment.can_encode(&[(p, source_ul - moved_ul), (q, target_ul + moved_ul)]))
+                || (crate::world::environment::State::enabled(w.generator_version) && !w.environment.can_wake(&affected))
                 || !w.sandbox.can_admit(&[q])
                 || !admission(w, p, q)
                 || !s.prepare(w, &[p, q])
@@ -289,12 +301,20 @@ pub(super) fn step(
             n.gas = amount + moved;
             c.gas -= moved;
             w.set(q, b);
+            if exact {
+                n.gas = (target_ul + moved_ul).div_ceil(w.environment.quantum()) as u8;
+                c.gas = (source_ul - moved_ul).div_ceil(w.environment.quantum()) as u8;
+            }
             w.sandbox.set(q, n);
             if c.gas == 0 {
                 w.set(p, B::Air);
                 c = ThermalCell::default();
             }
             w.sandbox.set(p, c);
+            if exact {
+                w.environment.encode_water(q, target_ul + moved_ul);
+                w.environment.encode_water(p, source_ul - moved_ul);
+            }
             visited.insert(q);
             changed(p, blocks, chunks);
             changed(q, blocks, chunks);

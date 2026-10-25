@@ -33,6 +33,9 @@ impl Adventure {
         cfg: &crate::world::WorldSampleConfig,
         origin: Vec3,
     ) -> Option<QuestMarker> {
+        if let Some(marker) = super::super::workshop::marker(self, cfg, origin) {
+            return Some(marker);
+        }
         let (pos, label, kind) = if self.sigils == 7 && !self.heart_restored() {
             (sites::workshop_heart(cfg)?, "Workshop heart", 3)
         } else if let Some((kind, pos)) = sites::next_relic(cfg, origin, self.sigils) {
@@ -179,7 +182,7 @@ impl Adventure {
                 }
                 sound(&mut self.sounds, Cue::Clang, Some(pos), 0.65);
                 self.effect(pos + Vec3::Y, [0.3, 1.0, 0.65], 0.6);
-                world.expedition.say(if next == 3 { "The furnace settles into a steady beat. You recover health and mana before the guardian fight." } else { "Pressure stabilizing. The next valve is marked on the operating plate." });
+                world.expedition.say(if next == 3 { "Furnace activated. Health and mana restored." } else { "Valve set. Check the plate for the next valve." });
             } else {
                 if state & BYPASS == 0 && self.hazards.len() < 16 {
                     self.hazards.push(tactics::Hazard {
@@ -232,7 +235,7 @@ impl Adventure {
             });
             self.effect(pos + Vec3::Y, [1.0, 0.7, 0.3], 3.0);
             sound(&mut self.sounds, Cue::Treasure, Some(pos), 1.0);
-            self.route = "Expedition complete. The restored heart is a sanctuary; your workshop and the wider world remain yours to build.".into();
+            self.route = "Heart restored. Use it to recover health and mana.".into();
             world.expedition.say(&self.route);
         } else if self.heart_restored() {
             let danger = self
@@ -242,7 +245,7 @@ impl Adventure {
             if danger {
                 world
                     .expedition
-                    .say("The heart cannot shelter you while enemies are nearby.");
+                    .say("Enemies nearby. Cannot heal.");
                 return;
             }
             self.health = self.max_health();
@@ -250,14 +253,14 @@ impl Adventure {
             sound(&mut self.sounds, Cue::Mend, Some(pos), 0.7);
             world
                 .expedition
-                .say("Home again. The workshop heart restores your health and mana.");
+                .say("Health and mana restored.");
         } else {
             self.chart_route(world, pos);
         }
     }
     pub(super) fn chart_route(&mut self, world: &mut World, origin: Vec3) {
         if self.sigils == 7 {
-            self.route = "Three relics recovered. Return down the starter workshop's mine to restore its heart.".into();
+            self.route = "Return to the heart beneath the workshop.".into();
         } else if let Some((kind, point)) =
             sites::next_relic(&world.sample_config(), origin, self.sigils)
         {
@@ -274,7 +277,7 @@ impl Adventure {
                     _ => "northwest",
                 };
             self.route = format!(
-                "{} lies {}: {:.0} m from this relic, near X {:.0}, Z {:.0}{}. Recover its guardian relic, then follow the next resonance.",
+                "{}: {} {:.0} m. X {:.0}, Z {:.0}{}",
                 if kind == 3 {
                     "A foundry"
                 } else if kind == 5 {
@@ -296,7 +299,7 @@ impl Adventure {
                 }
             );
         } else {
-            self.route = "No remaining guardian resonance in this district. Travel farther, then consult another claimed relic. Foundries, archives and crystal cathedrals hold the three keys.".into();
+            self.route = "No relics nearby. Search farther away.".into();
         }
         world.expedition.say(&self.route);
     }

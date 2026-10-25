@@ -12,16 +12,16 @@ Decision: `lowend` means an Intel Iris Xe laptop:
 
 Profile caps (first proposal, tuned by measurement):
 - view distance 12 chunks;
-- at most 20k allocated bricks, about 120 MB including optional planes (ADR 0015);
+- at most 20k allocated bricks; the original 120 MB estimate is corrected by ADR 0017: all proposed planes would total 205.078 MiB before mirrors and other GPU allocations. Actual byte caps and sparse-plane occupancy need measurement;
 - CA target of 500k awake cells at 60 tps;
 - 60 fps p95 frame time;
 - simulation budget at most 6 ms per tick on 4 threads.
 
-Until a real Iris Xe device is benched, the dev machine emulates `lowend`:
+Until a real Iris Xe device is benched, the dev machine uses a limited development configuration, **not hardware emulation** (clarified 2026-10-24, ADR 0017):
 - CPU benches pinned to 4 performance cores (the existing `bench.py` pinning);
 - 1280×720 at 12 chunks;
-- GPU timings scaled by a measured 4090-to-Iris-Xe ratio from one calibration kernel (the A5 resident CA step). This is recorded once in the bench table, and the gates use it until hardware numbers replace it.
+- any GPU timings scaled by a calibration-kernel ratio must be labelled estimates. They cannot pass Iris Xe acceptance or predict integrated shared-memory/frame behavior.
 
-The profile is data: a budgets table in RON (per profile: lowend, desktop, steamdeck), loaded with a round-trip test when it is introduced in M1. The perf gate (median of 3, 8%) keeps running on the dev machine. A lowend regression is judged on the scaled numbers until a device exists.
+The profile is planned as data: a budgets table in RON (per profile: lowend, desktop, steamdeck), loaded and validated when introduced in M1. The local perf gate convention (median of 3, 8%) remains separate from hardware acceptance. No target-device result is inferred from scaled desktop timings. Current user instructions defer tests and CI.
 
-Risk: emulation can hide iGPU memory-bandwidth limits. The first real-device bench is an M1 exit item.
+Risk: desktop approximations hide iGPU memory-bandwidth limits. The first real-device bench is an M1 exit item.

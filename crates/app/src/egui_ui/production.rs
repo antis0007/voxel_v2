@@ -26,7 +26,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
         }
         if ui
             .selectable_label(health_mode, "Health")
-            .on_hover_text("Which assemblies run, starve, block or lack power, and what limits the factory")
+            .on_hover_text("Machine status and bottlenecks")
             .clicked()
         {
             health_mode = true;
@@ -54,15 +54,39 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
     });
     ui.ctx().data_mut(|d| d.insert_temp(hour_id, hour));
     let (sample, span) = if hour { view.hour } else { view.minute };
+    let span = span.max(0.001);
     let per_min = |sub: u32| sub as f32 / 64.0 * 60.0 / span;
 
-    // Power graph: last 60 s, generation (amber) against load (blue).
+    if let Some((health, count)) = view.health.bottleneck()
+        && ui.add(egui::Button::new(
+            RichText::new(format!("{count} {}  ·  Inspect machines", health.label()))
+                .color(health_colour(health)),
+        )).on_hover_text(health.fix()).clicked() {
+            ui.ctx().data_mut(|d| d.insert_temp(mode_id, true));
+        }
+
+    // The keyed readings sit outside the plot so a peak never hides a number.
+    let last = view.power_history.last().copied().unwrap_or((0, 0));
     ui.label(RichText::new("POWER · last 60 s").size(11.0).color(MUTED));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("Generated {}", power::fmt_power(last.0 as f64 / 4.0))).color(AMBER).size(12.0));
+        ui.label(RichText::new(format!("Used {}", power::fmt_power(last.1 as f64 / 4.0))).color(MANA).size(12.0));
+        let balance = last.0 as f64 - last.1 as f64;
+        ui.label(RichText::new(format!("{} {}",
+            if balance >= 0.0 { "Surplus" } else { "Shortfall" },
+            power::fmt_power(balance.abs() / 4.0),
+        )).color(if balance >= 0.0 { MUTED } else { DANGER }).size(11.0));
+    });
     let graph_height = (ui.ctx().content_rect().height() * 0.2).clamp(40.0, 90.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().min(560.0), graph_height), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().min(560.0), graph_height), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 0, Color32::from_rgb(17, 15, 20));
+    p.rect_filled(rect, 0, super::grimoire::RECESS);
     p.rect_stroke(rect, 0, Stroke::new(1.0, EDGE), egui::StrokeKind::Inside);
+    let plot = rect.shrink(5.0);
+    for fraction in [0.25, 0.5, 0.75] {
+        let y = plot.bottom() - plot.height() * fraction;
+        p.line_segment([pos2(plot.left(), y), pos2(plot.right(), y)], Stroke::new(1.0, EDGE.gamma_multiply(0.35)));
+    }
     let peak = view
         .power_history
         .iter()
@@ -77,8 +101,8 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
             .enumerate()
             .map(|(i, s)| {
                 let v = if k == 0 { s.0 } else { s.1 } as f32;
-                let x = rect.left() + rect.width() * i as f32 / 59.0;
-                pos2(x, rect.bottom() - 4.0 - (rect.height() - 8.0) * v / peak)
+                let x = plot.left() + plot.width() * i as f32 / 59.0;
+                pos2(x, plot.bottom() - plot.height() * v / peak)
             })
             .collect();
         if points.len() > 1 {
@@ -86,19 +110,18 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
         }
     }
     // A second of history is four ticks of units; per tick is kilowatts.
-    let last = view.power_history.last().copied().unwrap_or((0, 0));
-    p.text(
-        rect.left_top() + vec2(4.0, 3.0),
-        egui::Align2::LEFT_TOP,
-        format!(
-            "made {}  used {}  peak {}",
-            power::fmt_power(last.0 as f64 / 4.0),
-            power::fmt_power(last.1 as f64 / 4.0),
-            power::fmt_power(peak as f64 / 4.0)
-        ),
-        egui::FontId::monospace(10.0),
-        PAPER,
-    );
+    if let Some(pointer) = response.hover_pos() {
+        let index = (((pointer.x - plot.left()) / plot.width()).clamp(0.0, 1.0) * 59.0).round() as usize;
+        if let Some(&(generated, used)) = view.power_history.get(index) {
+            let x = plot.left() + plot.width() * index as f32 / 59.0;
+            p.line_segment([pos2(x, plot.top()), pos2(x, plot.bottom())], Stroke::new(1.0, PAPER));
+            response.on_hover_text(format!("{} s ago\nGenerated {} · Used {}",
+                view.power_history.len().saturating_sub(index + 1),
+                power::fmt_power(generated as f64 / 4.0),
+                power::fmt_power(used as f64 / 4.0),
+            ));
+        }
+    }
     ui.label(
         RichText::new(format!(
             "Energy over the window: {} generated · {} consumed",
@@ -112,7 +135,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
         power::fmt_energy(sample.charged as f64), power::fmt_energy(sample.discharged as f64),
         power::fmt_energy(sample.delivered as f64), power::fmt_energy(sample.converted as f64)))
         .size(11.0).color(MUTED))
-        .on_hover_text("Delivered fills machine buffers; consumed is committed work. Converters are ideal capacity-limited bridges with zero modeled electrical loss. Storage transfers are not fresh generation.");
+        .on_hover_text("Delivered: power received. Consumed: power used by machines. Storage transfers are excluded.");
 
     let mut rows: Vec<usize> = (0..NAMES.len())
         .filter(|&i| sample.made[i] > 0 || sample.used[i] > 0)
@@ -122,7 +145,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
     });
     if rows.is_empty() && sample.kits == 0 {
         ui.label(
-            RichText::new("Nothing has been produced yet in this window. Machines report here as they finish batches.")
+            RichText::new("No production yet.")
                 .color(MUTED),
         );
         return;
@@ -131,7 +154,8 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
         .iter()
         .map(|&i| per_min(sample.made[i]).max(per_min(sample.used[i])))
         .fold(1.0f32, f32::max);
-    egui::ScrollArea::vertical()
+    let rate_width = ((ui.available_width() - 190.0) * 0.5).clamp(55.0, 130.0);
+    egui::ScrollArea::both()
         .id_salt("production_rows")
         .auto_shrink([false, false])
         .max_height((ui.ctx().content_rect().height()
@@ -154,8 +178,8 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
                             icons::paint(ui.painter(), r, Icon::Resource(i));
                             ui.label(RichText::new(NAMES[i]).size(11.0).color(PAPER));
                         });
-                        rate_bar(ui, made, top, JADE);
-                        rate_bar(ui, used, top, AMBER);
+                        rate_bar(ui, made, top, JADE, rate_width);
+                        rate_bar(ui, used, top, AMBER, rate_width);
                         let net = made - used;
                         ui.label(
                             RichText::new(format!("{net:+.1}"))
@@ -179,31 +203,31 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut super::UiAction)
         });
 }
 
-fn rate_bar(ui: &mut egui::Ui, value: f32, top: f32, colour: Color32) {
-    let (r, _) = ui.allocate_exact_size(vec2(130.0, 14.0), Sense::hover());
+fn rate_bar(ui: &mut egui::Ui, value: f32, top: f32, colour: Color32, width: f32) {
+    let (r, _) = ui.allocate_exact_size(vec2(width, 17.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(r, 0, Color32::from_rgb(20, 18, 22));
+    p.rect_filled(r, 0, super::grimoire::RECESS);
     let mut fill = r;
     fill.set_width(r.width() * (value / top).clamp(0.0, 1.0));
-    p.rect_filled(fill, 0, colour.gamma_multiply(0.55));
+    p.rect_filled(fill, 0, colour.gamma_multiply(0.30));
     p.text(
         r.left_center() + vec2(3.0, 0.0),
         egui::Align2::LEFT_CENTER,
         format!("{value:.1}"),
-        egui::FontId::monospace(10.0),
+        egui::FontId::monospace(11.0),
         PAPER,
     );
 }
 
 fn health_colour(h: Health) -> Color32 {
     match h {
-        Health::Running => Color32::from_rgb(120, 214, 150),
+        Health::Running => JADE,
         Health::Starved => AMBER,
-        Health::Blocked => Color32::from_rgb(240, 140, 60),
+        Health::Blocked => super::pixel_art::EMBER,
         Health::Unpowered => DANGER,
         Health::Idle => MUTED,
-        Health::Paused => Color32::from_rgb(110, 110, 124),
-        Health::Unbuilt | Health::Unconfigured => Color32::from_rgb(120, 150, 220),
+        Health::Paused => MUTED,
+        Health::Unbuilt | Health::Unconfigured => MANA,
     }
 }
 
@@ -217,7 +241,7 @@ fn draw_health(ui: &mut egui::Ui, health: &Summary) {
     }
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().min(560.0), 16.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 0, Color32::from_rgb(17, 15, 20));
+    p.rect_filled(rect, 0, super::grimoire::RECESS);
     let mut x = rect.left();
     for h in Health::ALL {
         let n = health.counts[h as usize];
@@ -263,7 +287,7 @@ fn draw_health(ui: &mut egui::Ui, health: &Summary) {
         }
     }
     ui.add_space(6.0);
-    egui::ScrollArea::vertical()
+    egui::ScrollArea::both()
         .id_salt("health_rows")
         .max_height(ui.available_height().min(ui.ctx().content_rect().height() - 300.0).max(120.0))
         .show(ui, |ui| {

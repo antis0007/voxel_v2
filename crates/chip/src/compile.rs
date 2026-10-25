@@ -8,7 +8,7 @@ use crate::registry::{Dir, ModuleSpec, PortSpec, Registry, Role, Signal};
 
 /// Bumped whenever checks or characterisation change results. Revisions
 /// record it; a released revision keeps the model it was released with.
-pub const COMPILER_VERSION: u32 = 1;
+pub const COMPILER_VERSION: u32 = 2;
 /// Bytes of register file inside the core, usable as task RAM without SRAM.
 pub const CORE_REGISTER_BYTES: u32 = 4;
 
@@ -84,11 +84,11 @@ pub fn label(spec: &ModuleSpec, part: &Part) -> String {
 pub fn compile(design: &Design, registry: &Registry) -> Compiled {
     let mut d = Vec::new();
     let Some(process) = registry.process(&design.process) else {
-        err(&mut d, format!("Unknown process {}", design.process), Some(Fix::UsePreset));
+        err(&mut d, format!("Unknown Process: {}", design.process), Some(Fix::UsePreset));
         return Compiled { diagnostics: d, report: None };
     };
     if design.layers == 0 || design.layers > process.max_layers {
-        err(&mut d, format!("{} supports 1–{} metal layers", process.name, process.max_layers), None);
+        err(&mut d, format!("Layers {}: Process Allows 1–{}", design.layers, process.max_layers), None);
     }
     floorplan(design, registry, &mut d);
     nets(design, registry, &mut d);
@@ -97,19 +97,19 @@ pub fn compile(design: &Design, registry: &Registry) -> Compiled {
 
     let wires = extract(design, registry);
     if !wires.unrouted.is_empty() {
-        err(&mut d, format!("{} net(s) have no wire yet", wires.unrouted.len()), Some(Fix::RepairRoutes));
+        err(&mut d, format!("Unrouted: {} Nets", wires.unrouted.len()), Some(Fix::RepairRoutes));
     }
     for &id in &wires.opens {
-        err(&mut d, format!("Net {} does not reach all of its pins", net_name(design, id)), Some(Fix::RepairRoutes));
+        err(&mut d, format!("Open: {}", net_name(design, id)), Some(Fix::RepairRoutes));
     }
     for &(a, b) in &wires.shorts {
-        err(&mut d, format!("Short: nets {} and {} share a site on one layer", net_name(design, a), net_name(design, b)), Some(Fix::RepairRoutes));
+        err(&mut d, format!("Short: {} × {}", net_name(design, a), net_name(design, b)), Some(Fix::RepairRoutes));
     }
     for (id, why) in &wires.illegal {
-        err(&mut d, format!("Wire of net {} {why}", net_name(design, *id)), Some(Fix::RepairRoutes));
+        err(&mut d, format!("Bad Wire: {} · {why}", net_name(design, *id)), Some(Fix::RepairRoutes));
     }
     if design.layers == 1 && !wires.unrouted.is_empty() {
-        warn(&mut d, "Routing is congested on a single layer; a second metal layer usually frees it".into(), Some(Fix::AddLayer));
+        warn(&mut d, "Congested: 1 Layer".into(), Some(Fix::AddLayer));
     }
 
     let has_errors = d.iter().any(|x| x.severity == Severity::Error);
@@ -127,21 +127,21 @@ fn net_name(design: &Design, id: u16) -> String {
 fn floorplan(design: &Design, registry: &Registry, d: &mut Vec<Diagnostic>) {
     for (i, part) in design.parts.iter().enumerate() {
         let Some(spec) = registry.module(&part.module) else {
-            err(d, format!("Module {} is not in the verified library", part.module), None);
+            err(d, format!("Unknown Module: {}", part.module), None);
             continue;
         };
         let Some((x, y, w, h)) = design.rect(registry, part) else { continue };
         if u16::from(x) + u16::from(w) > u16::from(design.width) || u16::from(y) + u16::from(h) > u16::from(design.height) {
-            err(d, format!("{} leaves the die", label(spec, part)), None);
+            err(d, format!("Off Die: {}", label(spec, part)), None);
         }
         if spec.edge && !(x == 0 || y == 0 || x + w >= design.width || y + h >= design.height) {
-            err(d, format!("{} has pads: it must touch the die edge", label(spec, part)), Some(Fix::MoveToEdge(part.id)));
+            err(d, format!("Pads Off Edge: {}", label(spec, part)), Some(Fix::MoveToEdge(part.id)));
         }
         for other in &design.parts[..i] {
             if let Some((ox, oy, ow, oh)) = design.rect(registry, other)
                 && x < ox + ow && ox < x + w && y < oy + oh && oy < y + h
             {
-                err(d, format!("{} overlaps module #{}", label(spec, part), other.id), None);
+                err(d, format!("Overlap: {} × #{}", label(spec, part), other.id), None);
             }
         }
     }
@@ -151,22 +151,22 @@ fn nets(design: &Design, registry: &Registry, d: &mut Vec<Diagnostic>) {
     for net in &design.nets {
         let pins = resolve(design, registry, net);
         if pins.len() != net.pins.len() {
-            err(d, format!("Net {} names a port that does not exist", net.name), Some(Fix::UsePreset));
+            err(d, format!("Unknown Port: {}", net.name), Some(Fix::UsePreset));
             continue;
         }
         let Some(&(_, _, first)) = pins.first() else { continue };
         if let Some((p, s, port)) = pins.iter().find(|(_, _, q)| q.signal != first.signal) {
-            err(d, format!("Net {}: {}.{} is {:?}, the net carries {:?}", net.name, label(s, p), port.name, port.signal, first.signal), None);
+            err(d, format!("Type Mismatch: {} {} {} on {} Net", label(s, p), port.name.to_uppercase(), port.signal.label(), first.signal.label()), None);
             continue;
         }
         if let Some((p, s, port)) = pins.iter().find(|(_, _, q)| q.width != first.width) {
-            err(d, format!("Net {}: {}.{} is {} bits wide, the net {}", net.name, label(s, p), port.name, port.width, first.width), None);
+            err(d, format!("Width Mismatch: {} {} {} b, Net {} b", label(s, p), port.name.to_uppercase(), port.width, first.width), None);
         }
         let drivers = pins.iter().filter(|(_, _, q)| q.dir == Dir::Drive).count();
         if drivers == 0 {
-            err(d, format!("Net {} ({:?}) has no driver", net.name, first.signal), None);
+            err(d, format!("No Driver: {}", net.name), None);
         } else if drivers > 1 {
-            err(d, format!("Net {} has {drivers} drivers fighting", net.name), None);
+            err(d, format!("{drivers} Drivers: {}", net.name), None);
         }
     }
     for part in &design.parts {
@@ -176,14 +176,14 @@ fn nets(design: &Design, registry: &Registry, d: &mut Vec<Diagnostic>) {
             let required = !port.optional && (port.dir == Dir::Sink || spec.role == Role::Core);
             if required && !joined {
                 let what = match port.signal {
-                    Signal::Power => "is unpowered",
-                    Signal::Clock => "has no clock",
-                    Signal::Reset => "has no reset",
-                    _ => "is not connected",
+                    Signal::Power => "Unpowered",
+                    Signal::Clock => "No Clock",
+                    Signal::Reset => "No Reset",
+                    _ => "Unconnected",
                 };
-                err(d, format!("{} port {} {what}", label(spec, part), port.name), Some(Fix::Connect { part: part.id, port: port.name.clone() }));
+                err(d, format!("{what}: {} {}", label(spec, part), port.name.to_uppercase()), Some(Fix::Connect { part: part.id, port: port.name.clone() }));
             } else if !joined && port.dir == Dir::Drive && !port.optional {
-                warn(d, format!("{}.{} drives nothing", label(spec, part), port.name), None);
+                warn(d, format!("Unused Output: {} {}", label(spec, part), port.name.to_uppercase()), None);
             }
         }
     }
@@ -196,19 +196,19 @@ fn function<'a>(design: &'a Design, registry: &'a Registry, d: &mut Vec<Diagnost
     };
     let cores = role(Role::Core);
     if role(Role::Supply).is_empty() {
-        err(d, "No supply pads: nothing on the die is powered".into(), Some(Fix::Add(Role::Supply)));
+        err(d, "No Supply Pads".into(), Some(Fix::Add(Role::Supply)));
     }
     if role(Role::Clock).is_empty() {
-        err(d, "No clock source".into(), Some(Fix::Add(Role::Clock)));
+        err(d, "No Clock Source".into(), Some(Fix::Add(Role::Clock)));
     }
     let core = match cores.as_slice() {
         [] => {
-            err(d, "No control core: nothing runs the firmware".into(), Some(Fix::Add(Role::Core)));
+            err(d, "No Core".into(), Some(Fix::Add(Role::Core)));
             return None;
         }
         [one] => *one,
         _ => {
-            err(d, "This compiler supports one control core per die".into(), None);
+            err(d, "Cores: 1 Per Die".into(), None);
             return None;
         }
     };
@@ -219,31 +219,34 @@ fn function<'a>(design: &'a Design, registry: &'a Registry, d: &mut Vec<Diagnost
     };
     let roms = on_bus("imem", Role::Rom);
     if roms.is_empty() {
-        err(d, "No program memory on the core's instruction bus: the core cannot execute".into(), Some(Fix::Add(Role::Rom)));
+        err(d, "No Program ROM".into(), Some(Fix::Add(Role::Rom)));
     }
     let mix = design.firmware.mix();
     let rom: u32 = roms.iter().map(|s| s.bytes).sum();
     if !roms.is_empty() && mix.rom_bytes > rom {
-        err(d, format!("Firmware needs {} B of ROM, the instruction bus reaches {rom} B", mix.rom_bytes), Some(Fix::Add(Role::Rom)));
+        err(d, format!("ROM {} / {rom} B", mix.rom_bytes), Some(Fix::Add(Role::Rom)));
     }
     let ram: u32 = CORE_REGISTER_BYTES + on_bus("dmem", Role::Sram).iter().map(|s| s.bytes).sum::<u32>();
     if mix.ram_bytes > ram {
-        err(d, format!("{} needs {} B of RAM, the core has {ram} B: add SRAM on the data bus", design.firmware.label(), mix.ram_bytes), Some(Fix::Add(Role::Sram)));
+        err(d, format!("RAM {} / {ram} B", mix.ram_bytes), Some(Fix::Add(Role::Sram)));
     }
     let adcs: u32 = on_bus("pbus", Role::Adc).iter().map(|s| s.channels).sum();
     if u32::from(design.firmware.channels) > adcs {
-        err(d, format!("Firmware reads {} sensor(s), the peripheral bus reaches {adcs} ADC channel(s)", design.firmware.channels), Some(Fix::Add(Role::Adc)));
+        err(d, format!("Sensors {} / {adcs}", design.firmware.channels), Some(Fix::Add(Role::Adc)));
     }
     if on_bus("pbus", Role::Gpio).is_empty() {
-        err(d, "No GPIO on the peripheral bus: the controller cannot drive the machine".into(), Some(Fix::Add(Role::Gpio)));
+        err(d, "No GPIO".into(), Some(Fix::Add(Role::Gpio)));
     }
     let alus_on_bus = on_bus("alu", Role::Alu).len();
     let alus = role(Role::Alu).len();
     if alus > alus_on_bus {
-        warn(d, format!("{} ALU(s) are not on the core's ALU bus: they cost area and leakage but add no throughput", alus - alus_on_bus), None);
+        warn(d, format!("ALU Unused: {} Off ALU Bus", alus - alus_on_bus), None);
+    }
+    if on_bus("pbus", Role::Watchdog).is_empty() {
+        warn(d, "No Watchdog: Brownout Hangs Core".into(), Some(Fix::Add(Role::Watchdog)));
     }
     if role(Role::Timer).len() > on_bus("pbus", Role::Timer).len() {
-        warn(d, "A timer is not on the peripheral bus: the core cannot sleep on it".into(), None);
+        warn(d, "Timer Off Bus".into(), None);
     }
     Some(core)
 }

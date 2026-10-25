@@ -150,12 +150,11 @@ fn skitterer(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
     for side in [-1.0_f32, 1.0] {
         for i in 0..4 {
             let ph = e.phase * 8.0 + i as f32 * 1.55 + side * 0.7;
-            let stride = ph.sin() * 0.055 * e.gait + wind * 0.025;
-            let lift = ph.cos().max(0.0) * 0.055 * e.gait;
+            let (stride, lift) = super::enemy_presentation::step(ph, 0.13, 0.09, e.gait * (1.0 - wind));
             let z = 0.26 - i as f32 * 0.17;
             let hip = local(e, side * 0.27, 0.32 + bob - crouch, z);
             let knee = local(e, side * 0.50, 0.30 + lift + bob - crouch, z + stride);
-            let foot = local(e, side * (0.63 + wind * 0.10), 0.04, z + stride * 1.45);
+            let foot = local(e, side * (0.63 + wind * 0.10), 0.04 + lift, z + stride);
             limb(m, hip, knee, foot, 0.035, [0.27, 0.23, 0.14]);
         }
     }
@@ -570,12 +569,13 @@ fn kiln(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
     for side in [-1.0_f32, 1.0] {
         for i in 0..3 {
             let z = -0.22 + i as f32 * 0.22;
-            let swing = (e.phase * 6.0 + i as f32 * 1.8 + side).sin() * 0.04 * e.gait;
+            let (swing, lift) = super::enemy_presentation::step(
+                e.phase * 6.0 + i as f32 * 2.1 + side, 0.12, 0.075, e.gait * (1.0 - wind));
             limb(
                 m,
                 local(e, side * 0.30, 0.34, z),
                 local(e, side * 0.52, 0.18, z + swing),
-                local(e, side * 0.58, 0.04, z + swing * 1.5),
+                local(e, side * 0.58, 0.04 + lift, z + swing),
                 0.045,
                 soot,
             );
@@ -598,18 +598,18 @@ fn kiln(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
 }
 
 fn porter(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) {
-    let stride = 0.15 * e.gait;
     let frame = [0.34, 0.29, 0.23];
     let brass = [0.56, 0.43, 0.20];
     let cloth = [0.16, 0.24, 0.24];
     let cargo = [0.34, 0.24, 0.14];
     for (x, phase) in [(-0.25, 0.0), (0.25, std::f32::consts::PI)] {
-        let swing = stride * (e.phase * 4.2 + phase).sin();
+        let (swing, lift) = super::enemy_presentation::step(
+            e.phase * 4.2 + phase, 0.34, 0.12, e.gait * (1.0 - wind));
         limb(
             m,
             local(e, x, 0.62, 0.0),
             local(e, x * 1.2, 0.32, swing * 0.6),
-            local(e, x * 1.25, 0.04 + (e.phase * 4.2 + phase).cos().max(0.0) * 0.07 * e.gait, swing),
+            local(e, x * 1.25, 0.04 + lift, swing),
             0.085,
             [0.20, 0.17, 0.14],
         );

@@ -135,7 +135,7 @@ impl Adventure {
         }
         if shot.mods.proximity
             && shot.payload.is_some()
-            && nearest_foe(&self.enemies, world, shot.pos, 3.0).is_some()
+            && nearest_foe(&self.enemies, world, shot.pos, wands::card_rules::PROXIMITY_RANGE).is_some()
         {
             self.release_payload(world, shot);
         }
@@ -163,7 +163,7 @@ impl Adventure {
     /// Damage multiplier for a direct hit from the new modifiers.
     pub(super) fn arcana_hit_mul(mods: &wands::ShotMods, e: &Enemy) -> f32 {
         if mods.crit_wet && (e.status.wet > 0.0 || e.slow > 0.0) {
-            2.0
+            wands::card_rules::SOAKED_MULTIPLIER
         } else {
             1.0
         }
@@ -196,7 +196,7 @@ impl Adventure {
             self.blast_visual(at, 1.8, -shot.velocity.normalize_or_zero(), [1.0, 0.5, 0.2]);
             world.sandbox.apply_radial_impulse(at, 3.0, 4.5, scale);
             if self.terrain_blasts.len() < 4 {
-                self.terrain_blasts.push_back((at, 1.6));
+                self.terrain_blasts.push_back((at, wands::card_rules::EXPLOSIVE_CRATER));
             }
             let distance = (eye - at).length();
             if distance < 2.4 {
@@ -213,7 +213,7 @@ impl Adventure {
             sound(&mut self.sounds, Cue::Burst, Some(at), 0.8);
         }
         if shot.mods.pull {
-            self.implode(at, 4.5, 6.0);
+            self.implode(at, wands::card_rules::UNDERTOW_RADIUS, 6.0);
         }
     }
 

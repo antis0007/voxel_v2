@@ -1,0 +1,884 @@
+TECHNICAL EXPLORATION WORLD — REVISED DIRECTION AND IMPLEMENTATION PROMPTS
+21 October 2026
+Target: the existing Rust + raw WGPU voxel game. No Bevy.
+
+STATUS AND AUTHORITY
+
+This is a design revision and a set of implementation instructions for the current game owners. No current repository or executable was available in this workspace, so this document does not claim that the proposed systems are implemented, compiled, playable or benchmarked. The accompanying concept image is an art-direction reference, not an engine capture.
+
+The user's latest direction governs new work: high technology, a small amount of genuine magic, technical autonomy, nonlinear dungeons, automation, old spacefaring civilizations, occasional wrecks and meteors, observable orbital stations, buildable radios and useful spectral instruments. This supersedes the earlier emphasis on a magical temple saturated with glowing astral decoration.
+
+LATEST ART AND DUNGEON REVISION: the user additionally requests distinctive pixel art, smaller detailed voxels, coherent shading and physics, Skyward Sword/Zelda ruins, Souls-scale spaces and combat, JRPG/D&D character building, and difficult older-D&D tombs protected against trivial excavation and magic. Sections 13–16 govern these additions. Selected tomb cores may be genuinely protected; earlier support for player-created bypasses does not require every wall to be breakable or every puzzle to have a cheap outside route. The Relay Works remains the introductory radio/engineering slice. The Sepulchre of the Last Bearers is the new demanding art/dungeon benchmark, and does not depend on finishing orbital features first.
+
+IMMEDIATE PRIORITY: the latest screenshot, image(20261021-123444).png, was successfully inspected locally. The user reports poor performance and shading glitches. Section 17 and Prompt K now precede new environment content, finer voxel storage and added rendering effects. The art, tomb and progression work remains the direction, but new renderer/content load waits for reproduced shading faults, measured cost and an explicit budget. No source checkout or runtime has become available with this image.
+
+Keep the useful work already specified in the visual/physics, horizon and dungeon briefs: coherent materials and lighting, continuous terrain coverage, actual voxel/collision agreement, readable enemy actions, meaningful room graphs, save identity and measured performance. This is a setting and systems correction, not a reason to start a replacement engine.
+
+Earlier project briefs report existing power networks, batteries, transformers, an assembler, production statistics and save support. Those reports are leads for repository inspection. Their exact capacities, versions and completion status must be checked in the current code. They are not permission to create duplicate power or inventory systems. No verified existing orbital, radio or spectrum system was found in the available project material.
+
+1. THE GAME'S CENTRAL PROMISE
+
+The player explores a beautiful, materially coherent world built and altered by several civilizations. They learn how things work, construct instruments, recover knowledge, change infrastructure and develop their own solutions. A ruin can become a workshop; a workshop can become a communications outpost; a communications discovery can change where the player explores next.
+
+Most things have understandable physical, technical, biological or social causes. A small number of exceptional phenomena remain genuinely strange. Their effects still have consistent limits, costs, observables and consequences.
+
+The most useful quality target is a completed chain of player agency:
+
+Notice something -> form a hypothesis -> obtain evidence -> construct or modify a tool -> change the world -> retain and automate the useful result.
+
+This chain should work across exploration, combat, manufacturing and discovery. It is stronger than a growing catalogue of independent machines, weapons and quest objects.
+
+DESIGN COMMITMENTS
+
+- Let the player infer rules from reliable observations and clear feedback.
+- Accept valid digging, building, routing, repair, avoidance, negotiation and equipment substitution within declared material, construction, protection and antimagic rules. A protected tomb envelope is a valid rule; it must be visible, consistent and enforced through authoritative world operations.
+- Define objectives by meaningful resulting state rather than by an approved sequence of button presses.
+- Give failures recoverable consequences and understandable causes where the encounter permits recovery.
+- Make expertise rewarding while providing usable defaults, visible units and progressive explanation.
+- Let players automate a process after understanding it; repeated manual retuning is not a substitute for depth.
+- Let capabilities work outside the room that introduced them.
+- Preserve persistent consequences, including repaired equipment, terrain changes, ownership, discoveries and useful constructions.
+- Keep functional complexity concentrated around meaningful decisions. High technology does not require visual clutter everywhere.
+
+2. HOW TO USE THE INSPIRATIONS
+
+These are proposed transfers into an original game, not assertions that each reference uses the implementation below.
+
+Zork and object-based adventures
+Use attention to objects, spatial inference, investigation and experimentation. Support broad reusable actions such as inspect, move, connect, isolate, measure and combine. Explain why an attempt fails in terms the player can use. Avoid obscure command guessing, unexplained exceptions and progress depending on one easily missed pixel.
+
+Older D&D dungeon expeditions
+Use loops, side entrances, dangerous shortcuts, preparation, logistics, faction interests, valuable information, utility tools and the option to retreat. Add genuinely defended tomb cores, consequential traps and mechanisms that demand observation and preparation. Access to the reward need not follow from merely reaching the other side of a gap. Give the player evidence with which to choose a route. D&D's published discussion of exploration explicitly connects agency to meaningful navigation choices and available information. [S1]
+
+D&D 5e
+Give exploration, social interaction and combat useful roles. A confrontation can be about crossing a room, protecting equipment, stabilizing a fault or obtaining cooperation. Official encounter guidance discusses goals other than defeating every enemy. [S2] If character skills exist, they can supply interpretation, measurements or advantageous options; a failed hidden roll should not invalidate a physically successful construction.
+
+Ravnica and Magic: The Gathering
+Take the idea of layered civilization and institutions that perform civic functions while pursuing different values. Wizards' Ravnica description combines accumulated urban history with guild identities and responsibilities. [S3] Build original institutions around water, power, archives, salvage, fabrication and orbital services. Let their disagreements affect working systems instead of existing only as colored banners and dialogue affiliations.
+
+RimWorld
+Use needs, relationships, resources and infrastructure to produce understandable stories. Begin with a few actors and concrete responsibilities; a complete colony simulator is not a prerequisite. A custodian, cooperative and salvage claimant can already create a consequential dispute over one working power converter.
+
+Factorio, Satisfactory and technical Minecraft
+Use legible flows, capacities, bottlenecks, modular construction, automation, diagnostics and player expression. The factory should produce expedition capabilities: portable energy, pumps, replacement parts, instruments, relays, field tools and survey equipment. Exploration should return new materials, compatible components, knowledge, contacts and opportunities to repurpose infrastructure.
+
+Noita
+Use shared material and effect rules that produce useful combinations. Its official description explicitly grounds interaction in simulated materials. [S4] Extend the existing effect and material paths. A creature's tool, a player tool and a machine should agree about the same material where they perform the same operation.
+
+Generative puzzle games
+Generate understandable mechanisms and constrained problems. Validate that a player has a feasible path from available resources to a goal. Runtime success should accept any compatible construction that achieves that goal, including solutions the generator did not enumerate.
+
+Neal Stephenson and speculative fiction
+The useful influences are thematic: engineering as action, knowledge as power, institutions that preserve or restrict information, material constraints, long histories and technical choices with social consequences. Stephenson's account of Seveneves emphasizes the scope of near-Earth space and real physical constraints; the publisher's description of The Diamond Age makes an educational technology and its effects on a person's independence central. [S5, S6] His account of Anathem's origins connects it to the Clock of the Long Now and thinking across longer intervals. [S15] Translate that into institutions and structures designed to outlast their current occupants.
+
+Apply those ideas through systems and situations. A public beacon can be readable while its maintenance commands require permission. An archive can teach a protocol that a faction wants to restrict. A repair can restore a community service while changing control over an old installation. Use an original voice, setting and characters.
+
+3. WORLD HISTORY SHOULD APPEAR IN CONSTRUCTION
+
+Create places with a sequence of uses. Each layer changes layout, materials, ownership and functioning infrastructure.
+
+REFERENCE SITE: THE RELAY WORKS
+
+First layer: an old ground-to-orbit communications installation.
+It contains an equipment hall, antenna control, protected archives, cooling, power conversion, maintenance access and a stable geographic reference.
+
+Second layer: civilian water and power adaptation.
+A later community reused some equipment for pumps, treatment and local distribution. New pipes pass through older service openings. Practical workshops interrupt original symmetry. Components have repair histories and incompatible generations of connectors.
+
+Third layer: an actual funerary and archival use.
+Part of the gallery became a place of remembrance. Memorials, protected records and burial niches are cultural objects. They need not conceal machinery or puzzles. Cultural value and physical protection are separate decisions: some objects have social consequences when disturbed, while purpose-built sealed tomb cores can also have real excavation protection and independently defined antimagic coverage.
+
+Fourth layer: present occupants and degradation.
+Maintenance machines continue partial work orders. Organic creatures occupy warm, damp or quiet spaces. A cooperative needs water; salvagers need parts; an archive custodian protects records. These actors can understand the technology differently while still being intelligent people with their own priorities.
+
+Never explain every tomb as a group of supposedly ignorant people mistaking a computer for a god. Keep room for intentional ceremonies, actual burials, contested memory, aesthetics and genuinely anomalous events.
+
+OTHER SITE FAMILIES, AFTER THE REFERENCE SITE WORKS
+
+- A pressure-sealed archive/tomb: conservation needs, access rights, maintenance routes and useful records.
+- A buried industrial works: material processing, incompatible upgrades, shared power and recoverable breakdowns.
+- A rare starship ruin: recognizable hull sections, pressure boundaries, service decks, unfamiliar but learnable standards and a continuing purpose for surviving systems.
+- A remote observatory or survey outpost: sightlines, calibration references, records, antenna placement and a relationship to terrain.
+
+Shipwrecks should remain exceptional. Their value can be a new interface, unusual manufacturing method, working instrument or information, rather than a universally stronger ore. Choose local construction and history before scattering salvage.
+
+4. ART DIRECTION: ADVANCED CAPABILITY, CLEAR CONSTRUCTION
+
+Use broad quiet stone and ceramic masses, dark structural members, selected light armor/paneling, visible joints, serviceable assemblies and intentional routes. High technology should be evident in what equipment does and how precisely it is constructed.
+
+Gold and silver remain part of the requested identity. Apply them to archival clasps, instrument edges, calibrated scales, precision guides, selected electrical contacts and protected fittings. The HUD can resemble a durable field folio or instrument case with crisp pixel construction. Its data layer should remain plain and legible: units, confidence, timestamps, signal state and explicit actions.
+
+The earlier Relay Works concept supplies useful proportions and routes, but its uniform beige/gold finish is insufficiently distinctive. The latest counterweight-tomb concept supersedes it as the art benchmark: an asymmetric diagonal balance beam, deep shafts, dark basalt, pale ceramic, celadon, vermilion load marks and small silver/gold fittings. Translate the hierarchy into a small buildable kit. Do not reproduce every fitting, cinematic blur or painted fleck, or assume its lighting and frame rate have been demonstrated in WGPU. Section 13 defines the production treatment.
+
+Replace repeated glowing ceiling clusters with structural ribs, maintenance recesses, supported equipment, cooling runs and occasional framed openings. One rare anomalous apparatus can be visually exceptional because the rest of the hall has restraint.
+
+Ceilings vary with purpose: a compressed service passage, a tall equipment bay, a quieter burial gallery, a pressure hull in the rare ship ruin. Room shape follows circulation, load, access and history before decoration.
+
+Keep the existing wand/effect customization where it works. A wand can have the construction language of a modular field instrument: emitter, cell/reservoir, focusing components and interchangeable tools. Renaming the existing system is not required to make it fit the world.
+
+ENEMIES AND INHABITANTS
+
+- Warden: a heavy containment or repair machine, with a continuing task, readable permissions and a committed physical response to interference. Keep the shield/brace/bash/recovery combat design.
+- Moth: retain a biological animal with a warm or damp nesting niche, an understandable response to light and a distinct aerial silhouette. It should not automatically become a drone.
+- Crawler: a low maintenance/salvage machine where compatible with its established identity, with working claws used both for a job and for defense. Verify current content before converting any existing fauna.
+
+Give each one ordinary activity before combat escalation. Restoring safe conditions, avoiding a nest, relocating a light or supplying a useful part can create different outcomes through supported rules. Not every actor must be hostile or possess a dialogue tree.
+
+RARE MAGIC
+
+The first region should contain at most a small, deliberate set of exceptional rules. An existing phantom-floor or other anomalous material can remain if its state, activation, extent, cost, collision and failure behavior are coherent. Document those rules. Do not make radio communication, ordinary doors, every enemy's movement and basic manufacturing depend on unrelated magical exceptions.
+
+The anomaly's origin can remain unknown after players learn to use it. Mystery can also concern purpose, authorship, ownership and consequences; it does not require withholding every usable rule.
+
+5. TECHNICAL PROBLEMS THAT RESPECT PLAYER AUTONOMY
+
+The runtime objective is a state the world can actually reach. The generator's known solutions are evidence of solvability, not the exclusive scripts players must execute.
+
+For the first introductory relay problem (this is not the difficulty benchmark for defended tombs):
+
+1. Build a small valid network of existing power devices and a communications load.
+2. Place it in real traversable geometry with usable ports and maintenance clearances.
+3. Apply one bounded fault family, such as a broken power feed. More fault families come later.
+4. Provide at least two independent ways to discover the relevant condition: an instrument reading plus visible damage, for example.
+5. Supply or make reachable the compatible resources required by two materially different solution witnesses.
+6. Replay those witnesses through authoritative actions and validate actual reachability, capacity, energy and resulting state.
+7. Repair or reject invalid candidates within bounded attempts; use a known valid fallback and record the failure reason.
+
+Validate each witness from a separate copy of the declared initial state. The portable approach must not depend on equipment, authority or world changes obtained only by completing the fixed-relay approach. Validation copies are a development tool; normal play must preserve the player's actual changes rather than resetting the site between attempts.
+
+Examples of compatible solutions include replacing a cable, rerouting the feed, supplying an adequately charged battery or moving the radio to a usable alternative supply. They qualify only if the actual component properties and power graph support them.
+
+Do not require a universal symbolic solver. Start with a finite family of mechanisms and a small set of authored action templates whose parameters and geometry vary. Validation covers the declared initial tool/resource envelope. It cannot prove every conceivable voxel construction, and does not need to restrict runtime possibilities to what it proved.
+
+An optional advanced problem can create a choice between service consumers. If the player builds enough extra capacity to satisfy both, accept that result. Do not add an invisible prohibition to preserve a scripted moral dilemma.
+
+Doors, walls and supports use the same world operations as elsewhere. Physical, material, energetic, attention and social costs should be observable. A legitimate breach of ordinary or explicitly breachable structure is a supported solution; destruction should not automatically trigger a special punitive spawn. Selected tomb cores can reject excavation, fracture, transmutation and displacement while their declared structural seal is engaged. This protection is separate from antimagic, applies to every mutation path and actor, and covers the actual floor, roof, corners and foundations. See Section 14. Player agency does not require an exterior bypass for every inner seal.
+
+Clues remain useful after a failed attempt. Explain outcomes such as inadequate energy, unsupported protocol, antenna misalignment, unavailable command authority or a blocked path. Avoid a generic red failure icon for every cause.
+
+6. ORBITAL OBJECTS ARE PERSISTENT WORLD ENTITIES
+
+The sky should contain things the player can investigate. A station's appearance, radio signal, instrument observation and response refer to the same persistent identity.
+
+PHYSICAL BASIS
+
+NASA describes ordinary space-station sightings as reflected sunlight, with visibility particularly favorable near dawn and dusk and possible disappearance into planetary shadow. A station being overhead does not guarantee a visible optical pass. [S7]
+
+A moving low-orbit object should cross the sky. A truly stationary synchronous object requires a circular, prograde, equatorial orbit with the planet's rotation period; general synchronous orbits need not remain fixed. [S8] An arriving ship should enter an orbit or use an explicit powered hovering behavior, rather than remain at an arbitrary sky coordinate.
+
+As an illustrative calculation, a 100 m structure at 400 km range subtends about 0.00025 radians. In a 1920-pixel, 90-degree horizontal field of view, its central image is roughly 0.24 pixels wide before brightness filtering. Ordinary unaided sightings should therefore be small moving lights. A telescope or a deliberately exceptional nearby/large structure can reveal shape. This is a calculated example, not a measurement of the proposed game.
+
+BOUNDED IMPLEMENTATION
+
+Use one reference planet, an explicitly located playable region, a compatible Sun direction and a handful of orbital entities. Circular inclined orbits are sufficient initially. A general N-body simulation, whole spherical terrain engine and explorable station interior are not prerequisites.
+
+For a circular orbit:
+
+    angular_rate = sqrt(mu / orbit_radius^3)
+    phase = phase_at_epoch + angular_rate * (celestial_time - epoch)
+    inertial_position = orbit_plane_rotation *
+                        [orbit_radius*cos(phase), orbit_radius*sin(phase), 0]
+
+Evaluate analytically at the requested time. Extend to Keplerian ellipses when an actual encounter needs them. JPL's orbit and frame documentation is a useful reference for separating state, epoch and coordinate transformations; adopting its entire toolkit is unnecessary. [S9]
+
+Keep these spaces explicit:
+
+- Planet-centered inertial f64: trajectory position and velocity.
+- Planet-fixed f64: surface observer and rotation.
+- Local observer frame: east/north/up direction, azimuth/elevation and local obstruction.
+- Camera-relative render data: small values or unit directions supplied to WGPU.
+
+Subtract large positions in f64 before converting render quantities to f32. GPU double precision is not required. A floating render-origin shift must not move the antenna's geographic observer or alter a predicted pass.
+
+The initial flat voxel region needs a documented bounded geographic chart on the reference planet. Do not use coordinate modulo to wrap an unbounded plane around a globe. State the supported extent and approximation; later distant regions can use explicit additional charts.
+
+TIME POLICY
+
+Keep the existing simulation clock authoritative for manufacturing, battery energy, combat and other current gameplay. Declare the conversion from gameplay seconds to celestial physical seconds. Planet rotation, the Sun, orbits, eclipses and contact predictions must use the same celestial clock. Display contact countdowns in useful playable seconds, with units explicit.
+
+A short game day cannot be treated as an equally short physical rotation period while quietly keeping Earthlike radius/gravity and unrelated Earthlike orbital periods. Celestial time compression is a deliberate gameplay approximation. It also compresses pass durations. Measure those durations at the chosen day length before approving the experience.
+
+Document this two-domain approximation and its exact conversion instead of claiming one globally literal time scale. A radio's operating duration and energy use must use compatible units; faster astronomy must not silently multiply factory output or free battery capacity. Do not multiply radio latency or Doppler by the display acceleration accidentally. For Doppler, use physical orbital position/velocity units.
+
+Choose and test a minimum playable contact duration before finalizing the orbit/day configuration. A hypothetical eight-minute physical window lasts only about 6.7 playable seconds at 72-times celestial acceleration. This arithmetic example shows why passive recording, a retained observation and a later predicted contact can be essential. The next usable pass is not necessarily the next orbit or the next night. Seed a favorable initial phase if needed, but do not teleport a station overhead when the player finishes crafting.
+
+Pause, sleep, accelerated time and save/load need explicit behavior. Recompute analytic orbital state after a jump. Apply arrival and other consequential scheduled events once. Do not reset identities or phase. Automated contact opportunities crossed during a time jump must either be evaluated coherently or reported as not simulated under a clear policy; do not invent successful exchanges.
+
+OPTICAL VISIBILITY
+
+Evaluate planetary occultation, local terrain/structure obstruction, sunlight/eclipse, sky contrast and atmospheric/cloud attenuation. A sphere with a point-Sun shadow test is an acceptable documented first approximation.
+
+An active optical beacon is separate from reflected sunlight and has its own power/activity. Being radio-reachable does not imply being visible; being visible does not imply a working transmitter. Use a stable filtered light point for an unresolved source. No permanent huge station model in the night sky unless its actual scale and distance justify it.
+
+MOVING SHIPS AND METEORS
+
+An arriving ship keeps one identity through an authored or computed trajectory and an explicit orbital insertion. Segment transitions preserve position; velocity changes correspond to declared maneuvers. Subsequent passes, beacons and contact windows arise from that trajectory.
+
+NASA distinguishes meteoroids in space, meteors as the atmospheric light phenomenon and meteorites as surviving material on the ground. [S14] Treat common meteor streaks, rare surviving meteorites and rare shipwrecks as distinct event/content families. If a gameplay-relevant impact occurs, its displayed path, location, terrain/debris event and persistent identity should agree. Do not imply every visible streak lands nearby or contains advanced technology. Event rarity and scale are design choices; an atmospheric visual event need not instantiate expensive local debris.
+
+7. RADIO COMMUNICATION AS A BUILDABLE CAPABILITY
+
+Start with a small scalar link model and explicit protocol states. NASA's communications overview describes link budgets, antenna gain, pointing, path loss, noise and achievable data rates; its telecom introduction describes simple beacon information as distinct from full telemetry. [S10, S11]
+
+The progression is:
+
+Unidentified energy -> repeatable signal -> bearing estimate -> carrier/protocol lock -> decoded beacon -> two-way exchange -> automated tracking and useful services.
+
+A receiver does not need a transmitter to listen. A detectable carrier is not necessarily decodable. Decoding a public beacon does not decrypt protected traffic or grant command authority.
+
+Transmitting, listening and device power are distinct states. Absence from the active-emitter index prevents fresh direct detection; it does not make an otherwise powered, configured receiver unreachable. A station may disable its periodic beacon while still listening. A player with legitimately acquired targeting/configuration information can contact it, and it can reply if its transmitter is allowed to activate. Use authoritative equipment lookup for receive endpoints rather than treating the emission index as the whole communications topology.
+
+SCALAR LINK MODEL
+
+For a supported band, a proposed received-power model is:
+
+    Pr = Pt + Gt(pointing) + Gr(pointing)
+         - path_loss(distance, frequency)
+         - obstruction_loss - weather_loss - system_loss
+
+Use compatible logarithmic units. Compare the result against receiver noise, bandwidth, interference and protocol requirements to determine acquisition, packet quality and supported rate. Apply hysteresis so small fluctuations do not cause unstable interface flicker.
+
+Both antenna patterns matter. Transmitter power and receiver sensitivity are different properties. Use a few documented fictional band profiles initially rather than a complete real-frequency catalogue. Their rules should have consistent range, obstruction, aperture and weather tradeoffs.
+
+Evaluate planet horizon and authoritative local terrain/buildings from the actual antenna position. Render distance, camera direction and current depth buffer must not govern communications. A coarse distant horizon query needs a local 3D check for caves, overhangs and nearby structures. Missing terrain data is an explicit unknown/deferred result, not automatically a clear path. Resolve it through a bounded authoritative query or prioritized background work on the relevant horizon region, including persisted edits. Do not require loading a planet-length chain of render chunks. Prove the reference encounter resolves pending queries within its preparation/contact budget; report pending information honestly and retry coherently.
+
+Radio and visible light need distinct attenuation models. An eclipsed station may still transmit. Clouds that obscure an optical point need not equally block every supported radio band. Start with documented simplified obstruction/propagation; do not claim a full-wave solver.
+
+For first-order Doppler:
+
+    range_rate = dot(satellite_velocity - observer_velocity,
+                     normalized(satellite_position - observer_position))
+    received_frequency ~= transmitted_frequency * (1 - range_rate/c)
+
+Use a shared inertial frame and physical seconds, including observer motion from planet rotation. ESA describes Doppler as a measurement of line-of-sight range rate. [S12] Initial receivers can offer automatic frequency tracking after acquisition; manual control remains available for advanced play.
+
+COMPLETE TWO-WAY CONTACT
+
+Evaluate uplink and downlink independently. The player may hear the station while lacking sufficient ground transmit power or correct pointing to reach it.
+
+An actual contact requires:
+- A request leaves a powered, configured transmitter.
+- A viable uplink delivers it to a compatible station receiver.
+- The station processes the request under its protocol/permission rules.
+- A response is transmitted back through a viable downlink.
+- The player receives and matches that response to the request.
+
+Use correlation IDs, bounded message lifetimes and idempotent handling of consequential commands. A repeated packet must not duplicate a reward, resource transfer or state change. Keep pending-message bounds small. Define whether in-flight attempts survive loading or cancel explicitly.
+
+Public first contact can answer with a useful survey, ephemeris, service bulletin or diagnostic request. More valuable commands can have explicit permissions, costs and negotiated access. Do not require a complex cryptography simulation to establish the initial distinction between readability and authority.
+
+8. SPECTRUM GOGGLES: EVIDENCE WITH LIMITS
+
+The goggles are an instrument display. Band-specific sensors, antennas and processors determine what is measurable. A small wearable display need not contain every large-aperture sensor itself.
+
+Visible / narrow optical bands
+Show surfaces or emitted light reaching the sensor. A special filter can reveal a real material/illumination interaction when implemented. It does not automatically reveal every quest object.
+
+Thermal infrared
+Show a model of observed surface thermal emission with material response. NASA distinguishes thermal infrared emission from reflected near-infrared light. [S13] Heating machinery, a recently active surface or a leak can provide evidence. A wall normally supplies a wall-surface reading; an exact hidden-creature outline is not justified merely because the entity exists. Any through-wall effect needs a supported propagation model and clear limits.
+
+Passive RF survey
+Show detected energy, band, signal strength and an estimated bearing/lobe where the sensor has directional capability. Confidence, last observation time and acquisition state are part of the display. Passive detection alone does not establish exact distance, identity or a detailed hull shape.
+
+Decoded signal mode
+Show supported packet contents: an advertised identity, health flag, timing information or published trajectory. Label source claims and predictions as such. Stale information remains visibly stale. Unsupported modulation or encryption does not become readable simply because a target is selected.
+
+Active ranging / radar, later
+Transmit energy and process a supported return. Account for active emissions, target response, power and a distinct return-link model. Do not reuse a one-way communications threshold and call it a physically modeled radar.
+
+Anomalous instrument, optional later
+Use a separate documented fictional sensing rule for the rare exceptional material. Do not imply ordinary RF goggles can see anything the game designer wants to reveal.
+
+LOCALIZATION AND KNOWLEDGE
+
+A bearing can improve through directional hardware, observer motion, multiple receivers or decoded ephemeris. Range requires additional information or an appropriate measurement. Multipath/obstruction can degrade confidence; the first implementation can model bounded uncertainty rather than full electromagnetic interference.
+
+Receiver observations and acquired tracks belong to the player/equipment. The HUD and automation consume those observations, decoded messages and explicitly available predictions. They must not query hidden entity positions for perfect target tracking.
+
+Keep observed, predicted, lost and reacquired states distinct. Noise and sampling advance with simulation time, not the number of rendered frames. Powering off a transmitter stops fresh direct detections; a saved prediction may remain, clearly labeled.
+
+9. ONE COMPLETE FIRST PLAYABLE SITE
+
+Working objective: establish a valid two-way exchange with one independently represented orbital station.
+
+Use eight compact spaces, with two loops and an optional cultural branch:
+
+A. Ridge listening terrace: safe observation point, possible moving light, a detectable signal and a viable portable-antenna position.
+B. Receiving vestibule: safe first footing, evidence of current cultural use and access to upper or lower circulation.
+C. Names/archive gallery: a quieter upper route with an overlook, useful but nonexclusive records and sight of the relay machinery.
+D. Lower cistern: a longer sheltered approach, organic moth habitat and a modest traversal choice.
+E. Repair workshop: compatible spare parts, accessible test points and a crawler with a continuing maintenance job. Essential parts are not hidden in graves.
+F. Relay equipment hall: the fixed radio, actual service connections and the Warden's task/response.
+G. Antenna well: vertical service access, real antenna connections and a physical return shortcut to the terrace.
+H. Quiet burial vault: an optional cultural branch with memorials and history. It need not contain a mandatory switch, enemy or component.
+
+Main interior loop: B -> C -> F -> E -> D -> B.
+Upper return loop: A -> B -> C -> F -> G -> A.
+Optional cultural branch: C -> H.
+These connections describe topology, not a requirement to repeat identical rectangular rooms. The G-to-A shortcut may begin closed from the outside and open through a comprehensible mechanism from within.
+
+The geometry supplies loops; actual construction/destruction can create more routes. Validate physical player clearance, collision, interaction reach, line of sight and useful landing/recovery space. A room graph alone is insufficient.
+
+APPROACH A: RESTORE THE FIXED RELAY
+
+Use evidence to locate a broken feed. Repair or reroute it with compatible components. Provide enough energy and power for the intended operating period. Configure the supported receiver/protocol, align the antenna using observations or available predictions, send a request and receive a correlated reply.
+
+APPROACH B: BUILD A PORTABLE STATION
+
+Use compatible generic parts and an appropriate power source. Place the antenna on the ridge or another valid location. Acquire the same source, configure a viable uplink and complete the same exchange. The site is useful, but entering every room and defeating every occupant are unnecessary.
+
+The engine evaluates the actual communication chain. Do not implement success as restored_panel OR crafted_quest_antenna. If the player supplies a third valid configuration, it works.
+
+FIRST USEFUL CONSEQUENCE
+
+The station replies with one actionable piece of information or service: a survey of another region, a predictable opportunity, a diagnostic request with a meaningful payment, or access to a compatible fabrication specification. Complete one consequence through existing progression systems. Avoid requiring an explorable orbiting interior for first contact.
+
+FIRST AUTOMATION
+
+Let the player record a preset and configure a tracking/recording rule. It uses observations or acquired orbital data, actuates an actual antenna within movement and power limits, handles loss of lock and records a message during a later pass. This makes a factory-built instrument a durable world capability.
+
+Discovery should not depend on noticing one brief point of light at the right minute. Provide repeated opportunities, a signal, records or an NPC clue. Missing one pass must not permanently remove the objective. Measure contact-window duration at the chosen time scale; provide a useful fallback instead of demanding idle waiting or constant manual adjustment.
+
+10. RUST / WGPU INTEGRATION AND PERFORMANCE
+
+Keep one authoritative world state. Add only the small domain types needed by current behavior.
+
+Suggested responsibilities, with names adapted to the actual repository:
+
+- Celestial state: reference planet, time conversion, chart anchor and persistent orbital entities.
+- Equipment state: power, antenna pose, band/mode, protocol and device identity, using existing machine/entity ownership.
+- Emitter index: a rebuildable lookup over active authoritative components. It is not a second copy of their state.
+- Observation records: receiver-owned measurements, timestamps, uncertainty, decoded data and acquired tracks.
+- Message state: bounded requests/responses and durable results of accepted consequential actions.
+- Presentation: points, models and instrument/HUD views consuming the appropriate state.
+
+Rendering quality, LOD and chunk residency must not create or destroy persistent orbital entities. Horizon rendering and radio obstruction may share world data, but they use appropriate queries and distinct quality requirements. A mountain that is visually outside the loaded near field still matters to the radio path.
+
+Cache orbital evaluation for consumers. If updates are less frequent than rendering, bound apparent angular interpolation error. Obstruction-cache validity must account for both endpoints, changing line-of-sight direction, observation time, chart state and relevant obstacle revisions. A stationary antenna still needs updated results as the satellite rises, passes behind a ridge and sets. Cached gain/link results also depend on antenna pose and equipment state. Bound candidate emitters by band and spatial/visibility information before detailed checks.
+
+Persist source identity, trajectory epoch, operational state, equipment configuration, antenna placement, repairs, energy, accepted commands, player discoveries and contact records where meaningful. Rebuild transient indices. Do not duplicate an item when moving it between world, inventory and machine ownership. Reload must not refresh an old uncertain observation into a new exact one.
+
+Use the established save migration path. Preserve separate legacy combat/discovery/environmental claims. A new radio-contact outcome must never fabricate guardian deaths to satisfy an unrelated reward gate.
+
+Measure on actual hardware: ordinary play, multiple receivers, a declared emitter population, terrain edits, origin shifts and relevant streaming activity. Report CPU/GPU time and memory, update/query counts and spikes. Avoid per-frame rebuilding of static geometry, full-world field grids, unbounded searches or synchronous readback for ordinary instrument display.
+
+11. TARGETED IMPLEMENTATION PROMPTS
+
+SHARED CONTRACT — SEND WITH EVERY OWNER'S TASK
+
+Work in the existing Rust + raw WGPU repository. Read its instructions, current changes, Cargo.lock and actual relevant code. Reuse existing world, materials, effects, power, inventory, generation, UI and persistence systems. Do not introduce Bevy, a second renderer, a second spell evaluator or duplicate machine state. Coordinate shared-file ownership with active work.
+
+The latest direction is high technology with slight, bounded magic. Preserve working existing mechanics and saves; reinterpret their presentation where appropriate. Older briefs describe context and proposed work, not proof of the current implementation.
+
+Complete a small playable result with measured evidence. Separate implemented, compiled, visually verified, gameplay-verified and performance-measured status. If a runtime gate cannot be checked, state that precisely and provide reproduction steps.
+
+PROMPT A — MAKE THE DUNGEON A LAYERED, FUNCTIONING PLACE
+
+Use the revised dungeon-quality brief and Sections 3–5/9 here. Build the reference Relay Works in the existing site family: original orbital communications, later water/power adaptation, an actual funerary/archive branch and present occupants.
+
+Implement the compact geometry kit, coherent ceilings, supported machinery and quiet material hierarchy. Use gold/silver as instrument and archival craft. Keep one small exceptional material feature; ordinary radio equipment does not require magic. Preserve current names/IDs and intentional phantom-floor behavior until explicitly migrated.
+
+Build the two-loop arrangement with a fixed relay path and a reachable portable-antenna location. Validate actual voxel collision, player/enemy clearance, access to ports and useful exits. Cultural spaces can be valuable without containing a switch or loot chest.
+
+Keep Warden, organic moth and crawler distinguishable by silhouette, movement and role. Give each one ordinary activity and a coherent response to interference. Preserve readable attack preparation, commitment and recovery. Noncombat resolutions must follow supported conditions, not merely a new dialogue flag.
+
+Use existing power capabilities for one broken-feed problem. Construct a functioning network, apply a bounded fault and provide evidence and compatible resources. Replay two solution witnesses through real actions. Reject or repair bad seeds with bounded retries. Runtime outcomes accept any valid compatible solution.
+
+Deliver one playable fixed seed before more content. Prove fixed-installation restoration, portable bypass, an improvised physical modification, useful recovery from a mistake and persistence. Coordinate contact completion with the radio owner instead of creating a parallel quest script.
+
+PROMPT B — MAKE THE SKY OBJECT AND ORBIT ONE CONSISTENT ENTITY
+
+Implement Sections 6/10 using a reference planet, a bounded geographic chart and a handful of persistent objects. Start with inclined circular analytical orbits and explicit epochs. Document world-axis conventions and units. Use f64 for celestial state and observer subtraction; supply camera-relative f32/directions to WGPU.
+
+Declare the engine/gameplay/celestial clock conversion. The Sun, rotation, orbital motion, eclipse and predictions share celestial time. Preserve the established manufacturing/energy clock, document the approximation and measure a usable contact-window duration at the selected game-day speed. Transmission duration, energy consumption and displayed countdowns need compatible declared units. Define pause, sleep, time jumps and save/load, including once-only arrival events.
+
+Render ordinary stations as stable unresolved light points when illumination, contrast, atmosphere and occlusion permit. Model reflected sunlight and active beacons separately. Use actual orbit geometry; no independent screen-space transit animation or permanent oversized hull.
+
+Expose source position/velocity and authoritative obstruction queries to radio and instruments. Origin shifts, camera movement, LOD and chunk loading cannot change orbital truth. Do not assume missing obstruction data is clear sky.
+
+Follow-up after the complete first-contact acceptance gate: add one arriving ship with continuous position and an explicit insertion maneuver. It retains identity and then follows its orbit. This extension is not a prerequisite for the first radio reply. Keep it separate from later explorable spacecraft interiors and meteor content.
+
+Prove a moving inclined pass, a valid synchronous test, eclipse loss of reflected light while radio can remain active, opposite-side planetary occlusion, local obstruction, origin-shift stability, save/load/time-jump continuity and agreement between rendering and instrument bearings. Report documented approximations and measured cost.
+
+PROMPT C — BUILD RADIO CONTACT AND HONEST SPECTRAL INSTRUMENTS
+
+Implement Sections 7–8 over existing equipment/power/UI systems. The emitter index references authoritative components; it does not duplicate state. Transmitting, listening and device power are distinct, and a silent active receiver remains reachable through supported equipment lookup. A receiver obtains measurements, acquisition state and decoded information. The HUD consumes those observations rather than unrestricted hidden positions.
+
+Start with one supported radio band/protocol, a receiver/transceiver, a directional antenna and one orbital beacon. Use a small link budget with power, both antenna patterns, range, band, noise and authoritative obstruction. Evaluate uplink/downlink separately. Include observer motion in any Doppler calculation and use physical seconds.
+
+Complete a real request and correlated response. Hearing the station is insufficient. Demonstrate a receivable downlink with a failed uplink, an unsupported protocol and a valid public beacon without command authority. Use bounded request lifetimes and idempotent consequential effects.
+
+Implement RF goggles as the display for compatible sensor hardware: band/strength, a justified bearing estimate, confidence, timestamp and observed/predicted/lost states. No exact range or hidden hull outline from passive energy detection alone. Add thermal mode only from a supported surface-temperature/material model; keep its limitations distinct from RF. Defer active radar until a real return model exists.
+
+Power-off ends fresh detections. Both moving source/observer geometry and terrain/building edits invalidate obstruction caches; antenna pose and operating state invalidate affected link results. Missing obstruction data has a bounded authoritative resolution path. Prove a stationary player sees correct link changes as the station rises, crosses a ridge and sets. Graphics settings and FPS do not change communication rules. Preserve discoveries and equipment through save/load; pending exchanges follow an explicit policy.
+
+Deliver a complete acquisition-to-reply demonstration with useful feedback for every failure. Show the same object as a sky point, measured signal, decoded identity and response source.
+
+PROMPT D — CONNECT FABRICATION, AUTOMATION AND SOCIAL CONSEQUENCES
+
+Use existing recipes, machines, batteries, networks, statistics and configuration systems. Verify reported existing capabilities before extending them. Build the minimum component chain that lets the player produce compatible portable radio equipment; substitute components by meaningful properties/capacities where supported.
+
+Complete the expedition/factory loop: exploration yields a useful component or specification, manufacturing produces a working instrument, that instrument establishes contact, and contact supplies an actionable result. Do not add numerous unused recipe intermediates.
+
+Provide a saved receiver preset and one tracking/recording automation rule using measured or legitimately acquired data. Actuate the real antenna with its power and movement limits. Handle loss/reacquisition and a subsequent pass. The controller may predict from acquired ephemeris, but must label and respect that source of knowledge.
+
+Introduce only the actors needed for the first site: a basin cooperative, a salvage/archive interest and a custodian. Give them concrete responsibilities and requests tied to actual infrastructure. A power diversion changes real consumer service. New capacity can solve both needs. Permissions govern supported commands; physical bypasses remain subject to the world's ordinary rules and observable consequences.
+
+Persist repairs, configured equipment, accepted requests, earned capabilities and meaningful relationships through existing state ownership. Avoid inventing an entire colony/faction framework as a prerequisite. Prove one automation and one infrastructure consequence through normal play.
+
+PROMPT E — VERIFY ONE COMPLETE DISCOVERY-TO-CONTACT EXPERIENCE
+
+Integrate A–D with the current UI, material, physics and horizon work. Shared contracts and state ownership are settled before parallel edits to common systems.
+
+Prove the following in the actual executable:
+1. A player can discover the opportunity through sight or another clue and repeat it after missing a pass.
+2. The visible source and instrument reading agree within stated sensor limits.
+3. The same world/seed supports fixed-relay restoration and a portable player-built setup.
+4. An unplanned but physically valid reroute/bypass also succeeds.
+5. A downlink can succeed while an inadequate uplink fails with useful feedback.
+6. The station receives a request and the player receives its matched response and one useful consequence.
+7. A saved automation operates an actual antenna during a later contact window and handles loss of signal.
+8. A transmitter switch-off, real obstruction beyond draw distance and a terrain edit affect observations correctly.
+9. Save/load and origin shifts preserve identities and physical state. Time advancement applies the declared simulation/energy policy without resetting repairs, discoveries or once-only outcomes. Pending exchanges follow their documented policy.
+10. The experience remains readable at the declared lower graphics preset and performs within measured project budgets.
+
+Report matched captures and real motion evidence, the chosen day/time model and contact durations, tested hardware/settings, CPU/GPU cost, query/instance counts, memory and significant spikes. Use meaningful regression checks for shared state, contact asymmetry, duplicate messages, obstruction invalidation and persistence. Do not substitute screenshots or passing compilation for gameplay proof.
+
+Stop expanding the catalogue until this complete chain works. The next additions should reuse its contracts: more useful stations, local relays, new dungeon mechanism families, additional sensor bands, rare shipwrecks and coherent impact events.
+
+12. IMPLEMENTATION ORDER AND OWNERSHIP
+
+Agree the time, coordinate, identity and observation contracts first. Then environment/problem work and orbital work can proceed in parallel. Radio work consumes the orbital/equipment contracts; automation consumes observations and existing machine capabilities. One integrator owns shared world/save/UI changes and validates the end-to-end slice.
+
+The first orbital slice requires one station and a full two-way contact. Arriving ships, active radar, multiple anomaly families, explorable orbital interiors and broad faction simulation are extensions. The latest art and defended-tomb milestone can proceed independently against the shared world/material contracts. This order preserves the large vision while making each addition useful immediately.
+
+13. DISTINCTIVE PIXEL ART AND FINE VOXELS
+
+THE VISUAL THESIS
+
+Build ancient precision machinery inside monumental ruins, with deliberate pixel materials and physically coherent light. Use smaller voxels to articulate meaningful form: a ceramic lip, a worn stair, a shield rim, a load-bearing pin, a broken arch and an actual opening. Increasing subdivision alone will not repair room composition, repeated motifs, weak enemy silhouettes or poor light hierarchy.
+
+The current dungeon screenshots show weak enclosure definition, repeated bright ceiling motifs, broad patterned surfaces and thin enemy construction. The earlier Relay Works concept improves architecture but distributes beige stone, metal and ornament too uniformly. The new tomb concept introduces stronger color groups and a distinctive diagonal silhouette. Its painted speckle, cinematic depth of field and decorative complexity are not production requirements. It is an unverified concept, not a solved physical mechanism or a renderer benchmark.
+
+Use the references for different decisions:
+- Skyward Sword: expressive color grouping, readable shapes and a civilization-specific craft language. Nintendo explicitly described its impressionist-influenced palette. Its designers also discussed integrating ancient electrical robots through pottery-inspired forms rather than an overwhelmingly mechanical appearance. [S16, S17]
+- Zelda dungeons: a spatial mechanism learned, recombined and understood through revisiting changed spaces. This is our proposed adaptation, not a claim about every Zelda dungeon.
+- Dark Souls/Elden Ring: imposing scale, compressed approaches followed by reveals, memorable silhouettes and deliberate combat commitment. Preserve readable surfaces and colorful materials; darkness is not a substitute for composition.
+- Noita: intentional pixel marks and material interactions. In 3D, translate this into controlled texel density, authored clusters and shared effects, rather than a whole-screen pixelation filter.
+- Modded Minecraft shaders: coherent sky, directional light, atmosphere and material response. Complementary's Reimagined and Unbound presentations show that visual identity and realistic lighting are separate art decisions; its official description distinguishes their default styles within the same configurable shader system. [S18]
+
+ONE ORIGINAL RUIN FAMILY: THE LAST BEARERS
+
+These builders treated burial as a careful act of carrying and balancing. Their structures express that practice through processional bridges, paired lifting points, weighing galleries, load marks, ceramic seals and heavy counterweights. Some spaces are genuinely ceremonial and contain no puzzle. Technology serves the culture; every inscription need not be a circuit diagram.
+
+Macro scale: one enormous diagonal balance arm crosses a tall, asymmetric chamber. Deep shafts establish real height. One lower service gallery and an upper burial door give the eye useful destinations. Lower corridors and alcoves make the major reveal effective.
+
+Construction scale: dark structural frames, pale ceramic load shoes, stepped masonry, heavy pins, guided carriages, supported balconies and visible replacement joints. Repeated shapes have jobs. The ceiling contains suspension, ribs and inspection access rather than repeated floating sparkle clusters.
+
+Surface scale: a limited set of clustered mineral marks, chipped exposed edges, water staining below a real leak, polished contact surfaces, chipped ceramic glaze and localized corrosion. Avoid independent random color per tiny voxel. Quiet surfaces must remain quiet in motion and at distance.
+
+Palette: blue-black basalt and warm chalk ceramic carry the large values; muted celadon distinguishes older fittings; vermilion marks load limits and ceremonial paths; aged silver identifies precision interfaces; small amounts of gold identify honored fittings and folio clasps. Actual hazard state also uses shape, position, animation or sound. Do not rely on red/green distinctions alone or make all warm-colored ornament imply powered equipment.
+
+Keep the palette recognizable under daylight, roof-lit shadow and torchlight. Neighboring regions may use different dominant materials and weathering, but related builders retain recognizable proportions, joints and marks. Do not make every region a recolored copy of one cathedral.
+
+PIXEL AND MATERIAL RULES
+
+1. Declare world-space texel density and a small set of authored cluster scales. Use deliberate clusters and restrained ramps; do not cover every face with single-pixel noise.
+2. Keep the intended voxel silhouette and major face breaks. Do not smooth every voxel corner into a rounded plastic object. Add geometry or carefully bounded normal detail only where it supports the material and survives inspection in motion.
+3. Crisp magnification and stable minification are different requirements. Keep close pixel edges intentional, but use suitable mip levels/filtering and atlas padding or texture arrays at distance. Nearest sampling at every distance is not a universal pixel-art solution.
+4. Give albedo, roughness, metallic response and emission separate responsibilities. Ceramic, dry stone, polished contacts and corroded metal must differ without every material becoming wet or reflective. Existing shader capability determines the first pass; a replacement renderer is not a prerequisite.
+5. Audit the actual WGPU color path before tuning brightness: texture encoding, linear lighting, intermediate targets, exposure/tone mapping and final output encoding. UnormSrgb formats perform conversions on sampling and writing; avoid accidental double conversion. Inspect the repository's locked WGPU version rather than upgrading to match current documentation. [S19]
+6. Use broad sky/bounce contribution, a directional key and a bounded number of useful practical lights. Ambient fill should reveal selected planes while retaining dark recesses. Emissive appearance is not proof of illumination; one emitter per tiny voxel is not the lighting plan.
+7. Apply contact shading at the relevant scale. Do not turn every crack into a black outline or use screen-space occlusion as the only way the room becomes readable. Any cached/baked term affected by editable geometry needs an invalidation policy.
+8. Keep gameplay captures sharp enough to judge aim, edges and hazards. Evaluate temporal stability during motion and edits; reject stale history on disocclusion/material changes where temporal processing exists. A still with cinematic blur is insufficient evidence.
+
+UI: THE INSTRUMENT FOLIO
+
+Retain the requested gold/silver, bookbinding and magitech direction with original icons and frames. Use a consistent logical pixel grid, integer-aligned borders and controlled scaling. Silver carries ordinary controls and measuring edges; gold is reserved for selected clasps, milestones and important seals. Restrict decorative curls, rivets and cogs to a few structural corners. Keep health, equipment, target state and active hazards legible and spatially predictable. The large target panel and debug overlay in the supplied combat view must be assessed at ordinary play scale. Hide debug UI in release presentation. Avoid covering the enemy's preparation or the route being judged.
+
+FINE VOXELS WITHOUT A SECOND WORLD
+
+Distinguish appearance detail, geometric detail and physical interaction detail. An engraved pixel can be surface art. A visible passage, severed connector, shield hole or load-bearing cut must have matching authoritative geometry and interactions.
+
+For a fixed volume, reducing cell edge length by eight multiplies dense cell count by 512. Select a refinement level after profiling the actual representation. Choose one bounded prototype, such as a doorway opening or machine component; extend to stairs and breakable assemblies only after that case succeeds. Reuse existing chunk/material coordinates. Consider compact empty/uniform storage and sparse local refinement only if the measured case needs them; they are not mandatory new systems. Do not begin by replacing the engine with an octree ray tracer.
+
+All physical voxels share defined material properties and effect rules. This does not require a rigid body, shadow-casting light or unconditional simulation update for each voxel. Supported terrain can remain static; detached connected solids can become bodies; active heat/liquid/combustion regions can update under the implemented model. Sleeping and coarse simulation need explicit wake rules and conservation appropriate to the model. Rendering distance alone must not disable an active hazard, change a collision query or create free energy.
+
+Derived render/collision structures must follow authoritative edited geometry and versioning. Physics may use an appropriate derived representation; Teardown's developer describes a separate physics representation regenerated from primary voxel data. That is a useful precedent, not a request to copy its architecture or promise its performance. [S20] During asynchronous rebuilds, authoritative queries must already respect committed edits, or the edit must not be presented as committed. Do not show a hole that a projectile still hits as solid.
+
+At distance, fine surface marks merge into the intended color mass. The horizon uses the same terrain identity, material family, lighting and atmospheric distance as near geometry. Coarse coverage remains until replacement geometry is ready; selection and publication must avoid holes, double surfaces and obviously separate loading layers. Preserve meaningful edited openings and landmarks under the declared LOD policy. Refer to the existing horizon-continuity brief for streaming ownership.
+
+FIRST ART/RENDER ACCEPTANCE
+
+- A matched exterior approach, doorway and main room work at eye level, looking up, and during a walking pan.
+- Silhouette, route and target remain readable with debug labels hidden and at a reduced viewing size.
+- Day, dusk and practical-light scenes retain distinct stone, ceramic, metal and organic materials.
+- Small openings, breakage and detached components agree across visible geometry, selection, collision and relevant effects.
+- Texture marks and highlights remain stable while moving; fine detail resolves into quiet far-field masses.
+- Report hardware, resolution, settings, active content, CPU/GPU frame-time distributions, memory, geometry/brick counts and material costs. Use actual project budgets. Do not invent a frame-rate improvement or call concept art proof.
+
+14. DEFENDED TOMBS, ANTIMAGIC AND DIFFICULT MECHANISMS
+
+CORRECTION TO THE EARLIER OPEN-ENDED BYPASS RULE
+
+Some inner tombs should really resist digging around the puzzle. A sealed core may have genuinely unbreakable wall, roof, floor and foundation sections while its structural protection remains engaged. This is an explicit game-world capability rule, not a claim of physically realistic infinite-strength stone. Communicate the material and seal through construction, tool feedback and inspection. Do not disguise invulnerability as millions of hit points or a hidden level requirement.
+
+Keep ordinary outer ruins destructible. Some perimeter structures may admit a costly industrial breach using actual access, power, cooling, supports and material handling. A specific inner seal can still require its mechanism to open. An industrial alternative is not mandatory for every tomb.
+
+Protection applies at the shared mutation boundary: mining, explosives, heat/chemical erosion where implemented, transmutation, replacing a block, moving an object, detaching an assembly and undermining supports must not each invent different exemptions. Check corners, foundations and chunk boundaries. Opening a service joint follows its declared mechanism; cosmetic trim never constitutes the only protective backing. A protected structure is not a permission to erase the player's surrounding construction or to spawn a punishment for trying a tool.
+
+Separate three things:
+- Structure: what can be fractured, excavated, displaced, opened or dismantled, and under which physical/structural state.
+- Antimagic: where a new magical act may be created/applied and where an effect requiring continuing magic may function. An instantaneous spell must still pass creation/application checks; only its already completed consequences that no longer depend on magic become ordinary afterward.
+- Objective: the actual access, mechanism state, payload handling and extraction required for success.
+
+A bridge may solve a traversal challenge without retracting the burial-door bolt. A drone may survey a passage without carrying a heavy archive chest or operating an inaccessible lever. Its limits are real clearance, manipulator, power, payload and observations. If a player's equipment actually meets those requirements, accept the resulting work.
+
+ANTIMAGIC CONTRACT — ORIGINAL GAME ADAPTATION
+
+D&D provides a useful precedent for local suppression of spells and magical properties with continuing durations. Its current and legacy wording differ; this project is designing its own explicit rules rather than claiming a literal rules port. [S21, S22] The distinction between magic that sustains an effect and a completed change is particularly useful. Sage Advice discusses why an instantaneous completed change is not automatically something an antimagic field reverses. [S23]
+
+1. Conventional mechanical force, electricity, pumps, ropes, fuel, ordinary projectiles and radio continue according to their normal rules. Radio may separately be attenuated by actual walls/materials. Antimagic is not automatically an EMP, an RF jammer or a universal energy sink.
+2. Integrate suppression into the existing effect evaluator and authoritative effect application. Do not create a second spell engine or apply damage and then try to undo it.
+3. Define coverage with a few authoritative volumes and an index. Protect the whole intended interior; a thin field only on the wall can leave a teleport destination inside unprotected. Visual glow, camera position and render LOD do not define coverage.
+4. For instantaneous teleportation, validate departure and destination occupancy volumes. Do not invent a ray path through the intervening space. A traversed dash or moving effect instead checks its actual swept path. Declare which model each existing ability uses.
+5. A pure magical projectile or beam checks its swept intersection so it cannot skip the field between ticks. A physical arrow keeps ordinary momentum/impact while a magical contribution is suppressed. Clip sustained area application to eligible space.
+6. A burning piece of ordinary wood does not become unburned when carried inside merely because a spell originally lit it. Existing heat, damage and other completed physical changes retain their normal state. Specify which summoned/conjured effects require continuing magic.
+7. Suppressed durations continue under the time contract. There is no accumulated damage/output waiting to burst out after suppression ends. Equipment identities, charges and contents are preserved; crossing a boundary must not duplicate, refill or destroy inventory.
+8. If sustained summons already exist, preserve a stable identity and remaining duration while suppressing their manifested actions/collision under a declared policy. Do not treat suppression as death or allow an invisible summon to be smuggled through the tomb and materialized behind the gate. Resumption requires a valid occupied space.
+9. Coverage from overlapping active sources is a union. Disabling one does not remove another. Declare the update order for source power, coverage and effect commitment, and revalidate stale queued commands before mutation.
+10. The field source and structural protection must not rely on magic which their own suppression would cancel. Give them an explicit independent technical/material rule. Player and enemy effects obey the same relevant policy; a technological Warden can function because its mechanism is conventional.
+11. Persist source states and relevant region metadata independently of the visible chunks. Unloaded field metadata cannot silently authorize a spell. Resolve unknown coverage through a bounded priority path; do not leave actions pending forever or silently switch protection off at distance.
+
+Use these defenses in identifiable tomb families. Preserve magic's usefulness in the wider game and provide preparation evidence before entering a suppressed region. A caster should understand that this expedition requires physical tools. Do not place universal suppression in every dungeon merely because an interesting ability is difficult to accommodate.
+
+TRAPS MUST REWARD OBSERVATION AND ALLOW SEVERE CONSEQUENCES
+
+The useful structure is a trigger, an observable process, a real effect and countermeasures. Wizards' Traps Revisited presents a related framework, including complex traps; it is a 2017 playtest document, not current final rules. [S24] Our tombs should expose enough evidence for investigation: worn paths, accessible scales, mechanical sounds, previous damage, diagrams, test pieces and safe viewing positions.
+
+Warnings need not explain the answer. A narrow safe ledge can permit reconnaissance before a lethal sequence. Mistakes may cost supplies, strand equipment, close a route, flood a gallery or kill the player. Do not silently reset the machine or promise that every error is harmless. Avoid demanding an untelegraphed pixel-perfect input to survive a supposedly intellectual puzzle.
+
+REFERENCE TOMB A — SEPULCHRE OF THE LAST BEARERS
+
+The hero chamber is one coupled counterweight machine. Build a bounded reliable mechanism before adding many moving parts: a guided counterweight, drum/brake, transfer platform and physical burial-door bolt are enough for the first playable stage. The mature room can add multiple spans and linked carriages once that stage is validated. A general flexible-rope simulator is not a prerequisite.
+
+Agree the physical contract before environment and enemy work depend on it. The first prototype can have one independent motion coordinate: a platform and guided counterweight with a fixed linkage ratio, derived drum rotation and discrete brake/latch states. Declare mass and carried-load accounting, gravitational/actuator work, drive force and speed limits, brake holding capacity, authoritative moving collision and the response to an obstruction. Reuse an existing mechanism model; otherwise use an explicitly documented constrained approximation, with fixed-step state and no claim of a general rope simulation. The giant diagonal arm is a static supporting jib in this first prototype. A moving balance beam would add a mechanical degree of freedom and belongs to a later validated extension.
+
+Show the lever relationships, engaged latch and load using geometry, an index wheel and a scale. A small operable model at the entrance teaches the basic dependency. The player can observe release, transfer, latch and reset from a safe landing. Carried inventory, placed ballast and the actual payload contribute according to the game's declared mass rules.
+
+Manual approach: inspect the load, move available ballast or the counterweight carriage, operate the winch, transfer at a stable state, engage a mechanical latch and release the burial bolt. Extracting the archive/coffin changes the load and creates a second application of the same principle. No invisible completed-puzzle flag holds the bridge in place.
+
+Engineering approach: secure the load with a sufficiently rated brace or provided brake, isolate the relevant drive, then use an accessible service crank or a real powered actuator. A controller can read load, position and latch state and perform the same actions. It must respond to changed ballast and interrupted power; replaying fixed timings is insufficient for the changing-load case.
+
+Do not assume current building already requires structural support. Inspect its real rules. If floating player bridges are currently permitted, a bridge can legitimately cross the shaft; it still does not retract the protected bolt or carry out the required load transfer. Introduce general support requirements only as an explicit implemented construction rule, not as a one-room exception.
+
+The core envelope stops tunneling and its continuous antimagic stops sustained flight/conjuration shortcuts under the defined policy. A genuine grapple or built bridge remains useful where its actual reach and attachment permit it. Severe mistakes can drop equipment to the lower works or leave a platform stranded; some openly closing machinery is lethal. Save the resulting condition.
+
+The tomb's critical object is culturally meaningful. A respectful retrieval, sanctioned maintenance and theft may have different social outcomes while using the same machinery. Do not make every burial object a disguised battery.
+
+REFERENCE TOMB B — CISTERN OF BORROWED BREATH
+
+Three connected water/air chambers control the pressure load on a burial gate. Stains, floats, pipe routes, two pressure gauges and a safe test volume expose the dependencies. Equalizing the gate and preserving an air pocket are separate requirements. Diving gear extends working time without opening a pressure-loaded door.
+
+One approach sequences isolation, equalization and transfer. Another uses a real pump, accumulator/check valves and service ports with adequate flow, head, capacity and energy. Automation uses measured limits and manual isolation. Failures persist as water movement, damaged equipment or dangerous loss of air; the room does not secretly reset.
+
+This is a follow-up family, not a prerequisite for the first tomb. Verify the existing fluid/pressure implementation. If only surface water exists, do not label it a pressure simulation. A bounded reservoir/port network is acceptable if its geometry, openings and state exchanges are explicit and consistent with the world. Defer this family if it would require an unrelated fluid-engine rewrite.
+
+REFERENCE TOMB C — PROCESSION OF CLOSING DOORS
+
+A sequence of full-height moving stone leaves is driven by a few visible index drums. A side gallery permits reconnaissance. Bell strokes follow actual shaft positions. Pressure plates can alter phase, making observation and feedback matter after the first crossing. Refuges provide deliberate staging positions.
+
+One approach reads the approach/open/transfer/warning/closed phases and moves through refuges. Another secures the stored load, disengages a real clutch and hand-drives or controls the mechanism through maintenance access. Cutting power engages the declared fail-safe brake/shutters rather than automatically opening everything. A sufficiently rated brace works; a weak object can fail with evidence.
+
+Protected roofs prevent simply flying over the moving leaves. Collision and crushing follow the visible swept geometry and consistent policy. Automation reads phase/latch state; it cannot use a special solve-tomb command. This family can reuse the first tomb's constrained moving parts and sensors.
+
+GENERATION AND BYPASS VALIDATION
+
+Define a declared entry capability envelope for design validation: ordinary tools, mobility, construction reach, power, sensors, payload and consumables. This envelope describes what the generator promises to support; it is not a hidden runtime inventory restriction. Higher-capability players retain earned advantages under the same rules.
+
+Start from a small set of authored mechanism families with bounded parameters. Produce at least one complete solution witness from the declared initial state, and a second where the encounter explicitly promises one. Validate actual geometry, resources, mechanism states, suppression and extraction. A witness is evidence of feasibility, not an exclusive accepted input sequence. Classify an intentionally later-capability site separately from an invalid seed; announce meaningful preparation requirements.
+
+Before procedural expansion, check:
+- Wall, floor, ceiling, corner, decorative layer, foundation and chunk-seam excavation.
+- Outside/inside spell creation, fast boundary crossings, sustained effects and teleport semantics.
+- Real building reach, placement access and existing attachment rules; no placing a block into an unseen sealed interior by coordinate alone unless that is an intended general capability.
+- Drones, grapples and sensors using actual clearance, payload, reach, power and information.
+- Supported explosive/thermal/chemical operations and permitted industrial breach, with no mutation-path loophole.
+- Power loss, stored mechanical energy, wedges, braces, pumps where supported, and changing carried loads.
+- Save/load, leaving the region, waiting and returning, with persistent damage, equipment and machine phase.
+- Full factory preparation. If a legitimate installation meets the rules, it should work. Do not invent a new defense because the player built a good solution.
+
+15. REAL-TIME COMBAT AND JRPG/D&D BUILD DESIGN
+
+COMBAT CONTRACT
+
+Use one authoritative action model: preparation, committed execution and recovery, with explicit movement, turning, cancellation and input-buffer rules. Player and enemy collision follows authoritative poses/phases; rendering interpolates them. A valid visible physical contact is not subsequently discarded by a hidden accuracy roll. Shields, cover, armor and material capability explain block/resistance outcomes.
+
+Souls-inspired commitment fits here as a design transfer: reading the attack, managing position and equipment, committing and exploiting recovery. Bandai Namco's Elden Ring introduction describes stamina, equipment load and different weapon demands. [S25] This first-person game needs its own camera/FOV, off-screen audio and motion testing rather than copied third-person timings. Do not use camera shake or a large target panel to conceal an enemy's preparation.
+
+Retain existing resource and defense systems where they work. An exertion limit and a machine battery express different decisions; a second focus meter, another break meter and several cooldown layers should not be added merely to match a list of inspirations. Begin with the current attacks, clear recovery and one useful equipment specialization.
+
+PROGRESSION CONTRACT
+
+Tool proficiencies improve handling or expose useful operating modes. Feats and equipment choices change capabilities and trade-offs. Character knowledge can interpret a gauge, recognize a safe procedure or annotate an observation. Basic observation and physically valid operation remain possible without an invisible successful skill roll.
+
+Possible first specializations:
+- Field Rigger: faster installation/release of compatible load clamps; the same anchors, ratings and access rules apply.
+- Braced Operator: a stronger stable operating mode while deployed, with reduced mobility and real support requirements.
+- Controlled Channel: a supported maintained spell can continue during slow movement with a declared output trade-off.
+
+Choose only the specializations needed by the first encounter. Preserve existing spell/deck evaluation and equipment identity. Do not copy a complete six-stat/class system without a concrete use for each attribute, and do not replace physical interactions with a generic plus-crit build spreadsheet.
+
+If adding a D&D-inspired concentration choice, apply one maintained slot to an explicitly designated family of sustained magical effects. It does not automatically limit every projectile, persistent physical fire or autonomous machine. Starting another maintained effect replaces the first through the existing evaluator. Interruptions use declared events such as qualifying stagger, disconnection or suppression, with duration and resumption behavior explicitly documented. A trigger attached to a wand is not free unlimited sustaining capability.
+
+JRPG-style build synergy should arise from world state. A winch exposes a service joint; a brace stabilizes a heavy tool; a physical latch retains a load after a temporary magical support is removed; a sensor/controller operates real machinery. Apply only interactions the engine actually models. A heated, wet, brittle or electrically connected state should have a documented material meaning rather than an unrelated bonus icon for every ability.
+
+Rewards should create new options: a compact actuator, reliable load sensor, tool head, material process, protocol, service authorization or a small deliberate specialization choice. Allow equipment to be reconstructed and reused in the player's factory. Avoid making dozens of larger health totals and slightly higher damage rarities the main progression system.
+
+REFERENCE ENCOUNTER — THE COUNTERWEIGHT KEEPER
+
+Adapt an existing Warden with stable identity. Give it a broad ceramic shield, compact head, a readable counterbalanced shoulder, heavy planted feet and visible service interfaces. Its silhouette should express a machine that braces and carries. Reserve small gold/silver fittings for joints, fasteners and instruments. Keep the Moth biological and redesign its wings/behavior separately; one art pass must not turn the entire ecology into maintenance robots.
+
+The Keeper protects the working controls. Begin with two clear attacks: a braced sweep and a forward shove. Feet planting, a raised shoulder and a spatial mechanical sound show preparation. Limit committed turning. Recovery exposes a real joint or drive; damaging it changes an implemented capability rather than merely enabling a timed bonus multiplier.
+
+Combat resolution: use space, cover, block/evasion under current rules and recovery opportunities to disable the Keeper. Then operate the still-physical gate. Do not make every door open because an enemy HP value reached zero.
+
+Engineering resolution: secure the guided counterweight with the built-in brake or a rated support, isolate the appropriate drive, then operate a service crank/actuator. If cutting power disables the Keeper but engages a normally applied brake, show both consequences honestly. The player must still secure and move the load. A valid improvised support or power reroute works. Automation uses observed position/load/latch state and commands the same machinery.
+
+If this creates an easy solution for an expert with sufficient equipment, that is earned mastery. Challenge comes from access, preparation, meaningful control and consequences, not from declaring equipment invalid when it becomes effective. Legacy guardian/claim policies remain explicit: an engineering route receives its intended access/outcome without fabricating an enemy death or silently granting an unrelated combat reward.
+
+16. TARGETED IMPLEMENTATION PROMPTS — F THROUGH J
+
+COMMON CONTRACT FOR THIS REVISION
+
+Work in the current Rust + raw WGPU repository. Inspect actual code, project guidance, assets, Cargo.lock and running agents before edits. Reuse current world/material/chunk coordinates, power, inventory, effect evaluation, actor identities and persistence. Treat this brief as a target, not proof of implemented features. Coordinate shared renderer/world/save files through one integrator. Preserve the existing horizon work and save compatibility. Do not introduce Bevy, a second spell interpreter or a replacement engine. Deliver one integrated playable benchmark before procedural expansion. Report implemented, compiled, visually verified, gameplay-verified and performance-measured separately; provide exact reproduction steps for unavailable gates.
+
+Prompt K in Section 17 is the immediate prerequisite. Finish the bounded correctness/performance repair before F's new content and G's resolution experiment. Color-path corrections discovered during K belong to that repair. New rooms, material catalogues and extra GPU effects do not.
+
+PROMPT F — ESTABLISH THE ORIGINAL PIXEL-ART BENCHMARK
+
+After Prompt K, art-direct and implement one exterior approach, threshold and main chamber for the Sepulchre of the Last Bearers using the existing asset/renderer path. Build the large silhouette first: a diagonal supporting jib, deep shaft, asymmetric service gallery and elevated burial door. The jib supports a constrained guided-weight mechanism; it does not silently introduce a new moving balance beam. Use blue-black basalt, warm chalk ceramic, muted celadon, vermilion load marks and small aged silver/gold interfaces. Replace repeated glowing ceiling clusters and broad cross-pattern wallpaper with functional supports, restrained material fields and a few meaningful state indicators. Keep genuinely anomalous features exceptional.
+
+Define macro form, construction scale and clustered pixel detail. Author a compact material/geometry kit with consistent texel density and quiet far-distance behavior. Make stone, ceramic, metal and biological material distinct under existing lighting. Inspect the real WGPU color path and correct confirmed encoding/exposure errors before adding effects. Keep crisp voxel forms and suitable mip/filtering behavior in motion. Use light to reveal selected enclosure planes and routes, with bounded practical sources. Do not add random per-voxel color, universal metallic sheen, pervasive bloom or cinematic blur as substitutes for form.
+
+Give the Warden one strong mass silhouette and update a representative HUD panel to original silver/gold instrument-folio construction with aligned pixel borders. Keep target state legible without obscuring actions. Preserve biological enemy identity and current IDs.
+
+Deliver matched in-engine before/after views and a walking/upward camera sequence at day, dusk and practical-light settings. Include a reduced viewing-size readability check, exposed materials and measured scene cost. The concept image is direction only. End with a short critical list of remaining visible defects, not a claim that the whole game now exceeds its references.
+
+PROMPT G — PROVE FINER VOXELS WITH MATCHING PHYSICS AND STABLE LOD
+
+After Prompt K, inspect how the current world stores, meshes, edits, collides with and simulates cells. Choose ONE useful finer-detail case, such as an opening in a doorway or a machine component, only after demonstrating a geometric need and available frame-time/memory headroom. Prefer the existing representation. Select refinement after measuring its storage and rebuild cost; do not globally multiply resolution or require sparse storage merely because this brief mentions it. Reuse coordinate/material ownership and the existing streaming pipeline. Extending the approach to stairs, other props and breakable assemblies is subsequent work.
+
+Document which detail is surface art, visible geometry or physical geometry. Collision-significant openings and cuts must agree with authoritative shape. Queries and effects must respect committed edits during async rebuilds. Preserve the existing supported fracture/detachment and simulation behavior; do not add rigid-body conversion, a new cellular simulator or a general support system to complete this refinement task. Camera distance cannot change active gameplay results. Preserve real load/energy/power semantics the engine already implements rather than claiming every possible material process now exists.
+
+Make the near/far transition preserve silhouette, edited openings under the declared policy, material family, world-space lighting and atmosphere. Keep replacement coverage continuous and avoid double surfaces or a separately loading horizon. Fine pixel marks should resolve into stable large color groups. Temporal processing, if present, must reject invalid history after edits and disocclusion.
+
+Prove the selected fine detail with visual/selection/collision agreement, one edit using existing supported operations, save/load of the changed object, a motion sequence across relevant LOD transitions and measured active-scene cost. Report CPU/GPU distributions, memory, cell/brick and geometry counts, and rebuild spikes on declared hardware. Stop at the smallest refinement that delivers useful detail within the actual budget. If it requires an unbudgeted world-storage/physics rewrite, report that result and retain the art improvement achievable with existing geometry.
+
+PROMPT H — IMPLEMENT PROTECTED TOMB CORES AND CONSISTENT ANTIMAGIC
+
+Add a declared protected-core policy to existing authoritative world mutation, separately from a localized antimagic policy in the existing effect evaluator. A sealed core may genuinely reject excavation/fracture/displacement until its structural release condition is met. Cover walls, roof, floor, foundations, corners and chunk seams. Provide construction cues and immediate useful tool feedback; do not imitate resistance with excessive HP. Ordinary outer ruins remain editable.
+
+Use compact persistent field volumes independent of render chunks. Define coverage union, activation order and command revalidation. Validate effect creation/application, swept magical projectiles, sustained areas and equipment properties. Distinguish true teleport departure/destination checks from traversed movement. Fill the intended interior so a thin boundary does not leave a valid teleport destination inside. Preserve physical projectiles, completed physical consequences and ordinary machinery. Player and enemy effects obey the same rules. Define duration/charge/item/summon identity behavior without duplication or deferred damage bursts. The field source and structure protection cannot depend on magic their own field suppresses.
+
+Exercise every existing mutation path and the actual player tool/mobility set. Check outside-to-inside effects, fast crossings, roof/floor/seam mining, queued stale actions, overlapping sources, power loss, unloaded coverage and save/load. Do not implement speculative spell categories that the game does not yet have. Produce a small readable in-game rules matrix and a test chamber before connecting this policy to the finished tomb.
+
+PROMPT I — BUILD THE COUNTERWEIGHT TOMB AS A PHYSICAL PUZZLE
+
+Build one fixed-seed defended tomb around a bounded guided counterweight, drum/brake, transfer platform and physical burial-door bolt. Agree the single-degree-of-freedom mechanism contract in Section 14 before F/I/J depend on it: load accounting, linkage ratio, drive/work limits, brake holding, obstruction behavior and authoritative moving collision. Keep the enormous supporting jib static in the first stage. Use the approved art kit. Provide a safe observation point, an operable teaching model, useful load/position/latch feedback, a lower service route where appropriate and meaningful extraction. Success is the actual mechanism/access/payload state, not a remembered button sequence.
+
+Support a manual load-balancing route and an engineering route using a real brake/brace, isolation and service crank or powered actuator. Use current construction and mass rules. If players can build unsupported bridges, accept a valid crossing; it still does not release the protected bolt. Do not invent one-room support exceptions. Antimagic and core protection use Prompt H. Dangerous machinery has legible phases and collision that matches motion. Failed attempts retain altered loads, dropped equipment and machine state, with lethal outcomes where clearly signaled.
+
+Expose the same observations/actions to the existing automation system. Prove a feedback controller responds to a changed load and a power/sensor interruption. A fixed timer macro is not sufficient for that test. Preserve resource use and give automation no hidden state access.
+
+Validate two solution witnesses from separate copies of the initial state and accept other valid runtime constructions. Test the actual equipment envelope against mining, building, flight, teleportation, drones and remote operation. Preserve earned high-capability advantages. Save/load halfway through and prove extraction still works. Only then add bounded parameter variants with solvability and clearance checks. Defer the pressure-cistern family if existing fluids cannot support it; the closing-door family can reuse these mechanisms.
+
+PROMPT J — MAKE ONE GUARDIAN ENCOUNTER AND BUILD CHOICE WORTH PLAYING
+
+Adapt the existing Warden into the Counterweight Keeper with stable identity and a physically readable shield/brace/load-bearing silhouette. Implement a braced sweep and forward shove through the current action/combat path. Define preparation, turning limit, committed execution and recovery. Test from first-person camera distance with geometry, sounds and target UI that preserve the telegraph. Visible contacts yield consistent hit/block/material-resistance outcomes; do not add a hidden post-contact accuracy roll.
+
+Make one exposed joint/drive have a real tactical consequence when disabled. Reuse current resources and defenses. Add one useful equipment specialization or proficiency choice tied to this encounter, such as compatible field clamps or a braced tool mode. Preserve the existing wand evaluator and spell identity. Add concentration-like behavior only for an explicitly designated sustained-effect family, with clear interruption/suppression rules; do not limit all independent effects or machines by accident.
+
+Prove a combat resolution and an engineering resolution. Disabling the Keeper makes the mechanism safer but does not fake the gate state. Securing a load, isolating a drive and operating the real service connection can earn access without fabricating a kill. Legacy guardian claims remain governed by their own policy. A valid player controller may operate the same mechanism with the same costs and observations.
+
+Deliver short real-play recordings of preparation/miss/recovery, an improvised physical solution and save/load after partial damage. Verify action/contact behavior at different rendering frame rates and persistence of equipment, upgrades, repairs and outcomes. Expand enemy and skill catalogues only after this encounter is readable, varied and enjoyable in hands-on play.
+
+INTEGRATION ORDER
+
+K first reproduces and repairs the shading faults and establishes measured performance/headroom. Then F establishes one visible reference using existing capabilities. G is conditional on a measured geometric need and sufficient headroom; G and H can proceed in parallel only after agreeing material/world interfaces and shared-file ownership. I depends on the relevant protected-core/effect contract and a stable constrained mechanism; it does not depend on a planet-wide resolution increase. J can develop its enemy art/timing alongside I, then integrate against the same machine state. Re-run the exterior approach and existing horizon scenario after integration. Radio/orbit work remains a separate extension using the same world coordinates, time, power and persistence contracts.
+
+Completion evidence is one playable expedition: approach through a continuous landscape, read the ruin, prepare at the threshold, observe the mechanism, confront or out-engineer the Keeper, manipulate the load, extract the objective, retain changes, and reuse one recovered capability at a workshop. Compare visual quality, interaction consistency and cost on that complete route before expanding procedural scope.
+
+17. IMMEDIATE RENDERING CORRECTNESS AND PERFORMANCE REPAIR
+
+EVIDENCE FROM image(20261021-123444).png
+
+The new image was opened successfully in the local workspace despite the attachment error message. It shows a forest, terraced grass, a brick wall, a held flaming wand and the current HUD. There is no frame-time counter visible; the small 151-degree label belongs to the compass, and 115 MP is a gameplay resource label.
+
+Confirmed visual targets:
+- The large canopy face on the left has dense mottled detail, while central/right canopy panels at comparable apparent distance are smoother and show broad vertical bands. This is an appearance inconsistency. It does not identify whether the source is material selection, UV/projection scale, filtering, vertex tint, normals or lighting.
+- Ground near the central trunk and lower-left terraces contains abrupt dark rectangular/strip-like regions. Some may be correct blocky tree shadows. A still does not prove shadow acne, z-fighting, bad cascades or stale casters.
+- The sky and fogged forest are much brighter than the nearby canopy, compressing foreground readability. The capture's time/weather/exposure are unknown, so this is not proof of an incorrect gamma or ambient term.
+- The salmon-colored flame/particles remain very bright and comparatively flat against the dark scene. Check their emission and world contribution separately. Visible particle count does not establish their performance cost.
+
+The user reports poor performance. This is valid symptom evidence, but the screenshot cannot distinguish simulation, meshing, upload, submission, GPU work or presentation stalls. Do not invent an FPS value or root cause.
+
+DIAGNOSTIC PRIORITY
+
+First locate the canopy difference using raw material base color, material/mesh/LOD identity and a UV/projection checker. Then show geometric and shading normals. Next isolate the contribution producing the ground darkening: AO, direct light, sky/indirect, local light and shadow visibility separately. Finally inspect fog/transmittance and output mapping. Keep the original combined image available for comparison.
+
+If the defect appears in raw base color, lighting adjustments will not repair its cause. If it first appears in AO/shadows, inspect that term and its geometry rather than changing the base material. If it moves with the camera, inspect view-dependent sampling, shadow coverage, reconstruction/history and coordinate/origin conventions. A straight edge alone is not proof of a chunk boundary; compare actual debug ownership.
+
+Use existing diagnostics where available. These views belong in the current debug workflow, not in a new profiler application or a permanent user-facing settings maze.
+
+PROMPT K — FIX THE FOREST SHADING AND MEASURE THE REAL BOTTLENECK
+
+This is the next execution task. Restore rendering correctness and performance before implementing finer voxels, a new material catalogue, more effects or the new tomb environment. Work in the existing Rust + raw WGPU repository. Inspect project instructions, current changes, Cargo.lock and other active owners; preserve the engine, current saves and working horizon repairs. Use the actual installed WGPU version and supported adapter capabilities. Do not upgrade dependencies as a speculative fix.
+
+1. REPRODUCE THE USER'S SCENE
+
+Use the supplied forest screenshot as a visual reference. Obtain or construct a fixed seed/save with equivalent nearby foliage, terraced ground, distant forest, a brick wall and a held wand. Do not claim an exact match if the original save/camera is unavailable. Record camera transform, time/weather, exposure, resolution, render scale, graphics preset, draw distance, adapter/backend, build profile, frame cap and present mode.
+
+Capture an idle view, a slow rotation/translation, a walk across a near/horizon coverage transition and one repeatable tree/terrain edit that changes visible shadowing. Keep separate warmed steady-state and streaming/edit measurements. Use matching state for before/after comparisons. Preserve the current release-quality preset for the final run. Inspect whether the launched executable is an optimized build rather than assuming either debug or release.
+
+2. ATTRIBUTE FRAME TIME BEFORE OPTIMIZING
+
+Reuse current timing hooks or add narrow optional instrumentation. Measure CPU simulation, world/job work, completed mesh integration, upload staging/bytes, command encoding and relevant waits. Keep worker time, queue age and main-thread blocking distinct. Check whether a stationary camera with unchanged content still schedules unnecessary generation, remeshing or uploads.
+
+Where supported, enable timestamp queries for existing major render/compute passes. Request only the capabilities needed by the repository's WGPU version. Resolve queries into a bounded readback ring, map completed older buffers asynchronously, retain originating frame/configuration IDs and avoid a per-frame GPU wait. Reuse a readback buffer only after its mapped data has been consumed and it is unmapped; skip an optional sample if the bounded ring is occupied rather than stalling gameplay. Convert timestamp ticks using the queue's timestamp period. CPU duration around queue submission is not GPU execution time. If timestamps are unsupported, use an available supported GPU capture/profiler or report the limitation explicitly. [S26, S27]
+
+Measure surface acquisition, presentation/frame-cap waits and any deliberate pacing separately. FIFO acquisition can block while waiting for presentation space. Do not label that interval shader execution, and do not add CPU and GPU intervals together as if they never overlap. A supported uncapped diagnostic can expose available headroom; restore the normal present mode for final validation. [S28]
+
+Report sample duration/frame count, frame-time p50/p95/p99 with enough data to support the tail claims, major spikes, CPU/GPU breakdown and missing measurements. Count submitted draws/instances/triangles, shadow caster work, active light/particle work, upload bytes, queued jobs and relevant memory. Record sustained cost separately from first-use shader/pipeline creation and cold loading. Do not invent a hardware budget; record the intended target and baseline.
+
+3. ISOLATE THE COST WITH CONTROLLED CHANGES
+
+Compare full internal resolution with half width and half height, holding world visibility, simulation, shadow configuration and camera fixed. Reinitialize affected targets/history correctly. A large GPU improvement points toward resolution-dependent work; a small change does not alone prove a CPU bottleneck.
+
+Then test one measured expensive or visually suspicious stage at a time: shadows, foliage, procedural material evaluation, clouds/fog, transparency, AO, reflections or temporal/post work, only where such stages actually exist. Keep the change local and reversible. Distinguish showing a neutral contribution while still running the stage from skipping its GPU work. Maintain valid initialized textures, depth and compositing contracts so an invalid pipeline is not reported as a fast result.
+
+If geometry/shadow submission dominates, inspect hidden internal voxel faces, culling, greedy-merge compatibility, draw batching and caster duplication. If foliage is costly, inspect its actual opaque/cutout/blended path and overdraw before selecting a treatment. If material evaluation dominates, inspect repeated procedural noise/projection samples and work that could use existing material constants or cached data. If uploads/CPU work dominate, fix repeated dirtying, queue integration or invalidation demonstrated by the trace. These are conditional branches, not instructions to rewrite every system.
+
+4. FIND THE FIRST INCORRECT SHADING STAGE
+
+Add only missing diagnostic views:
+- Raw base color without AO, lighting or vertex darkening; material identity and UV/projection checker.
+- Mesh/LOD identity and world-region ownership.
+- Geometric normal and shading normal.
+- AO alone, direct light alone, sky/indirect alone and local-light contribution.
+- Shadow visibility, cascade/coverage identity if present, and relevant depth.
+- Fog transmittance/reconstructed distance, pre-tone-map color and final output.
+
+For the left-canopy mottling versus central vertical bands, trace material assignment, texel scale, coordinate/projection selection, mip choice, vertex colors and decoded normals. Verify discrete material/face flags do not interpolate into unrelated values. Check near/proxy paths against the same world material; use current source evidence before blaming LOD.
+
+For the ground bands, test with AO and shadows isolated separately. Verify whether boundaries follow real occluders. If AO is responsible, inspect range/encoding, face-corner data, merge compatibility and interpolation. If shadows are responsible, inspect light-space transforms, depth conventions, projection, comparison, bias, cascade/coverage blending and caster validity. Bias must address a demonstrated depth issue; a large global bias is not a generic fix for every dark patch.
+
+Historical project material points to a horizon path and overloaded AO/tag values. Verify whether that design is still present. A tag interpreted as real occlusion, an unhandled proxy branch or a coordinate mismatch is an audit lead, not an established current bug. Do not copy a historical file layout without checking it.
+
+Audit color encoding and the full linear-light path through texture reads, intermediate targets, exposure/tone mapping and final output. WGPU UnormSrgb conversions happen on sampling/writing; avoid missing or duplicated transfer operations. Do not compensate for a confirmed pipeline error using a global brightness, saturation or fog adjustment. [S19]
+
+For motion-only artifacts, compare a current-frame diagnostic with accumulated history. Check current/previous transforms, disocclusion, edits, origin shifts, resolution changes and state invalidation. Do not blur the image to hide unstable detail.
+
+5. KEEP VISIBLE GEOMETRY AND SHADOW STATE CONSISTENT
+
+Audit near meshes, horizon proxies, coverage masks and shadow-caster lists together with source/edit revisions and origins. Keep valid fallback geometry until a usable replacement is published. Prevent duplicate parent/child surfaces and stale caster data after edits. Select shadow casters for the light's required coverage; camera visibility alone is not sufficient.
+
+Invalidate the dependencies that changed. Do not rebuild every mesh, shadow map and horizon resource every frame to conceal a stale-cache bug. Preserve the existing horizon continuity contract and retain ordinary world/simulation behavior during the final test.
+
+6. FINISH WITH A PROVEN REPAIR
+
+Fix the isolated causes with the smallest coherent changes. After each fix, repeat the original scene and the relevant motion/edit sequence. Keep lighting/time/exposure and quality settings matched. A lower preset can be a separate intentional option, but is not evidence that a defect at the requested preset is repaired.
+
+Deliver: exact cause and affected code for each confirmed shading fault; a before/after timing table at matched settings; clear captures and a short real-motion sequence; relevant regression checks for any changed publication/invalidation behavior; and remaining limits. Separate compiled, visually verified, gameplay-verified and performance-measured status. If the runtime or original reproduction is unavailable, say precisely which gates remain unverified instead of treating compilation as success.
+
+Stop after the demonstrated repair and an explicit available budget. Resume Prompt F's art work next. Prompt G's finer physical geometry requires a separate measured need and headroom; extra post effects or a broad simulation rewrite are not part of this stabilization task.
+
+18. PRIMARY SOURCES AND SCOPE
+
+Sources support reference-game descriptions and physical distinctions. The proposed setting, art direction, puzzle model, architecture and implementation sequencing are original recommendations. No source establishes performance or completion of this unseen repository.
+
+[S1] D&D Beyond, Exploring the Wilderness: Navigation and Player Agency
+https://www.dndbeyond.com/posts/269-exploring-the-wilderness-navigation-and-player
+
+[S2] D&D Beyond, Let's Design an Adventure: Encounters and the Three Pillars
+https://www.dndbeyond.com/posts/693-lets-design-an-adventure-encounters-and-the-three
+
+[S3] Wizards of the Coast, Ravnica
+https://magic.wizards.com/en/story/ravnica-plane
+
+[S4] Noita, official game description
+https://noitagame.com/
+
+[S5] Neal Stephenson, Seveneves
+https://www.nealstephenson.com/seveneves.html
+
+[S6] Penguin Random House, The Diamond Age
+https://www.penguinrandomhouse.com/books/172835/the-diamond-age-by-neal-stephenson/
+
+[S7] NASA, Spot the Station Frequently Asked Questions
+https://www.nasa.gov/missions/station/spot-the-station-frequently-asked-questions/
+
+[S8] ESA, Types of Orbits
+https://www.esa.int/Enabling_Support/Space_Transportation/Types_of_orbits
+
+[S9] NASA/JPL NAIF, conics and reference frames
+https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/cspice/conics_c.html
+https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/frames.html
+
+[S10] NASA, Small Spacecraft Technology: Communications
+https://www.nasa.gov/smallsat-institute/sst-soa/soa-communications/
+
+[S11] NASA, Basics of Space Flight: Telecom
+https://science.nasa.gov/learn/basics-of-space-flight/chapter10-1/
+
+[S12] ESA, Keeping Track of Spacecraft with Delta-DOR
+https://www.esa.int/Enabling_Support/Operations/Keeping_track_of_spacecraft_with_Delta-DOR
+
+[S13] NASA, Infrared Waves
+https://science.nasa.gov/ems/07_infraredwaves/
+
+[S14] NASA, Meteors and Meteorites
+https://science.nasa.gov/solar-system/meteors-meteorites/
+
+[S15] Neal Stephenson, Anathem
+https://www.nealstephenson.com/anathem.html
+
+[S16] Nintendo, First Impressions: The Legend of Zelda: Skyward Sword (2010)
+https://www.nintendo.com/en-za/News/2010/First-Impressions-The-Legend-of-Zelda-Skyward-Sword-252048.html
+
+[S17] Nintendo, Iwata Asks: Skyward Sword, The Logical Dungeon
+https://www.nintendo.com/en-za/Iwata-Asks/Iwata-Asks-The-Legend-of-Zelda-Skyward-Sword/Vol-4-The-Dense-Desert-and-A-New-System/2-The-Logical-Dungeon/2-The-Logical-Dungeon-221336.html
+
+[S18] Complementary Shaders, official style descriptions
+https://www.complementary.dev/shaders/
+
+[S19] WGPU documentation, Texture Color Formats and sRGB Conversions
+https://wgpu.rs/doc/wgpu/documentation/color/srgb/index.html
+Consult the repository's locked version before applying API-specific changes.
+
+[S20] Dennis Gustafsson, Teardown quicksave (2020)
+https://blog.voxagon.se/2020/11/18/teardown-quicksave.html
+
+[S21] D&D Beyond, Antimagic Field, current spell page
+https://www.dndbeyond.com/spells/2618860-antimagic-field
+
+[S22] D&D Beyond, Antimagic Field, legacy spell page
+https://www.dndbeyond.com/spells/1999-antimagic-field
+
+[S23] D&D Beyond, Sage Advice Compendium, instantaneous effects and antimagic
+https://www.dndbeyond.com/sources/dnd/sae/sage-advice-compendium
+
+[S24] Wizards of the Coast, Unearthed Arcana: Traps Revisited (2017 playtest, not final rules)
+https://media.wizards.com/2017/dnd/downloads/0227_UATraps.pdf
+
+[S25] Bandai Namco, Elden Ring introduction: stats and attributes (2023)
+https://www.bandainamcoent.com/news/elden-ring-introduction-part-1-stats
+
+[S26] WGPU documentation, Features: timestamp-query capabilities
+https://wgpu.rs/doc/wgpu/struct.Features.html
+
+[S27] WGPU documentation, Queue: timestamp period and submission callbacks
+https://wgpu.rs/doc/wgpu/struct.Queue.html
+
+[S28] WGPU documentation, PresentMode: FIFO surface-acquisition waiting
+https://wgpu.rs/doc/wgpu/enum.PresentMode.html

@@ -101,6 +101,8 @@ fn ring_step(level: usize) -> f32 {
 
 /// Exact summaries through 64 m (~6 km). Beyond that, one fixed 8 m cheap point
 /// evaluator preserves macro detail independent of the requested ring spacing.
+/// Generator 38 filters the separate residual layer at 64 m for this policy;
+/// metre-scale relief remains in the surface shader, not aliased mesh peaks.
 /// Policy 1 is deliberately distinct from exact policy 0: neither is an area
 /// average, and a point from one policy cannot satisfy the other's query.
 fn sample_detail(level: usize) -> u8 {
@@ -1108,8 +1110,9 @@ fn evaluate_samples(
     let evaluated = parallel::map_blocks(&work, PREPASS_BLOCK, workers, cancel, |&((bx, bz), detail, step)| {
         let (height, block) = if detail == 0 {
             distant_surface(&cfg, bx, bz)
+        } else if canonical {
+            crate::world::landscape::preview_surface_canonical(&cfg, bx, bz)
         } else {
-            let step = if canonical { 8.0 } else { step };
             crate::world::landscape::preview_surface_lod(&cfg, bx, bz, step)
         };
         Some(((bx, bz), (height, block, detail)))

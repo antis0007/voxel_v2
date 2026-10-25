@@ -2,6 +2,7 @@
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HomePage {
     #[default]
+    Title,
     Library,
     Create,
     Preferences,
@@ -14,7 +15,19 @@ pub(super) fn home(
     render: &mut RenderUiState,
 ) -> UiAction {
     let ctx = owner.ctx.clone();
-    backdrop(&ctx, *seed, *world);
+    if owner.home_page == HomePage::Title {
+        let recent = owner.library_entries.iter().filter(|e|e.saved > 0).max_by_key(|e|e.saved);
+        return match super::main_menu::draw(&ctx, recent.map(|e|e.name.as_str()), owner.library_loading,
+            owner.library_status.as_deref().or(owner.persistence_status.as_deref())) {
+            super::main_menu::Intent::Continue => recent.map_or(UiAction::None,|e|UiAction::OpenWorld(e.id.clone())),
+            super::main_menu::Intent::Load => { owner.home_page = HomePage::Library; UiAction::None },
+            super::main_menu::Intent::New => { owner.home_page = HomePage::Create; UiAction::None },
+            super::main_menu::Intent::Settings => { owner.home_page = HomePage::Preferences; UiAction::None },
+            super::main_menu::Intent::Quit => UiAction::Quit,
+            super::main_menu::Intent::None => UiAction::None,
+        };
+    }
+    backdrop(&ctx);
     let mut result = UiAction::None;
     egui::TopBottomPanel::top("home_navigation")
         .frame(
@@ -25,9 +38,10 @@ pub(super) fn home(
         .show(&ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (page, label) in [
-                    (HomePage::Library, "Your worlds"),
+                    (HomePage::Title, "Main menu"),
+                    (HomePage::Library, "Load world"),
                     (HomePage::Create, "New world"),
-                    (HomePage::Preferences, "Preferences"),
+                    (HomePage::Preferences, "Settings"),
                 ] {
                     if tab(ui, label, owner.home_page == page).clicked() {
                         owner.home_page = page;
@@ -39,6 +53,7 @@ pub(super) fn home(
             });
         });
     let screen_action = match owner.home_page {
+        HomePage::Title => UiAction::None,
         HomePage::Library => super::world_browser::draw(owner),
         HomePage::Create => new_world(
             &ctx,
@@ -59,7 +74,7 @@ pub(super) fn home(
                         ui.vertical_centered(|ui| {
                             ui.set_max_width((ui.available_width() - 32.0).clamp(220.0, 720.0));
                             surface().show(ui, |ui| {
-                                heading(ui, "Settings", "Display, controls and autosave.");
+                                heading(ui, "Settings", "");
                                 settings::graphics_settings(ui, render, scale.meters());
                                 ui.add(
                                     egui::Slider::new(&mut owner.fov_degrees, 50.0..=110.0)
@@ -73,22 +88,7 @@ pub(super) fn home(
                                 ui.checkbox(&mut owner.invert_mouse, "Invert vertical look");
                                 ui.checkbox(&mut owner.show_hud, "Show the in-game HUD");
                                 super::magic_fx::motion_setting(ui);
-                                ui.horizontal(|ui| {
-                                    ui.add(
-                                        egui::Slider::new(
-                                            &mut owner.ui_scale,
-                                            0.75..=1.75,
-                                        )
-                                        .step_by(0.05)
-                                        .text("UI scale"),
-                                    );
-                                    if ui.small_button("Reset").clicked() {
-                                        owner.ui_scale = crate::preferences::UI_SCALE_DEFAULT;
-                                    }
-                                });
-                                ui.small(
-                                    "Scales menus, HUD text and the inventory without changing the world.",
-                                );
+                                super::typography::controls(ui, &mut owner.ui_scale);
                                 ui.add(
                                     egui::Slider::new(&mut owner.hotbar_scale, 0.7..=1.6)
                                         .step_by(0.05)
@@ -138,7 +138,7 @@ pub(super) fn caption(ui: &mut egui::Ui, text: &str) {
 }
 pub(super) fn heading(ui: &mut egui::Ui, title: &str, detail: &str) {
     ui.heading(RichText::new(title).size(24.0).color(PAPER));
-    ui.label(RichText::new(detail).color(MUTED));
+    if !detail.is_empty() { ui.label(RichText::new(detail).color(MUTED)); }
     ui.add_space(12.0);
 }
 pub(super) fn action(ui: &mut egui::Ui, text: &str, primary: bool) -> Response {
@@ -330,11 +330,10 @@ pub(super) fn landscape(p: &egui::Painter, r: Rect, seed: u32, kind: WorldType) 
     }
 }
 
-fn backdrop(ctx: &egui::Context, seed: u32, kind: WorldType) {
+fn backdrop(ctx: &egui::Context) {
     let p = ctx.layer_painter(egui::LayerId::background());
     let r = ctx.content_rect();
-    landscape(&p, r, seed, kind);
-    p.rect_filled(r, 0, Color32::from_rgba_unmultiplied(18, 16, 18, 100));
+    p.rect_filled(r, 0, Color32::from_rgb(20, 24, 27));
 }
 fn world_card(
     ui: &mut egui::Ui,
@@ -401,28 +400,26 @@ fn new_world(
     name: &mut String,
     loading: bool,
 ) -> UiAction {
-    backdrop(ctx, *seed, *world);
     let mut result = UiAction::None;
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx,|ui| {
         let wide=ui.available_width()>1000.0;
         egui::ScrollArea::vertical().id_salt("world_front_end").show(ui,|ui| {
             ui.add_space(if wide{36.0}else{16.0});
-            let width=(ui.available_width()-32.0).clamp(200.0,1040.0);
+            let width=(ui.available_width()-32.0).clamp(200.0,560.0);
             ui.vertical_centered(|ui| {
                 ui.set_max_width(width);
                 surface().show(ui,|ui| {
                     let mut form=|ui:&mut egui::Ui,result:&mut UiAction,world:&mut WorldType,scale:&mut VoxelScalePreset,seed:&mut u32,render:&mut RenderUiState| {
-                        caption(ui,"WORLD SETUP");
-                        heading(ui,"New world","Choose terrain, block size and seed.");
+                        heading(ui,"New world","");
                         ui.add(egui::TextEdit::singleline(name).hint_text("World name").char_limit(64).desired_width(f32::INFINITY));
                         for (kind,title,detail) in [
-                            (WorldType::Hills,"Wildlands","Forests, coastlines and caves to discover."),
-                            (WorldType::Ridged,"Highlands","Steep ridges and broad mountain silhouettes."),
-                            (WorldType::Superflat,"Open canvas","A level landscape for ambitious builds."),
+                            (WorldType::Hills,"Default","Forests, rivers and caves."),
+                            (WorldType::Ridged,"Highlands","Mountains and deep valleys."),
+                            (WorldType::Superflat,"Flat","Flat building ground."),
                         ] {
                             if world_card(ui,kind,*world==kind,*seed,title,detail).clicked(){*world=kind;}
                         }
-                        ui.add_space(8.0);caption(ui,"BUILDING PRECISION");
+                        ui.add_space(8.0);caption(ui,"BLOCK SIZE");
                         let old=scale.meters();
                         ui.horizontal_wrapped(|ui| {
                             for (preset,label) in [(VoxelScalePreset::OneMeter,"Classic · 1 m"),(VoxelScalePreset::HalfMeter,"Fine · 0.5 m"),(VoxelScalePreset::QuarterMeter,"Micro · 0.25 m")] {
@@ -431,7 +428,7 @@ fn new_world(
                             }
                         });
                         if old!=scale.meters(){render.settings=render.settings.rescale_blocks(old,scale.meters());}
-                        ui.small("Smaller blocks add detail; your height and movement stay the same.");
+                        ui.small("Smaller blocks need more memory.");
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("World seed").color(MUTED));
@@ -442,30 +439,10 @@ fn new_world(
                         ui.add_enabled_ui(!loading && !name.trim().is_empty(),|ui| {
                             if action(ui,"Create world",true).clicked(){*result=UiAction::StartWorld {name:name.trim().to_owned(),reference:false,world_type:*world,voxel_scale:*scale,seed:*seed};}
                         });
-                        if !loading && action(ui,"Create Moss & Ember studio",false).clicked() {
-                            *result=UiAction::StartWorld{name:"Moss & Ember".into(),reference:true,world_type:WorldType::Superflat,voxel_scale:*scale,seed:*seed};
-                        }
                         if let Some(status)=status {ui.label(RichText::new(status).small().color(MUTED));}
                         ui.collapsing("Display & terrain quality",|ui|settings::graphics_settings(ui,render,scale.meters()));
                     };
-                    if wide {
-                        ui.columns(2,|cols| {
-                            cols[0].set_max_width(410.0);
-                            caption(&mut cols[0],"LANDSCAPE");
-                            cols[0].add_space(12.0);
-                            cols[0].label(RichText::new("Terrain preview").size(26.0).color(PAPER).strong());
-                            cols[0].add_space(14.0);
-                            cols[0].label("Landscape sketch. The generated terrain varies with the seed.");
-                            let (r,_)=cols[0].allocate_exact_size(vec2(cols[0].available_width(),190.0),Sense::hover());
-                            landscape(&cols[0].painter().with_clip_rect(r),r,*seed,*world);
-                            cols[0].add_space(14.0);
-                            cols[0].small("WASD to explore   ·   E for inventory   ·   F to interact");
-                            form(&mut cols[1],&mut result,world,scale,seed,render);
-                        });
-                    } else {
-                        caption(ui,"VOXEL WORKSHOP");
-                        form(ui,&mut result,world,scale,seed,render);
-                    }
+                    form(ui,&mut result,world,scale,seed,render);
                 });
             });
             ui.add_space(24.0);
@@ -478,14 +455,32 @@ pub(super) fn journal(
     expedition: Option<&crate::world::expedition::Expedition>,
     adventure: &crate::world::adventure::View,
 ) {
-    heading(ui, "Field journal", "Objectives, equipment and supplies.");
+    heading(ui, "Field journal", "");
     let Some(e) = expedition else {
         ui.label("No world loaded.");
         return;
     };
     super::relics::expedition_goal(ui, adventure);
+    if adventure.workshop_available {
+    caption(ui, "FIRST EXPEDITION");
+    for (label, complete) in [
+        ("Find the workshop and mine its lit side bay", e.workshop_found && e.lamp),
+        ("Smelt copper and upgrade the starter wand", adventure.wand >= 2),
+        ("Defeat the fungal vault guardians", adventure.workshop_cleared),
+        ("Return and use the workshop bench", adventure.workshop_returned),
+    ] {
+        ui.label(RichText::new(format!("{}  {label}", if complete { "✓" } else { "·" }))
+            .color(if complete { MINT } else { MUTED }));
+    }
+    ui.add_space(12.0);
+    }
+    if e.lamp {
+        ui.label(format!("Lumen Lantern: {} · [L]", if e.lamp_enabled() { "On" } else { "Off" }));
+    }
     caption(ui, "WORKSHOP PREPARATION");
-    ui.label(RichText::new(e.objective()).size(17.0).color(MINT));
+    if !e.objective().is_empty() {
+        ui.label(RichText::new(e.objective()).size(17.0).color(MINT));
+    }
     ui.add_space(12.0);
     for (name, complete) in [
         ("Discover the ruined workshop", e.workshop_found),
@@ -537,7 +532,7 @@ pub(super) fn journal(
         }
     });
     if !any {
-        ui.label("Gather salvage and ore to fill your pack.");
+        ui.label("No supplies.");
     }
 }
 pub(super) fn pause(
@@ -629,14 +624,14 @@ pub(super) fn pause(
                                 if action(ui, "World list", false).clicked() { result = UiAction::BackToWorldSelect; }
                                 if action(ui, "Save and quit", false).clicked() { result = UiAction::Quit; }
                             }
-                            ui.label(RichText::new("World list uses your last save. Save now to keep recent changes.").small().color(MUTED));
+                            ui.label(RichText::new("Unsaved Changes").small().color(MUTED));
                         }
                         PausePage::Journal => journal(ui, owner.expedition.as_ref(), &owner.adventure),
                         PausePage::Graphics => {
                             heading(
                                 ui,
                                 "Display",
-                                "View distance, lighting and frame rate.",
+                                "",
                             );
                             settings::graphics_settings(ui, render, physics.voxel_scale.meters());
                             super::magic_fx::motion_setting(ui);
@@ -644,23 +639,7 @@ pub(super) fn pause(
                                 egui::Slider::new(&mut owner.fov_degrees, 50.0..=110.0)
                                     .text("Field of view"),
                             );
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::Slider::new(
-                                        &mut owner.ui_scale,
-                                        crate::preferences::UI_SCALE_MIN
-                                            ..=crate::preferences::UI_SCALE_MAX,
-                                    )
-                                        .step_by(0.05)
-                                        .text("UI scale"),
-                                );
-                                if ui.small_button("Reset").clicked() {
-                                    owner.ui_scale = crate::preferences::UI_SCALE_DEFAULT;
-                                }
-                            });
-                            ui.small(
-                                "Scales menus, HUD text and the inventory without changing the world.",
-                            );
+                            super::typography::controls(ui, &mut owner.ui_scale);
                             ui.add(
                                 egui::Slider::new(&mut owner.hotbar_scale, 0.7..=1.6)
                                     .step_by(0.05)
@@ -673,7 +652,7 @@ pub(super) fn pause(
                             }
                         }
                         PausePage::Controls => {
-                            heading(ui, "Controls", "Mouse settings and key bindings.");
+                            heading(ui, "Controls", "");
                             ui.add(
                                 egui::Slider::new(&mut owner.mouse_sensitivity, 0.0005..=0.006)
                                     .logarithmic(true)
@@ -687,7 +666,7 @@ pub(super) fn pause(
                             heading(
                                 ui,
                                 "World",
-                                "Weather, simulation and saving.",
+                                "",
                             );
                             settings::environment_settings(ui, time, physics, &mut result);
                         }
@@ -696,41 +675,6 @@ pub(super) fn pause(
         });
     result
 }
-pub(super) fn loading(ctx: &egui::Context, state: &LoadingUiState) {
-    backdrop(ctx, 71, WorldType::Hills);
-    egui::CentralPanel::default()
-        .frame(egui::Frame::NONE)
-        .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space((ui.available_height() * 0.32).max(24.0));
-                ui.set_max_width(520.0);
-                surface().show(ui, |ui| {
-                    caption(ui, "VOXEL WORKSHOP");
-                    heading(ui, &state.title, &state.detail);
-                    let (r, _) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 5.0), Sense::hover());
-                    ui.painter()
-                        .rect_filled(r, 0, Color32::from_rgb(72, 58, 47));
-                    let progress = state.progress_01.clamp(0.0, 1.0);
-                    ui.painter().rect_filled(
-                        Rect::from_min_size(r.min, vec2(r.width() * progress, r.height())),
-                        0,
-                        MINT,
-                    );
-                    ui.add_space(10.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{:.0}%  ·  Preparing nearby terrain",
-                            progress * 100.0
-                        ))
-                        .small()
-                        .color(MUTED),
-                    );
-                });
-            });
-        });
-}
-
 pub(super) fn journey_hud(
     ctx: &egui::Context,
     expedition: Option<&crate::world::expedition::Expedition>,
@@ -795,7 +739,7 @@ pub(super) fn storage_notice(ctx: &egui::Context, error: &str) {
                 ui.label(RichText::new("Saving needs attention").strong().color(GOLD));
                 ui.label(RichText::new(error).small().color(PAPER));
                 ui.label(
-                    RichText::new("Unsaved edits remain in memory. Pause to review your save.")
+                    RichText::new("Unsaved Changes")
                         .small()
                         .color(MUTED),
                 );

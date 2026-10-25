@@ -8,6 +8,7 @@ pub mod radio;
 pub mod megastructures;
 pub mod skyhook;
 pub mod meteors;
+pub mod passes;
 
 const CELL_M: f32 = 4096.0;
 pub const SIGHT_RANGE_M: f32 = 6000.0;
@@ -149,6 +150,7 @@ pub struct Booking {
 
 #[derive(Default)]
 pub struct State {
+    pass_cache: std::cell::RefCell<Option<passes::Cache>>,
     booking: Option<Booking>,
     pub receiver: receiver::State,
     pub radio: radio::State,
@@ -167,6 +169,9 @@ pub struct Contact {
 
 #[derive(Clone, Default)]
 pub struct View {
+    pub pass_forecasts: Vec<passes::Forecast>,
+    pub pass_forecasts_pending: bool,
+    pub calendar: f64,
     pub contacts: Vec<Contact>,
     pub megastructures: Vec<megastructures::Contact>,
     pub skyhooks: Vec<skyhook::Contact>,
@@ -176,6 +181,9 @@ pub struct View {
 
 pub fn view(world: &super::World, day: &DayNightCycle, player: &crate::player::Player) -> View {
     View {
+        calendar: calendar(day),
+        pass_forecasts: if world.orbital.radio.level>0 {passes::forecast(world,day,player.pos*world.voxel_scale.meters())} else {Vec::new()},
+        pass_forecasts_pending: world.orbital.radio.level>0 && passes::pending(world),
         megastructures: megastructures::contacts(world.seed, day, player.pos * world.voxel_scale.meters()),
         skyhooks: skyhook::contacts(world.seed, day, player.pos * world.voxel_scale.meters()),
         contacts: contacts(
@@ -408,10 +416,10 @@ impl State {
         });
         match channel {
             Channel::Radio => {
-                "Meridian acknowledges your radio return. An inspection carriage will descend after alignment. Cargo locks remain sealed."
+                "Return requested. Carriage descending after alignment. Cargo locked."
             }
             Channel::Resonance => {
-                "The ancient braid answers your resonance. An inspection carriage will descend after alignment. Cargo locks remain sealed."
+                "Return requested. Carriage descending after alignment. Cargo locked."
             }
         }
     }
@@ -467,7 +475,7 @@ impl State {
             });
         }
         if version >= 25 {
-            state.receiver = receiver::State::decode(read)?;
+            state.receiver = receiver::State::decode(read,version)?;
         }
         if version >= 28 { state.radio = radio::State::decode(read)?; }
         Ok(state)

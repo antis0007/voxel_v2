@@ -82,15 +82,27 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
-// Match the conservative 2x2 depth footprint used by the half-resolution march.
+// Beyond the march horizon, geometry and clear sky have the same foreground
+// cloud column. Treating orbital silhouettes as nearby depth edges rejected
+// their sky neighbours and made thin parts pop through the cloud deck.
+fn cloud_occluder_depth(depth: f32, uv: vec2<f32>) -> f32 {
+    if depth <= 1e-7 { return 0.0; }
+    let dir = camera_ray(vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
+    let view_depth = cam.ray_up.w / max(depth + cam.ray_right.w, 1e-8);
+    let distance = view_depth / max(dot(dir, cam.camera_forward.xyz), 1e-4);
+    return select(depth, 0.0, distance >= CLOUD_MAX_DISTANCE_M);
+}
+
+// Match the conservative 2x2 depth footprint used by the reduced-resolution march.
 fn cloud_sample_depth(uv: vec2<f32>) -> f32 {
     let dims = vec2<i32>(textureDimensions(scene_depth_tex));
     let base = vec2<i32>(floor(uv * vec2<f32>(dims) - vec2<f32>(0.5)));
     let a = clamp(base, vec2<i32>(0), dims - 1);
     let b = clamp(base + 1, vec2<i32>(0), dims - 1);
-    return max(max(textureLoad(scene_depth_tex, a, 0),
+    let depth = max(max(textureLoad(scene_depth_tex, a, 0),
         textureLoad(scene_depth_tex, vec2<i32>(b.x, a.y), 0)),
         max(textureLoad(scene_depth_tex, vec2<i32>(a.x, b.y), 0), textureLoad(scene_depth_tex, b, 0)));
+    return cloud_occluder_depth(depth, uv);
 }
 
 fn depth_match(a: f32, b: f32) -> f32 {
@@ -112,7 +124,7 @@ fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
     let empty_footprint=max(max(colors[0].a,colors[1].a),max(colors[2].a,colors[3].a))<=0.00001;
     let pixel = clamp(vec2<i32>(uv * vec2<f32>(textureDimensions(scene_depth_tex))),
         vec2<i32>(0), vec2<i32>(textureDimensions(scene_depth_tex)) - 1);
-    let depth = textureLoad(scene_depth_tex, pixel, 0);
+    let depth = cloud_occluder_depth(textureLoad(scene_depth_tex, pixel, 0), uv);
     var total = vec4<f32>(0.0);
     var weight = 0.0;
     var all_sky = depth <= 1e-7;
@@ -302,7 +314,7 @@ fn stylise_cloud(premul: vec3<f32>, alpha: f32) -> vec4<f32> {
     let band_i = floor(band_pos);
     let band_f = fract(band_pos);
     let stepped = (band_i + smoothstep(0.15, 0.85, band_f)) / bands;
-    let ramp = mix(lifted, stepped, 0.18 * (1.0 - storm));
+    let ramp = mix(lifted, stepped, 0.08 * (1.0 - storm));
     let sky = light.sky_top_saturation.rgb;
     let lit_col = mix(vec3<f32>(1.0, 0.975, 0.92), light.sun_color_daylight.rgb, 0.45);
     let shade_col = mix(vec3<f32>(0.44, 0.51, 0.72), sky * 1.3 + vec3<f32>(0.06), 0.40);
@@ -311,9 +323,9 @@ fn stylise_cloud(premul: vec3<f32>, alpha: f32) -> vec4<f32> {
     let tone = mix(base_shade, lit_col, smoothstep(0.16, 1.05, ramp));
     let recoloured = tone * crown * ramp * 1.40;
     // Marched colour survives wherever it is doing real work.
-    let strength = smoothstep(0.10, 0.50, day) * (1.0 - twilight * 0.88) * (1.0 - storm * 0.92) * 0.85;
+    let strength = smoothstep(0.10, 0.50, day) * (1.0 - twilight * 0.88) * (1.0 - storm * 0.92) * 0.62;
     let graded = mix(c, recoloured, strength);
-    // Firmer silhouette: pull wispy edges in without deleting thin veils.
-    let edge_alpha = mix(alpha, smoothstep(0.06, 0.92, alpha), 0.20 * strength);
-    return vec4<f32>(max(graded, vec3<f32>(0.0)) * edge_alpha, edge_alpha);
+    // Colour direction must not reshape optical coverage. In particular, a
+    // passing station should reveal the same thin veil as the adjacent sky.
+    return vec4<f32>(max(graded, vec3<f32>(0.0)) * alpha, alpha);
 }

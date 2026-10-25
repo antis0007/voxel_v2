@@ -16,7 +16,7 @@ fn submerged_volume_optics_and_tessellation_are_invariant_but_free_surfaces_chan
     let bytes = |mesh: &ChunkMesh| bytemuck::cast_slice::<Vertex3, u8>(&mesh.vertices).to_vec();
     for scale in [1.0, 0.5, 0.25] {
         let mut source = GeneratedChunk {
-            voxel_meters: scale, water_levels: Default::default(), chunk: IVec3::new(-1, 0, -1),
+            voxel_meters: scale, water_levels: Default::default(), water_deficit: Default::default(), chunk: IVec3::new(-1, 0, -1),
             blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
             sky_ceiling: vec![0; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
             bed_height: vec![0; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
@@ -138,6 +138,7 @@ fn all_lods_preserve_free_water_level_area_and_optics() {
                 let mut chunk = GeneratedChunk {
                     voxel_meters: scale,
                     water_levels: HashMap::new(),
+                    water_deficit: HashMap::new(),
                     chunk: coord,
                     blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
                     sky_ceiling: vec![bed; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
@@ -236,6 +237,7 @@ fn exact_water_budget_covers_fragmented_partial_surfaces() {
     let mut chunk = GeneratedChunk {
         voxel_meters: 1.0,
         water_levels: Default::default(),
+        water_deficit: Default::default(),
         chunk: IVec3::ZERO,
         blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
         sky_ceiling: Vec::new(),

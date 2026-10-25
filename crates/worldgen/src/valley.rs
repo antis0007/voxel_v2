@@ -12,6 +12,8 @@ const STEPS: usize = 16;
 const STEP_M: f32 = 70.0;
 const STOREY: f32 = 2.9;
 
+mod settlement;
+
 thread_local! {
     static PROBING: Cell<bool> = const { Cell::new(false) };
     static LOCAL_PLAN: std::cell::RefCell<Option<((u32, u32, u8, u8), Arc<Plan>)>> = const { std::cell::RefCell::new(None) };
@@ -32,6 +34,8 @@ struct Plan {
     max_z: f32,
     hamlet: Vec3,
     hamlet_fwd: Vec3,
+    hamlet_grade: f32,
+    hamlet_suitable: bool,
     tower: Vec3,
     tower_fwd: Vec3,
 }
@@ -49,10 +53,12 @@ pub(super) fn carve(cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32) -> f32 {
     let Some(plan) = plan(cfg) else {
         return h;
     };
-    if wx < plan.min_x - 48.0
-        || wx > plan.max_x + 48.0
-        || wz < plan.min_z - 48.0
-        || wz > plan.max_z + 48.0
+    let h = if cfg.generator_version >= 37 { village_ground(&plan, wx, wz, h) } else { h };
+    let margin = if cfg.generator_version >= 37 { 160.0 } else { 48.0 };
+    if wx < plan.min_x - margin
+        || wx > plan.max_x + margin
+        || wz < plan.min_z - margin
+        || wz > plan.max_z + margin
     {
         return h;
     }
@@ -60,7 +66,10 @@ pub(super) fn carve(cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32) -> f32 {
         return h;
     };
     let half = if lake { 14.0 } else { 4.5 };
-    let flood = if lake { 40.0 } else { 30.0 };
+    let flood = if cfg.generator_version >= 37 {
+        // Deep incision needs a broad valley wall, not a slot through a mountain.
+        (30.0 + (h - bed).max(0.0) * 1.8).min(160.0)
+    } else if lake { 40.0 } else { 30.0 };
     if lateral > flood {
         return h;
     }
@@ -70,7 +79,27 @@ pub(super) fn carve(cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32) -> f32 {
     }
     let t = super::smoothstep(half, flood, lateral);
     let bank = bed + 1.4 + (h - bed - 1.4).max(0.0) * t;
-    h.min(bank.max(bed))
+    let carved = h.min(bank.max(bed));
+    if cfg.generator_version >= 37 {
+        village_ground(&plan, wx, wz, carved)
+    } else {
+        carved
+    }
+}
+
+fn village_axes(plan: &Plan, wx: f32, wz: f32) -> (f32, f32) {
+    let (x, z) = (wx - plan.hamlet.x, wz - plan.hamlet.z);
+    (x * plan.hamlet_fwd.x + z * plan.hamlet_fwd.z,
+        -x * plan.hamlet_fwd.z + z * plan.hamlet_fwd.x)
+}
+
+fn village_ground(plan: &Plan, wx: f32, wz: f32, h: f32) -> f32 {
+    if !plan.hamlet_suitable { return h; }
+    let (along, across) = village_axes(plan, wx, wz);
+    let edge = ((along.abs() - 32.0).max(0.0)).hypot((across.abs() - 19.0).max(0.0));
+    let blend = 1.0 - super::smoothstep(0.0, 26.0, edge);
+    let street = plan.hamlet.y + along * plan.hamlet_grade;
+    h + (street - h) * blend
 }
 
 pub(super) fn in_channel(cfg: &WorldSampleConfig, wx: f32, wz: f32) -> bool {
@@ -133,7 +162,7 @@ pub(super) fn built_up(cfg: &WorldSampleConfig, wx: f32, wz: f32) -> bool {
 }
 
 fn built_up_in(plan: &Plan, wx: f32, wz: f32) -> bool {
-    let hamlet = (wx - plan.hamlet.x).hypot(wz - plan.hamlet.z) < 48.0;
+    let hamlet = plan.hamlet_suitable && (wx - plan.hamlet.x).hypot(wz - plan.hamlet.z) < 48.0;
     let tower = (wx - plan.tower.x).hypot(wz - plan.tower.z) < 28.0;
     hamlet || tower
 }
@@ -149,7 +178,7 @@ pub(super) fn architecture(cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         && let Some(b) = tower(&plan, cfg, m) {
             return Some(b);
         }
-    if (m.x - plan.hamlet.x).abs() < 52.0
+    if plan.hamlet_suitable && (m.x - plan.hamlet.x).abs() < 52.0
         && (m.z - plan.hamlet.z).abs() < 52.0
         && (m.x - plan.hamlet.x).hypot(m.z - plan.hamlet.z) < 52.0
         && let Some(b) = hamlet(&plan, cfg, m) {
@@ -280,8 +309,36 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
     }
     let hamlet_i = 9;
     let tower_i = 2;
-    let (hx, hz, hfwd) = frame_at(&xs, &zs, hamlet_i, 22.0);
-    let (tx, tz, tfwd) = frame_at(&xs, &zs, tower_i, -36.0);
+    let (mut hx, mut hz, mut hfwd) = frame_at(&xs, &zs, hamlet_i, 22.0);
+    let mut hamlet_suitable = true;
+    if cfg.generator_version >= 37 {
+        // The whole village needs a usable bank. Score both sides of several
+        // river segments before committing to a site.
+        let mut best = f32::MAX;
+        for i in 5..13 {
+            for side in [-68.0, 68.0] {
+                let (x, z, fwd) = frame_at(&xs, &zs, i, side);
+                let right = Vec3::new(-fwd.z, 0.0, fwd.x);
+                let mut lo = f32::MAX;
+                let mut hi = f32::MIN;
+                for u in [-34.0, 0.0, 34.0] {
+                    for v in [-24.0, 0.0, 24.0] {
+                        let p = Vec3::new(x, 0.0, z) + fwd * u + right * v;
+                        let y = relief(cfg, p.x, p.z);
+                        lo = lo.min(y); hi = hi.max(y);
+                    }
+                }
+                let score = hi - lo + (16.0 - lo).max(0.0) * 10.0;
+                if score < best { best = score; hx = x; hz = z; hfwd = fwd; }
+            }
+        }
+        hamlet_suitable = best <= 10.0;
+    }
+    let (tx, tz, tfwd) = frame_at(&xs, &zs, tower_i, if cfg.generator_version >= 37 { -64.0 } else { -36.0 });
+    let hamlet_grade = if cfg.generator_version >= 37 {
+        ((relief(cfg, hx + hfwd.x * 32.0, hz + hfwd.z * 32.0)
+            - relief(cfg, hx - hfwd.x * 32.0, hz - hfwd.z * 32.0)) / 64.0).clamp(-0.08, 0.08)
+    } else { 0.0 };
     let min_x = xs.iter().copied().fold(hx.min(tx), f32::min);
     let max_x = xs.iter().copied().fold(hx.max(tx), f32::max);
     let min_z = zs.iter().copied().fold(hz.min(tz), f32::min);
@@ -297,6 +354,8 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
         max_z,
         hamlet: Vec3::new(hx, relief(cfg, hx, hz), hz),
         hamlet_fwd: hfwd,
+        hamlet_grade,
+        hamlet_suitable,
         tower: Vec3::new(tx, relief(cfg, tx, tz), tz),
         tower_fwd: tfwd,
     }
@@ -320,6 +379,9 @@ fn rot(x: f32, z: f32, turn: f32) -> (f32, f32) {
 }
 
 fn hamlet(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
+    if cfg.generator_version >= 41 {
+        return settlement::sample(plan, cfg, m);
+    }
     let right = Vec3::new(-plan.hamlet_fwd.z, 0.0, plan.hamlet_fwd.x);
     let local = m - plan.hamlet;
     let along = local.x * plan.hamlet_fwd.x + local.z * plan.hamlet_fwd.z;
@@ -333,9 +395,12 @@ fn hamlet(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         (7.0, 5.0, 0),
     ];
     for (i, (w, d, role)) in ROLES.iter().copied().enumerate() {
-        let cx = -30.0 + i as f32 * 12.0;
-        let lx = along - cx;
-        let lz = across;
+        let modern = cfg.generator_version >= 37;
+        let cx = if modern { -21.0 + (i % 3) as f32 * 21.0 } else { -30.0 + i as f32 * 12.0 };
+        let row = if !modern { 0.0 } else if i < 3 { 10.0 } else { -10.0 };
+        let facing = if row < 0.0 { -1.0 } else { 1.0 };
+        let lx = (along - cx) * facing;
+        let lz = (across - row) * facing;
         if lx.abs() > w * 0.5 + 1.2
             || lz.abs() > d * 0.5 + 1.2
             || m.y < plan.hamlet.y - 8.0
@@ -343,7 +408,10 @@ fn hamlet(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         {
             continue;
         }
-        let floor = parcel_floor(cfg, plan.hamlet, plan.hamlet_fwd, right, cx, w, d);
+        let floor = if modern {
+            // Quantize once per building. All entrances meet the common street.
+            cfg.world_y(cfg.blocks_for_height(plan.hamlet.y + cx * plan.hamlet_grade))
+        } else { parcel_floor(cfg, plan.hamlet, plan.hamlet_fwd, right, cx, w, d) };
         let ly = m.y - floor;
         let vox = if cfg.generator_version >= 16 {
             cfg.voxel_meters()
@@ -352,6 +420,15 @@ fn hamlet(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         };
         if let Some(b) = timber(role, lx, ly, lz, w, d, vox) {
             return Some(b);
+        }
+    }
+    if cfg.generator_version >= 37 && along.abs() < 35.0 && across.abs() < 19.0 {
+        let spur = (along + 21.0).abs().min(along.abs()).min((along - 21.0).abs());
+        if across.abs() < 2.0 || (spur < 1.3 && across.abs() < 10.0) {
+            let v = cfg.voxel_meters();
+            let floor = cfg.world_y(cfg.blocks_for_height(plan.hamlet.y + along * plan.hamlet_grade));
+            if m.y >= floor && m.y < floor + v { return Some(B::Gravel); }
+            if m.y >= floor + v && m.y < floor + 3.0 { return Some(B::Air); }
         }
     }
     None
@@ -500,6 +577,33 @@ fn tower(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
         0.0
     };
     let wall = r > 4.35 - 0.8f32.max(vox * 1.2) && r < 4.35;
+    if cfg.generator_version >= 44 {
+        // A landing joins the round tower door to its approach. Its centre
+        // stays clear; paired posts frame the entrance without narrowing it.
+        if lx.abs() < 2.2 && (-6.4..-3.3).contains(&lz) {
+            if ly >= -vox && ly < vox { return Some(B::Cobblestone); }
+            if ly >= vox && ly < 2.8 {
+                if lx.abs() > 2.2 - vox && lz < -5.4 {
+                    return Some(if ly >= 2.8 - vox { B::Torch } else { B::StoneBricks });
+                }
+                return Some(B::Air);
+            }
+        }
+    }
+    if cfg.generator_version >= 41 {
+        // The upper study opens onto a lookout, with a continuous deck and
+        // an outer parapet. Keep the doorway above the shared floor slab.
+        let deck = STOREY * 3.0;
+        if (4.0..5.8).contains(&r) && ly >= deck && ly < deck + vox {
+            return Some(B::StoneBricks);
+        }
+        if r >= 5.8 - vox.max(0.5) && r < 5.8 && ly >= deck + vox && ly < deck + vox + 1.0 {
+            return Some(B::Cobblestone);
+        }
+        if wall && lz < -2.0 && lx.abs() < 1.2 && ly >= deck + vox && ly < 11.6 {
+            return Some(B::Air);
+        }
+    }
     let door = lz < -3.3 && lx.abs() < 0.8 && (0.0..2.3).contains(&ly);
     let window = wall
         && ly > 1.2

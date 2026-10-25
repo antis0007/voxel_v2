@@ -1,0 +1,534 @@
+CLAUDE CODE — UI AND MULTISCALE WORLD OVERHAUL
+October 24, 2026
+
+HOW TO USE
+Give this entire prompt to Claude Code in the existing Rust/WGPU game repository. Include the earlier documents if available:
+- voxel_biome_implementation_plan.txt
+- claude_voxel_architecture_master_prompt.txt
+- claude_voxel_painterly_visual_overhaul_prompt.txt
+Also provide the original art references and recent game screenshots. This prompt supplies a self-contained implementation direction when those documents are temporarily unavailable; never claim to have inspected missing files.
+
+BEGIN PROMPT
+
+Implement a cohesive overhaul of the game's UI and world-generation quality. I want the immediate readability, compact item-based interaction and crafted visual character suggested by Minecraft and Noita, adapted into an original interface suitable for this game's deeper magic, building, science and automation systems. Build an interface that feels like part of an artistic voxel adventure and is pleasant to use repeatedly.
+
+Also improve world generation across the full hierarchy: distant landforms, regions and watersheds, biome patches, settlements and dungeons, trees and rocks, local terrain, fine voxel features and material detail. Follow the earlier biome, architecture and painterly-overhaul documents. Preserve their visual targets and actual gameplay requirements. Do not substitute a UI reskin for world improvements or declare the world done after adding more noise and foliage.
+
+This is a production implementation request. Inspect the repository, implement, run the game where possible, capture actual output, test the interactions, and iterate. Do not stop at another planning document or static mockup. Preserve Rust/WGPU and the no-Bevy constraint. Reuse the actual UI toolkit, renderer, world storage and gameplay systems unless a focused change is demonstrably necessary.
+
+Evidence boundary: the available shoreline and dungeon screenshots are useful world references but do not expose a complete inventory/settings/crafting UI. Treat my report that the UI looks ugly as the problem statement; inspect the current UI before asserting specific defects. No repository audit, benchmark or UI runtime inspection has been performed by the author of this prompt. Proposed measurements and layouts below are starting values to validate.
+
+01. PRODUCT TARGET AND SCOPE
+
+Deliver two connected improvements:
+A. A consistent, polished game interface for exploration, combat, inventory, crafting, wand configuration, building and machine interaction, plus necessary menus/settings.
+B. A coherent generated world whose form and detail remain convincing from distant views down to player-scale inspection and fine edits.
+
+Core requirements:
+- The world remains the primary visual surface during exploration.
+- Frequently used actions require few steps and provide clear feedback.
+- The UI communicates real gameplay state; it does not invent values or unsupported mechanics.
+- A common visual and interaction system spans all screens.
+- Rich systems become understandable through progressive disclosure, clear units, diagrams and explanations.
+- World detail has purpose and geographic/artistic relationships.
+- Voxel scale changes do not create inconsistent collision, duplicated material, lost edits or incompatible saves.
+- Visual success requires actual engine captures and moving interaction, not compilation alone.
+
+Avoid an oversized dashboard aesthetic, unrelated rounded cards, blurry glass panels, huge empty padding, generic stock icons, inconsistent fonts, permanent debug text and decorative borders around every sub-element. Inspect the actual UI first; these are rejection criteria, not claims about its current implementation.
+
+02. AUDIT THE EXISTING UI AND WORLD BEFORE CHANGING THEM
+
+Read project instructions and preserve unrelated work. Map actual source ownership for:
+UI layout/styles/fonts/icons/input; inventory/items; crafting/recipes; spell/wand simulation; building tools; machine/electrical/fluid state; menus/settings; persistence; terrain/biome/structure generation; voxel storage/resolution; meshing/LOD; collision/raycasting; streaming; save versions.
+
+Launch and capture representative current screens where possible:
+Exploration HUD, combat HUD, empty/full inventory, container transfer, crafting with missing materials, wand editing, machine in operation and fault state, building preview, pause/settings, and current debug overlay.
+
+Record a short usability audit: what information is visible, what is redundant, which actions are hard to discover, which controls conflict, where space is wasted, and which styles differ. Separate verified problems from proposed enhancements.
+
+Establish fixed UI resolution/scale settings and fixed world seeds/cameras/routes. Measure baseline CPU/GPU frame time and UI overhead. Locate actual voxel size versus LOD behavior rather than assuming the engine already supports arbitrary mixed-resolution solids.
+
+Create a concise integration map, then begin implementation. Do not spend the session writing a replacement design essay.
+
+03. ORIGINAL VISUAL LANGUAGE: CARVED STONE, INK AND EMBER
+
+Use compact, crisp, subtly dimensional UI surfaces with a restrained fantasy-industrial character. Borrow usability principles from the named games; create original assets and proportions rather than copying their sprites, logos or fonts.
+
+Proposed token palette, expressed as starting sRGB colors:
+- Deep surface: #171C20
+- Raised surface/slot: #252C31
+- Inner slot recess: #101518
+- Muted stone edge: #566064
+- Primary text: #F0E9D8
+- Secondary text: #B5B9B3
+- Selection/focus accent: #E8B968
+- Health/danger accent: #CF6268
+- Mana/magic accent: #76B7CF
+- Success/growth accent: #88B47E
+Tune in the actual renderer. These are design candidates, not proven contrast-compliant values. Check contrast in final rendered states, including disabled/selected controls and screenshots against bright and dark worlds.
+
+Use a few tones per component. A restrained upper edge, darker lower edge and inset slot can produce material presence without glossy gradients. Reserve gold/ember for selection, focus and rare importance. Do not surround every item with a saturated rarity frame.
+
+Typography:
+Use one highly readable primary face, with an optional carefully chosen pixel-style display face for headings/numerals if it remains legible. Reuse or supply properly licensed font assets. Do not rely on an unavailable system font. Keep glyph fallback for symbols and future text needs. No ornamental fantasy font for descriptions, quantities or scientific units.
+
+Iconography:
+Use consistent perspective, scale, silhouette and shading. Item icons can be generated from authoritative item models in a controlled render setup or authored sprites, depending on the asset pipeline. Use one coherent approach per category. Similar items need distinct silhouettes as well as color. Spell icons must communicate category/behavior. Avoid emoji as production icons.
+
+Texture:
+Allow very low-contrast grain or a tiny authored edge motif on larger panels. Keep text and slots clean. No heavy canvas overlay, noisy stone behind paragraphs or animated shimmer on every border.
+
+04. LAYOUT TOKENS, DPI, READABILITY AND COMPONENT STATES
+
+Centralize spacing, color, typography, borders, sizes and interaction feedback. Do not patch each screen with unrelated constants.
+
+Initial layout probes at 1080p and normal UI scale:
+- Base spacing unit: 4 logical pixels.
+- Common spacing: 4/8/12/16.
+- Item slot: approximately 44–52 logical pixels, with room for a legible count.
+- Main text: approximately 16–18 logical pixels; headings around 20–24.
+- Secondary text: approximately 14–16; avoid essential information in tiny labels.
+These are test values, not rigid physical-pixel rules. Use the toolkit's coordinate/DPI model consistently and test actual on-screen readability.
+
+Scaling:
+Provide UI scale and independent text-size support where feasible. Test 1280x720, 1920x1080, a higher-DPI resolution and ultrawide. Use scrolling/reflow at constrained sizes. Never crop essential buttons, quantity fields or tooltips. Preserve crisp sprite sampling at supported scales; do not apply nearest-neighbor sampling globally to text or the 3D scene.
+
+Component states:
+Default, hover, pressed, keyboard/controller focus, selected, disabled, pending and error. Focus must remain visible without hover. Color should be reinforced by shape/outline/icon/text where it conveys meaning. Disabled actions explain why when inspected.
+
+Feedback:
+Use short restrained transitions, tactile hover/press feedback and optional quiet sounds. Honor reduced-motion/volume preferences. Critical actions and information must not wait for a long animation. Keep animations from shifting layout or resetting focus.
+
+Safe areas:
+Anchor HUD to margins and respect configured scale/aspect ratio. Tooltips and context menus clamp/reflow inside the viewport. Tooltips must not cover the object/action the player is trying to inspect unnecessarily.
+
+05. EXPLORATION AND COMBAT HUD
+
+Build a compact default HUD with a clear information hierarchy:
+- Bottom center: the action hotbar, with a strong selected-slot outline and small binding hints.
+- Near the hotbar: health and the currently relevant resource, compact and consistent.
+- Center: a subtle adaptive crosshair or targeting cue.
+- Context area near the center/lower center: a concise interaction prompt when something actionable is targeted.
+- Peripheral area: short-lived pickup/status notifications, stacked with a cap.
+
+Hotbar:
+Preserve actual slot count and saved bindings. If the existing game has no established count, begin by testing nine slots; do not shrink a larger existing hotbar and lose assignments. Show item count, durability/charge only when relevant, and a distinct selected item. Avoid repeating the selected item's full name permanently; show it briefly on selection or when needed.
+
+Resources:
+Health is always understandable. Mana/energy/stamina appear according to actual mechanics. Do not display invented bars. Support configurable numeric values. Segment/pip styling is acceptable if it maps clearly to quantities and remains legible at large capacities. Critical changes have clear feedback without filling the screen with warnings.
+
+Target inspection:
+Show a short object name and action, such as a real machine's name and current binding for Open. Material/quantity/voxel-size detail appears in building/inspection mode or through an additional held modifier, not permanent multiline debug text.
+
+Status effects:
+Use a capped compact row with duration/stack information on inspection. Prioritize dangerous/important effects. Avoid covering health/hotbar with repeated notifications.
+
+Combat:
+Telegraphs, crosshair feedback and essential resources remain visible during effects. Enemy bars should appear where useful, with restrained name/detail density. Do not reveal hidden enemy information unintentionally. Keep the central aim region clear.
+
+Debug:
+Move engine diagnostics into a dedicated toggleable overlay and developer screens. Use configurable bindings. Do not assume a particular key is free. Diagnostics remain available without becoming the normal game aesthetic.
+
+06. INVENTORY AND CONTAINER INTERACTION
+
+Use a compact consistent inventory grid with strong item silhouettes, readable stack counts and clear selection. Provide a stable header, category/search controls when needed, and a context/details area.
+
+Layout:
+Player inventory plus equipped/active items in a clear grouping. When opening a container, show its grid alongside the player's with consistent slot styling and transfer direction. Avoid moving frequently used controls unpredictably between screens.
+
+Interactions:
+Primary click select/pick up/place; supported quick-transfer modifier; split stack; move one; swap compatible items; keyboard navigation; context actions for equip/use/inspect/drop where valid. Map these to existing controls and make bindings discoverable. Preserve existing useful behavior rather than arbitrarily renaming every control.
+
+Drag behavior:
+Show the dragged item, quantity and valid/invalid destination. Use clear pending/committed state. Failed drops return safely without losing or duplicating items. Closing a menu while holding a stack must deterministically restore/commit it according to a defined rule. If the source is occupied, choose a safe available destination or keep a recoverable state; do not silently drop items into the world.
+
+Transfers:
+Use authoritative inventory commands with capacity and compatibility checks. Splits, swaps, quick-transfer and auto-stack preserve quantities and metadata. Sorting is scoped to the selected container, has a stable deterministic order and does not rearrange equipped/hotbar items unless explicitly chosen. Avoid destructive surprises.
+
+Search/filter:
+Match names and useful categories/tags with clear empty results. Filters change presentation, not item ownership. Keep selections stable when items move or counts change. Large inventories need efficient rendering/querying, not per-frame expensive rebuilding of all metadata.
+
+Tooltips:
+Name, concise purpose, relevant stats, state, and action hints. Advanced properties are expandable/held-detail. Compare equipment with clear deltas. Avoid walls of repeated flavor text before useful information.
+
+Accessibility:
+Important categories differ by shape/text as well as color. Support larger labels and keyboard operation. Touch/controller behavior is only required if supported or part of the current platform scope; do not claim support without implementing focus/navigation.
+
+07. CRAFTING, RECIPES AND MATERIAL DISCOVERY
+
+Create one coherent recipe view that explains what can be made, what is missing and what action will occur.
+
+Layout:
+Search/category recipe list; selected recipe output and short purpose; ingredient slots with available/required counts; required station/process; quantity control; primary craft action; optional queue/status where the underlying system supports it.
+
+Ingredient clarity:
+Show missing ingredients explicitly with icons, counts and text. If multiple materials satisfy a category, explain or allow the supported selection. Do not pretend an unavailable substitution exists. Distinguish carried resources from connected storage; only include remote inventory if gameplay actually permits it.
+
+Actions:
+Craft one and a clear chosen amount/max option. Preview resource use and output capacity before committing. Commit through authoritative gameplay logic. If inventory changes while the menu is open, revalidate without losing resources or creating duplicate outputs. Do not consume ingredients on UI button-down before a transaction succeeds.
+
+Discovery:
+Explain where a known ingredient generally comes from using existing discovered knowledge. Preserve intended exploration/spoiler rules. Locked recipes show the real requirement rather than a meaningless disabled button. Do not implement a new research progression solely to decorate this screen.
+
+Large production chains:
+Offer concise upstream/downstream recipe links or a focused dependency view when useful. Bound traversal and handle cycles. Avoid showing an enormous unreadable factory graph for a simple recipe.
+
+08. WAND AND SPELL EDITOR
+
+This is a signature interface. Make ordering, capacity, timing and interactions understandable while preserving the real spell model.
+
+Layout:
+Selected wand/model/icon and concise actual stats; ordered spell/modifier slots; available spell inventory; a focused description/preview area. Show slot order unambiguously and keep drag/reorder feedback clear.
+
+Stats:
+Only display actual implemented properties: for example capacity, resource cost, cast delay, recharge or other existing values. Explain units and whether a value belongs to the wand, a spell or the resulting sequence. Do not import a named game's exact stat model if this engine differs.
+
+Relationships:
+Represent supported modifiers, triggers, payloads or grouping with clear connectors/indentation/brackets. The UI must reflect the runtime interpretation. Invalid configurations explain the failing rule and highlight the relevant slot; they are not merely red with no explanation.
+
+Preview:
+Use the same authoritative spell interpretation in a side-effect-free preview/simulation path where practical. Never consume resources, spawn world entities or modify the wand while hovering. Bound recursion, projectile count and simulation time. If randomness or complex interactions prevent exact prediction, label ranges/estimates and show assumptions rather than false certainty.
+
+Editing:
+Reordering preserves spell identity and quantity. Changing selection cannot silently discard pending edits. Define apply/immediate-commit semantics and use them consistently. If runtime rules restrict editing while casting/in combat, explain the actual rule.
+
+Tooltips:
+Short effect explanation first, then real cost/timing/compatibility. Show meaningful combined consequences for the selected build. Keep flavor text secondary. Provide a quick way to compare wands without opening multiple layered popups.
+
+09. BUILDING, MATERIALS AND VOXEL-SCALE CONTROLS
+
+Make building controls explicit and understandable. Distinguish material, tool/shape, physical placement scale, orientation and snapping.
+
+In building mode show:
+Selected material and available quantity; placement/removal shape; active physical scale if supported; rotation/snap state; a concise preview cost and valid/invalid reason. Keep detailed controls in a focused palette, with a compact HUD summary during placement.
+
+Preview:
+Show the exact affected bounds or representative volume at the chosen scale. Differentiate valid placement, blocked space and insufficient material using more than hue. Avoid a huge opaque ghost obscuring the target. Snap indicators should explain alignment to existing geometry.
+
+Scale changes:
+Preserve the intended placement anchor while changing scale, or clearly preview the changed bounds. Do not move the tool unpredictably across the screen. Validate against actual world/storage rules, not render LOD. Show units meaningful to the player, such as dimensions, rather than internal octree depth.
+
+Resources:
+Costs and recovered material must follow authoritative volume/item rules. A finer brush must not multiply material or duplicate ore drops. Quantization/rounding follows a documented gameplay policy with tests. Do not display exact cost when the preview cannot know it; either compute accurately or mark a bounded estimate and revalidate on commit.
+
+Undo:
+If a safe authoritative undo system exists, expose it. Otherwise implement only a scoped transactional undo for eligible building edits, with resource/world-state validity checks. Do not add a cosmetic undo button or promise to undo arbitrary combat, fluid and inventory changes.
+
+Input:
+Preview/commit controls never conflict with clicking UI. Closing a build panel must not also place a block or fire the wand. Preserve existing bindings where possible and support rebinding through a common action map.
+
+10. MACHINES, ELECTRICAL SYSTEMS AND PROCESS UI
+
+Use the same visual components as inventory/crafting, while providing the technical information needed to make decisions.
+
+Machine panel:
+Name/state; input/output slots; actual recipe/process; progress or cycle state; energy/power and relevant fluid/heat state; concise fault/reason; contextual actions. Show only applicable fields.
+
+State explanations:
+Replace generic inactive with real causes: no input, wrong input, insufficient power, output full, disconnected, paused, overheated or another implemented condition. Prioritize the actual blocking cause, with expandable details for additional constraints.
+
+Units:
+Keep power, stored energy, voltage, current, resistance and capacitance distinct when those systems exist. Display units and scaling consistently. Never label energy as power, fake current from a progress bar or treat UI animation time as physical simulation. Preserve the game's intended time abstraction while keeping the underlying quantities coherent.
+
+Process view:
+For complex machines, show a small ordered flow of stages with active stage, inputs/byproducts and blockage. Link to deeper recipe/process information only when useful. The default view should answer: what is it doing, what does it need, and where is the output?
+
+Circuits:
+If the circuit system exists, provide a focused inspection view with actual terminals, connection state and measured/simulated quantities. Bound and simplify diagrams for large networks. Show the selected component's neighborhood first; avoid drawing every cable in the world. Do not make a new circuit simulator as a prerequisite for UI work.
+
+World overlay:
+Use a held inspection tool/mode for ports, flow direction and connection hints. Keep it out of normal exploration. Respect visibility and interaction range. Format values without excessive decimal noise and preserve useful precision when expanded.
+
+11. MENUS, SETTINGS, MAPS, HELP AND ACCESSIBILITY
+
+Pause/settings must use the same component language and behave predictably. Group controls by task, keep labels plain and display current bindings/values. Include UI scale, text size, audio categories, brightness/exposure controls as supported, accessibility preferences and graphics presets with real effects.
+
+Settings:
+Apply reversible changes with clear feedback. Risky display-mode changes need a timed recovery path. Persist valid values and sanitize obsolete/out-of-range saved settings. Do not reset custom bindings because the UI layout changed.
+
+Map/journal:
+If existing, improve discovery readability, marker clustering, labels and navigation. Preserve fog-of-war and player knowledge. Do not expose undiscovered ruins/ore merely because the world generator knows their coordinates. Avoid adding a full map subsystem if absent and not needed for the current milestone.
+
+Help:
+Show current bindings, not hardcoded keys. Provide short contextual help for inventory transfer, wand order, machine faults and building scale. First-use hints can be dismissed and revisited; do not interrupt every action with a tutorial popup.
+
+Accessibility:
+Readable contrast, scalable text, non-color-only cues, keyboard focus, reduced motion, volume control and alternatives to tiny hover-only information. Test long labels, large quantities and missing glyphs. Preserve a practical route through each core screen without precise mouse-only gestures.
+
+12. UI STATE, INPUT ROUTING AND GAMEPLAY OWNERSHIP
+
+UI renders state and requests actions; gameplay owns inventories, equipment, crafting, spells, machines and world edits. Do not duplicate simulation rules inside widgets.
+
+Define clear interaction states: normal play, focused panel, dragging item, text entry, rebinding and modal confirmation where actually required. Manage cursor capture/visibility intentionally. Input should be consumed by the correct layer once. Prevent movement/fire/build commands while typing or interacting with panels according to existing pause/network rules.
+
+Escape/back:
+Close the most immediate popup/drag/modal safely, then the panel, then pause according to a consistent hierarchy. Never lose held items or apply an unintended world action during closure. Focus returns to a sensible control.
+
+Stable identity:
+Use item/container/recipe/machine IDs rather than transient row indices for actions. Sorting, filtering, quantity updates and asynchronous state must not retarget a click to a different object. Use revisions/validation when needed.
+
+Persistence:
+Save relevant preferences, filters or selected tabs only when useful; do not persist invalid transient pointers. World state remains authoritative. If multiplayer/networking exists, handle pending/failed actions without assuming local prediction succeeded. Do not invent a networking requirement if the game is local-only.
+
+Implementation:
+Use the current toolkit's strengths. Centralize reusable slot, tooltip, button, status, progress, quantity and panel components. Avoid a new UI framework migration unless a concrete blocker is proven. Keep debug tooling available in its own layer.
+
+13. WORLD ART DIRECTION TO PRESERVE FROM THE EARLIER DOCUMENTS
+
+Read the earlier documents when available and map their requirements to the real implementation. This prompt adds UI and explicit multiscale integration; it does not authorize discarding their visual standards.
+
+Keep the five initial biome identities:
+Amberroot Wildwood: old irregular trees, large roots, connected canopy, cool depth and restrained warm fungal light.
+Wisp Fen: sparse tall deadwood, coherent water channels, raised banks, low atmosphere and limited lantern accents.
+Skyglass Tarn: dominant asymmetric peak, connected ridges, coherent snow/rock pattern, treeline, lake basin and outlet.
+Greenward Basin: broad buildable terraces, connected rivers, forest/field patches, roads, workshops and settlements.
+Frostbound Gorge: dark monumental rock, pale cliff-integrated architecture, river-led composition and lit multi-route interiors.
+
+Keep the architectural families and principles:
+Pale cliff/water settlements and distinctive flared tower roofs; terraced Crownstone cities with skyline hierarchy; vermilion fortifications; pale ceremonial temples/colonnades; elevated cool magitech terraces; rare slender waytowers. Use actual foundations, openings, interiors and circulation. Do not substitute random generic towers or empty shells.
+
+Keep the painterly visual requirements:
+Strong large forms, meaningful medium detail, restrained microdetail; distinctive tree anatomy/age; coherent stands and ground ecology; purposeful bank types; connected mountains; water cues tied to geometry; calmer sky grouping; readable dungeon light and differentiated materials.
+
+Reference discipline:
+The supplied art guides composition/material/form, not copied surface photographs or a universal canvas overlay. Preserve voxel character. Avoid all-surface noise, uniformly saturated materials, excessive bloom, uniform tree scatter and atmospheric effects used to hide broken geometry.
+
+Same-scene improvement:
+Retain reproducible comparisons for the original shoreline and dungeon views. Improve their real terrain, vegetation, architecture and light; do not claim victory solely from an unrelated handcrafted scene. Include normal gameplay UI in final views as well as clean environment comparisons.
+
+14. EXPLICIT SCALE HIERARCHY FOR WORLD GENERATION
+
+Separate three concepts:
+A. World-design scale: region, landform, habitat, structure, plant, detail.
+B. Physical voxel resolution: authoritative editable material/occupancy granularity.
+C. Render LOD: visual simplification chosen for distance and projected importance.
+These are related but not interchangeable. Render LOD must not change inventory yields, terrain ownership or the meaning of a stored edit.
+
+World-design hierarchy:
+1. Region: ridge networks, basins, watershed connections and broad climate/exposure.
+2. Landform: valley floor, lake basin, gorge, cliff, hill shoulder and major cave system.
+3. Habitat/settlement patch: forest stand, meadow, wetland, quarry, town district and ruin envelope.
+4. Landmark/object: tree, boulder formation, building, bridge, dungeon room and stream reach.
+5. Local geometry: roots, banks, arches, stairs, rock strata, soil layers and medium vegetation.
+6. Fine detail: selected bark shapes, stone trim, small plants, material grain and supported fine edits.
+
+For every layer define:
+Inputs/owner; deterministic identity; bounds/dependency radius; output representation; what can change at runtime; persistence; and how lower/higher representations derive from it.
+
+Do not evaluate all layers independently with unrelated noise. A large root belongs to a tree, a tree belongs to a stand, the stand responds to soil/slope/water, and those respond to the region landform. Small detail reinforces this hierarchy.
+
+15. REGION, TERRAIN AND HYDROLOGY GENERATION
+
+Begin with a connected bounded test region using existing streaming, rather than promising an infinite globally coherent watershed from a local noise function.
+
+Plan major ridges, basin floors, drainage/outlets and landmark opportunities. Build directional ridges with varying peaks/shoulders and subordinate spurs. Use different valley cross-sections for open basin and narrow gorge. Add bounded local roughness only after main forms work.
+
+Water:
+Give lakes persistent identities, levels and outlet policies. River reaches have connected paths, widths and surface profiles. Ordinary downstream profiles do not rise unexpectedly; waterfalls/steps are explicit. Validate confluences and lake/river transitions. Keep caves near water intentionally dry/flooded/connected according to the real fluid model.
+
+Cross-region contracts:
+If extending beyond the initial region, establish shared ownership for drainage ports, ridge continuation and crossing features. Adjacent regions consume the same boundary data. Do not independently invent incompatible rivers at each chunk edge.
+
+Terrain layers:
+Bedrock/strata, soil and surface cover derive from geology and depth. Excavation reveals coherent materials. Caves/overhangs use the actual volumetric representation where required. A heightfield may support ordinary far hills but cannot alone describe caves, arches or cliff housing.
+
+Landform quality:
+Avoid equal-sized conical peaks, evenly terraced beaches and noisy bumps on every face. Use large quiet surfaces where the reference calls for them. Terrain should offer interesting traversal and useful building space, not constant collision clutter.
+
+Landmarks:
+Place them using hard support/access/water constraints before artistic scoring. Score silhouette, plausible route views and spacing only after validity passes. Use bounded candidate search and clear failure/fallback behavior.
+
+16. HABITATS, TREES, STRUCTURES AND FINE DETAIL
+
+Habitat patches:
+Use moisture, exposure, slope, soil and canopy conditions plus controlled clustering. Keep ecological transitions between biomes. Sharp cliffs/banks can remain crisp while vegetation and atmospheric contributions change gradually.
+
+Vegetation:
+Use species/age archetypes with trunk taper, meaningful branch structure, roots, connected crown lobes and gaps. Generate stands with edge/interior/clearing structure. Keep some suppressed young trees, deadwood and varied age where appropriate. Do not replace one generic tree with dozens of random recolors.
+
+Ground cover:
+Patch grass, litter, moss, flowers and shrubs according to habitat. Keep routes, machinery spaces and player-built surfaces clear. Fine decorative plants need not have individual physics/collision. Harvestable or structurally important organisms retain stable identity and persistent state.
+
+Shorelines:
+Distinguish protected sand, raised soil/root bank, embedded rock projection and low wet reed margin. Align wetness/vegetation to actual water state. Preserve open water as compositional space.
+
+Structures:
+Plan masses, circulation, foundations, floors/openings and roofs before ornament. Generate interiors that correspond to visible exteriors. Dungeon lighting and actual route accessibility are part of generation validation. Historical damage derives from intact architecture; rubble has plausible material/placement and does not seal every route.
+
+Fine voxel detail:
+Use finer geometry selectively around visible silhouettes, roots, arch profiles, stair/landing edges, important mechanisms, sculptures and close interactive features. Large quiet walls/hills do not need the same density. Material patterns may carry shallow detail where actual geometry would add little value, but cannot fake traversable openings or meaningful relief.
+
+Artistic color:
+Use macro/medium material variation with restrained fine grain. Keep stone, soil, bark, plaster, metal and water distinct. Avoid arbitrary high-contrast patches on every voxel. Preserve broad light/value grouping at all representations.
+
+17. PHYSICAL VOXEL RESOLUTION: REQUIRED INVARIANTS
+
+Audit the actual data model first. If the world has fixed authoritative resolution and multiple visual LODs, report that accurately. Do not advertise arbitrary physical subdivision through a UI control that only changes the mesh. If variable resolution exists, document its constraints and extend it carefully.
+
+Required invariants for any supported physical scales:
+- One authoritative material/occupancy result at any world location.
+- Shared boundaries have consistent ownership and coordinates.
+- Subdivision preserves parent content/state unless an explicit edit changes it.
+- Coarsening/compaction never silently deletes meaningful fine edits or mixes materials into a different gameplay result.
+- Raycasts, collision, rendering and edit previews refer to compatible world geometry.
+- Resource accounting follows the actual physical/material policy across scales.
+- Stable feature/loot IDs prevent subdivision from rerolling resources or duplicating rewards.
+- Save/load retains all fine edits and the information required to interpret their coordinates/version.
+
+Coordinate rules:
+Use the existing canonical world-coordinate scheme. Specify quantization, negative-coordinate behavior, cell intervals, boundary tie-breaking and supported scale ratios. Avoid independent floating-point rounding in rendering, physics and placement. Test negative positions and far coordinates explicitly.
+
+Subdivision:
+If a coarse cell is refined, derive child state deterministically from the authoritative source/edits. Do not simply rerun a different generator seed at finer scale. Preserve metadata and removed/harvested content. Uniform regions may compress efficiently without allocating every fine cell.
+
+Coarsening:
+Distinguish visual aggregation from physical state compaction. A mixed or edited area may remain stored at finer detail while rendering a coarse approximation. Never overwrite detailed stored state merely because the player walked away. Use conservative feature preservation where a coarse proxy cannot express a hole, thin wall or bridge.
+
+Sampling:
+Fine surface detail can be omitted visually at distance, but the major surface, important apertures and edited silhouette must remain coherent. Small noise layers should not cause a mountain to change shape radically when approaching it.
+
+Material cost/yield:
+Document how volume maps to item units and how rounding/remainders work. Use sufficient exact/consistent accounting for supported scales. Repeated refine/place/remove/coarsen cycles must not generate free material or destroy large amounts through repeated rounding. If the game intentionally uses discrete block-item rules, preserve and communicate those rules instead of pretending everything is continuous volume.
+
+Implementation scope:
+Do not rebuild storage into an octree or another architecture merely because multiscale detail sounds desirable. Improve artistic generation at all existing supported scales first. Add physical-resolution capabilities only where necessary and supported by a concrete integration plan with persistence/collision tests.
+
+18. RENDER LOD, STREAMING AND EDIT CONSISTENCY
+
+Derive near/middle/far representations from the same region, feature and edit state.
+
+Preservation priority:
+Terrain ridge/valley form before tiny bumps; tree canopy/major branches before leaf detail; architecture roof/tower/arch shape before trim; important edited holes before surface grain; habitat color/coverage before individual small plants.
+
+Boundaries:
+Use the actual mesher's suitable seam/transition method. Shared input alone does not prove matching output: inspect boundary vertices, normals, material summaries and collision where relevant. Do not invent a specific stitching algorithm before auditing the existing topology.
+
+Coverage:
+Maintain an old valid representation until a replacement is ready. Avoid holes during loading. Non-heightfield structures such as bridges/arches/overhangs need suitable proxies. A far heightfield cannot be the only fallback for an edited underground entrance or suspended root bridge.
+
+Interaction:
+If a coarse visual proxy is insufficient for accurate picking/editing, resolve the authoritative target before committing. Show an honest pending/limited preview rather than editing a guessed cell. Do not make a distant visible resource harvestable repeatedly without loading its persistent state.
+
+Async jobs:
+Capture source revisions and reject stale results. A tree removed during meshing must not reappear. Propagate dirty bounds to dependent meshes, collision, lighting, navigation and far proxies. Bound/cancel obsolete work during rapid travel.
+
+Save/version:
+Keep existing worlds compatible or implement explicit migrations. Retain generator identity where needed. UI preferences can migrate independently from terrain generation; do not reset an entire world to update interface styling.
+
+19. SHARED UI/WORLD PLAYTESTS
+
+Validate the two overhauls together through complete actions:
+
+A. Explore the improved shore with the new HUD. Identify a tree/rock, collect materials, receive compact feedback, open inventory, split/transfer a stack and resume play without accidental firing or placement.
+
+B. Build a small shelter/workshop at more than one supported placement scale. Preview bounds/cost, rotate/snap, place/remove, verify material accounting, save/reload and inspect from near and far. The UI explains scale without exposing internal rendering details.
+
+C. Enter a newly improved ruin/dungeon. Read the route and enemy cues, change equipment/wand configuration safely, inspect an item, operate a mechanism and return to gameplay. No panel/effect obscures essential combat information.
+
+D. Craft a real item, including insufficient-resource and output-full cases. Feed a machine, inspect its actual blocking state, fix the problem and observe real progress/output. UI numbers and authoritative simulation agree.
+
+E. Travel from a valley/settlement toward a distant landmark. Major geometry and biome identity remain consistent; the HUD is quiet; discovery feedback is useful; fine details appear without distracting shape changes.
+
+F. Change UI scale/graphics quality and repeat the critical interactions. Preserve legibility, input/focus, geometry meaning and gameplay cues.
+
+These are acceptance scenarios, not permission to fabricate unsupported crafting, fluid, wand or circuit mechanics. Use existing systems, implement necessary focused gaps, and clearly report genuinely absent features.
+
+20. PERFORMANCE, ASSETS AND IMPLEMENTATION DISCIPLINE
+
+Reuse current rendering/UI facilities. Centralize icon atlases, fonts, shared components and formatting. Avoid loading textures/fonts per frame, rebuilding all recipe graphs on hover, allocating huge strings each tick or scanning the entire world for a target tooltip.
+
+UI updates:
+Use stable state, cached derived views and appropriate invalidation. Render only relevant visible content. Keep the current immediate/retained-mode architecture if it works; this task is not an excuse for a framework migration.
+
+World work:
+Cache coarse plans and spatial indexes. Query local intersecting features. Bound generation, placement attempts, physics activation, light counts and upload queues. Use finer detail where it adds visible value. Preserve gameplay state when reducing decorative cost.
+
+Measurements:
+Record hardware, resolution, UI scale, graphics settings, seed/build and route. Track CPU/GPU times where available, frame-time p50/p95/p99, memory, generation latency and upload spikes. A 60 fps target has a 16.67 ms frame interval; higher targets require a correspondingly smaller whole-frame budget. Measure actual headroom before assigning costs.
+
+Check menu-open overhead and world traversal separately. A beautiful inventory should not trigger a major scene stall, and closing it should not force an unnecessary world rebuild. Do not claim performance on untested hardware.
+
+Assets:
+Produce coherent original icons/panels/font usage and maintain provenance/licenses. Temporary placeholders are explicitly marked and replaced before visual completion. Do not ship copied named-game assets or use generated concept screenshots as evidence of engine implementation.
+
+21. EXECUTION PACKAGES
+
+P0 — Audit and evidence
+Inspect current UI flows and world/resolution architecture. Read the earlier documents. Capture before states and fixed world routes. Identify actual integration points. Continue into implementation after the concise audit.
+
+P1 — UI foundations and interaction safety
+Implement theme tokens, typography/icon rules, shared components, scaling, focus/input routing and safe close/drag semantics. Build a small component test gallery using the production UI path.
+Gate: coherent appearance and correct states at target resolutions, without changing gameplay ownership.
+
+P2 — Complete HUD/inventory/container slice
+Finish the everyday exploration HUD, item slots, tooltips, stack operations and container transfers. Use real items and gameplay state. Replace placeholders.
+Gate: polished actual-game captures and complete transfer/play-resume scenarios, not a static mockup.
+
+P3 — Crafting, wand and machine interfaces
+Implement the supported systems' complete screens using the common design. Add clear reason/error states, previews and authoritative commands. Improve building controls and settings.
+Gate: each implemented screen communicates real state and supports its core task safely.
+
+P4 — World hierarchy and physical-scale correctness
+Document and repair the actual macro-to-micro generation dependencies, coordinate/ownership rules, resource accounting and fine-edit persistence. Improve supported scale behavior without an unnecessary storage rewrite.
+Gate: deterministic boundaries and editing tests; no free material/duplicated loot/lost edits.
+
+P5 — Shoreline/forest/landform visual slice
+Apply the earlier biome and painterly plans to the original shore and nearby traversable region. Improve ridges, banks, trees, stand structure, ground ecology, water/sky relationships and selected fine detail.
+Gate: clearly improved same-view and walking-route evidence across distances, with measured cost.
+
+P6 — Structures/dungeons and connected region
+Apply architecture families and biome placement to a connected region. Improve a functioning settlement/workshop and lit multi-route dungeon. Integrate new UI into their actual play loops.
+Gate: coherent architecture/interiors, useful gameplay, readable scenes and preserved edits.
+
+P7 — LOD, streaming, save and performance completion
+Test near/far transitions, rapid travel, fine edits, menus, machines and save/load together. Fix stale results, invalid previews, clipping, input leakage and frame-time spikes.
+Gate: all relevant correctness/visual/performance checks pass or remaining limitations are explicitly stated.
+
+P8 — Final art/usability review
+Review all core screens and world specimens at normal gameplay scale. Correct hierarchy, spacing, typography, silhouette and material defects before adding ornament. Deliver actual captures, test evidence and a concise implementation report.
+Gate: no claims that a first prototype completes the entire scope. Preserve exact progress/next steps if sessions interrupt execution.
+
+Prioritization:
+Deliver a polished HUD/inventory slice early, then finish the deeper screens and world work. Do not spend the whole task designing dozens of screens without shipping one usable complete flow. Do not defer world-generation requirements indefinitely because the UI looks better.
+
+22. VERIFICATION AND DEFINITION OF DONE
+
+UI correctness:
+- Open/close menus with mouse/keyboard and supported controllers without leaked gameplay input.
+- Move/split/swap/quick-transfer stacks; close during a drag; change filters; sort; handle full destinations. Preserve identities and quantities.
+- Revalidate crafting/transactions if state changes while a panel is open.
+- Preview wand configurations without mutating or consuming gameplay state; bound complex previews.
+- Show real machine faults and correct units; handle unavailable/stale objects safely.
+- Validate build preview/cost/scale against the committed authoritative edit.
+- Test rebinding, text entry, long labels, large counts, UI scale and viewport extremes.
+- Preserve focus and avoid clipped tooltips, unreadable text or hidden required actions.
+
+World correctness:
+- Same seed/version produces consistent authoritative results under different chunk order/worker scheduling within the declared determinism scope.
+- Test negative coordinates, chunk edges, supported physical-scale boundaries and far coordinates.
+- Refine/place/remove/coarsen/reload cycles preserve material accounting, fine edits and object identity.
+- Carve openings and thin features across representation boundaries; inspect rendering, collision and raycasts.
+- Remove a tree or tower while a mesh/proxy job is pending; reject obsolete output.
+- Verify connected water/terrain/structure boundaries and valid routes after generation.
+- Preserve player-built surfaces, harvest state, machine contents and container rewards on reload.
+
+Visual/usability evidence:
+Capture the same major screens before/after at matching resolution/UI scale. Capture shoreline/dungeon/settlement views at matching seed/camera/time/exposure where possible. Include normal gameplay with HUD as well as clean world views. Record moving walkthroughs and complete interactions, not only carefully staged images.
+
+Acceptance questions:
+Can the player immediately locate health, selected item and the action they need?
+Can a full inventory be understood without tiny text or visual clutter?
+Can the player explain why a recipe/machine/wand configuration is blocked?
+Can the player predict building scale and cost before committing?
+Does the generated world have stronger forms and ecological/architectural relationships at every supported detail level?
+Do fine edits and long-distance representations describe the same place?
+Do the UI and world share an intentional aesthetic without hiding gameplay information?
+
+Final report:
+State what changed, why, actual files/modules, tests performed, inspected captures, hardware/settings/metrics and remaining limitations. Distinguish implemented from planned and visually verified from unverified. If the environment cannot launch the game, give exact reproduction steps and do not fabricate approval or benchmark results.
+
+Respect the repository's workflow and unrelated work. Local implementation does not imply permission for remote publishing or a release deployment.
+
+Start now: inspect the project, establish the audit/baselines, implement the shared UI foundation and complete HUD/inventory interaction, then carry the same level of quality through the other interfaces and the full world-generation hierarchy. Keep the earlier art documents as active implementation requirements. The result should feel like a coherent, expressive voxel game with a usable crafted interface and a world worth exploring closely.
+
+END PROMPT

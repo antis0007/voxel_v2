@@ -13,6 +13,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+mod fine;
+mod refinement;
+mod workshop;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Roof {
     Gable,
@@ -156,6 +160,8 @@ pub struct Wing {
     door_x: Vec<Vec<bool>>,
     door_z: Vec<Vec<bool>>,
     stair: Option<Stair>,
+    /// Facade detail that resolves at fine voxel scales (generator 51+).
+    fine: bool,
 }
 
 /// Recursive binary partition of a cell grid; leaves become rooms.
@@ -383,6 +389,7 @@ impl Wing {
             door_x,
             door_z,
             stair,
+            fine: false,
         }
     }
 
@@ -574,6 +581,10 @@ impl Wing {
             }
         }
         let along = u % self.cell;
+        let face = fine::Face { depth: ex.min(ez), u, along, rel, fy, storey: s, side, corner };
+        if let Some(b) = self.fine_facade(&face, v, slab) {
+            return Some(b);
+        }
         let centre = (along - self.cell * 0.5).abs();
         if !corner && fy >= slab {
             match self.windows {
@@ -829,9 +840,18 @@ pub struct Building {
     min: (f32, f32),
     max: (f32, f32),
     top: f32,
+    workshop_entry: bool,
 }
 
 impl Building {
+    /// Turns on fine facade detail for every wing (generator 51+).
+    pub fn refined(mut self) -> Self {
+        for w in &mut self.wings {
+            w.fine = true;
+        }
+        self
+    }
+
     pub fn new(
         wings: Vec<Wing>,
         curtains: Vec<Curtain>,
@@ -867,6 +887,7 @@ impl Building {
             min,
             max,
             top,
+            workshop_entry: false,
         }
     }
 
@@ -878,7 +899,52 @@ impl Building {
         (self.min.0, self.min.1, self.max.0, self.max.1)
     }
 
+    /// Outside the main gate/door, in the same local frame as the building.
+    pub fn entrance(&self) -> Option<Vec3> {
+        for c in &self.curtains {
+            if let Some((side, u, _, _)) = c.gate {
+                let (x, z) = match side {
+                    0 => (u, c.z0 - 1.0), 1 => (u, c.z1 + 1.0),
+                    2 => (c.x0 - 1.0, u), _ => (c.x1 + 1.0, u),
+                };
+                return Some(Vec3::new(x, 0.0, z));
+            }
+        }
+        let w = self.wings.first()?;
+        let d = w.doors.first()?;
+        let (x, z) = match d.side {
+            0 => (d.u, -1.0), 1 => (d.u, w.depth() + 1.0),
+            2 => (-1.0, d.u), _ => (w.width() + 1.0, d.u),
+        };
+        Some(Vec3::new(w.x0 + x, 0.0, w.z0 + z))
+    }
+
+    pub fn occupies(&self, x: f32, z: f32) -> bool {
+        self.wings.iter().any(|w| x >= w.x0 && x <= w.x0 + w.width()
+            && z >= w.z0 && z <= w.z0 + w.depth())
+            || self.curtains.iter().any(|c| x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1)
+    }
+
     pub fn sample(&self, q: Vec3, v: f32, th: f32) -> Option<B> {
+        self.sample_plot(q, v, th, false)
+    }
+
+    /// New-world plots meet the existing hillside at their outer edge.
+    pub fn sample_sited(&self, q: Vec3, v: f32, th: f32, version: u32) -> Option<B> {
+        if version >= 47 && self.workshop_entry {
+            return workshop::sample(self, q, v, th, version);
+        }
+        if version >= 49 {
+            return self.sample_court_gardens(q, v, th);
+        }
+        if version >= 44 {
+            return self.sample_circulation(q, v, th);
+        }
+        if version >= 39 { return self.sample_refined(q, v, th); }
+        self.sample_plot(q, v, th, version >= 37)
+    }
+
+    fn sample_plot(&self, q: Vec3, v: f32, th: f32, graded: bool) -> Option<B> {
         if !self.contains_xz(q.x, q.z) || q.y > self.top || q.y < -FOUNDATION {
             return None;
         }
@@ -917,6 +983,19 @@ impl Building {
                 // Embankment below the floor line, cutting above it, both rising 1:1 from the plot edge.
                 let dist = ox.hypot(oz);
                 if dist < SKIRT {
+                    if graded {
+                        // The old -dist ramp ended above the ground at SKIRT,
+                        // leaving a vertical wall as tall as the foundation.
+                        let blend = crate::smoothstep(0.0, SKIRT, dist);
+                        let top = v + (th - v) * blend;
+                        if q.y < top && q.y >= th {
+                            return Some(if q.y >= top - v { B::Grass } else { B::Dirt });
+                        }
+                        if q.y >= top && q.y < th {
+                            return Some(B::Air);
+                        }
+                        return None;
+                    }
                     if q.y < -dist {
                         if q.y >= th && q.y > -FOUNDATION {
                             return Some(if q.y >= -dist - v { B::Grass } else { B::Dirt });
@@ -936,7 +1015,7 @@ const FOUNDATION: f32 = 40.0;
 /// A levelled plot blends into the hillside over this distance at 45 degrees.
 const SKIRT: f32 = 16.0;
 
-type SiteKey = (u32, u32, bool);
+type SiteKey = (u32, u32, bool, u32);
 type SiteSlot = Option<Rc<Building>>;
 
 thread_local! {
@@ -963,7 +1042,11 @@ fn spec(x0: f32, z0: f32, nx: usize, nz: usize, seed: u32, f: impl FnOnce(&mut W
 /// Ruin-site buildings. Kind 1 (the watchtower) keeps its bespoke round tower.
 /// Coordinates are site-local metres before the site's quarter-turn.
 pub fn site_building(kind: u32, seed: u32, starter: bool) -> Option<Rc<Building>> {
-    let key = (seed, kind, starter);
+    site_building_version(kind, seed, starter, 0)
+}
+
+pub fn site_building_version(kind: u32, seed: u32, starter: bool, version: u32) -> Option<Rc<Building>> {
+    let key = (seed, kind, starter, version);
     if let Some(hit) = LAST_SITE.with(|l| {
         l.borrow()
             .as_ref()
@@ -976,7 +1059,13 @@ pub fn site_building(kind: u32, seed: u32, starter: bool) -> Option<Rc<Building>
     let slot = match found {
         Some(slot) => slot,
         None => {
-            let built = build_site(kind, seed, starter).map(Rc::new);
+            let built = build_site(kind, seed, starter).map(|b| {
+                let b = if version >= 39 { refinement::silhouette(b, kind, seed) } else { b };
+                let b = if version >= 41 { refinement::courtyard(b, kind, seed) } else { b };
+                let b = if version >= 49 { refinement::open_court(b, kind) } else { b };
+                let b = if version >= 47 && kind == 0 { workshop::dress(b) } else { b };
+                if version >= fine::VERSION { b.refined() } else { b }
+            }).map(Rc::new);
             SITE_BUILDINGS.with(|c| {
                 let mut c = c.borrow_mut();
                 if c.len() >= 128 {

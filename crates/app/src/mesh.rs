@@ -63,6 +63,7 @@ impl ChunkMesh {
 pub struct GeneratedChunk {
     pub voxel_meters: f32,
     pub water_levels: std::collections::HashMap<IVec3, u8>,
+    pub water_deficit: std::collections::HashMap<IVec3, u64>,
     pub chunk: IVec3,
     pub blocks: Vec<BlockId>,
     /// Highest opaque cell per padded column; generated terrain supplies roofs
@@ -88,6 +89,7 @@ impl GeneratedChunk {
             + self.bed_height.capacity() * std::mem::size_of::<i32>()
             + self.bed_frac.capacity() * std::mem::size_of::<f32>()
             + self.water_levels.capacity() * (std::mem::size_of::<(IVec3, u8)>() + 1) * 2
+            + self.water_deficit.capacity() * (std::mem::size_of::<(IVec3, u64)>() + 1) * 2
     }
 
     pub fn new(chunk: IVec3, blocks: Vec<BlockId>) -> Self {
@@ -99,11 +101,18 @@ impl GeneratedChunk {
             bed_height: Vec::new(),
             bed_frac: Vec::new(),
             water_levels: Default::default(),
+            water_deficit: Default::default(),
         }
     }
 
     pub fn origin(&self) -> IVec3 {
         self.chunk * CHUNK_SIZE - IVec3::splat(CHUNK_PAD)
+    }
+
+    pub fn water_fill(&self, p: IVec3) -> f32 {
+        let volume = f64::from(self.voxel_meters).powi(3) * 1_000_000_000.0;
+        (f64::from(self.water_levels.get(&p).copied().unwrap_or(8)) / 8.0
+            - self.water_deficit.get(&p).copied().unwrap_or(0) as f64 / volume) as f32
     }
 
     /// Torch blocks in this chunk's own cells. The halo belongs to the neighbour,
@@ -249,7 +258,7 @@ impl GeneratedChunk {
                 let mut cells = if self.get_world(p + IVec3::Y) == BlockId::Water {
                     1.0
                 } else {
-                    self.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0
+                    self.water_fill(p)
                 };
                 p.y -= 1;
                 while p.y >= self.origin().y && self.get_world(p) == BlockId::Water {
@@ -1482,7 +1491,7 @@ fn scale_torch_vertices(
 fn free_water_level(chunk: &GeneratedChunk, p: IVec3) -> Option<f32> {
     (chunk.get_world(p) == BlockId::Water && chunk.get_world(p + IVec3::Y) != BlockId::Water)
         .then(|| {
-            chunk.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0
+            chunk.water_fill(p)
                 * (1.0 - WATER_SURFACE_INSET)
         })
 }
@@ -1519,7 +1528,7 @@ pub fn exact_water_mesh_bytes_upper_bound(chunk: &GeneratedChunk) -> usize {
                 if chunk.get_world(p) != BlockId::Water { continue; }
                 let submerged = chunk.get_world(p + IVec3::Y) == BlockId::Water;
                 let full_height = submerged
-                    || f32::from(chunk.water_levels.get(&p).copied().unwrap_or(8)) / 8.0
+                    || chunk.water_fill(p)
                         * (1.0 - WATER_SURFACE_INSET) >= 1.0;
                 faces += usize::from(!full_height);
                 faces += usize::from(chunk.get_world(p - IVec3::Y).is_empty());
@@ -1558,7 +1567,7 @@ fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
         if chunk.get_world(p + IVec3::Y) == BlockId::Water {
             return 1.0;
         }
-        (chunk.water_levels.get(&p).copied().unwrap_or(8) as f32 / 8.0)
+        chunk.water_fill(p)
             * (1.0 - WATER_SURFACE_INSET)
     };
     // Corners of a unit cell in the order the top quad is emitted.

@@ -99,8 +99,8 @@ fn machine_note(kind: Kind, id: usize) -> &'static str {
         (Kind::Washer, _) => "Also takes 250 L of piped water per batch.",
         (Kind::Cultivator, 0) => "The biomass is a living culture: it stays in the machine.",
         (Kind::Furnace, 0..=2) => "Ore mode. Crushing or washing first doubles or triples the yield.",
-        (Kind::Fabricator, 2) => "Condenses resonance into essence. Power-hungry.",
-        (Kind::Fabricator, 3) => "Salvage circuits build the first fabricator. Manufactured crystal circuits sustain coils, cores and advanced machinery.",
+        (Kind::Fabricator, 2) => "Makes essence.",
+        (Kind::Fabricator, 3) => "Salvage circuits to craft your first fabricator.",
         _ => "",
     }
 }

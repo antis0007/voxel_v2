@@ -29,6 +29,35 @@ fn complexes(c: &WorldSampleConfig, want: usize) -> Vec<((i32, i32), std::rc::Rc
     out
 }
 
+/// Complexes planned straight from a seed, without the world's siting: for
+/// checks of room geometry that need many complexes of a rare kind, which a
+/// search of the map can no longer find quickly (siting 39+ is costly).
+fn planned(c: &WorldSampleConfig, n: usize) -> Vec<((i32, i32), std::rc::Rc<Complex>)> {
+    (0..n as i32)
+        .map(|k| {
+            let cell = (k * 3 + 2, 2);
+            let (cx, cz) = (cell.0 as f32 * crate::dungeon::CELL, cell.1 as f32 * crate::dungeon::CELL);
+            let seed = c.seed.wrapping_add((k as u32).wrapping_mul(0x9e37_79b9));
+            (cell, std::rc::Rc::new(generate(seed, cx, cz, 70.0, c.generator_version)))
+        })
+        .collect()
+}
+
+/// Complexes from several seeds, `per` from each, until `want` are found.
+/// Generator 39 siting rejects most cells in hills, so one seed's nearby
+/// rings no longer hold enough complexes for a statistical check.
+fn many(scale: VoxelScalePreset, per: usize, want: usize) -> Vec<(WorldSampleConfig, (i32, i32), std::rc::Rc<Complex>)> {
+    let mut out = Vec::new();
+    for seed in 0u32..64 {
+        let c = cfg(seed.wrapping_mul(2654435761) ^ 424242, scale);
+        out.extend(complexes(&c, per).into_iter().map(|(cell, d)| (c, cell, d)));
+        if out.len() >= want {
+            break;
+        }
+    }
+    out
+}
+
 /// Rasterised complex: blocks below the ground, natural rock where the complex
 /// does not say otherwise.
 struct Grid {
@@ -159,8 +188,7 @@ fn half_metre_complexes_are_reachable_too() {
 
 #[test]
 fn complexes_vary_in_job_shape_depth_and_rooms() {
-    let c = cfg(424242, VoxelScalePreset::OneMeter);
-    let found = complexes(&c, 40);
+    let found: Vec<_> = many(VoxelScalePreset::OneMeter, 8, 40).into_iter().map(|(_, cell, d)| (cell, d)).collect();
     assert!(found.len() >= 30, "only {} complexes", found.len());
     let jobs: HashSet<_> = found.iter().map(|(_, d)| d.job.name()).collect();
     let sizes: HashSet<_> = found.iter().map(|(_, d)| d.rooms.len()).collect();
@@ -176,9 +204,8 @@ fn complexes_vary_in_job_shape_depth_and_rooms() {
 
 #[test]
 fn the_core_is_sealed_and_entered_only_through_its_puzzle() {
-    let c = cfg(424242, VoxelScalePreset::OneMeter);
     let mut cores = 0;
-    for (_, d) in complexes(&c, 20) {
+    for (c, _, d) in many(VoxelScalePreset::OneMeter, 6, 20) {
         let Some(o) = d.objective else { continue };
         cores += 1;
         let core = &d.rooms[o];
@@ -205,7 +232,7 @@ fn sampling_is_deterministic_and_cache_independent() {
     let (cell, d) = complexes(&c, 1).remove(0);
     let fresh = {
         let (seed, cx, cz, ground) = super::super::site(&c, cell.0, cell.1).unwrap();
-        generate(seed, cx, cz, ground, c.generator_version)
+        fit_terrain(&c, generate(seed, cx, cz, ground, c.generator_version)).unwrap()
     };
     let height = c.blocks_for_height(d.ground + 200.0);
     for k in 0..4000 {

@@ -51,6 +51,12 @@ pub(super) fn choose(
     let above_water = (tree.ground_y - cfg.water_level()) as f32 * cfg.voxel_meters();
     let waterside = climate.moisture > 0.60 && above_water < 5.5;
     let (form, conifer, trunk, radius, crown) = match climate.biome {
+        Biome::Savanna if cfg.generator_version >= 47 => {
+            (TreeForm::Umbrella, false, 4.0 + age * 3.0, 4.5 + age * 2.5, 2.6 + age * 1.4)
+        }
+        Biome::Rainforest if cfg.generator_version >= 47 && individual > 0.78 => {
+            (TreeForm::Umbrella, false, 14.0 + age * 6.0, 5.5 + age * 2.5, 5.0 + age * 3.0)
+        }
         Biome::Savanna => (TreeForm::Umbrella, false, 4.0 + age * 3.0, 4.5 + age * 2.5, 1.6 + age * 0.8),
         Biome::Rainforest if individual > 0.78 => {
             (TreeForm::Umbrella, false, 17.0 + age * 8.0, 5.5 + age * 2.5, 2.6 + age * 1.4)
@@ -122,9 +128,11 @@ pub(super) fn umbrella(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f:
         let variation = limb_variation(cfg, tree, limb);
         let angle = f.rotation + limb as f32 * TAU / limbs as f32 + (variation - 0.5) * 0.9;
         let reach = f.radius * (0.45 + variation * 0.25);
-        let tip = centre + Vec3::new(angle.cos() * reach, 0.0, angle.sin() * reach);
+        let rise = if cfg.generator_version >= 47 { (variation - 0.5) * f.crown_h * 0.35 } else { 0.0 };
+        let tip = centre + Vec3::new(angle.cos() * reach, rise, angle.sin() * reach);
         let (distance, along) = distance_to_segment(f.q, fork, tip);
-        if distance <= (f.stem * (0.62 - along * 0.30)).max(f.scale * 0.53) {
+        let minimum = if cfg.generator_version >= 47 { 0.82 } else { 0.53 };
+        if distance <= (f.stem * (0.62 - along * 0.30)).max(f.scale * minimum) {
             return BlockId::Log;
         }
         let pad = f.radius * (0.45 + variation * 0.15);
@@ -201,6 +209,13 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile, radius: f
 pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile, height: f32, crown_h: f32) -> Option<f32> {
     let top = match tree.form {
         TreeForm::Classic | TreeForm::HighCrown => return None,
+        TreeForm::Umbrella if cfg.generator_version >= 47 => {
+            let mut rise = 0.0f32;
+            for limb in 0..umbrella_limbs(tree) {
+                rise = rise.max((limb_variation(cfg, tree, limb) - 0.5) * crown_h * 0.35);
+            }
+            height + crown_h * (0.1 + 0.5 * THRESHOLD_REACH) + rise
+        }
         TreeForm::Umbrella => height + crown_h * (0.1 + 0.5 * THRESHOLD_REACH),
         TreeForm::Weeping => {
             height + (crown_h * 0.45 * THRESHOLD_REACH).max(crown_h * (0.15 + 0.30 * THRESHOLD_REACH))

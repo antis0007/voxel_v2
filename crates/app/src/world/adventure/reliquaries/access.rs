@@ -113,9 +113,9 @@ fn open_treasure(adventure: &mut Adventure, world: &mut World, shrine: &Shrine, 
         return;
     }
     world.expedition.say(match t.opens {
-        Opens::Boss => "The guardian's ward breaks. The reward vault beside the arena stands open.",
-        Opens::Lever(_) => "The pin gives. Somewhere below, a gate grinds open on a treasure room.",
-        Opens::Cracked => "Behind the cracked wall lies a forgotten cache.",
+        Opens::Boss => "Reward Vault Open",
+        Opens::Lever(_) => "Treasure Gate Open",
+        Opens::Cracked => "Cache Open",
     });
     sound(&mut adventure.sounds, Cue::Treasure, Some(pos), 0.8);
     let Some(&c) = cache.first() else {

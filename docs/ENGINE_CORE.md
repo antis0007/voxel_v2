@@ -1,8 +1,10 @@
-# Engine core: design proposal (session 1 deliverable)
+# Engine core: evolving design and implementation roadmap
 
-Status: **proposal, not approved.** Nothing here is implemented. This document and `docs/GAME_DESIGN.md` **supersede `docs/PLAN2.md`** as the roadmap (user decision 2026-10-23). PLAN2's decisions D1–D7 carry over unchanged; its open phases are mapped in §11. Conflicts between the spec, PLAN2 and the code are resolved in `docs/adr/0014-spec-v2-reconciliation.md`, and that ADR governs. Where this document and the code differ, the code is described as "today" and the spec as "target".
+Status: **long-range proposal; implemented increments are recorded separately.** This document and `docs/GAME_DESIGN.md` **supersede `docs/PLAN2.md`** as the roadmap (user decision 2026-10-23). PLAN2's decisions D1–D7 carry over; its open phases are mapped in §11. ADR 0014 reconciles the original spec. The 2026-10-24 refinement in `docs/adr/0017-roadmap-contracts-and-sparse-activity.md` corrects layout, capacity and timing ambiguities without changing the running game's authority or save format.
 
-Source: `ENGINE_CORE_PROMPT_v2.md`, sections III, VIII, X, XI and XII. Research notes: `docs/research/README.md`. Gameplay side: `docs/GAME_DESIGN.md`.
+Current execution order and the painterly/architecture integration are in `docs/plans/2026-10-24-engine-and-world-refinement.md`. The request to continue planning and implementation authorizes bounded improvements to existing code; it does not make every proposed migration complete or approve retiring the legacy simulation.
+
+Source: `docs/specs/ENGINE_CORE_PROMPT_v2.md`, sections III, VIII, X, XI and XII. Research notes: `docs/research/README.md`. Gameplay side: `docs/GAME_DESIGN.md`. The reconciled inventory and sequencing in `docs/MASTER_PLAN.md` also incorporate the game bible and mod addendum; notably, the shared VM and Primer begin earlier than this original schedule.
 
 ---
 
@@ -12,10 +14,11 @@ Source: `ENGINE_CORE_PROMPT_v2.md`, sections III, VIII, X, XI and XII. Research 
 |---|---|---|
 | Crates | 9: core, content, audio, voxel, worldgen, sim, sim_gpu, gpu, app | `crates/` |
 | Live simulation | f32 per-cell water and sand, thermal (32k cells), rigid bodies (64 × 128 voxels), wall-clock budget 2.5 ms | `crates/app/src/simulation/` |
-| New CA | Integer Margolus kernel on 8³ bricks, reactions from RON, CPU and GPU byte-identical (0.98 ms per 1M cells on an RTX 4090). **Not wired into the game.** | `crates/sim/src/`, `crates/sim_gpu/src/` |
-| CA authority | No `CaBackend` trait and no 2-tick mirror (ADR 0009 corrected) | `crates/sim/src/kernel.rs` |
+| New CA | Existing integer Margolus kernel now invoked by an opt-in, sealed headless CPU region. Ordinary window play remains legacy. Earlier CPU/GPU equivalence and desktop timing are historical evidence, not reverified for this integration | `crates/sim/src/`, `crates/app/src/simulation/cpu_region/` |
+| CA authority | Small app-side `CaBackend`, exact snapshots and two-CA-tick mirror in the isolated CPU path; GPU and general gameplay cutover pending (ADR 0018) | `crates/app/src/simulation/cpu_region.rs` |
 | Mutation path | `World::set` and siblings, about 70 call sites; no `Action` enum, no log, no replay | `crates/app/src/world.rs` |
-| Tick agreement | Headless steps per tick; the window runs each system once per frame with `steps × STEP` as dt | `crates/app/src/headless.rs`, `crates/app/src/main.rs` |
+| Tick agreement | Both drivers execute shared gameplay/finish functions per 120 Hz step; legacy wall-time scheduling still prevents an equivalence claim | `crates/app/src/simulation/fixed.rs`, `headless.rs`, `main.rs` |
+| CPU CA activity | Dense awake-chunk index and set-bit enumeration; sleeping resident chunks are excluded from work discovery. Compile-checked, runtime equivalence and timing pending | `crates/sim/src/store/activity.rs` |
 | Rendering | CPU greedy meshing, 52-byte vertices, streaming arena with multi-draw indirect, CPU frustum culling, 4+1 shadow cascades, heightfield horizon | `crates/app/src/mesh.rs`, `crates/app/src/render/` |
 | Tests and gates | Headless scenarios with snapshots, content round trips, criterion benches with an 8% gate, `gpu_*` tests, layout tests | `crates/app/src/repo_layout.rs`, `scripts/bench.py` |
 
@@ -24,7 +27,7 @@ Source: `ENGINE_CORE_PROMPT_v2.md`, sections III, VIII, X, XI and XII. Research 
 - **D1** 32³ chunks for storage and streaming; 8³ bricks on the GPU; a `u64` dirty mask per chunk, one bit per brick.
 - **D2** `Scale` reserved in the brick header and brick coordinate type; unused until variable-scale LOD lands.
 - **D3** All CA state is integer; every random choice is a positional hash; hash and Margolus phase order pinned in one `const` block with a golden test.
-- **D4** `CaBackend` trait; gameplay reads state two ticks behind the authoritative backend (ADR 0009, not yet built).
+- **D4** `CaBackend` trait; gameplay reads state two ticks behind the authoritative backend (ADR 0009; implemented only in the isolated CPU development path, ADR 0018).
 - **D5** No ECS (ADR 0010).
 - **D6** `naga_oil` is tried first; otherwise the ≈80-line resolver.
 - **D7** Save v29 with a v28 loader. Loaders older than v28 are removed when no save or scenario needs them.
@@ -70,12 +73,15 @@ A plane is allocated when a material that needs it enters the brick (powder need
 ### 3.3 Brick header (target, 32 bytes, GPU array)
 
 ```
-dirty: u64 (one bit per 2³ Margolus block)
-flags: u32 (plane bitset:10, uniform, has_bodies, nav_dirty, mesh_dirty, light_dirty, network_dirty, weather_exposed)
-support_min: u8 | awake_ticks: u16 | lod: u8 | mesh_slot: u32 | plane_base: u32 | light_base: u32
+word 0..1: dirty_lo: u32 | dirty_hi: u32 (one bit per 2³ Margolus block)
+word 2: flags: u32 (planes and derived-work flags)
+word 3: support_min:8 | awake_ticks:16 | lod:8 (packed explicitly into u32)
+word 4..7: mesh_slot: u32 | plane_base: u32 | light_base: u32 | reserved: u32
 ```
 
-A uniform brick (one material, no planes) is a constant in the chunk grid, allocated on first edit. Expected residency on `lowend`: at most 20k allocated bricks, about 120 MB with planes (ADR 0016).
+This is a proposed 32-byte wire layout, not today's CPU `ChunkEntry` or GPU layout. Current dirty masks have one bit per brick in a chunk; the proposed sub-brick mask is a separate future layer. Non-empty uniform bricks are not compressed today.
+
+At 20k bricks, base cells cost 78.125 MiB, motion adds 39.063 MiB, seven u8 fields add 68.359 MiB, and the item plane adds 19.531 MiB: **205.078 MiB before mirrors, headers, staging, meshes or allocator overhead**. The earlier 120 MB estimate covered roughly base plus motion only. Admission must use actual bytes per plane, not just brick count (ADR 0017).
 
 ### 3.4 Pools and lists
 
@@ -127,7 +133,7 @@ Target (III.4): integer fixed-point bodies with a brick-aligned grid of at most 
 
 `MobTable` with position, velocity, capsule, kind, health, needs, goal, path handle, brick id, LOD tier, inventory handle, faction, status flags. Today's enemies and five bosses (`crates/app/src/world/adventure/`) migrate onto it with their behaviour intact.
 
-- **Movement:** capsule sweep against the CPU mirror near the player; one-tick-stale snapshot far away. Modes: walk, climb, swim, fly, burrow.
+- **Movement:** capsule sweep against the same tick-stamped two-CA-tick gameplay mirror near and far (D4). Prediction may improve local responsiveness without committing independent authoritative writes. Modes: walk, climb, swim, fly, burrow.
 - **Navigation:** per-brick `NavSummary` (walkable bitset plus six portal bytes), coarse graph, HPA* with cached paths and jittered replans.
 - **Senses:** scent (gas plane), hearing (event ring), sight (at most four rays per mob per tick), vibration (support and body events).
 - **Behaviour:** utility AI defined in RON. Actions emit `Action`s, never direct writes.
@@ -155,8 +161,8 @@ Visual changes need before and after captures (`docs/design/VISUAL_DIRECTION_EXE
 
 ## 10. Save format and migration
 
-- **Current:** `VXWSAV29`, `SAVE_VERSION = 29`, loader for v28 (D7). The generator version is in `CLAUDE.md`.
-- **Next (save v30):** paged chunks with LZ4, entity tables, plane pools, action-log tail, incremental autosave. Requires its own ADR and an old-fixture round-trip test (`just test migrate`, `just test save`).
+- **Current source, checked 2026-10-24:** `VXWSAV32`, `SAVE_VERSION = 32`, generator 46. The loader accepts version headers 1 through 32 with version-specific decoding. This is a source observation, not a newly verified migration result. D7's v29 and the spec's v30 are historical targets; preserve the existing loaders.
+- **Future migration (version unassigned):** paged chunks with LZ4, entity tables, plane pools, action-log tail, incremental autosave. Assign a version from the live source when implementation starts; versions 30–32 are already used. Requires its own ADR and old-fixture compatibility evidence (`just test migrate`, `just test save`, deferred under the current no-tests instruction).
 - Generator version gates are never edited; a behaviour change adds a new gate.
 
 ## 11. Milestones (supersede PLAN2's phases)
@@ -191,13 +197,13 @@ Milestones are cut lines, not promises. Each ends with a playable build, a captu
 
 | Risk | Mitigation |
 |---|---|
-| iGPU throughput: 500k awake cells may not fit an Iris Xe at 60 tps | Calibrate early (M1 S2 records the 4090-to-lowend ratio); gas divisor and distance degradation; awake caps per profile |
+| iGPU throughput: 500k awake cells may not fit an Iris Xe at 60 tps | Measure on the target device before acceptance; desktop timings and scaled estimates remain separate. Bound authoritative work deterministically |
 | GPU memory on iGPUs | Plane pools sized per profile; eviction by distance; residency in the overlay |
-| Readback latency | Double-buffered small results with one tick of lag (D4) |
+| Readback latency | Tick-tagged result ring with exactly two CA ticks of gameplay lag (D4); deadline misses stall authority, never publish an older snapshot as current |
 | Margolus artefacts | Phase permutation measured in M1 S4, pinned by test |
 | Cross-vendor determinism | Integer-only state, hash golden test, CPU≡GPU on 200 random bricks per kernel |
 | Save migrations | Every bump gets an old-fixture test (saves rule) |
-| Wiring the new CA breaks the look of water and sand | Same-pose captures before and after M1 S2; legacy path kept behind a flag for one session |
+| Wiring the new CA breaks gameplay or water presentation | Stage command ingress, CPU adapter, mirror, GPU adapter, then cutover; keep legacy rollback until equivalence, saves, visual and performance gates pass |
 | Content explosion | Validators for references, reachability and energy cycles; the feature matrix cost column |
 | Feature creep and scope | Pillar test; milestones are cut lines |
 | Multiplayer | Lockstep-ready design (actions, replay); transport deferred by ADR |
@@ -206,11 +212,11 @@ Milestones are cut lines, not promises. Each ends with a playable build, a captu
 
 ## 14. Session schedule
 
-Sessions are a planning unit, not a commitment. Each ends with `just verify` green, a scenario, a bench number on `lowend`, a capture when the picture changes, and the LOC delta.
+Sessions below are work packages, not estimates or a requirement to combine several migrations into one session. The ordered, smaller increments in `docs/plans/2026-10-24-engine-and-world-refinement.md` refine S2/S3. Record compile, scenario, performance and visual evidence separately. The current user instruction prohibits adding/running tests or hosted CI; listed test gates remain pending, rather than being run implicitly through `just verify`.
 
 **M1 Foundation**
-1. This session: research notes, this document, `docs/GAME_DESIGN.md`, ADRs 0014–0016. Stop for approval.
-2. Wire the game to `engine_sim` (old PLAN2 A6): `CaBackend` (Cpu, Gpu), 2-tick mirror, edits as commands; shared tick-order array with a headless-equals-window hash test; residency timer off `Instant`; integer, `Instant` and `rand` grep tests. Retire the legacy water, sand and thermal paths after same-pose captures. Record the lowend calibration ratio.
+1. Original planning deliverable: research notes, this document, `docs/GAME_DESIGN.md`, ADRs 0014–0016. Produced 2026-10-23; subsequent refinement is tracked in the dated execution plan.
+2. Stage the game-to-CA integration (old PLAN2 A6): establish clock/command semantics before `CaBackend` (Cpu, Gpu), then the 2-tick mirror and shared driver. Remove residency wall-time decisions from authoritative logic. Cut over only after the separate correctness, persistence, performance and visual gates; there is no one-session legacy-retirement deadline.
 3. `Action` enum v0 (CA writes), per-tick action log, replay and desync check for all scenarios; conservation ledger and boundary pass (old A7); file and function size lints and the unwrap lint for new code.
 4. `motion` plane; powder momentum, angle of repose, shatter; ballistic particles (old A8); Margolus phase-permutation measurement and its ADR. Scenarios `avalanche_100k`, `fountain`.
 5. Liquids with pressure and compression; gases with buoyancy; `oxygen` plane. Scenarios `u_tube`, `dam_break_200k`, `gas_room_seal`, `methane_explosion`.
@@ -231,6 +237,6 @@ M3–M7 sessions are scheduled at the end of M2 against measured velocity.
 ## 15. Open decisions for approval
 
 1. Accept ADR 0014 (with the user decisions in rows 6, 11 and 14), ADR 0015 and ADR 0016.
-2. Accept the milestone table in §11 and the M1–M2 sessions in §14, with M1 S2 as the next session.
-3. Confirm that the legacy simulation is retired in M1 S2, after captures, rather than kept in parallel.
+2. Confirm milestone scope after the first integrated vertical slice; use the dated execution plan for the next bounded increment.
+3. Legacy retirement remains contingent on the cutover gates, rather than on a calendar/session number.
 4. Confirm the 250k correctness exit and the 500k `lowend` performance exit.

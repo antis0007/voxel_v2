@@ -40,6 +40,9 @@ pub struct Input {
     pub alt_down: bool,
     pub break_block: bool,
     pub place_block: bool,
+    /// Keep short clicks until the next fixed interaction step.
+    pub break_pressed: bool,
+    pub place_pressed: bool,
     pub wheel: f32,
     pub ctrl_down: bool,
     pub pick_block: bool,
@@ -304,7 +307,7 @@ fn update_player_local(
 
     let immersed = |point: Vec3| {
         let cell = point.floor().as_ivec3();
-        point.y - (cell.y as f32) < world.water_volume(cell + origin) as f32 / 8.0
+        point.y - (cell.y as f32) < world.water_fill(cell + origin)
     };
     let body_scale = player.scale / world.voxel_scale.meters();
     let was_swimming = player.swimming;

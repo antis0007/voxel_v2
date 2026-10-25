@@ -30,6 +30,10 @@ pub fn furnish(c: &Complex, k: &Corr, m: Vec3, along: f32, across: f32, half: f3
     }
     // Rubble at the wall foot, only where it leaves a clear two-metre lane
     // and never on a ramp, where it would stack on a step.
+    // Generator 48, at fine scales: a kerb along both floor edges.
+    if c.version >= super::fine::VERSION && v <= 0.5 && half - across.abs() < 0.3 && fy < 0.25 {
+        return Some(c.pal.trim);
+    }
     let p = (m / v).floor().as_ivec3();
     let flat = (k.fa - k.fb).abs() < 0.01;
     (flat && half >= 1.5 && half - across.abs() < 0.5 && fy < v && hash3(p.x, p.y, p.z, c.seed.wrapping_add(23)) > 0.82).then_some(B::Gravel)
@@ -45,6 +49,10 @@ pub fn shell(c: &Complex, k: &Corr, m: Vec3, v: f32) -> B {
     };
     let out = across.abs() - half;
     let fy = m.y - k.floor_at(m.x, m.z);
+    // Generator 48, at fine scales: a string course along the wall face.
+    if c.version >= super::fine::VERSION && v <= 0.5 && out < v && (1.2..1.2 + v.max(0.25)).contains(&fy) {
+        return c.pal.accent;
+    }
     if !(0.0..0.8).contains(&out) || k.a1 - k.a0 < 6.0 || along < k.a0 + 1.5 || along > k.a1 - 1.5 {
         return stone();
     }

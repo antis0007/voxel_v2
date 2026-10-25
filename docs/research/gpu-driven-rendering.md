@@ -1,5 +1,15 @@
-# GPU-driven rendering (Haar and Aaltonen; visibility buffer)
-Source: Ulrich Haar and Sebastian Aaltonen, "GPU-Driven Rendering Pipelines", SIGGRAPH 2015 Advances in Real-Time Rendering (https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf); slide text read via a mirror (pdf4pro), so exact claims are unverified against the PDF itself.
-Adopt: GPU culling of fixed-size clusters writing indirect/multi-draw arguments with no CPU readback; cluster-level frustum and occlusion culling; a visibility buffer (triangle and instance ids per pixel) as a cache-friendly alternative to a fat G-buffer.
-Reject: Ubisoft's 300-occluder depth pre-pass and per-cluster backface baking as first steps; CPU quad-tree culling; the reported 0.7 ms PS4 budget is not our target.
-Why: Indirect draws for 8^3 bricks cut CPU work for factory and magic scenes, but integer voxel state must stay out of the culling path and the iGPU budget is tight.
+# GPU-driven submission
+
+Reviewed 2026-10-24; R01/R02/C18. Haar/Aaltonen's [SIGGRAPH 2015 slides](https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf) timed out; exact pipeline and device timings remain unverified. The [binary mesher's own renderer](https://github.com/cgerikj/binary-greedy-meshing) documents indirect submission; its API route does not establish our backend support.
+
+## What we adopt
+
+S3 compares bounded brick/cluster culling and indirect submission while authoritative integer state stays separate from presentation. Keep cached CPU draw visibility as a proposed capability fallback.
+
+## What we reject
+
+Do not assume compute, multi-draw, Hi-Z, visibility buffers and every backend are available together. Do not declare a visibility buffer mandatory before measuring its material/transparent workload costs.
+
+## What we improve
+
+R02 specifies each capability branch, allocation and upload budget, including GL/no-compute. Publish frame-time distributions and edit latency on defined classes before selecting the renderer.

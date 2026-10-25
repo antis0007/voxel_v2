@@ -336,7 +336,7 @@ pub fn draw(ctx: &egui::Context, open: &mut bool) {
                             style = WandStyle::default();
                         }
                     });
-                    ui.small("U closes. Changes show in your hand at once.");
+                    ui.small("[U] Close");
                 });
             });
         });

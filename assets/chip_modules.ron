@@ -16,12 +16,23 @@ ChipTable(
             wire_pf_per_site: 0.15,
             margin: 1.25,
             max_layers: 3,
+            overlay_um: 2.0,
+            wafer_mm: 12.0,
         ),
+    ],
+    // Fabrication labs for wafer lots. Random defects follow Y = exp(-D·A)
+    // with D in defects/cm²; sigma is the die-to-die spread of the critical
+    // path; overlay is the 1-sigma mask alignment error in µm; a clean or
+    // strip step picks up contamination with probability `contamination`.
+    // `filters` is extra material per step for the cleaner lab.
+    labs: [
+        Lab(id: "bench", name: "Open Bench", defect_per_cm2: 18.0, sigma: 0.08, overlay_um: 1.4, contamination: 0.10, filters: 0),
+        Lab(id: "clean", name: "Clean Hood", defect_per_cm2: 4.0, sigma: 0.03, overlay_um: 0.6, contamination: 0.02, filters: 4),
     ],
     modules: [
         Module(
             id: "supply_pad",
-            name: "Supply pads + POR",
+            name: "Supply Pads",
             role: Supply,
             size: (2, 1),
             edge: true,
@@ -34,7 +45,7 @@ ChipTable(
         ),
         Module(
             id: "rc_osc",
-            name: "RC oscillator 4 MHz",
+            name: "RC Oscillator",
             role: Clock,
             size: (2, 2),
             delay_ns: 0.0,
@@ -47,7 +58,7 @@ ChipTable(
         ),
         Module(
             id: "core8",
-            name: "8-bit control core",
+            name: "Control Core",
             role: Core,
             size: (4, 4),
             delay_ns: 45.0,
@@ -70,7 +81,7 @@ ChipTable(
         ),
         Module(
             id: "alu8",
-            name: "8-bit ALU",
+            name: "ALU",
             role: Alu,
             size: (2, 3),
             combinational: true,
@@ -86,7 +97,7 @@ ChipTable(
         ),
         Module(
             id: "rom256",
-            name: "Mask ROM 256 B",
+            name: "Mask ROM",
             role: Rom,
             size: (3, 3),
             delay_ns: 250.0,
@@ -100,7 +111,7 @@ ChipTable(
         ),
         Module(
             id: "sram64",
-            name: "Static RAM 64 B",
+            name: "SRAM",
             role: Sram,
             size: (3, 3),
             delay_ns: 180.0,
@@ -114,7 +125,7 @@ ChipTable(
         ),
         Module(
             id: "timer8",
-            name: "8-bit wake timer",
+            name: "Timer 8-bit",
             role: Timer,
             size: (2, 1),
             delay_ns: 30.0,
@@ -127,7 +138,7 @@ ChipTable(
         ),
         Module(
             id: "timer16",
-            name: "16-bit wake timer",
+            name: "Timer 16-bit",
             role: Timer,
             size: (2, 2),
             delay_ns: 35.0,
@@ -140,8 +151,20 @@ ChipTable(
             ],
         ),
         Module(
+            id: "watchdog",
+            name: "Watchdog",
+            role: Watchdog,
+            size: (2, 1),
+            delay_ns: 25.0,
+            idle_uw: 80.0,
+            ports: [
+                Port(name: "vdd", signal: Power, dir: Sink, width: 1, at: (0, 0)),
+                Port(name: "bus", signal: PeriphBus, dir: Sink, width: 8, at: (1, 0)),
+            ],
+        ),
+        Module(
             id: "gpio4",
-            name: "GPIO ×4 + pads",
+            name: "GPIO",
             role: Gpio,
             size: (2, 2),
             edge: true,
@@ -156,7 +179,7 @@ ChipTable(
         ),
         Module(
             id: "adc8",
-            name: "8-bit SAR ADC + pad",
+            name: "ADC",
             role: Adc,
             size: (2, 2),
             edge: true,

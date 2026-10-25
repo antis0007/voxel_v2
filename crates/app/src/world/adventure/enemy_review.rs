@@ -138,8 +138,8 @@ pub(super) fn after(world: &mut World, player: &Player) {
         world.adventure.hazards.clear();
         return;
     }
-    if mode() == "poses" {
-        let t = world.adventure.time;
+    if mode() == "poses" || mode() == "materials" {
+        let t = if mode() == "materials" { 0.0 } else { world.adventure.time };
         let cycle = t % 4.0;
         for e in &mut world.adventure.enemies {
             e.pos = e.home;
@@ -161,6 +161,13 @@ pub(super) fn after(world: &mut World, player: &Player) {
         }
         world.adventure.projectiles.clear();
         world.adventure.hazards.clear();
+        if mode() == "materials" {
+            // Hold an ordinary mining-tool windup beside live creature models.
+            // This exercises the same model batch that previously inherited turf.
+            world.adventure.weapon = 0;
+            world.adventure.combo = 0;
+            world.adventure.melee_cd = world.adventure.swing_duration() * 0.78;
+        }
     }
     if automated() || manual() {
         observe(world, player);

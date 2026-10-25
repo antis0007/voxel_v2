@@ -1,0 +1,79 @@
+//! Executable per-step gameplay order shared by the window and headless drivers.
+//! Tools enter between `gameplay` and `finish`; no elapsed-time batching here.
+use super::{Budget, STEP_SECONDS, WorldSimulation};
+use crate::{
+    player::{Input, Player, update_player},
+    world::{self, DayNightCycle, World},
+};
+use glam::IVec3;
+use std::collections::HashSet;
+
+pub enum Hook {
+    BeforePlayer,
+    BeforeAdventure,
+}
+
+#[derive(Default)]
+pub struct Actions {
+    pub cast: bool,
+    pub cycle: bool,
+    pub melee: bool,
+}
+
+/// The callback only supplies driver-specific input/review hooks. All gameplay
+/// system calls and their fixed duration live here, rather than in stage names.
+pub fn gameplay(
+    world: &mut World,
+    player: &mut Player,
+    input: &mut Input,
+    move_player: bool,
+    mut hook: impl FnMut(Hook, &mut World, &mut Player, &mut Input) -> Actions,
+) -> bool {
+    // The CPU development region owns an isolated headless session. Unmigrated
+    // factory/spell writers are suspended there, not run against its mirror.
+    let legacy = world.ca_view.is_none();
+    if legacy {
+        world.expedition.tick(STEP_SECONDS);
+        let size = world::factory::step(world);
+        world.factory.tick(STEP_SECONDS, size);
+    }
+    hook(Hook::BeforePlayer, world, player, input);
+    if move_player {
+        update_player(player, input, world, STEP_SECONDS);
+    }
+    let actions = hook(Hook::BeforeAdventure, world, player, input);
+    let consumed = legacy
+        && world::adventure::tick(
+            world,
+            player,
+            STEP_SECONDS,
+            actions.cast,
+            actions.cycle,
+            actions.melee,
+        );
+    input.cast_pressed = false;
+    input.cycle_spell = false;
+    input.place_pressed = false;
+    input.break_pressed = false;
+    consumed
+}
+
+pub fn finish(
+    sim: &mut WorldSimulation,
+    world: &mut World,
+    player: &Player,
+    day: &mut DayNightCycle,
+    blocks: &mut HashSet<IVec3>,
+    chunks: &mut HashSet<IVec3>,
+    budget: Budget,
+    settle: bool,
+    advance_day: bool,
+) {
+    sim.update(world, player, STEP_SECONDS, blocks, chunks, budget);
+    if settle {
+        sim.settle(world);
+    }
+    if advance_day && sim.authority_error.is_none() {
+        day.advance(STEP_SECONDS);
+    }
+}

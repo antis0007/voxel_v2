@@ -12,6 +12,8 @@ use glam::{IVec3, Vec3};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod routes;
+
 /// Surface worldbuilding rides the current v18 baseline. It is sampled only in
 /// newly generated or unedited chunks; resident edits always win, as they do
 /// for every other generator layer.
@@ -33,6 +35,8 @@ struct Trail {
     max_x: f32,
     min_z: f32,
     max_z: f32,
+    /// Walkable surface heights, sampled along the curve (generator 37+).
+    grade: Vec<f32>,
 }
 
 impl Trail {
@@ -63,6 +67,7 @@ impl Trail {
             max_x,
             min_z,
             max_z,
+            grade: Vec::new(),
         }
     }
 
@@ -161,40 +166,45 @@ fn plan(cfg: &WorldSampleConfig) -> Rc<Plan> {
 
 fn build(cfg: &WorldSampleConfig) -> Plan {
     let mut trails = Vec::new();
-    let mut targets: Vec<(f32, f32, f32)> = Vec::new();
-    for (p, kind, _, variation) in super::sites::horizon_landmarks(cfg, (0, 0), REACH) {
-        if p.y <= cfg.water_level() as f32 * cfg.voxel_meters() + 2.0 {
-            continue;
+    if cfg.generator_version >= 37 {
+        trails = routes::network(cfg);
+    } else {
+        let mut targets: Vec<(f32, f32, f32)> = Vec::new();
+        for (p, kind, _, variation) in super::sites::horizon_landmarks(cfg, (0, 0), REACH) {
+            if p.y <= cfg.water_level() as f32 * cfg.voxel_meters() + 2.0 {
+                continue;
+            }
+            // The workshop entrance faces the spawn clearing. A path to its centre
+            // would disappear under the building, while this endpoint meets the
+            // front step in the open.
+            let target = if kind == 0 && p.x.abs() < 0.5 {
+                Vec3::new(0.0, p.y, p.z + 9.0 + variation)
+            } else {
+                Vec3::new(p.x, p.y, p.z)
+            };
+            let d = target.x.hypot(target.z);
+            if d > 20.0 {
+                targets.push((target.x, target.z, d));
+            }
         }
-        // The workshop entrance faces the spawn clearing. A path to its centre
-        // would disappear under the building, while this endpoint meets the
-        // front step in the open.
-        let target = if kind == 0 && p.x.abs() < 0.5 {
-            Vec3::new(0.0, p.y, p.z + 9.0 + variation)
-        } else {
-            Vec3::new(p.x, p.y, p.z)
-        };
-        let d = target.x.hypot(target.z);
-        if d > 20.0 {
-            targets.push((target.x, target.z, d));
+        targets.sort_by(|a, b| a.2.total_cmp(&b.2));
+        let mut used: Vec<(f32, f32)> = Vec::new();
+        for (i, (x, z, _)) in targets.into_iter().enumerate() {
+            if trails.len() >= MAX_TRAILS {
+                break;
+            }
+            if used.iter().any(|(ux, uz)| (x - ux).hypot(z - uz) < 40.0) {
+                continue;
+            }
+            used.push((x, z));
+            let seed = cfg
+                .seed
+                .wrapping_add((i as u32).wrapping_mul(0x9E37_79B1))
+                .wrapping_add(x.to_bits().rotate_left(7))
+                .wrapping_add(z.to_bits().rotate_left(17));
+            trails.push(Trail::new(0.0, 0.0, x, z, seed, 1.55));
         }
-    }
-    targets.sort_by(|a, b| a.2.total_cmp(&b.2));
-    let mut used: Vec<(f32, f32)> = Vec::new();
-    for (i, (x, z, _)) in targets.into_iter().enumerate() {
-        if trails.len() >= MAX_TRAILS {
-            break;
-        }
-        if used.iter().any(|(ux, uz)| (x - ux).hypot(z - uz) < 40.0) {
-            continue;
-        }
-        used.push((x, z));
-        let seed = cfg
-            .seed
-            .wrapping_add((i as u32).wrapping_mul(0x9E37_79B1))
-            .wrapping_add(x.to_bits().rotate_left(7))
-            .wrapping_add(z.to_bits().rotate_left(17));
-        trails.push(Trail::new(0.0, 0.0, x, z, seed, 1.55));
+
     }
 
     // Furnish the route with real places to stop: a cairn, a camp, a shrine,
@@ -297,7 +307,13 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
                 cfg.seed ^ (ti as u32),
                 0.9,
             );
-            trails.push(spur);
+            if cfg.generator_version < 37 {
+                trails.push(spur);
+            } else if let Some(spur) = routes::fit(cfg, spur, Some(routes::height_at(trail, t)), None) {
+                trails.push(spur);
+            } else {
+                nooks.pop();
+            }
         }
     }
 
@@ -336,7 +352,8 @@ pub(super) fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32, terrain_top:
     // Trails live in the top few voxels; structures reach about four metres
     // above and nooks about two metres below. Reject the bulk of a chunk before
     // touching the cached plan.
-    if !(-4.5..=5.5).contains(&depth) {
+    let clearance = if cfg.generator_version >= 37 { -8.0 } else { -4.5 };
+    if !(clearance..=5.5).contains(&depth) {
         return None;
     }
     let plan = plan(cfg);
@@ -352,6 +369,10 @@ pub(super) fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32, terrain_top:
             && let Some(b) = wayside_block(cfg, w, p, m) {
                 return Some(b);
             }
+    }
+
+    if cfg.generator_version >= 37 {
+        return routes::block(cfg, &plan.trails, m, terrain_top);
     }
 
     let mut best: Option<(f32, &Trail)> = None;

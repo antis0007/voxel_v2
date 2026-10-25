@@ -130,7 +130,7 @@ impl Design {
             }
             (None, None) => {
                 let id = self.fresh_id();
-                let name = format!("{}_{}", a.port, id);
+                let name = format!("{} {}", a.port.to_uppercase(), id);
                 self.nets.push(Net { id, name, pins: vec![a, b], paths: Vec::new(), manual: false });
                 id
             }

@@ -16,6 +16,7 @@ use glam::{IVec3, Vec3};
 
 mod dress;
 mod feature;
+mod fine;
 mod fixtures;
 mod glow;
 mod furnish;
@@ -210,6 +211,10 @@ impl Layout {
                     {
                         return Some(block);
                     }
+                    let f = t.frame(m);
+                    if let Some(kerb) = self.fine_kerb(t.style, f.lateral, f.half, m.y - f.floor, v) {
+                        return Some(kerb);
+                    }
                     let lit = if deco { self.passage_dress(t, m, v, mech) } else { None };
                     return Some(lit.unwrap_or(B::Air));
                 }
@@ -219,7 +224,7 @@ impl Layout {
             }
         }
         if let Some(style) = floor {
-            return Some(palette(style)[3]);
+            return Some(fine::flagstone(self.version, style, m, v).unwrap_or(palette(style)[3]));
         }
         shell.map(|(style, sealed, owner)| if sealed { B::TombStone } else { self.wall(cell, owner, style, m, v) })
     }
@@ -269,7 +274,7 @@ impl Layout {
         }
         if deco {
             let dressed = match s.shape {
-                Shape::Hall { .. } => self.hall_dress(s, cell, m, v, mech),
+                Shape::Hall { .. } => self.fine_hall(s, m, v).or_else(|| self.hall_dress(s, cell, m, v, mech)),
                 Shape::Round { x, z, r, floor, .. } => self.round_dress(x, z, r, floor, m, v, mech),
                 Shape::Cave { .. } => {
                     let lamp = if self.version >= glow::VERSION { self.cave_lamp(s, m, v, mech) } else { None };

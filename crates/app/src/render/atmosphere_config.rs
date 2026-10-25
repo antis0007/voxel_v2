@@ -53,18 +53,17 @@ impl AtmosphereConfig {
         self.presets.iter().try_for_each(AtmospherePreset::validate)
     }
 
-    pub fn active_preset(&self) -> &AtmospherePreset {
-        self.presets
-            .iter()
-            .find(|p| p.name == self.active)
-            .unwrap_or(&self.presets[0])
+    /// The preset named by `active`. Parsed configurations always contain it;
+    /// a manually constructed configuration may be empty or name no preset.
+    pub fn active_preset(&self) -> Option<&AtmospherePreset> {
+        self.presets.iter().find(|p| p.name == self.active)
     }
 
     /// The preset selected in the shipped file. A malformed shipped file is a
     /// build defect caught by the tests below; the fallback keeps release safe.
     pub fn shipped_active() -> AtmospherePreset {
         match Self::parse(ATMOSPHERE_RON) {
-            Ok(config) => config.active_preset().clone(),
+            Ok(config) => config.active_preset().cloned().unwrap_or_else(AtmospherePreset::earthlike),
             Err(error) => {
                 eprintln!("{error}; using built-in earthlike coefficients");
                 AtmospherePreset::earthlike()
@@ -93,7 +92,9 @@ impl AtmospherePreset {
 
     fn validate(&self) -> Result<(), String> {
         let name = &self.name;
-        if (self.planet_radius_m - RUNTIME_PLANET_RADIUS_M).abs() > 1.0 {
+        if !self.planet_radius_m.is_finite()
+            || (self.planet_radius_m - RUNTIME_PLANET_RADIUS_M).abs() > 1.0
+        {
             return Err(format!(
                 "{name}: planet_radius_m must be {RUNTIME_PLANET_RADIUS_M} for now"
             ));
@@ -103,6 +104,9 @@ impl AtmospherePreset {
         }
         if !(-0.99..=0.99).contains(&self.mie_g) {
             return Err(format!("{name}: mie_g outside -0.99..=0.99"));
+        }
+        if !self.ozone_center_m.is_finite() || self.ozone_center_m < 0.0 {
+            return Err(format!("{name}: ozone_center_m must be finite and non-negative"));
         }
         let positive = [
             self.rayleigh_scale_height_m,

@@ -1,6 +1,7 @@
 //! Inventory navigation, Minecraft-style survival inventory screen (E), 2×2 hand-crafting grid,
 //! HWYLA/modded-style compact recipe & tooltip QOL, and separate creative block catalogue.
 use super::*;
+mod descriptions;
 use crate::world::inventory::{
     ArmorTier, CRAFT_SLOTS, CraftingRecipe, EQUIP_SLOTS, EquipSlot, HAND_GRID, HOTBAR_SLOTS,
     Item, ItemStack, PACK_SLOTS, PointerRelease, SlotAddr, SurvivalInventory, pointer_release,
@@ -324,31 +325,25 @@ fn show_item_tooltip(resp: &egui::Response, stack: ItemStack, inv: &SurvivalInve
                 ui.weak(format!("({}/{})", stack.count, inv.stack_limit(stack.item)));
             }
         });
-        ui.label(
-            RichText::new(stack.item.category())
-                .size(11.0)
-                .color(presentation::AMBER),
-        );
-        ui.label(
-            RichText::new(stack.item.description())
-                .size(11.5)
-                .color(presentation::MUTED),
-        );
+        descriptions::details(ui, stack.item);
+        if let Some((before, after)) = inv.armor_comparison(stack.item) {
+            let delta = (after - before) * 100.0;
+            ui.label(RichText::new(format!("Equipped defence: {:.0}% → {:.0}% ({delta:+.0}%)", before*100.0, after*100.0))
+                .color(if delta < 0.0 { presentation::DANGER } else { presentation::PAPER }));
+        }
         let total = inv.count_item(stack.item);
-        if let Item::Wand { id, .. } = stack.item {
-            super::wand_icon::card(ui, id);
-        }
-        if let Item::PowerKit(k) = stack.item {
-            ui.small(format!("Stored: {} · upgrade {}", crate::world::factory::power::fmt_energy(k.energy as f64), k.upgrade));
-            ui.small("One assembly per slot. Charge travels with this item.");
-        }
         if total > stack.count {
             ui.small(format!("Owned: {total}"));
         }
-        ui.separator();
-        ui.small("LMB: Pick/Place · RMB: Split/Place 1 · Shift+Click: Transfer");
-        ui.small("Ctrl+Click: Transfer All · Double-Click: Gather");
-        ui.small("Drag outside this panel: Throw stack · Q / Ctrl+Q: Drop 1 / All");
+        if descriptions::expanded(ui) {
+            if let Item::Wand { id, .. } = stack.item {
+                super::wand_icon::card(ui, id);
+            }
+            ui.separator();
+            ui.small("[LMB] Stack · [RMB] 1x · [Shift] Transfer");
+            ui.small("[Ctrl] All · [Double Click] Stack");
+            ui.small("Drag outside this panel: Throw stack · Q / Ctrl+Q: Drop 1 / All");
+        }
     });
 }
 
@@ -676,11 +671,7 @@ fn draw_recipe_tooltip(ui: &mut egui::Ui, recipe: &CraftingRecipe, inv: &Surviva
             );
         }
     });
-    ui.label(
-        RichText::new(recipe.output.item.description())
-            .size(11.5)
-            .color(presentation::MUTED),
-    );
+    descriptions::details(ui, recipe.output.item);
     ui.separator();
     for &(item, need) in recipe.ingredients {
         let have = inv.count_item(item);
@@ -936,6 +927,16 @@ fn draw_survival_pack_view(
                             }
                             out_resp.clone().on_hover_ui(|ui| {
                                 draw_recipe_tooltip(ui, recipe, survival);
+                                if let Err(reason) = survival.grid_craft_batches(false, bench) {
+                                    ui.colored_label(presentation::DANGER, reason.message());
+                                }
+                                match survival.grid_craft_batches(true, bench) {
+                                    Ok(fit) => { ui.small(format!("Pack has room for {fit} of {batches} batches")); }
+                                    Err(crate::world::inventory::CraftBlocker::OutputSpace) => {
+                                        ui.colored_label(presentation::DANGER, "Pack has no room for this output");
+                                    }
+                                    _ => {}
+                                }
                                 ui.small(format!(
                                     "{batches} ready · Click takes one · Right-click takes one · Shift-click crafts the stack into the pack"
                                 ));
@@ -952,13 +953,12 @@ fn draw_survival_pack_view(
                             ui.painter().rect_filled(out_rect.shrink(2.0), 0, ghost_missing);
                             out_resp.on_hover_ui(|ui| {
                                 draw_recipe_tooltip(ui, rec, survival);
-                                ui.small("Missing ingredients are marked red");
                             });
                         } else {
                             out_resp.on_hover_text(if bench {
-                                "3×3 workbench output · pick a recipe to stage it"
+                                "Output · 3×3"
                             } else {
-                                "2×2 hand output · machines need a workbench (F, then E)"
+                                "Output · 2×2"
                             });
                         }
                     });
@@ -974,22 +974,16 @@ fn draw_survival_pack_view(
                 ui.label(section_label("BACKPACK"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .small_button("Stack")
-                        .on_hover_text("Merge matching backpack items into hotbar stacks")
+                        .small_button("⇧")
+                        .on_hover_text("Stack Transfer")
                         .clicked()
                     {
                         survival.quick_stack_to_hotbar();
                     }
                     if ui
-                        .small_button("Sort [R]")
-                        .on_hover_text("Compact partial stacks and sort backpack by category [R]")
+                        .small_button("≡")
+                        .on_hover_text("Sort")
                         .clicked()
-                        || (ui.ctx().input(|i| i.key_pressed(egui::Key::R))
-                            && ui
-                                .ctx()
-                                .data_mut(|d| d.get_temp::<Option<Item>>(egui::Id::new("surv_hovered_item")))
-                                .flatten()
-                                .is_none())
                     {
                         survival.sort_pack();
                     }
@@ -1062,7 +1056,7 @@ fn draw_survival_pack_view(
                 ui.label(section_label("RECIPES"));
                 if ui
                     .selectable_label(craftable_only, "Ready")
-                    .on_hover_text("Show only recipes you can craft from the pack")
+                    .on_hover_text("Craftable")
                     .clicked()
                 {
                     craftable_only = !craftable_only;
@@ -1189,7 +1183,7 @@ fn draw_survival_pack_view(
                         .size(11.0)
                         .color(presentation::MUTED),
                 )
-                .on_hover_text("Found on the crystal altar of the matching Holy Mountain landing, or assembled with F at a workbench.");
+                .on_hover_text("Workbench / Crystal Altar");
             }
         });
     }));
@@ -1202,6 +1196,11 @@ fn draw_survival_pack_view(
     // Number keys 1–9 while hovering any slot swap that slot with hotbar[0..9],
     // and pressing Q (1 item) or Ctrl+Q (entire stack) while hovering a slot drops it immediately!
     if let Some(addr) = hovered_slot {
+        if matches!(addr, SlotAddr::Pack(_))
+            && survival.cursor.is_none()
+            && ui.ctx().input(|i| i.pointer.button_clicked(egui::PointerButton::Middle)) {
+            survival.sort_pack();
+        }
         let keys = [
             egui::Key::Num1,
             egui::Key::Num2,
@@ -1434,9 +1433,7 @@ pub(super) fn draw(
                 }
             }
 
-            // Minimal header bar: Mode tabs on the left, Close on the right
-            ui.horizontal_wrapped(|ui| {
-                for (id, label) in [
+            let pages = [
                     (2, "Inventory"),
                     (6, "Recipes"),
                     (7, "Production"),
@@ -1446,14 +1443,34 @@ pub(super) fn draw(
                     (3, "Machines"),
                     (5, "Forge"),
                     (4, "Creative"),
-                ] {
-                    let response = if compact {
-                        ui.selectable_label(page == id, label)
-                    } else {
-                        front_end::tab(ui, label, page == id)
-                    };
-                    if response.clicked() {
-                        page = id;
+            ];
+            // Navigation adapts to logical width, preserving the player's zoom.
+            // Narrow fieldbooks use one destination picker instead of spending
+            // several rows on tabs before the usable content even begins.
+            let narrow_navigation = ui.available_width() < 680.0;
+            if !narrow_navigation {
+                ui.horizontal_wrapped(|ui| {
+                    for (id, label) in pages {
+                        if grimoire::tab(ui, label, page == id, compact).clicked() {
+                            page = id;
+                            *drag = None;
+                        }
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                if narrow_navigation {
+                    let before = page;
+                    let title = pages.iter().find(|(id, _)| *id == page)
+                        .map_or("Inventory", |(_, label)| *label);
+                    egui::ComboBox::from_id_salt("fieldbook_destination")
+                        .selected_text(RichText::new(title).size(12.0).color(presentation::PAPER))
+                        .show_ui(ui, |ui| {
+                            for (id, label) in pages {
+                                ui.selectable_value(&mut page, id, RichText::new(label).size(12.0));
+                            }
+                        });
+                    if page != before {
                         *drag = None;
                     }
                 }
@@ -1464,6 +1481,9 @@ pub(super) fn draw(
                         *drag = None;
                     }
                     if page == 2 {
+                        if !narrow_navigation {
+                            ui.weak("Hover + Alt: controls and details");
+                        }
                         if ui.ctx().input(|i| i.key_pressed(egui::Key::Q)) {
                             *action = UiAction::DropInventory(creative.selected_slot);
                         }
@@ -1658,6 +1678,8 @@ pub(super) fn draw(
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if page == 5 {
+                        super::resonance::draw(ui, &equipment.resonance, machines.bench, action);
+                        ui.separator();
                         super::tinkering::draw(ui, equipment, survival, machines.bench, action);
                         return;
                     }
@@ -1815,11 +1837,7 @@ fn draw_catalogue(
                 response.clone().on_hover_ui(|ui| {
                     ui.set_max_width(220.0);
                     ui.strong(RichText::new(item.name()).size(13.0));
-                    ui.label(
-                        RichText::new(item.description())
-                            .size(11.0)
-                            .color(presentation::MUTED),
-                    );
+                    descriptions::details(ui, *item);
                     ui.small(if full {
                         format!("Click to add a full stack (×{amount}).")
                     } else {

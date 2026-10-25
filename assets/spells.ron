@@ -5,8 +5,6 @@
     (
         id: 0,
         name: "Spark",
-        flavor: "One spark, the old tithe unit. The wand logs it as given. It is not much, but it is yours.",
-        hint: "Chains to nearby enemies. Shatters frost and charges factory machines.",
         tag: "PROJECTILE",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
@@ -23,8 +21,6 @@
     (
         id: 1,
         name: "Mend",
-        flavor: "A field-surgery routine from the anchor\'s work crews. Your wounds close with a faint, embarrassed sigh.",
-        hint: "Circle of Vigour: restores health immediately and spawns sanctum motes.",
         tag: "UTILITY",
         color: (0.62, 0.74, 0.38),
         cost: 30.0,
@@ -41,8 +37,6 @@
     (
         id: 2,
         name: "Frost lance",
-        flavor: "A spear of cold leaves your hand. The air behind it turns to glass.",
-        hint: "Cryo lance: freezes guardians and solidifies water into walkable ice.",
         tag: "PROJECTILE",
         color: (0.55, 0.74, 0.82),
         cost: 18.0,
@@ -59,8 +53,6 @@
     (
         id: 3,
         name: "Resonant burst",
-        flavor: "The bolt rings like a struck bell. The wall disagrees with it, then stops disagreeing.",
-        hint: "Explosive bolt: carves a 2 m crater and shatters frozen targets.",
         tag: "PROJECTILE",
         color: (0.52, 0.36, 0.52),
         cost: 30.0,
@@ -77,8 +69,6 @@
     (
         id: 4,
         name: "Mirror ward",
-        flavor: "Crystal plates circle you, ground to the same tolerance as choir glass. They return what is sent at you.",
-        hint: "Orbiting crystal runes reflect three enemy bolts into lightning.",
         tag: "UTILITY",
         color: (0.55, 0.74, 0.82),
         cost: 26.0,
@@ -95,8 +85,6 @@
     (
         id: 5,
         name: "Spore bloom",
-        flavor: "A conservatory strain, licensed for wound care. It smells of rain. It is a cousin of the Bloom.",
-        hint: "Bio-spore nebula harms guardians, heals you, and seeds fungal soil.",
         tag: "PROJECTILE",
         color: (0.42, 0.58, 0.32),
         cost: 38.0,
@@ -113,8 +101,6 @@
     (
         id: 6,
         name: "Rift well",
-        flavor: "A ballast well, used to sink spare mass where the anchor needed weight. Nobody fitted it with an off switch.",
-        hint: "Gravity singularity pulls guardians inward. Found in archives.",
         tag: "STATIC FIELD",
         color: (0.52, 0.36, 0.52),
         cost: 42.0,
@@ -131,8 +117,6 @@
     (
         id: 7,
         name: "Echo step",
-        flavor: "A carriage handoff routine, scaled to one body. The in-between was brief and unremarkable.",
-        hint: "Teleport blink along your aim ray onto safe ground. Found in cathedrals.",
         tag: "UTILITY",
         color: (0.55, 0.74, 0.82),
         cost: 24.0,
@@ -149,9 +133,7 @@
     (
         id: 8,
         name: "Empty",
-        flavor: "An empty slot. The contacts are clean. Someone pulled this card on purpose.",
-        hint: "Empty wand slot.",
-        tag: "PROJECTILE",
+        tag: "EMPTY",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
         cooldown: 0.28,
@@ -167,8 +149,6 @@
     (
         id: 9,
         name: "Lumen drill",
-        flavor: "A survey needle from the founders\' prospecting kit. It does not stop for stone, and it is rude about it.",
-        hint: "Pinpoint 6.5 m laser that carves solid rock/ore and slashes cast delay.",
         tag: "LASER DRILL",
         color: (0.96, 0.9, 0.79),
         cost: 10.0,
@@ -185,8 +165,6 @@
     (
         id: 10,
         name: "Black hole",
-        flavor: "Not truly a black hole: a ballast singularity the anchor kept for trimming load. Everything near it complies.",
-        hint: "Slow void singularity that devours terrain along its path and pulls foes in.",
         tag: "STATIC FIELD",
         color: (0.32, 0.2, 0.34),
         cost: 46.0,
@@ -203,8 +181,6 @@
     (
         id: 11,
         name: "Plasma cross",
-        flavor: "Two beams cross in the dark. Where they meet, the air burns.",
-        hint: "Deploys a spinning 4-blade 3D plasma cross that slices foes and melts ice.",
         tag: "STATIC FIELD",
         color: (0.55, 0.74, 0.82),
         cost: 34.0,
@@ -221,8 +197,6 @@
     (
         id: 12,
         name: "Magma glob",
-        flavor: "A glob of molten rock. It is heavier than it looks, and hotter.",
-        hint: "Molten fireball that heats the thermal lattice, ignites fire, and boils water.",
         tag: "PROJECTILE",
         color: (0.86, 0.46, 0.24),
         cost: 22.0,
@@ -239,8 +213,6 @@
     (
         id: 13,
         name: "Cryo nova",
-        flavor: "A pulse of cold rolls outward. Water stops pretending to be water.",
-        hint: "Sub-zero sphere that freezes water into ice bridges and deep-freezes foes.",
         tag: "PROJECTILE",
         color: (0.55, 0.74, 0.82),
         cost: 26.0,
@@ -257,8 +229,6 @@
     (
         id: 14,
         name: "Thunder charge",
-        flavor: "The charge builds in your palm until it cannot. Then it can.",
-        hint: "High-voltage bolt that arcs across enemies and electrifies water & cables.",
         tag: "PROJECTILE",
         color: (0.55, 0.74, 0.82),
         cost: 36.0,
@@ -275,8 +245,6 @@
     (
         id: 15,
         name: "Touch of gold",
-        flavor: "An assay routine that reports in gold. The founders found it funnier than you will.",
-        hint: "Alchemical transmutation: turns stone and dirt into crystal, ore, and glowcaps.",
         tag: "PROJECTILE",
         color: (0.9, 0.72, 0.42),
         cost: 32.0,
@@ -293,8 +261,6 @@
     (
         id: 16,
         name: "Bifurcate",
-        flavor: "One bolt becomes two. The second is slightly more confident than the first.",
-        hint: "Draws and casts the next 2 spells in the deck simultaneously.",
         tag: "MULTICAST",
         color: (0.55, 0.74, 0.82),
         cost: 2.0,
@@ -311,8 +277,6 @@
     (
         id: 17,
         name: "Trifurcate",
-        flavor: "One bolt becomes three. Nobody asked the walls.",
-        hint: "Draws and casts the next 3 spells in a 3D triad formation.",
         tag: "MULTICAST",
         color: (0.55, 0.74, 0.82),
         cost: 4.0,
@@ -329,8 +293,6 @@
     (
         id: 18,
         name: "Trigger bolt",
-        flavor: "A conditional, card to card. On impact, the next routine wakes up and looks around.",
-        hint: "Attaches the next spell in the deck as a 3D impact payload.",
         tag: "TRIGGER MOD",
         color: (0.86, 0.46, 0.24),
         cost: 6.0,
@@ -347,8 +309,6 @@
     (
         id: 19,
         name: "Homing arc",
-        flavor: "An arc that remembers who it was aimed at, and keeps remembering.",
-        hint: "Curves projectile trajectories in 3D toward nearby guardians.",
         tag: "MODIFIER",
         color: (0.62, 0.74, 0.38),
         cost: 8.0,
@@ -365,8 +325,6 @@
     (
         id: 20,
         name: "Orbit & ricochet",
-        flavor: "The bolt circles, strikes, and rebounds, unable to leave well enough alone.",
-        hint: "Adds orbiting satellite bolts, +22% damage, and 2 wall ricochet bounces.",
         tag: "MODIFIER",
         color: (0.52, 0.36, 0.52),
         cost: 6.0,
@@ -383,8 +341,6 @@
     (
         id: 21,
         name: "Heavy bore",
-        flavor: "The tunnelling routine that dug the Undercrown. It does not hurry. It does not stop.",
-        hint: "Matter Eater + Heavy Shot: +35% damage and bores through solid rock in flight.",
         tag: "MODIFIER",
         color: (0.86, 0.46, 0.24),
         cost: 10.0,
@@ -401,8 +357,6 @@
     (
         id: 22,
         name: "Rapid flux",
-        flavor: "The wand stutters faster than thought. You feel your pulse in the spell.",
-        hint: "Add Mana + Chainsaw: refunds up to 20 mana and cuts cast delay & recharge time.",
         tag: "MODIFIER",
         color: (0.62, 0.74, 0.38),
         cost: 0.0,
@@ -419,8 +373,6 @@
     (
         id: 23,
         name: "Elemental wake",
-        flavor: "Fire and frost follow in the bolt\'s wake, taking turns.",
-        hint: "Projectiles leave a thermal/hydro wake, a micro-voxel trail, and +12% damage.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 5.0,
@@ -437,8 +389,6 @@
     (
         id: 24,
         name: "Timberfall",
-        flavor: "A freight drop request. Somewhere above, a manifest of lumber is being honoured.",
-        hint: "Timberfall: shears a targeted tree. Leaves vanish; the trunk falls as a rigid body.",
         tag: "UTILITY",
         color: (0.42, 0.58, 0.32),
         cost: 8.0,
@@ -455,8 +405,6 @@
     (
         id: 25,
         name: "Gale",
-        flavor: "A ventilation routine for clearing spores from a hall. It moves things that were not asking to be moved.",
-        hint: "Gale: a short radial wind burst that staggers foes and launches loose assemblies.",
         tag: "UTILITY",
         color: (0.55, 0.74, 0.82),
         cost: 12.0,
@@ -473,8 +421,6 @@
     (
         id: 26,
         name: "Volatile edge",
-        flavor: "The edge is unstable. It will cut. It may also cut you.",
-        hint: "Volatile edge: impacts release a small physics crater and +8% damage.",
         tag: "MODIFIER",
         color: (0.86, 0.46, 0.24),
         cost: 7.0,
@@ -491,8 +437,6 @@
     (
         id: 27,
         name: "Siphon",
-        flavor: "You take a little of what you strike. The wand records it as owed.",
-        hint: "Siphon: direct hits restore a little health and add +5% damage.",
         tag: "MODIFIER",
         color: (0.86, 0.42, 0.36),
         cost: 6.0,
@@ -509,8 +453,6 @@
     (
         id: 28,
         name: "Ember seed",
-        flavor: "A seed of cinder. It waits for something dry to love.",
-        hint: "Ember seed: a lobbed seed that ignites flammable ground where it lands.",
         tag: "PROJECTILE",
         color: (0.86, 0.46, 0.24),
         cost: 9.0,
@@ -527,8 +469,6 @@
     (
         id: 29,
         name: "Meteor",
-        flavor: "A deorbit request on a channel the braid still honours. Somewhere above, a rock has been informed.",
-        hint: "Meteor: calls a rock down on your crosshair. Wide crater, fire, and a shove.",
         tag: "PROJECTILE",
         color: (0.95, 0.4, 0.12),
         cost: 40.0,
@@ -545,8 +485,6 @@
     (
         id: 30,
         name: "Time snag",
-        flavor: "The air thickens. Everything near you reconsiders its hurry.",
-        hint: "Time snag: slows nearby foes for 3.5 s and crushes hostile bolts to a crawl.",
         tag: "UTILITY",
         color: (0.74, 0.82, 0.86),
         cost: 24.0,
@@ -563,8 +501,6 @@
     (
         id: 31,
         name: "Grapple",
-        flavor: "A cable-rigging routine from the chain lifts. A line, a hook, and the ground comes to you.",
-        hint: "Grapple: hooks the block you aim at (32 m) and hauls you toward it.",
         tag: "UTILITY",
         color: (0.96, 0.9, 0.79),
         cost: 12.0,
@@ -581,8 +517,6 @@
     (
         id: 32,
         name: "Leap",
-        flavor: "Your feet remember being lighter.",
-        hint: "Leap: launches you up and forward. Works in mid-air.",
         tag: "UTILITY",
         color: (0.62, 0.74, 0.38),
         cost: 10.0,
@@ -599,8 +533,6 @@
     (
         id: 34,
         name: "Touch",
-        flavor: "No bolt. The wand\'s bare contact plate, meant for testing a circuit by hand.",
-        hint: "Touch: the next effect reads the body under your crosshair.",
         tag: "DELIVERY",
         color: (0.96, 0.9, 0.79),
         cost: 4.0,
@@ -617,8 +549,6 @@
     (
         id: 35,
         name: "Growth",
-        flavor: "The spell takes root and grows into something nobody planned.",
-        hint: "Growth: enlarge a lanterncap, or raise a juvenile from fungal soil.",
         tag: "EFFECT",
         color: (0.62, 0.74, 0.38),
         cost: 14.0,
@@ -635,8 +565,6 @@
     (
         id: 36,
         name: "Conjure lanterncap",
-        flavor: "A lanterncap: a walking fungal lamp the Ballast bred for dark halls. Docile, warm, and fond of people.",
-        hint: "Conjure lanterncap: create your one owned juvenile where this cast lands.",
         tag: "EFFECT",
         color: (0.9, 0.72, 0.42),
         cost: 28.0,
@@ -653,8 +581,6 @@
     (
         id: 37,
         name: "Widen",
-        flavor: "The bolt swells. It is easier to hit things now, including things you liked.",
-        hint: "Widen: the bolt\'s collision grows to 1.8×. The creature\'s size does not.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 6.0,
@@ -671,8 +597,6 @@
     (
         id: 38,
         name: "Seek ally",
-        flavor: "The bolt turns its head toward your friend, and nothing else matters to it.",
-        hint: "Seek ally: the bolt steers to your lanterncap, then to enemies.",
         tag: "MODIFIER",
         color: (0.62, 0.74, 0.38),
         cost: 8.0,
@@ -689,8 +613,6 @@
     (
         id: 39,
         name: "Shrink",
-        flavor: "The bolt shrinks to a sliver. It slips between things that thought they were safe.",
-        hint: "Shrink: step a lanterncap down one size class.",
         tag: "EFFECT",
         color: (0.48, 0.36, 0.26),
         cost: 14.0,
@@ -707,8 +629,6 @@
     (
         id: 40,
         name: "Divide by 2",
-        flavor: "Cast half as often, twice as carefully. Mostly the first part.",
-        hint: "Divide by 2: the next spell fires twice for one mana payment.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 8.0,
@@ -725,8 +645,6 @@
     (
         id: 41,
         name: "Divide by 4",
-        flavor: "A quarter of the haste. The rest of the wand is, frankly, relieved.",
-        hint: "Divide by 4: the next spell fires four times for one mana payment.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 16.0,
@@ -743,8 +661,6 @@
     (
         id: 42,
         name: "Curve",
-        flavor: "The bolt leans into a gentle curve. It has somewhere to be.",
-        hint: "Curve: the bolt yaws at a constant rate.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 12.0,
@@ -761,8 +677,6 @@
     (
         id: 43,
         name: "Wiggle",
-        flavor: "The bolt wiggles like it is trying to remember a dance.",
-        hint: "Wiggle: the bolt snakes along its flight.",
         tag: "MODIFIER",
         color: (0.62, 0.74, 0.38),
         cost: 12.0,
@@ -779,8 +693,6 @@
     (
         id: 44,
         name: "Orbiting arc",
-        flavor: "An arc spins in place around you, keeping its distance and its secrets.",
-        hint: "Orbiting arc: the bolt circles you.",
         tag: "MODIFIER",
         color: (0.52, 0.36, 0.52),
         cost: 12.0,
@@ -797,8 +709,6 @@
     (
         id: 45,
         name: "Blood siphon",
-        flavor: "The spell drinks from what it wounds, and hands it back to you, warm.",
-        hint: "Blood siphon: heal for a quarter of the magic damage this hit dealt.",
         tag: "MODIFIER",
         color: (0.86, 0.42, 0.36),
         cost: 10.0,
@@ -815,8 +725,6 @@
     (
         id: 46,
         name: "Unstable",
-        flavor: "One cast in five goes wrong. You will not be told which one.",
-        hint: "Unstable: more dangerous, and one cast in five fizzles.",
         tag: "MODIFIER",
         color: (0.86, 0.46, 0.24),
         cost: 4.0,
@@ -833,8 +741,6 @@
     (
         id: 47,
         name: "If wounded",
-        flavor: "If you are hurt, the next spell wakes up. It has been waiting for this.",
-        hint: "If wounded: the next spell fires only while you are below half health.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
@@ -851,8 +757,6 @@
     (
         id: 48,
         name: "If foe",
-        flavor: "If a foe is near, the next spell wakes up. It has also been waiting.",
-        hint: "If foe: the next spell fires only while an enemy is in sight.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
@@ -869,8 +773,6 @@
     (
         id: 49,
         name: "Alpha",
-        flavor: "The first card in a program. Everything after it is a question of arrangement.",
-        hint: "Alpha: copy the first projectile on the wand.",
         tag: "MODIFIER",
         color: (0.96, 0.9, 0.79),
         cost: 12.0,
@@ -887,8 +789,6 @@
     (
         id: 50,
         name: "Chaotic path",
-        flavor: "The bolt takes no path anyone has drawn. Neither do you, now.",
-        hint: "Chaotic path: each cast rolls curve, wiggle, or orbit.",
         tag: "MODIFIER",
         color: (0.52, 0.36, 0.52),
         cost: 12.0,
@@ -905,8 +805,6 @@
     (
         id: 51,
         name: "Light shot",
-        flavor: "A small, stubborn light that keeps the dark at arm\'s length.",
-        hint: "Light shot: faster, and a little weaker.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
@@ -923,8 +821,6 @@
     (
         id: 52,
         name: "Long life",
-        flavor: "The bolt lingers a good deal longer than it should. It likes the company.",
-        hint: "Long life: the bolt flies longer.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 12.0,
@@ -941,8 +837,6 @@
     (
         id: 53,
         name: "Piercing",
-        flavor: "The bolt goes through things instead of around them, like a bad idea.",
-        hint: "Piercing: the bolt keeps one extra bounce.",
         tag: "MODIFIER",
         color: (0.86, 0.46, 0.24),
         cost: 12.0,
@@ -959,8 +853,6 @@
     (
         id: 54,
         name: "Accelerate",
-        flavor: "The bolt picks up speed as it goes. By the end it is not listening.",
-        hint: "Accelerate: the bolt leaves faster.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
@@ -977,8 +869,6 @@
     (
         id: 55,
         name: "Damage plus",
-        flavor: "More damage. No subtlety. No apologies.",
-        hint: "Damage plus: +15% damage, still inside the 2.6× cap.",
         tag: "MODIFIER",
         color: (0.86, 0.42, 0.36),
         cost: 12.0,
@@ -995,8 +885,6 @@
     (
         id: 56,
         name: "Ignite",
-        flavor: "The bolt arrives already burning. So, shortly, does the target.",
-        hint: "Ignite: hits set enemies burning. Wet enemies flash to steam instead.",
         tag: "ELEMENT",
         color: (0.86, 0.46, 0.24),
         cost: 9.0,
@@ -1013,8 +901,6 @@
     (
         id: 57,
         name: "Static charge",
-        flavor: "Blue light crawls along the bolt. The watch used it to pass lightning between towers.",
-        hint: "Static charge: hits stagger. A wet enemy is conducted for +80% damage.",
         tag: "ELEMENT",
         color: (0.74, 0.82, 0.86),
         cost: 9.0,
@@ -1031,8 +917,6 @@
     (
         id: 58,
         name: "Venom coat",
-        flavor: "The bolt is coated in something green and patient.",
-        hint: "Venom coat: hits poison, stacking up to five times for deeper damage.",
         tag: "ELEMENT",
         color: (0.62, 0.74, 0.38),
         cost: 9.0,
@@ -1049,8 +933,6 @@
     (
         id: 59,
         name: "Drench",
-        flavor: "The bolt is, improbably, a splash. Everything it touches is now conductive.",
-        hint: "Drench: hits soak the enemy. Sets up shock, frost and steam reactions.",
         tag: "ELEMENT",
         color: (0.28, 0.48, 0.55),
         cost: 9.0,
@@ -1067,8 +949,6 @@
     (
         id: 60,
         name: "Cold snap",
-        flavor: "Frost forms on the bolt in exactly one held breath, by the sluice tables.",
-        hint: "Cold snap: hits chill the enemy. A wet enemy flash-freezes for longer.",
         tag: "ELEMENT",
         color: (0.55, 0.74, 0.82),
         cost: 9.0,
@@ -1085,8 +965,6 @@
     (
         id: 61,
         name: "Chain arc",
-        flavor: "One hit, then a jump, then another. The bolt dislikes being alone.",
-        hint: "Chain arc: on impact, lightning jumps between nearby enemies.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 10.0,
@@ -1103,8 +981,6 @@
     (
         id: 62,
         name: "Shrapnel",
-        flavor: "The bolt bursts into a fan of tiny, furious pieces.",
-        hint: "Shrapnel: on impact, shards hit every enemy within two metres.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 12.0,
@@ -1121,8 +997,6 @@
     (
         id: 63,
         name: "Overcharge",
-        flavor: "More sparks than the card is rated for. It sulks about it, afterward.",
-        hint: "Overcharge: +45% damage, slower bolt, expensive.",
         tag: "MODIFIER",
         color: (0.86, 0.42, 0.36),
         cost: 20.0,
@@ -1139,8 +1013,6 @@
     (
         id: 64,
         name: "Reverse",
-        flavor: "The bolt leaves the wand the way you came. Rude, and effective.",
-        hint: "Reverse: the next bolt fires behind you. Pair with Heavy bore to dig backward.",
         tag: "MODIFIER",
         color: (0.52, 0.36, 0.52),
         cost: 4.0,
@@ -1157,8 +1029,6 @@
     (
         id: 65,
         name: "Gravity",
-        flavor: "Adds mass to the bolt. Crews used it to seat a coupling without a hammer.",
-        hint: "Gravity: the bolt arcs downward. Stack for a steeper fall.",
         tag: "MODIFIER",
         color: (0.48, 0.36, 0.26),
         cost: 3.0,
@@ -1175,8 +1045,6 @@
     (
         id: 66,
         name: "Phase",
-        flavor: "The bolt passes through one wall. The card\'s maker did not record how, and the founders never reproduced it.",
-        hint: "Phase: the bolt passes through the next wall it meets.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 12.0,
@@ -1193,8 +1061,6 @@
     (
         id: 67,
         name: "Reckless",
-        flavor: "More damage. Fewer questions. The difference goes on your tally.",
-        hint: "Reckless: +60% damage, but each cast costs you 4 health (never lethal).",
         tag: "MODIFIER",
         color: (0.86, 0.42, 0.36),
         cost: 8.0,
@@ -1211,8 +1077,6 @@
     (
         id: 68,
         name: "Blood price",
-        flavor: "When the sparks run out, the wand accepts the old payment: whatever you have left.",
-        hint: "Blood price: pay half the mana cost in health instead. Unusable when low.",
         tag: "MODIFIER",
         color: (0.72, 0.16, 0.22),
         cost: 0.0,
@@ -1229,8 +1093,6 @@
     (
         id: 69,
         name: "Fork",
-        flavor: "The bolt shatters into three smaller ideas.",
-        hint: "Fork: on impact the bolt splits into three weak sparks.",
         tag: "MODIFIER",
         color: (0.9, 0.72, 0.42),
         cost: 10.0,
@@ -1247,8 +1109,6 @@
     (
         id: 70,
         name: "On timer",
-        flavor: "A promise with a deadline. The payload keeps it.",
-        hint: "On timer: like Trigger bolt, but the next spell fires 0.6 s into flight.",
         tag: "TRIGGER MOD",
         color: (0.52, 0.36, 0.52),
         cost: 7.0,
@@ -1265,8 +1125,6 @@
     (
         id: 71,
         name: "Chainsaw",
-        flavor: "A cutting arc for root clearance. It lives for a breath and takes whatever is closest.",
-        hint: "Chainsaw: a tiny rapid slicing bolt that only reaches a few metres. Nearly free to spam.",
         tag: "PROJECTILE",
         color: (0.96, 0.9, 0.79),
         cost: 1.0,
@@ -1283,8 +1141,6 @@
     (
         id: 72,
         name: "Teleport bolt",
-        flavor: "A freight swap: you and the bolt trade places. The bolt does not get a vote.",
-        hint: "Teleport bolt: on impact you swap to where it landed. Mind the drop.",
         tag: "PROJECTILE",
         color: (0.74, 0.55, 1.0),
         cost: 24.0,
@@ -1301,8 +1157,6 @@
     (
         id: 73,
         name: "Flood bolt",
-        flavor: "It arrives as a bolt and leaves as a puddle. The foe is wet, and so is the floor.",
-        hint: "Flood bolt: on impact it pours water and soaks nearby foes. Sets up shock, frost and steam.",
         tag: "PROJECTILE",
         color: (0.28, 0.48, 0.55),
         cost: 16.0,
@@ -1319,8 +1173,6 @@
     (
         id: 74,
         name: "Venom nova",
-        flavor: "A green bloom of something you should not breathe. The foes are breathing it.",
-        hint: "Venom nova: on impact a toxic burst poisons every foe within 3.4 m. Stacks with Venom coat.",
         tag: "PROJECTILE",
         color: (0.45, 0.85, 0.3),
         cost: 22.0,
@@ -1337,8 +1189,6 @@
     (
         id: 75,
         name: "Ice wall",
-        flavor: "A rime seal from the sluice works, for holding back a breach. Keep it between you and them.",
-        hint: "Ice wall: raises a 3 m wide ice barrier in front of you. Fire and lava melt it.",
         tag: "UTILITY",
         color: (0.65, 0.9, 1.0),
         cost: 20.0,
@@ -1355,8 +1205,6 @@
     (
         id: 76,
         name: "Bounce orb",
-        flavor: "A rubber idea with a bad temper. It bounces until someone stops it.",
-        hint: "Bounce orb: a slow light orb that ricochets four times off walls. Great in tunnels.",
         tag: "PROJECTILE",
         color: (0.96, 0.65, 0.85),
         cost: 8.0,
@@ -1373,8 +1221,6 @@
     (
         id: 77,
         name: "Mana leech",
-        flavor: "The bolt drinks from what it hits and passes the cup back. Every spark is accounted for.",
-        hint: "Mana leech: each hit restores 4 mana. Pair it with a cheap fast bolt to keep casting.",
         tag: "MODIFIER",
         color: (0.55, 0.74, 0.82),
         cost: 6.0,
@@ -1391,8 +1237,6 @@
     (
         id: 78,
         name: "Critical plus",
-        flavor: "Sometimes it lands exactly where it should. Sometimes that hurts.",
-        hint: "Critical plus: one hit in four lands for 2.5x damage.",
         tag: "MODIFIER",
         color: (0.86, 0.42, 0.36),
         cost: 7.0,
@@ -1409,8 +1253,6 @@
     (
         id: 79,
         name: "On expire",
-        flavor: "A fuse with patience. If nothing gets in the way, the next spell goes off anyway.",
-        hint: "On expire: like Trigger bolt, but the next spell also fires if the bolt times out without hitting anything.",
         tag: "TRIGGER MOD",
         color: (0.52, 0.36, 0.52),
         cost: 7.0,
@@ -1427,8 +1269,6 @@
     (
         id: 80,
         name: "Magic missile",
-        flavor: "A patient little bolt that remembers where you were looking, and then where they went.",
-        hint: "Weak homing bolt: drifts toward the nearest visible foe.",
         tag: "PROJECTILE",
         color: (0.62, 0.48, 0.95),
         cost: 10.0,
@@ -1445,8 +1285,6 @@
     (
         id: 81,
         name: "Freezing shard",
-        flavor: "A splinter of winter, sharp at one end and sharper at the other.",
-        hint: "Frost shard: chills on hit and freezes a little water where it lands.",
         tag: "PROJECTILE",
         color: (0.7, 0.88, 0.98),
         cost: 14.0,
@@ -1463,8 +1301,6 @@
     (
         id: 82,
         name: "Acid glob",
-        flavor: "The glob hisses at everything, including the wand. Mostly it means the rock.",
-        hint: "Arcing acid: dissolves a pocket of soft terrain and poisons the splash.",
         tag: "PROJECTILE",
         color: (0.55, 0.85, 0.22),
         cost: 16.0,
@@ -1481,8 +1317,6 @@
     (
         id: 83,
         name: "Lightning arc",
-        flavor: "For an instant the air remembers it was once a storm.",
-        hint: "Near-instant short arc: shocks the target and jumps to its neighbours.",
         tag: "PROJECTILE",
         color: (0.78, 0.86, 1.0),
         cost: 22.0,
@@ -1499,8 +1333,6 @@
     (
         id: 84,
         name: "Lodestone",
-        flavor: "A mote of very dense nothing. It pulls, it sulks, and three seconds later it is gone.",
-        hint: "Slow attractor: drags foes toward it, then collapses. Never lives past 3 s.",
         tag: "PROJECTILE",
         color: (0.36, 0.24, 0.55),
         cost: 34.0,
@@ -1517,8 +1349,6 @@
     (
         id: 85,
         name: "Bouncing burst",
-        flavor: "It does not stop, it negotiates. Every wall it meets agrees to move it faster.",
-        hint: "Ricochets six times, speeding up and popping at foes near each wall.",
         tag: "PROJECTILE",
         color: (0.98, 0.62, 0.3),
         cost: 14.0,
@@ -1535,8 +1365,6 @@
     (
         id: 86,
         name: "Dig bolt",
-        flavor: "A quarryman\'s prayer, condensed. It has no opinion about enemies.",
-        hint: "Bores a short tunnel through up to twelve soft blocks; barely hurts foes.",
         tag: "PROJECTILE",
         color: (0.7, 0.56, 0.38),
         cost: 8.0,
@@ -1553,8 +1381,6 @@
     (
         id: 87,
         name: "Scatter shot",
-        flavor: "Five pellets leave together and argue about direction the whole way.",
-        hint: "Point-blank cone of five weak pellets.",
         tag: "PROJECTILE",
         color: (0.92, 0.8, 0.55),
         cost: 16.0,
@@ -1571,8 +1397,6 @@
     (
         id: 88,
         name: "Soaked strike",
-        flavor: "Water finds the gaps in armour. This finds the water.",
-        hint: "Hits on wet or chilled foes deal double damage.",
         tag: "MODIFIER",
         color: (0.35, 0.62, 0.92),
         cost: 8.0,
@@ -1589,8 +1413,6 @@
     (
         id: 89,
         name: "Explosive payload",
-        flavor: "The bolt is now mostly a fuse. Stand somewhere else.",
-        hint: "Bolt detonates on impact: 1.6 m crater, blast hurts foes and you.",
         tag: "MODIFIER",
         color: (1.0, 0.48, 0.2),
         cost: 26.0,
@@ -1607,8 +1429,6 @@
     (
         id: 90,
         name: "Skewer",
-        flavor: "Bolts used to stop at the first thing they met. That was the old way.",
-        hint: "Bolt passes through two foes before stopping.",
         tag: "MODIFIER",
         color: (0.85, 0.85, 0.92),
         cost: 14.0,
@@ -1625,8 +1445,6 @@
     (
         id: 91,
         name: "Scatter quad",
-        flavor: "Four spells at once, and none of them agreed to aim the same way.",
-        hint: "Casts the next four spells together in a wide fan.",
         tag: "MULTICAST",
         color: (0.88, 0.7, 0.95),
         cost: 12.0,
@@ -1643,8 +1461,6 @@
     (
         id: 92,
         name: "On bounce",
-        flavor: "The second spell waits for the first to hit a wall and flinch.",
-        hint: "Trigger: the next spell fires from the first bounce. Adds one bounce.",
         tag: "TRIGGER MOD",
         color: (0.95, 0.6, 0.8),
         cost: 10.0,
@@ -1661,8 +1477,6 @@
     (
         id: 93,
         name: "On proximity",
-        flavor: "A tripwire you can throw. It is very interested in whoever comes near.",
-        hint: "Trigger: the next spell fires when a foe comes within 3 m of the bolt.",
         tag: "TRIGGER MOD",
         color: (0.95, 0.78, 0.4),
         cost: 12.0,
@@ -1679,8 +1493,6 @@
     (
         id: 94,
         name: "Undertow",
-        flavor: "The impact keeps a little hunger. Whatever stood nearby gets drawn in.",
-        hint: "On impact, drags foes within 4.5 m toward the hit.",
         tag: "MODIFIER",
         color: (0.45, 0.38, 0.78),
         cost: 12.0,

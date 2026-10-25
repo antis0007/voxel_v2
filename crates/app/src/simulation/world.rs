@@ -44,6 +44,9 @@ struct Recovery {
     generation: u64,
 }
 pub struct WorldSimulation {
+    pub(crate) player_tick: engine_core::time::TickId,
+    pub(crate) cpu_region: Option<super::cpu_region::Region>,
+    pub(crate) authority_error: Option<String>,
     enabled: bool,
     scale: VoxelScalePreset,
     sources: Residency,
@@ -64,12 +67,30 @@ pub struct WorldSimulation {
     pub status: Option<String>,
 }
 impl WorldSimulation {
+    /// Check authority deadlines before *any* gameplay writer runs this step.
+    pub(crate) fn prepare_step(&mut self) -> bool {
+        if self.authority_error.is_some() { return false; }
+        let result = self.player_tick.next().ok_or_else(|| "player tick exhausted".to_string())
+            .and_then(|tick| match (&self.cpu_region, tick.cellular_tick()) {
+                (Some(region), Some(ca_tick)) => region.ready(ca_tick),
+                _ => Ok(()),
+            });
+        if let Err(error) = result {
+            self.status = Some(error.clone());
+            self.authority_error = Some(error);
+            return false;
+        }
+        true
+    }
     /// The per-frame wall-clock budget the windowed game grants a pass.
-    pub fn live_budget() -> super::Budget {
-        super::Budget::wall(FRAME_BUDGET)
+    pub fn live_budget(world: &World) -> super::Budget {
+        super::Budget::wall(water_budget(world.activity.pending()))
     }
     pub fn new() -> Self {
         Self {
+            player_tick: Default::default(),
+            cpu_region: None,
+            authority_error: None,
             enabled: true,
             scale: VoxelScalePreset::OneMeter,
             sources: Residency::default(),
@@ -90,6 +111,9 @@ impl WorldSimulation {
         }
     }
     pub fn reset_for_world(&mut self, scale: VoxelScalePreset) {
+        self.player_tick = Default::default();
+        self.cpu_region = None;
+        self.authority_error = None;
         self.scale = scale;
         self.sources.reset();
         self.accumulator = 0.0;
@@ -107,6 +131,7 @@ impl WorldSimulation {
     /// Block until every requested chunk has been generated and queued. Used
     /// by headless runs so a tick never depends on worker timing.
     pub fn settle(&mut self, world: &mut World) {
+        if self.cpu_region.is_some() { return; }
         loop {
             self.sources.poll(world);
             for c in self.sources.completed() {
@@ -218,6 +243,22 @@ impl WorldSimulation {
         chunks: &mut HashSet<IVec3>,
         budget: super::Budget,
     ) {
+        let Some(tick) = self.player_tick.next() else {
+            self.authority_error = Some("player tick exhausted".into());
+            return;
+        };
+        if let Some(region) = self.cpu_region.as_mut() {
+            if let Some(ca_tick) = tick.cellular_tick() {
+                if let Err(error) = region.advance(ca_tick) {
+                    self.authority_error = Some(error);
+                    return;
+                }
+                world.ca_view = Some(region.published.clone());
+            }
+            self.player_tick = tick;
+            return; // No legacy, factory extraction, rigid, thermal or residency writer.
+        }
+        self.player_tick = tick;
         self.stats.applied_updates_last_step = 0;
         self.stats.simulated_chunks_last_step = 0;
         self.sources.poll(world);
@@ -240,6 +281,8 @@ impl WorldSimulation {
         }
         self.status = self.sources.error.clone().or(self.status.take());
         if self.enabled && !waiting_for_writeback && dt.is_finite() && dt > 0.0 {
+            super::environment::update(world, &mut self.sources, player.pos.floor().as_ivec3(), blocks, chunks,
+                budget.child(Duration::from_micros(500)).min(budget));
             let rigid_end = budget.child(RIGID_BUDGET).min(budget);
             if rigid_end.has_time() {
                 super::rigid::tick(
@@ -263,7 +306,7 @@ impl WorldSimulation {
             let interval = (0.08 * self.scale.meters()).max(1.0 / 30.0);
             self.accumulator = (self.accumulator + dt).min(interval * 8.0);
             let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
-            let water_end = budget.child(water_budget(world.activity.pending()));
+            let water_end = budget.child(water_budget(world.activity.pending())).min(budget);
             let mut catch_up = 0;
             while self.accumulator >= interval && catch_up < 4 && water_end.has_time() {
                 self.accumulator -= interval;

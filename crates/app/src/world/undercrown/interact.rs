@@ -132,10 +132,10 @@ pub(super) fn interact_with_plan(
     let message = match action {
         Action::Inspect => {
             if current & flags::DISCOVERED != 0 {
-                "You already know this detail."
+                "Detail Known"
             } else {
                 state.set(prop.id, flags::DISCOVERED);
-                "You commit the detail to memory."
+                "Detail Recorded"
             }
         }
         Action::Operate => {

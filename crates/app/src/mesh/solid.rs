@@ -31,7 +31,8 @@ impl SolidPlan {
         let mut water = vec![0u64; 3 * P * P];
         // Submerged volume churn must not switch the whole chunk's water
         // tessellation. Only a rendered free fractional surface needs this path.
-        let partial_water = chunk.water_levels.iter().any(|(&p, &level)| {
+        let partial_water = chunk.water_levels.iter().map(|(&p,&level)|(p,level))
+            .chain(chunk.water_deficit.keys().map(|&p|(p,7))).any(|(p, level)| {
             level < 8
                 && chunk.get_world(p) == BlockId::Water
                 && chunk.get_world(p + IVec3::Y) != BlockId::Water

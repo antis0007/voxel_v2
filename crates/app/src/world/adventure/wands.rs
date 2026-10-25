@@ -1,6 +1,7 @@
 //! Noita-style ordered spell deck evaluator: combinable modifiers, multicasts,
 //! impact triggers, and chassis stats visible on hover.
 use super::*;
+pub mod card_rules;
 
 pub const EMPTY: u32 = 8;
 pub const MAX_SLOTS: usize = 8;
@@ -20,6 +21,23 @@ pub fn is_modifier(spell: u32) -> bool {
 /// A growth or summon effect delivered by a Touch or a trigger.
 pub fn is_effect(spell: u32) -> bool {
     spell_class(spell) == Class::Effect
+}
+
+/// Intrinsic projectile modifiers shared by launch and its card preview.
+pub fn innate_mods(spell: u32, mods: &mut ShotMods) {
+    if spell == 76 {
+        mods.bounces = mods.bounces.max(card_rules::BOUNCE_ORB_RICOCHETS);
+    }
+    arcana::innate_mods(spell, mods);
+}
+
+pub fn base_life(spell: u32) -> f32 {
+    match spell {
+        10 => 3.6,
+        71 => 0.16,
+        76 => 4.0,
+        _ => arcana::base_life(spell).unwrap_or(3.0),
+    }
 }
 
 /// Accumulated projectile modifiers evaluated left-to-right across a cast block.
@@ -332,25 +350,25 @@ fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
         20 => {
             mods.orbit = true;
             mods.bounces = (mods.bounces + 2).min(4);
-            mods.damage_mul = (mods.damage_mul + 0.22).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.22).min(card_rules::MAX_DAMAGE_MULTIPLIER);
             mods.speed_mul = (mods.speed_mul * 1.08).min(1.6);
         }
         21 => {
             mods.bore = true;
-            mods.damage_mul = (mods.damage_mul + 0.35).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.35).min(card_rules::MAX_DAMAGE_MULTIPLIER);
             mods.speed_mul = (mods.speed_mul * 0.84).max(0.65);
         }
         23 => {
             mods.trail = true;
-            mods.damage_mul = (mods.damage_mul + 0.12).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.12).min(card_rules::MAX_DAMAGE_MULTIPLIER);
         }
         26 => {
             mods.volatile = true;
-            mods.damage_mul = (mods.damage_mul + 0.08).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.08).min(card_rules::MAX_DAMAGE_MULTIPLIER);
         }
         27 => {
             mods.siphon = true;
-            mods.damage_mul = (mods.damage_mul + 0.05).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.05).min(card_rules::MAX_DAMAGE_MULTIPLIER);
         }
         37 => mods.radius = 1.8,
         38 => {
@@ -370,7 +388,7 @@ fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
         52 => mods.life_mul = (mods.life_mul * 1.8).min(3.0),
         53 => mods.bounces = (mods.bounces + 1).min(4),
         54 => mods.speed_mul = (mods.speed_mul * 1.25).min(1.6),
-        55 => mods.damage_mul = (mods.damage_mul + 0.15).min(2.6),
+        55 => mods.damage_mul = (mods.damage_mul + 0.15).min(card_rules::MAX_DAMAGE_MULTIPLIER),
         56 => mods.element = Some(super::status::Element::Fire),
         57 => mods.element = Some(super::status::Element::Shock),
         58 => mods.element = Some(super::status::Element::Toxic),
@@ -379,7 +397,7 @@ fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
         61 => mods.chain = true,
         62 => mods.shrapnel = true,
         63 => {
-            mods.damage_mul = (mods.damage_mul + 0.45).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.45).min(card_rules::MAX_DAMAGE_MULTIPLIER);
             mods.speed_mul = (mods.speed_mul * 0.9).max(0.65);
         }
         64 => mods.reverse = true,
@@ -387,7 +405,7 @@ fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
         66 => mods.phase = (mods.phase + 1).min(2),
         67 => {
             mods.reckless = true;
-            mods.damage_mul = (mods.damage_mul + 0.6).min(2.6);
+            mods.damage_mul = (mods.damage_mul + 0.6).min(card_rules::MAX_DAMAGE_MULTIPLIER);
         }
         68 => mods.blood_price = true,
         69 => mods.fork = true,
@@ -501,7 +519,7 @@ pub fn evaluate_programmed(
     let mut mods = ShotMods::default();
     if wand_stats.always_cast == Some(23) {
         mods.trail = true;
-        mods.damage_mul = (mods.damage_mul + 0.10).min(2.6);
+        mods.damage_mul = (mods.damage_mul + 0.10).min(card_rules::MAX_DAMAGE_MULTIPLIER);
     }
     let mut draws: usize = if loadout.mode == 1 { 2 } else { 1 };
     let mut mana_refund = 0.0f32;
@@ -538,16 +556,16 @@ pub fn evaluate_programmed(
                     16 => draws = (draws + 1).min(4),
                     17 => draws = (draws + 2).min(4),
                     18 => attach_trigger = true,
-                    22 => mana_refund = mana_refund.max(20.0),
+                    22 => mana_refund = mana_refund.max(card_rules::RAPID_MANA_REFUND),
                     40 => copies = 2,
                     41 => copies = 4,
-                    47 => skip_draw = health_frac >= 0.5,
+                    47 => skip_draw = health_frac >= card_rules::WOUNDED_THRESHOLD,
                     48 => skip_draw = !foe_visible,
                     49 => copy_alpha = true,
                     70 => {
                         // Like Trigger bolt, but the payload fires mid-flight.
                         attach_trigger = true;
-                        mods.timer = 0.6;
+                        mods.timer = card_rules::TIMER_SECONDS;
                     }
                     79 => {
                         // Trigger bolt plus: also fires if the bolt times out.
@@ -708,7 +726,8 @@ pub fn evaluate_programmed(
 /// One hit in four is a critical hit. Deterministic in the clock and the
 /// target so a replay of the same fight rolls the same dice.
 pub(super) fn crit_roll(time: f32, slot: u32) -> bool {
-    super::discovery::mix32(time.to_bits() ^ slot.wrapping_mul(0x9e37_79b1)).is_multiple_of(4)
+    super::discovery::mix32(time.to_bits() ^ slot.wrapping_mul(0x9e37_79b1))
+        .is_multiple_of(card_rules::CRITICAL_PERIOD)
 }
 
 /// Cast a ray from a position in metres. `raycast_block` works in voxel
@@ -797,11 +816,7 @@ impl Adventure {
             return;
         }
         let mut mods = mods;
-        if spell == 76 {
-            // Bounce orb always ricochets, whatever else is on the deck.
-            mods.bounces = mods.bounces.max(4);
-        }
-        arcana::innate_mods(spell, &mut mods);
+        innate_mods(spell, &mut mods);
         let speed = spell_base_speed(spell) * mods.speed_mul;
         let arc_lift = match spell {
             5 => Vec3::Y * 2.0,
@@ -819,12 +834,7 @@ impl Adventure {
             velocity: dir * speed + arc_lift,
             hostile: false,
             spell,
-            life: ((match spell {
-                10 => 3.6,
-                71 => 0.16, // Chainsaw: a few metres of reach
-                76 => 4.0,
-                _ => arcana::base_life(spell).unwrap_or(3.0),
-            }) * mods.life_mul.max(0.25))
+            life: (base_life(spell) * mods.life_mul.max(0.25))
             .min(arcana::life_cap(spell)),
             payload,
             payload_mods: ShotMods::default(),
@@ -832,7 +842,7 @@ impl Adventure {
             bore_budget: if spell == 10 {
                 24
             } else if spell == arcana::DIG_BOLT {
-                12
+                card_rules::DIG_BOLT_BUDGET
             } else if mods.bore {
                 6
             } else {
@@ -907,9 +917,9 @@ impl Adventure {
         // Blood price pays half the mana cost in health, and refuses to be the
         // reason the caster dies.
         let blood_price = eval.actions.iter().any(|a| a.mods.blood_price);
-        let health_cost = eval.mana_cost * 0.5;
+        let health_cost = eval.mana_cost * card_rules::BLOOD_PRICE_FRACTION;
         if blood_price {
-            if self.health <= health_cost + 4.0 {
+            if self.health <= health_cost + card_rules::BLOOD_PRICE_RESERVE {
                 self.cast_cd = 0.12;
                 self.mana_flash = 0.45;
                 return;
@@ -945,7 +955,7 @@ impl Adventure {
         // A grapple with nothing in reach is a free no-op, not a wasted cast.
         if eval.actions.len() == 1
             && eval.actions[0].spell == 31
-            && aim_cell(world, eye, forward, 32.0).is_none()
+            && aim_cell(world, eye, forward, card_rules::GRAPPLE_REACH).is_none()
         {
             self.cast_cd = 0.12;
             return;
@@ -960,7 +970,7 @@ impl Adventure {
         let forward = super::modifiers::wobble(self.site_modifier, forward, self.time);
         if eval.actions.iter().any(|a| a.mods.reckless) {
             // Never lethal: Reckless trades health for damage, not for a death.
-            self.health = (self.health - 4.0).max(1.0);
+            self.health = (self.health - card_rules::RECKLESS_HEALTH).max(1.0);
         }
         self.last_cast = eval.actions[0].spell;
         self.cast_pose = 0.4;
@@ -978,7 +988,7 @@ impl Adventure {
             let spell = act.spell;
             match spell {
                 1 => {
-                    self.health = (self.health + 30.0 + rank as f32 * 5.0).min(self.max_health());
+                    self.health = (self.health + card_rules::MEND_BASE + rank as f32 * card_rules::MEND_PER_RANK).min(self.max_health());
                     if self.knows(6) {
                         self.hunger = (self.hunger + 12.0).min(100.0);
                     }
@@ -987,8 +997,8 @@ impl Adventure {
                     played_cue.get_or_insert(Cue::Mend);
                 }
                 4 => {
-                    self.ward = if self.knows(9) { 9.0 } else { 6.0 };
-                    self.ward_hits = if self.knows(10) {4} else {3};
+                    self.ward = card_rules::ward_duration(self.discoveries);
+                    self.ward_hits = card_rules::ward_hits(self.discoveries);
                     self.effect(eye + forward * 0.7, spell_color(4), 0.7);
                     self.spawn_voxel_burst(eye + forward * 0.7, spell_color(4), 16, 1.1, 0.04);
                     played_cue.get_or_insert(Cue::Ward);
@@ -1060,7 +1070,7 @@ impl Adventure {
                     played_cue.get_or_insert(Cue::Bloom);
                 }
                 _ => {
-                    if act.mods.unstable && (idx as u32 + self.time.to_bits()).is_multiple_of(5) {
+                    if act.mods.unstable && (idx as u32 + self.time.to_bits()).is_multiple_of(card_rules::UNSTABLE_PERIOD) {
                         self.spawn_voxel_burst(
                             eye + forward * 0.4,
                             [0.95, 0.55, 0.15],
@@ -1187,7 +1197,7 @@ impl Adventure {
     pub(super) fn cast_time_snag(&mut self, eye: Vec3) {
         for e in &mut self.enemies {
             if e.health > 0.0 && (e.center() - eye).length() < 9.0 {
-                e.slow = e.slow.max(3.5);
+                e.slow = e.slow.max(card_rules::TIME_SNAG_DURATION);
                 e.stagger = e.stagger.max(0.25);
             }
         }
@@ -1210,7 +1220,7 @@ impl Adventure {
         forward: Vec3,
     ) {
         let scale = world.voxel_scale.meters();
-        let Some((cell, _)) = aim_cell(world, eye, forward, 32.0) else {
+        let Some((cell, _)) = aim_cell(world, eye, forward, card_rules::GRAPPLE_REACH) else {
             return;
         };
         let target = (cell.as_vec3() + Vec3::splat(0.5)) * scale;
@@ -1340,7 +1350,7 @@ impl Adventure {
     pub(super) fn venom_nova(&mut self, world: &World, at: Vec3, damage_mul: f32) {
         use super::status::Element;
         for e in &mut self.enemies {
-            if e.health <= 0.0 || (e.center() - at).length() >= 3.4 || !line(world, at, e.center())
+            if e.health <= 0.0 || (e.center() - at).length() >= card_rules::VENOM_NOVA_RADIUS || !line(world, at, e.center())
             {
                 continue;
             }
@@ -1367,13 +1377,13 @@ impl Adventure {
         let step = scale * 0.9;
         // Sample both endpoints of each span, or the wall stops short of its
         // stated 3 m x 2.5 m at coarse voxel sizes.
-        let cols = (3.0 / step).ceil() as i32;
-        let rows = (2.5 / step).ceil() as i32;
+        let cols = (card_rules::ICE_WALL_WIDTH / step).ceil() as i32;
+        let rows = (card_rules::ICE_WALL_HEIGHT / step).ceil() as i32;
         let mut made = 0;
         for ci in 0..=cols {
-            let u = (-1.5 + ci as f32 * step).min(1.5);
+            let u = (-card_rules::ICE_WALL_WIDTH * 0.5 + ci as f32 * step).min(card_rules::ICE_WALL_WIDTH * 0.5);
             for ri in 0..=rows {
-                let h = (ri as f32 * step).min(2.5);
+                let h = (ri as f32 * step).min(card_rules::ICE_WALL_HEIGHT);
                 let cell = ((base + side * u + Vec3::Y * h) / scale).floor().as_ivec3();
                 if made < 400 && world.get(cell) == B::Air {
                     world.set(cell, B::Ice);

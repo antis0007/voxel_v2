@@ -241,7 +241,7 @@ impl ChunkCache {
         let mut changed_chunks = dirty_chunks.clone();
         if let Some(previous) = &self.edit_proxies.previous_water {
             for (q, old, new) in snapshot.water_levels.changed_chunks(previous) {
-                if old == new
+                if (old == new && !snapshot.water_levels.precision.changed(&previous.precision,q))
                     || !self.edit_proxies.previous_hot_coords.contains(&q)
                     || !snapshot.chunks.contains_key(&q)
                     || dirty_chunks.contains(&q)

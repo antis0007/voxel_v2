@@ -64,6 +64,13 @@ fn commit_transfer(
     if moved == 0 || !matches!(target_block, B::Air | B::Water) {
         return 0;
     }
+    let mut moved = moved;
+    if crate::world::environment::State::enabled(world.generator_version) {
+        while moved > 0 && !world.environment.transfer_fits(from, to, source, target, moved) {
+            moved -= 1;
+        }
+        if moved == 0 { return 0; }
+    }
     if !admission(world, from, to) {
         world.activity.wake(from);
         return 0;
@@ -75,13 +82,16 @@ fn commit_transfer(
     // Bounds, assembly guards, residency and both amounts have been checked
     // before the paired commit. One transaction keeps the moved mass atomic,
     // and pays revision/snapshot/wake bookkeeping once per transfer.
-    world.apply_water_pair(
+    if !world.apply_water_pair(
         from,
         source.saturating_sub(moved),
         to,
         target.saturating_add(moved),
         moved,
-    );
+    ) {
+        world.activity.wake(from);
+        return 0;
+    }
     let horizontal = Vec2::new((to.x - from.x) as f32, (to.z - from.z) as f32);
     if horizontal.length_squared() > 0.25 {
         let direction = horizontal.normalize();
@@ -328,7 +338,12 @@ pub(super) fn step(
             return 0;
         }
         world.set_many(&[(p, B::Air), (to, b)]);
-        if displaced > 0 {
+        if world.get(to) != b {
+            world.set(p,b);
+            world.activity.wake(p);
+            return 0;
+        }
+        if displaced > 0 && !crate::world::environment::State::enabled(world.generator_version) {
             world.set_water_volume(p, displaced);
         }
         visited.insert(to);

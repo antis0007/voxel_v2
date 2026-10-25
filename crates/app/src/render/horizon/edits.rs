@@ -525,6 +525,8 @@ fn edited_source(
                 if let Some(&level) = snapshot.water_levels.get(&p).or_else(|| cold_water.get(&p)) {
                     source.water_levels.insert(p, level);
                 }
+                let deficit = snapshot.water_levels.deficit(p);
+                if deficit > 0 { source.water_deficit.insert(p,deficit); }
             }
         }
     }
@@ -706,6 +708,9 @@ fn changes_visible_inner(old: &WorldSnapshot, new: &WorldSnapshot, eye: Vec3, hi
         }
     }
     for (q,previous,current) in new.water_levels.changed_chunks(&old.water_levels) {
+        if new.water_levels.precision.changed(&old.water_levels.precision,q) {
+            add(q,q*32,(q+IVec3::ONE)*32,false);
+        }
         let scale=new.cfg.voxel_meters();
         if coverage.contains_bounds((q.as_vec3()*32.0-Vec3::splat(2.0))*scale,
             ((q.as_vec3()+Vec3::ONE)*32.0+Vec3::splat(2.0))*scale,scale) { continue; }
@@ -897,6 +902,7 @@ fn occluded_bounds(snapshot: &WorldSnapshot, low: Vec3, high: Vec3, eye: Vec3) -
                 for p in positions {
                     p.hash(&mut signature);
                     snapshot.water_levels.get(p).copied().unwrap_or(8).hash(&mut signature);
+                    snapshot.water_levels.deficit(*p).hash(&mut signature);
                 }
                 signature.finish()
             };

@@ -56,6 +56,8 @@ fn validate() {
         ("shadow", SHADOW_SHADER.to_owned()),
         ("UI", UI_SHADER.to_owned()),
         ("UI magic", UI_MAGIC_SHADER.to_owned()),
+        ("Meridian room", MENU_SCENE_SHADER.to_owned()),
+        ("Meridian pixels", MENU_PRESENT_SHADER.to_owned()),
         ("postprocess", POSTPROCESS_SHADER.to_owned()),
         ("present", PRESENT_SHADER.to_owned()),
         ("fluid", FLUID_SHADER.to_owned()),

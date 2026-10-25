@@ -96,7 +96,7 @@ pub(super) fn reward(ctx: &egui::Context, view: &View) {
 
 /// A compact collection of permanent magical discoveries, with readable histories.
 pub(super) fn expedition_goal(ui: &mut egui::Ui, view: &View) {
-    ui.collapsing("Optional expedition: the workshop heart", |ui| {
+    ui.collapsing("Workshop heart", |ui| {
     ui.label(
         RichText::new(if view.heart_restored {
             "The workshop lives again"
@@ -126,13 +126,13 @@ pub(super) fn expedition_goal(ui: &mut egui::Ui, view: &View) {
             }
         }
     });
-    ui.label(RichText::new(if view.heart_restored { "Expedition complete · build, explore, and rest at the heart." }
-        else if view.sigils==7 { "Return down the starter workshop's mine. Offer the three relics to its heart." }
-        else { "Prepare at your workshop. Recover the foundry, archive and cathedral relics, then bring their resonance home." }).color(style::PAPER));
+    ui.label(RichText::new(if view.heart_restored { "Heart restored" }
+        else if view.sigils==7 { "Offer the three relics at the workshop heart." }
+        else { "Find the foundry, archive and cathedral relics." }).color(style::PAPER));
     if !view.route.is_empty() {
         ui.label(RichText::new(&view.route).color(style::MUTED).size(12.0));
     } else if !view.heart_restored {
-        ui.label(RichText::new("Claim the first reliquary below the starter workshop. Use it to trace a guardian's location.").color(style::MUTED).size(12.0));
+        ui.label(RichText::new("The reliquary below the workshop reveals a guardian.").color(style::MUTED).size(12.0));
     }
     ui.add_space(8.0);
     });
@@ -142,13 +142,13 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
     use crate::world::adventure::inscriptions::INSCRIPTIONS;
     expedition_goal(ui, view);
     ui.collapsing(
-        format!("Inscriptions  {} / 10", view.discoveries.count_ones()),
+        format!("Inscriptions  {} / {}", view.discoveries.count_ones(), INSCRIPTIONS.len()),
         |ui| {
             let id = ui.make_persistent_id("inscription_page");
             let mut selected = ui
                 .ctx()
                 .data_mut(|d| d.get_temp::<usize>(id))
-                .unwrap_or_else(|| view.discoveries.trailing_zeros().min(9) as usize);
+                .unwrap_or_else(|| (view.discoveries.trailing_zeros() as usize).min(INSCRIPTIONS.len() - 1));
             ui.horizontal_wrapped(|ui| {
                 for (i, lore) in INSCRIPTIONS.iter().enumerate() {
                     let owned = view.discoveries & (1 << i) != 0;
@@ -176,7 +176,6 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
             if view.discoveries & (1 << selected) != 0 {
                 ui.label(RichText::new(lore.name).color(style::AMBER).size(16.0));
                 ui.label(RichText::new(lore.benefit).color(style::MANA));
-                ui.label(RichText::new(lore.story).color(style::PAPER).italics());
             } else {
                 ui.label(format!(
                     "Find a {} and claim the inscription from its reliquary.",
@@ -198,11 +197,11 @@ pub(super) fn encounter(ctx: &egui::Context, view: &View) {
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new(boss.name).color(style::AMBER).size(12.0));
                         ui.label(
-                            RichText::new(boss.action.unwrap_or(if boss.health < boss.maximum * 0.5 {
+                            RichText::new(if boss.health < boss.maximum * 0.5 {
                                 "Enraged"
                             } else {
-                                "Awakened guardian"
-                            }))
+                                "Active"
+                            })
                             .color(style::MUTED)
                             .size(11.0),
                         );

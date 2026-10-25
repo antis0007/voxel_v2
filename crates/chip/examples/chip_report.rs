@@ -68,4 +68,22 @@ fn main() {
     }
     let ns = t.elapsed().as_secs_f64() * 1e9;
     println!("10k Sentinel states, 1200 ticks: {services} services, {:.0} ns/service incl. due scan", ns / services as f64);
+
+    // Fabrication: mask set on the first lot, then 64 lots run to the end.
+    let mut lib = engine_chip::library::Library::default();
+    let project = lib.add_project("T", designs[1].clone());
+    let Ok(rev) = lib.release(&registry, project, 0) else { return };
+    let t = Instant::now();
+    for i in 0..64 {
+        let _ = lib.start_lot(&registry, rev, if i % 2 == 0 { "bench" } else { "clean" }, 0);
+    }
+    let start_us = t.elapsed().as_secs_f64() * 1e6;
+    let t = Instant::now();
+    let mut made = 0;
+    for tick in (0..120 * 400).step_by(12) {
+        made += lib.advance_lots(&registry, tick);
+    }
+    let run_ms = t.elapsed().as_secs_f64() * 1e3;
+    let good: u32 = lib.lots.iter().filter_map(|l| l.outcome).map(|o| u32::from(o.good)).sum();
+    println!("64 lots: start {start_us:.0} µs (1 mask set), run {run_ms:.1} ms over 4000 services, {made} parts ({good} good dies)");
 }

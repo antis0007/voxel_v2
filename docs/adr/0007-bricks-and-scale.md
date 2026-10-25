@@ -13,7 +13,7 @@ Variable scale is level of detail first: a single-scale world whose distant regi
 Scale-boundary rules, the only place they are written down:
 1. A depth-d cell covers 2^d finest cells per axis.
 2. Neighbouring bricks differ by at most one depth (2:1 balance).
-3. Mass is counted in finest-cell units. Volume fields widen with depth: u8 for depths 0–1, u16 for depths 2–4.
+3. Mass is counted in finest-cell volume units. **Corrected 2026-10-24 (ADR 0017):** with `VOLUME_FULL = 64`, full-cell mass is `64 * 8^depth`: u8 covers depth 0, u16 depths 1–3, and depth 4 needs u32 before compression headroom. The earlier widths assumed different units. Coarse storage and overflow rules are not implemented; reserving `Scale` alone does not guarantee migration-free saves.
 4. A depth-d brick ticks every 2^d fine ticks. This is the existing `0.08·m` interval rule.
 5. Matter crosses a boundary only in a dedicated boundary pass. Fine faces aggregate into the coarse neighbour; coarse outflow is split by a positional hash with a remainder carry, so nothing is created or lost.
 6. Heat is conserved as energy, not averaged as temperature. A cell's thermal energy is `capacity × volume × temperature`, with `capacity` taken from `SimMaterial`. Merging sums energy and derives the coarse temperature as `ΣE / Σ(capacity × volume)`. Splitting gives each child the parent's temperature. The integer-division remainder is carried the same way as mass in rule 5. Averaging temperatures would let a small lava cell beside a large volume of air lose heat that still exists. (Amended 2026-10-22.)

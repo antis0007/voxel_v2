@@ -1,5 +1,8 @@
 //! Bounded fixed-step simulation. Wall-clock rendering never controls physics step size.
 mod cellular;
+mod environment;
+pub(crate) mod fixed;
+pub(crate) mod cpu_region;
 pub(crate) mod residency;
 mod rigid;
 pub(crate) mod sandbox;
@@ -19,7 +22,7 @@ pub(crate) fn acts(world: &crate::world::World, p: glam::IVec3) -> bool {
         || thermal::active(block)
         || world.sandbox.cells.contains_key(&sandbox::key(p))
 }
-pub const STEP_SECONDS: f32 = 1.0 / 120.0;
+pub const STEP_SECONDS: f32 = engine_core::time::PLAYER_STEP_SECONDS;
 const MAX_STEPS: u32 = 16;
 
 #[derive(Default)]

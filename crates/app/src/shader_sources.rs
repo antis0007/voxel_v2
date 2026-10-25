@@ -9,11 +9,12 @@ macro_rules! shader_inputs {
     ($($path:literal),* $(,)?) => { &[$((concat!("src/",$path),include_str!($path))),*] };
 }
 const SHADER_INPUTS: &[(&str,&str)] = shader_inputs![
+    "shaders/menu_scene.wgsl", "shaders/menu_present.wgsl",
     "shaders/ui_magic.wgsl", "shaders/camera_lighting_shared.wgsl", "shaders/lighting_shared.wgsl",
     "shaders/atmosphere_runtime_shared.wgsl", "shaders/atmosphere_shared.wgsl", "shaders/atmosphere_lut_generation.wgsl", "shaders/sky_probe.wgsl",
     "shaders/cloud_shared.wgsl", "shaders/cloud_morphology.wgsl", "shaders/weather_volume.wgsl",
     "shaders/underwater_shared.wgsl", "shaders/mood_shared.wgsl", "shaders/terrain_detail_shared.wgsl",
-    "shaders/enchantment_shared.wgsl", "shaders/world_shader.wgsl", "shaders/local_mist_shared.wgsl",
+    "shaders/enchantment_shared.wgsl", "shaders/terrain_surface.wgsl", "shaders/world_shader.wgsl", "shaders/local_mist_shared.wgsl",
     "shaders/cloud_shader.wgsl", "shaders/cloud_composite.wgsl", "shaders/sky_shader.wgsl",
     "shaders/cloud_temporal.wgsl", "shaders/cloud_weather_sampling.wgsl", "shaders/outline_shader.wgsl",
     "shaders/shadow_shader.wgsl", "shaders/ui_shader.wgsl", "shaders/postprocess.wgsl",
@@ -46,6 +47,8 @@ pub(crate) fn current_validation_source(source: String, manifest: &std::path::Pa
     Ok(output)
 }
 pub(crate) const UI_MAGIC_SHADER: &str = include_str!("shaders/ui_magic.wgsl");
+pub(crate) const MENU_SCENE_SHADER: &str = concat!(include_str!("shaders/color_shared.wgsl"), "\n", include_str!("shaders/menu_scene.wgsl"));
+pub(crate) const MENU_PRESENT_SHADER: &str = include_str!("shaders/menu_present.wgsl");
 const CAMERA_LIGHTING_WGSL: &str = include_str!("shaders/camera_lighting_shared.wgsl");
 const LIGHTING_WGSL: &str = include_str!("shaders/lighting_shared.wgsl");
 const ATMOSPHERE_RUNTIME_WGSL: &str = include_str!("shaders/atmosphere_runtime_shared.wgsl");
@@ -58,7 +61,7 @@ const WEATHER_VOLUME_WGSL: &str = include_str!("shaders/weather_volume.wgsl");
 const UNDERWATER_WGSL: &str = include_str!("shaders/underwater_shared.wgsl");
 const MOOD_WGSL: &str = include_str!("shaders/mood_shared.wgsl");
 
-const WORLD_SHADER_BODY: &str = concat!(include_str!("shaders/terrain_detail_shared.wgsl"), "\n", include_str!("shaders/enchantment_shared.wgsl"), "\n", include_str!("shaders/world_shader.wgsl"));
+const WORLD_SHADER_BODY: &str = concat!(include_str!("shaders/terrain_detail_shared.wgsl"), "\n", include_str!("shaders/enchantment_shared.wgsl"), "\n", include_str!("shaders/terrain_surface.wgsl"), "\n", include_str!("shaders/world_shader.wgsl"));
 const LOCAL_MIST_WGSL: &str = include_str!("shaders/local_mist_shared.wgsl");
 const CLOUD_SHADER_BODY: &str = include_str!("shaders/cloud_shader.wgsl");
 const CLOUD_COMPOSITE_SHADER_BODY: &str = include_str!("shaders/cloud_composite.wgsl");
@@ -87,7 +90,10 @@ pub(crate) fn world_shader_source() -> String {
 /// Per-frame sky and sun terms shared by every terrain pixel (`SkyProbe`).
 pub(crate) fn sky_probe_shader_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}",
+        "{}
+{}
+{}
+{}",
         CAMERA_LIGHTING_WGSL,
         ATMOSPHERE_RUNTIME_WGSL,
         ATMOSPHERE_WGSL,
@@ -142,9 +148,14 @@ pub(crate) fn cloud_shader_source_for_filtering(hardware_filtering: bool) -> Str
 }
 
 pub(crate) fn cloud_composite_shader_source() -> String {
+    // Reuse the camera declaration in the existing texture group, keeping the
+    // composite within four bind groups. Depth classification needs the exact
+    // projection coefficients at every world scale.
+    let camera = CAMERA_LIGHTING_WGSL.split("struct Lighting").next().unwrap()
+        .replace("@group(0) @binding(0)", "@group(1) @binding(2)");
     format!(
-        "{}\n{}\n{}\n{}\n{}",
-        LIGHTING_WGSL, ATMOSPHERE_RUNTIME_WGSL, WEATHER_CLIP_WGSL, CLOUD_WEATHER_SAMPLING_WGSL, CLOUD_COMPOSITE_SHADER_BODY
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        camera, LIGHTING_WGSL, ATMOSPHERE_RUNTIME_WGSL, WEATHER_CLIP_WGSL, CLOUD_WEATHER_SAMPLING_WGSL, CLOUD_SHARED_WGSL, CLOUD_COMPOSITE_SHADER_BODY
     )
 }
 

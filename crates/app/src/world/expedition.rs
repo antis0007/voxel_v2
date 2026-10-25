@@ -1,6 +1,6 @@
 //! A small complete exploration -> salvage -> processing -> tool upgrade loop.
 //! Quantities use 1/64 cubic metre units, so fine voxels do not multiply rewards.
-use super::{BlockId as B, World, mark_chunk_and_neighbors_dirty};
+use super::{BlockId as B, World, effects, mark_chunk_and_neighbors_dirty};
 use glam::{IVec3, Vec3};
 use std::collections::{HashSet, VecDeque};
 
@@ -29,6 +29,17 @@ pub const NAMES: [&str; super::factory::RESOURCE_COUNT] = [
     "Bio-ethanol",
 ];
 const UNIT: u32 = 64;
+const BORE_FUEL_UNITS: u32 = UNIT / 8;
+
+/// Physical radius shared by excavation and the inventory's tool comparison.
+pub fn bore_radius(tier: u32) -> f32 {
+    if tier == 1 { 1.6 } else { 2.8 }
+}
+
+/// Lumen fibre consumed by an excavation that finds at least one target.
+pub fn bore_fuel_cost() -> f64 {
+    BORE_FUEL_UNITS as f64 / UNIT as f64
+}
 
 /// Five container families. The block picks the family; the cell picks the roll,
 /// so two coffers in one crypt are not the same payout.
@@ -138,10 +149,29 @@ pub struct Expedition {
     pub tool_tier: u32,
     pub workshop_found: bool,
     pub lamp: bool,
+    /// Separate ownership from the switch so inventory reconciliation cannot relight it.
+    pub lamp_disabled: bool,
     pub message: String,
     pub message_seconds: f32,
 }
 impl Expedition {
+    pub fn lamp_enabled(&self) -> bool {
+        self.lamp && !self.lamp_disabled
+    }
+
+    pub fn toggle_lamp(&mut self) {
+        if !self.lamp {
+            self.say("Lumen Lantern: Missing");
+            return;
+        }
+        self.lamp_disabled = !self.lamp_disabled;
+        self.say(if self.lamp_enabled() {
+            "Lumen Lantern: On · [L]"
+        } else {
+            "Lumen Lantern: Off · [L]"
+        });
+    }
+
     pub fn say(&mut self, message: impl Into<String>) {
         self.message = message.into();
         self.message_seconds = 6.0;
@@ -166,7 +196,7 @@ impl Expedition {
         } else if self.tool_tier == 1 {
             "Collect crystals and refine iron for the resonant bore"
         } else {
-            "Build, explore and experiment with spells. Guardian relics are optional discoveries."
+            ""
         }
     }
     pub(super) fn add(&mut self, index: usize, amount: u32) {
@@ -243,16 +273,16 @@ pub fn fell_tree(world: &mut World, removed: IVec3) -> Option<Vec<IVec3>> {
         return None;
     }
 
-    // Canopy loot first, while the leaves still exist to be counted and placed.
-    let loot = canopy_loot(&leaves);
     let leaf_edits: Vec<(IVec3, B)> = leaves.iter().map(|p| (*p, B::Air)).collect();
-    world.set_many(&leaf_edits);
+    let mut removed_leaves = Vec::new();
+    world.set_many_committed(&leaf_edits, |p, _, _| removed_leaves.push(p));
+    // Admission can skip individual cells. Only removed leaves produce loot.
+    let loot = canopy_loot(&removed_leaves);
     for (p, item, count) in loot {
         give_or_drop(world, p, item, count);
     }
-    world.expedition.say("The canopy tears free.");
 
-    let mut touched = leaves;
+    let mut touched = removed_leaves;
     let body_possible = logs.len() <= crate::simulation::sandbox::MAX_BODY_VOXELS
         && world.sandbox.bodies.len() < crate::simulation::sandbox::MAX_BODIES
         && !world.sandbox.bodies.iter().any(|body| {
@@ -350,12 +380,12 @@ pub(crate) fn drop_log_cells(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
-    let edits: Vec<_> = cells.iter().map(|p| (*p, B::Air)).collect();
-    world.set_many(&edits);
     let item = super::inventory::Item::Block(B::Log);
     for &p in cells {
-        blocks.insert(p);
-        mark_chunk_and_neighbors_dirty(chunks, p);
+        let Ok(commit) = effects::replace(world, p, B::Log, B::Air) else {
+            continue;
+        };
+        commit.publish(world, blocks, chunks);
         give_or_drop(world, p, item, 1);
     }
     world.sync_from_inventory();
@@ -397,7 +427,7 @@ pub fn harvest(
                         .inventory
                         .notify_overflow(super::inventory::Item::Resource(i as u8));
                     world.expedition.say(
-                        "Inventory full — make room in your pack (E) before opening this cache.",
+                        "Inventory Full",
                     );
                     return false;
                 }
@@ -416,7 +446,7 @@ pub fn harvest(
                 .notify_overflow(super::inventory::Item::Resource(i as u8));
             world
                 .expedition
-                .say("Inventory full — press E to free a slot before mining more.");
+                .say("Inventory Full");
             return false;
         }
     } else if let Some(drop_block) = super::inventory::Item::canonical_block(block) {
@@ -428,22 +458,29 @@ pub fn harvest(
             world.inventory.notify_overflow(item);
             world
                 .expedition
-                .say("Inventory full — press E to free a slot before mining more.");
+                .say("Inventory Full");
             return false;
         }
     }
 
-    world.set(p, B::Air);
-    if world.get(p) != B::Air {
+    let Ok(commit) = effects::replace(world, p, block, B::Air) else {
         return false;
-    }
+    };
+    commit.publish(world, blocks, chunks);
     if let Some(i) = resource(block) {
+        if world.adventure.sounds.len() < 64 {
+            world.adventure.sounds.push(crate::audio::Event {
+                cue: crate::audio::Cue::Mine,
+                pos: Some((p.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters()),
+                gain: 0.4, pitch: if i == 5 { 1.3 } else { 0.9 },
+            });
+        }
         world.expedition.add(i, units);
         if i == 4 && !world.expedition.lamp {
             world.expedition.lamp = true;
             world
                 .expedition
-                .say("Lumen lantern discovered — it lights your way underground");
+                .say("Lumen Lantern: On · [L]");
         }
         world.reconcile_legacy_to_inventory();
     } else if matches!(block, B::SalvageCrate | B::SurveyCache | B::CultivatorCache) {
@@ -468,8 +505,6 @@ pub fn harvest(
         }
         world.sync_from_inventory();
     }
-    blocks.insert(p);
-    mark_chunk_and_neighbors_dirty(chunks, p);
     if block == B::Log
         && let Some(cells) = fell_tree(world, p) {
             for cell in cells {
@@ -485,7 +520,8 @@ pub fn harvest(
 /// A spell blast is a world-shaping event, not a mining action: running the
 /// full harvest/inventory pipeline for every stone voxel made large craters
 /// crawl and silently filled the pack with rubble. Magic removes the terrain
-/// directly, without auto-collecting ordinary blocks or ore.
+/// directly. Resource-bearing cells keep the same volume-weighted yields as
+/// mining; ordinary rubble stays out of the pack.
 pub fn spell_blast(
     world: &mut World,
     p: IVec3,
@@ -503,15 +539,18 @@ pub fn spell_blast(
     {
         return false;
     }
+    if resource(b).is_some() || matches!(b, B::SalvageCrate | B::SurveyCache | B::CultivatorCache) {
+        let changed = blast_harvest(world, p, blocks, chunks);
+        world.sync_from_inventory();
+        return changed;
+    }
+    let Ok(commit) = effects::replace(world, p, b, B::Air) else {
+        return false;
+    };
+    commit.publish(world, blocks, chunks);
     if b == B::Log {
-        drop_log_cells(world, &[p], blocks, chunks);
-    } else {
-        world.set(p, B::Air);
-        if world.get(p) != B::Air {
-            return false;
-        }
-        blocks.insert(p);
-        mark_chunk_and_neighbors_dirty(chunks, p);
+        give_or_drop(world, p, super::inventory::Item::Block(B::Log), 1);
+        world.sync_from_inventory();
     }
     if let Some(cells) = fell_tree(world, p) {
         for cell in cells {
@@ -579,10 +618,10 @@ pub fn blast_harvest(
     if !fits && existing.is_none() && world.inventory.dropped.len() >= 1024 {
         return false;
     }
-    world.set(p, B::Air);
-    if world.get(p) != B::Air {
+    let Ok(commit) = effects::replace(world, p, b, B::Air) else {
         return false;
-    }
+    };
+    commit.publish(world, blocks, chunks);
     if let Some((i, left)) = remainder {
         world.inventory.resource_remainders[i] = left;
     }
@@ -601,8 +640,6 @@ pub fn blast_harvest(
             });
         }
     }
-    blocks.insert(p);
-    mark_chunk_and_neighbors_dirty(chunks, p);
     if b == B::Log
         && let Some(cells) = fell_tree(world, p) {
             for cell in cells {
@@ -654,7 +691,7 @@ pub fn interact(
         let anchor = super::factory::anchor(p, super::factory::step(world));
         world.factory.focus = Some(anchor);
         if let Some(node) = world.factory.nodes.get(&anchor) {
-            world.expedition.say(format!("{} · {} · E to load, collect or pause. Connect item pipes and power cables to any face.",node.kind.name(),node.status));
+            world.expedition.say(format!("{} | {} | E  Open",node.kind.name(),node.status));
         }
         return;
     }
@@ -662,24 +699,32 @@ pub fn interact(
         B::Workbench => {
             world.expedition.workshop_found = true;
             world.factory.bench = Some(p);
-            world.expedition.say("Workbench ready. E opens crafting: assemble a bore or start a generator → crusher → electric furnace line.");
+            world.expedition.say("E  Craft");
+            super::workshop::use_bench(world, _player);
         }
         B::Smelter => {
             world.expedition.workshop_found = true;
             let mut processed = 0;
             for (ore, metal) in [(0, 6), (1, 7), (2, 8)] {
-                if world.expedition.pay(&[(ore, UNIT), (3, UNIT / 4)]) {
-                    world.expedition.add(metal, UNIT);
+                if super::inventory::resources::exchange(&mut world.inventory,
+                    &[(ore, UNIT), (3, UNIT / 4)], &[(metal, UNIT)]) {
                     processed += 1;
                 }
             }
-            world.reconcile_legacy_to_inventory();
+            world.sync_from_inventory();
             if processed > 0 {
+                world.adventure.sounds.push(crate::audio::Event {
+                    cue: crate::audio::Cue::Smelt, pos: Some((p.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters()),
+                    gain: 0.55, pitch: 1.0,
+                });
                 world
                     .expedition
                     .say("Smelted batch: 1 ingot per ore using 0.25 coal.");
-            } else if !reinforce_weapon(world) {
-                world.expedition.say("Nothing to smelt. With an empty forge, F fits one blade part or one modifier from your pack.");
+            } else if reinforce_weapon(world) {
+                world.reconcile_legacy_to_inventory();
+                world.sync_from_inventory();
+            } else {
+                world.expedition.say("Need ore, 0.25 coal and room for the ingot. F  Fit a blade part or modifier");
             }
         }
         B::SalvageCrate | B::SurveyCache | B::CultivatorCache => {
@@ -749,7 +794,7 @@ pub fn interact(
                             .say(format!("Spells discovered: {}.", names.join(", ")));
                     }
                     world.expedition.say(format!(
-                        "{} claimed. Hold R to cast. Arrange the deck in E. The brick mouth is 18 m east of the clearing.",
+                        "{} acquired. R  Cast | E  Edit spells",
                         names[tier as usize]
                     ));
                     // A second, found wand rests on the altar: its own chassis and deck.
@@ -793,13 +838,13 @@ pub fn bore_targets(world: &mut World, p: IVec3, player: Vec3, time_budget: crat
             .say("Craft a bore at a workbench first. Left mouse uses your selected mining size.");
         return Vec::new();
     }
-    if world.expedition.resources[4] < UNIT / 8 {
+    if world.expedition.resources[4] < BORE_FUEL_UNITS {
         world
             .expedition
-            .say("Bore needs 0.125 lumen fibre. Harvest luminous mushrooms.");
+            .say(format!("Bore needs {} lumen fibre. Harvest luminous mushrooms.", bore_fuel_cost()));
         return Vec::new();
     }
-    let radius = if tier == 1 { 1.6 } else { 2.8 };
+    let radius = bore_radius(tier);
     let voxel = world.voxel_scale.meters();
     let budget = ((if tier == 1 { 128.0 } else { 384.0 }) / voxel.powi(3)) as usize;
     let mut queue = VecDeque::from([p]);
@@ -835,7 +880,7 @@ pub fn bore_targets(world: &mut World, p: IVec3, player: Vec3, time_budget: crat
         }
     }
     if !targets.is_empty() {
-        world.expedition.resources[4] -= UNIT / 8;
+        world.expedition.resources[4] -= BORE_FUEL_UNITS;
         world.reconcile_legacy_to_inventory();
         world.expedition.say(format!(
             "Bore queued {:.2} m³",

@@ -94,7 +94,7 @@ fn shot_tags(mods: &wands::ShotMods) -> Vec<&'static str> {
     if mods.seek_ally {
         tags.push("Seek");
     }
-    if mods.orbit {
+    if mods.orbit || mods.bounces > 0 {
         tags.push("Ricochet");
     }
     if mods.bore {
@@ -133,7 +133,7 @@ fn shot_tags(mods: &wands::ShotMods) -> Vec<&'static str> {
     if mods.damage_mul > 1.05 {
         tags.push("Heavy");
     }
-    if mods.bounces > 0 {
+    if mods.pierce > 0 {
         tags.push("Pierce");
     }
     if let Some(element) = mods.element {
@@ -184,8 +184,8 @@ fn cast_program(eval: &wands::CastBlockEval) -> String {
         chain.push(step);
     }
     format!(
-        "Next cast ({:.0} mana): {}",
-        eval.mana_cost,
+        "Next cast ({} mana): {}",
+        adventure::spell_defs::card::amount(eval.mana_cost),
         chain.join(" + ")
     )
 }
@@ -300,6 +300,15 @@ pub(super) fn show_wand_hover_card(ui: &mut egui::Ui, view: &View) {
         FontId::monospace(10.5),
         style::MANA,
     );
+    if !ui.input(|input| input.modifiers.shift) {
+        ui.label(RichText::new(format!("{} Slots · {:.2}s Cast",
+            stats.capacity, stats.cast_delay)).size(11.0).color(style::PAPER));
+        super::description_copy::show(ui, engine_content::descriptions::get("wand"),
+            &format!("{} mana", adventure::spell_defs::card::amount(eval.mana_cost)), false);
+        return;
+    }
+    super::description_copy::show(ui, engine_content::descriptions::get("wand"),
+        &format!("{} mana", adventure::spell_defs::card::amount(eval.mana_cost)), true);
     clipped_line(
         ui,
         stats.chassis,
@@ -454,21 +463,37 @@ pub(super) fn show_wand_hover_card(ui: &mut egui::Ui, view: &View) {
     clipped_line(ui, &program, FontId::monospace(10.5), program_color, 16.0);
 }
 
-/// Renders a Noita-style Spell / Modifier Hover Card with type badge, mana drain,
-/// damage, cast delay delta, recharge delta, spread delta, and world physics note.
-/// The card is the same size for every spell. Missing stats stay as a dash so
-/// moving across the board does not resize the popup or the panel under it.
+/// Compact spell card: automatic stats, functional copy, cost, and Alt details.
+fn review_card_config() -> Option<(u32, bool)> {
+    static REVIEW: std::sync::OnceLock<Option<(u32, bool)>> = std::sync::OnceLock::new();
+    *REVIEW.get_or_init(|| {
+        if !crate::parse_benchmark_config().enabled || super::grimoire::review_page().is_none() {
+            return None;
+        }
+        let spell = std::env::var("VOXEL_REVIEW_SPELL_CARD").ok()?.parse().ok()?;
+        adventure::spell_defs::def(spell)?;
+        let expanded = std::env::var("VOXEL_REVIEW_CODEX").is_ok_and(|value| value == "1");
+        Some((spell, expanded))
+    })
+}
+
+/// Captures the real hover-card renderer in an unsaved benchmark review only.
+pub(super) fn review_spell_card(ctx: &egui::Context, view: &View) {
+    let Some((spell, _)) = review_card_config() else { return; };
+    egui::Area::new(egui::Id::new("spell-card-native-review"))
+        .order(egui::Order::Foreground)
+        .anchor(Align2::RIGHT_TOP, vec2(-24.0, 64.0))
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(style::INK)
+                .stroke(Stroke::new(1.0, style::EDGE))
+                .inner_margin(12)
+                .show(ui, |ui| show_spell_hover_card(ui, spell, view));
+        });
+}
+
 pub(super) fn show_spell_hover_card(ui: &mut egui::Ui, spell: u32, view: &View) {
     let available = view.can_wield(spell);
-    let cost = if spell == 22 {
-        -20.0
-    } else {
-        adventure::inscriptions::cost(spell, view.discoveries)
-    };
-    let dmg = adventure::spell_base_damage(spell);
-    let delay_mod = adventure::spell_cast_delay_delta(spell);
-    let rech_mod = adventure::spell_recharge_delta(spell);
-    let spread_mod = adventure::spell_spread_delta(spell);
     let is_mod = wands::is_modifier(spell);
 
     ui.set_width(HOVER_W);
@@ -496,96 +521,55 @@ pub(super) fn show_spell_hover_card(ui: &mut egui::Ui, spell: u32, view: &View) 
         if is_mod { style::AMBER } else { style::MANA },
     );
 
-    clipped_line(
-        ui,
-        adventure::spell_hint(spell),
-        FontId::proportional(11.0),
-        style::MUTED,
-        16.0,
-    );
-    clipped_line(
-        ui,
-        adventure::spell_flavor(spell),
-        FontId::proportional(11.0),
-        style::PAPER.gamma_multiply(0.72),
-        16.0,
-    );
-    let (rule, _) = ui.allocate_exact_size(vec2(HOVER_W, 8.0), egui::Sense::hover());
-    ui.painter().hline(
-        rule.x_range(),
-        rule.center().y,
-        Stroke::new(1.0, style::EDGE),
-    );
+    if let Some(entry) = adventure::spell_defs::card::description(spell) {
+        compact_spell_body(ui, spell, view, entry, available);
+    }
+}
 
-    stat_row(
-        ui,
-        "Mana Drain",
-        if cost < 0.0 {
-            format!("{cost:.0} (Add Mana)")
+/// Migrated cards use the same sparse, validated copy as inventory items.
+/// Values are generated by casting rules; Shift expands numeric mechanics.
+fn compact_spell_body(
+    ui: &mut egui::Ui,
+    spell: u32,
+    view: &View,
+    entry: &engine_content::descriptions::Description,
+    available: bool,
+) {
+    let card = adventure::spell_defs::card::read(spell, view.discoveries, view.rank);
+    ui.spacing_mut().item_spacing.y = 3.0;
+    if !card.stats.is_empty() {
+        ui.label(RichText::new(&card.stats).size(11.0).color(style::PAPER));
+    }
+    let expanded = ui.input(|input| input.modifiers.shift)
+        || review_card_config().is_some_and(|(id, expanded)| id == spell && expanded);
+    super::description_copy::show(ui, Some(entry), &card.cost, expanded);
+    if spell == wands::EMPTY { return; }
+    if !available {
+        let message = if adventure::spell_available(spell, view.wand, view.rare_spells) {
+            "Undiscovered"
         } else {
-            format!("{cost:.0}")
-        },
-        if cost < 0.0 { style::JADE } else { style::MANA },
-    );
-    stat_row(
-        ui,
-        "Base Damage",
-        if dmg > 0.0 {
-            format!("{dmg:.0}")
-        } else {
-            "—".to_string()
-        },
-        style::PAPER,
-    );
-    stat_row(
-        ui,
-        "Cast Delay",
-        signed_sec(delay_mod),
-        if delay_mod < -0.005 {
-            style::JADE
-        } else if delay_mod > 0.005 {
-            style::AMBER
-        } else {
-            style::MUTED
-        },
-    );
-    stat_row(
-        ui,
-        "Recharge Time",
-        signed_sec(rech_mod),
-        if rech_mod < -0.005 {
-            style::JADE
-        } else if rech_mod > 0.005 {
-            style::AMBER
-        } else {
-            style::MUTED
-        },
-    );
-    stat_row(
-        ui,
-        "Spread",
-        signed_deg(spread_mod),
-        if spread_mod < -0.05 {
-            style::JADE
-        } else if spread_mod > 0.05 {
-            style::AMBER
-        } else {
-            style::MUTED
-        },
-    );
-    clipped_line(
-        ui,
-        if available {
-            "Ready"
-        } else if adventure::spell_available(spell, view.wand, view.rare_spells) {
-            "Undiscovered · defeat guardians and clear sites"
-        } else {
-            "Locked · Claim a sanctum reliquary or upgrade the wand"
-        },
-        FontId::proportional(10.0),
-        if available { style::JADE } else { style::AMBER },
-        16.0,
-    );
+            "Requires wand upgrade or reliquary"
+        };
+        ui.label(RichText::new(message).size(10.0).color(style::AMBER));
+    }
+    if expanded {
+        ui.separator();
+        for (label, value) in card.details {
+            stat_row(ui, label, value, style::PAPER);
+        }
+        for (label, value) in [
+            ("Cast delay", adventure::spell_cast_delay_delta(spell)),
+            ("Recharge", adventure::spell_recharge_delta(spell)),
+        ] {
+            if value != 0.0 {
+                stat_row(ui, label, signed_sec(value), if value < 0.0 { style::JADE } else { style::AMBER });
+            }
+        }
+        let spread = adventure::spell_spread_delta(spell);
+        if spread != 0.0 {
+            stat_row(ui, "Spread", signed_deg(spread), style::PAPER);
+        }
+    }
 }
 
 /// Interactive Noita-style Wand Deck strip with:
@@ -901,7 +885,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
     });
 
     if view.wand == 0 {
-        ui.label("Craft one wand to start experimenting with spells and Noita-style modifiers.");
+        ui.label("Craft a wand to equip spells.");
         return;
     }
 
@@ -975,7 +959,7 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         });
 
     ui.small(
-        "Modifiers in front of a spell apply to it. The amber index is where the next cast starts. Click writes the selected slot; shift-click fills the first empty slot. Right-click or drag off the deck to clear. An empty wand casts nothing.",
+        "Modifiers affect the next spell. Amber marks the next cast.",
     );
 
     paint_spell_library(
@@ -1045,10 +1029,10 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         }
     });
     let blurb = match view.loadout.mode {
-        1 => "Prism Chassis: Draws 2 spells per cast with slight spread.",
-        2 => "Trigger Chassis: First projectile carries the next projectile spell and releases it on impact.",
-        3 => "Chaotic Chassis: Reshuffles the deck order every reload, with faster cast delay and recharge.",
-        _ => "Conduit Chassis: Evaluates modifier chains left-to-right in strict slot order.",
+        1 => "Casts two spells with spread.",
+        2 => "Releases the next projectile on impact.",
+        3 => "Shuffles on reload. Faster casting and recharge.",
+        _ => "Casts spells from left to right.",
     };
     let width = ui.available_width().min(BOARD_W);
     let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::hover());

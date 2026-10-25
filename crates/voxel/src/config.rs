@@ -2,7 +2,7 @@ use engine_core::VoxelScalePreset;
 
 /// New-world generator and maximum readable version. Keep historical version
 /// gates literal: bumping this must never change how an older save generates.
-pub const CURRENT_GENERATOR_VERSION: u32 = 36;
+pub const CURRENT_GENERATOR_VERSION: u32 = 51;
 pub const WORLD_MIN_Y_METERS: f32 = -16.0;
 pub const WORLD_MAX_Y_METERS: f32 = 512.0;
 pub const WATER_LEVEL_METERS: f32 = 12.0;

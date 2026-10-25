@@ -16,6 +16,20 @@ pub enum Signal {
     Data,
 }
 
+impl Signal {
+    pub fn label(self) -> &'static str {
+        match self {
+            Signal::Power => "Power",
+            Signal::Clock => "Clock",
+            Signal::Reset => "Reset",
+            Signal::MemBus => "Memory Bus",
+            Signal::PeriphBus => "Peripheral Bus",
+            Signal::AluBus => "ALU Bus",
+            Signal::Data => "Data",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Dir {
     Drive,
@@ -33,6 +47,7 @@ pub enum Role {
     Timer,
     Gpio,
     Adc,
+    Watchdog,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -126,12 +141,18 @@ pub struct Process {
     /// Clock period over the critical path.
     pub margin: f32,
     pub max_layers: u8,
+    /// Mask alignment the layout rules allow, µm.
+    pub overlay_um: f32,
+    /// Diameter of the coupon wafers a lot runs on, mm.
+    pub wafer_mm: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "ChipTable")]
 pub struct Registry {
     pub processes: Vec<Process>,
+    #[serde(default)]
+    pub labs: Vec<crate::fab::Lab>,
     pub modules: Vec<ModuleSpec>,
 }
 
@@ -150,6 +171,10 @@ impl Registry {
 
     pub fn module(&self, id: &str) -> Option<&ModuleSpec> {
         self.modules.iter().find(|m| m.id == id)
+    }
+
+    pub fn lab(&self, id: &str) -> Option<&crate::fab::Lab> {
+        self.labs.iter().find(|l| l.id == id)
     }
 
     pub fn process(&self, id: &str) -> Option<&Process> {

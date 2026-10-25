@@ -13,6 +13,9 @@ use glam::Vec3;
 
 mod chasm;
 mod dress;
+mod escape;
+mod inhabited;
+mod fine;
 mod footprint;
 mod gallery;
 mod index;
@@ -23,6 +26,7 @@ mod maze;
 mod outline;
 mod passage;
 mod plan;
+mod siting;
 mod starry;
 mod treasure;
 #[cfg(test)]
@@ -33,6 +37,10 @@ pub use index::Index;
 use index::CORR_BIT;
 pub use outline::Outline;
 pub use plan::generate;
+
+pub(crate) fn fit_terrain(cfg: &WorldSampleConfig, c: Complex) -> Option<Complex> {
+    if cfg.generator_version >= 39 { siting::fit(cfg, c) } else { Some(c) }
+}
 
 /// First generator with job-driven complexes.
 pub const VERSION: u32 = 32;
@@ -69,6 +77,10 @@ pub enum Kind {
     Chasm,
     /// The objective: sealed in tombstone, entered through one puzzle room.
     Core,
+    Scriptorium,
+    Refectory,
+    Infirmary,
+    Armory,
 }
 
 impl Kind {
@@ -120,6 +132,8 @@ pub struct Room {
     pub rift: f32,
     /// A dead end that pays for the detour: a salvage cache on a plinth.
     pub cache: bool,
+    /// Where a gallery's stair stands (`gallery::choose`).
+    pub stair: u8,
     /// Tombstone shell: no digging into or out of this room.
     pub sealed: bool,
     /// Per-room hash salt for layouts.
@@ -144,7 +158,7 @@ impl Room {
             Kind::Foundry => 1.0,
             Kind::Reveal => 4.0,
             Kind::Chasm => self.rift + 1.0,
-            Kind::Orrery if starry::plan(self) == starry::Plan::Islands => starry::VOID,
+            Kind::Orrery if starry::plan(self) == starry::Plan::Islands => starry::depth(self),
             Kind::Orrery => 1.2,
             _ => 0.0,
         }
@@ -247,14 +261,16 @@ impl Complex {
             return Some(b);
         }
         let (sx, sz, top) = self.shaft;
-        if m.y >= top - 1.0 {
-            return self.gatehouse.sample(
+        if m.y >= top - if cfg.generator_version >= 39 { 40.0 } else { 1.0 } {
+            let built = self.gatehouse.sample_sited(
                 Vec3::new(m.x - sx, m.y - top, m.z - sz),
                 v,
                 (height + 1) as f32 * v - top,
+                if cfg.generator_version >= 39 { cfg.generator_version } else { 0 },
             );
+            if built.is_some() || m.y >= top - 1.0 { return built; }
         }
-        if m.y > (height + 1) as f32 * v - 2.0 {
+        if cfg.generator_version < 39 && m.y > (height + 1) as f32 * v - 2.0 {
             return None;
         }
         let ids = self.index.at(m.x, m.z);
@@ -302,6 +318,11 @@ impl Complex {
                     Kind::Orrery => "Hall of Wandering Stars",
                     Kind::Chasm => "The Cleft",
                     Kind::Core => "The sealed vault",
+                    Kind::Library => "The old library",
+                    Kind::Scriptorium => "The mapmakers' scriptorium",
+                    Kind::Refectory => "The deserted refectory",
+                    Kind::Infirmary => "The old infirmary",
+                    Kind::Armory => "The garrison armory",
                     _ => self.job.name(),
                 });
             }

@@ -718,9 +718,9 @@ pub fn cloud_render_scale() -> u32 {
 pub fn set_cloud_render_scale(scale: u32) {
     CLOUD_RENDER_SCALE.store(scale.clamp(2, 4), Ordering::Relaxed);
 }
-/// The requested divisor is a quality ceiling, not permission to render a
-/// 180-line cloud image. Keep at least 360 rows so small windows do not turn
-/// every cumulus into a soft blob after the cubic reconstruction.
+/// Preserve the normal 640x360 quality floor at the requested setting. Sustained
+/// GPU overload may temporarily use a 426x240 floor instead; otherwise the
+/// governor's requests are clamped away at 720p/1080p and cannot relieve load.
 ///
 /// `width` and `height` are the scene size (see `scene_dims`). The 360-row floor
 /// scales with the render resolution, so a smaller scene gets a proportionally
@@ -733,13 +733,20 @@ pub fn effective_cloud_render_scale(width: u32, height: u32) -> u32 {
         // At full resolution keep the long-standing whole-number floor exactly.
         (if percent >= 100 { ratio.floor() } else { ratio.round() }) as u32
     };
-    let maximum = divisor(height, 360.0).min(divisor(width, 640.0)).clamp(1, 4);
-    (cloud_render_scale() + CLOUD_AUTO_BUMP.load(Ordering::Relaxed)).min(maximum)
+    let normal_maximum = divisor(height, 360.0).min(divisor(width, 640.0)).clamp(1, 4);
+    let base = cloud_render_scale().min(normal_maximum);
+    let bump = CLOUD_AUTO_BUMP.load(Ordering::Relaxed);
+    if bump == 0 { return base; }
+    let adaptive_maximum = divisor(height, 240.0).min(divisor(width, 426.0)).clamp(1, 6);
+    (base + bump).min(adaptive_maximum)
 }
 /// Divisor request including the governor's bump and the render resolution,
 /// used to notice changes that need the scene targets rebuilt.
-fn cloud_scale_request() -> u32 {
-    cloud_render_scale() * 8 + CLOUD_AUTO_BUMP.load(Ordering::Relaxed) + scene_scale_percent() * 64
+fn cloud_scale_request(width: u32, height: u32) -> u32 {
+    let (width, height) = scene_dims(width, height);
+    // Recreate targets only when their effective dimensions change. A governor
+    // step clipped by the minimum image size must not cause a full resize hitch.
+    effective_cloud_render_scale(width, height) + scene_scale_percent() * 8
 }
 
 /// Internal render resolution as a percentage of the window. The 3D scene (terrain,
@@ -1904,23 +1911,23 @@ impl GpuPendingInit {
     pub fn progress(&self) -> LoadingProgress {
         match self.stage {
             GpuInitStage::CoreBindings => LoadingProgress {
-                detail: "Creating uniform buffers and bind-group layouts…",
+                detail: "Starting graphics",
                 progress_01: 0.20,
             },
             GpuInitStage::CloudFields => LoadingProgress {
-                detail: "Uploading cloud/weather textures…",
+                detail: "Loading textures",
                 progress_01: 0.45,
             },
             GpuInitStage::ShaderModules => LoadingProgress {
-                detail: "Compiling shader modules…",
+                detail: "Loading shaders",
                 progress_01: 0.65,
             },
             GpuInitStage::Pipelines => LoadingProgress {
-                detail: "Creating render pipelines…",
+                detail: "Starting graphics",
                 progress_01: 0.82,
             },
             GpuInitStage::Finalize => LoadingProgress {
-                detail: "Finalizing renderer resources…",
+                detail: "Finishing",
                 progress_01: 0.92,
             },
             GpuInitStage::Complete => LoadingProgress {
@@ -2165,6 +2172,16 @@ impl GpuPendingInit {
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                         label: Some("cloud texture layout"),
                         entries: &[
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 2,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
                             wgpu::BindGroupLayoutEntry {
                                 binding: 0,
                                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT
@@ -2494,6 +2511,7 @@ impl GpuPendingInit {
                     self.cloud_texture_layout.as_ref().unwrap(),
                     &cloud_sampler,
                     &cloud_target,
+                    self.camera_buffer.as_ref().unwrap(),
                 );
 
                 let depth = Gpu::create_depth(device, config);
@@ -2992,6 +3010,7 @@ impl GpuPendingInit {
                     &postprocess.scene,
                 );
 
+                let initial_cloud_scale = cloud_scale_request(bootstrap.config.width, bootstrap.config.height);
                 let mut gpu = Gpu {
                     underwater: false,
                     water_surface_m: 12.0,
@@ -3077,7 +3096,7 @@ impl GpuPendingInit {
 
                     // History is invalid until the first resolved cloud frame is produced.
                     cloud_history_valid: false,
-                    cloud_render_scale: cloud_scale_request(),
+                    cloud_render_scale: initial_cloud_scale,
                     cloud_governor: cloud_governor::CloudGovernor::default(),
                     last_frame_instant: Instant::now(),
                     frame_index: 0,
@@ -3320,11 +3339,16 @@ impl Gpu {
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
         target: &wgpu::TextureView,
+        camera: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cloud bind group"),
             layout,
             entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: camera.as_entire_binding(),
+                },
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(target),
@@ -3684,7 +3708,7 @@ impl Gpu {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
-        self.cloud_render_scale = cloud_scale_request();
+        self.cloud_render_scale = cloud_scale_request(new_size.width, new_size.height);
         self.size = new_size;
         self.config.width = new_size.width;
         self.config.height = new_size.height;
@@ -3711,6 +3735,13 @@ impl Gpu {
             &self.depth,
             &self.cloud_shadow_view,
         );
+        self.resize_cloud_targets();
+    }
+
+    /// A cloud quality adjustment does not resize terrain, depth, atmosphere,
+    /// postprocessing or the swapchain. Keep those allocations and bindings.
+    fn resize_cloud_targets(&mut self) {
+        self.cloud_render_scale = cloud_scale_request(self.size.width, self.size.height);
         (self.cloud_target_tex, self.cloud_target) =
             Self::create_cloud_target(&self.device, &self.config);
         (self.cloud_current_tex, self.cloud_current_view) = Self::create_cloud_texture(
@@ -3730,6 +3761,7 @@ impl Gpu {
             &self.cloud_texture_layout,
             &self.cloud_sampler,
             &self.cloud_target,
+            &self.camera_buffer,
         );
         self.cloud_temporal_bind_group = Self::create_cloud_temporal_bind_group(
             &self.device,
@@ -4268,14 +4300,19 @@ impl Gpu {
             // GPUs) can settle on different looks. Say so instead of changing
             // the image silently.
             eprintln!(
-                "[cloud-governor] cloud resolution step {} (gpu pass {:.1} ms)",
+                "[cloud-governor] step {} effective_divisor={} (gpu pass {:.1} ms)",
                 self.cloud_governor.bump(),
+                cloud_scale_request(self.size.width, self.size.height) % 8,
                 self.last_render_stats.gpu_pass_total_ms
             );
         }
         self.last_frame_instant = Instant::now();
-        if self.cloud_render_scale != cloud_scale_request() {
-            self.resize(self.size);
+        if self.cloud_render_scale != cloud_scale_request(self.size.width, self.size.height) {
+            if self.cloud_render_scale / 8 == scene_scale_percent() {
+                self.resize_cloud_targets();
+            } else {
+                self.resize(self.size);
+            }
         }
         if self
             .gpu_profiler

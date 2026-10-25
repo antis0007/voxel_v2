@@ -4,6 +4,7 @@ use super::{BlockId as B, World, mark_chunk_and_neighbors_dirty};
 use glam::{IVec3, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
 mod extraction;
+pub mod chips;
 pub mod assembler;
 pub mod induction;
 pub mod multiblock;
@@ -305,6 +306,8 @@ pub struct Factory {
     power_net: HashMap<IVec3, usize>,
     /// Factorio-style production and power history.
     pub stats: stats::Production,
+    /// Player-designed controllers and their library.
+    pub chips: chips::Bay,
 }
 
 #[derive(Clone, Default)]
@@ -325,9 +328,16 @@ pub struct View {
     /// Generation and draw per second over the last minute (units).
     pub power_history: Vec<(u64, u64)>,
     pub count: usize,
+    /// Chip library snapshot and the focused machine's controller.
+    pub chips: Option<std::sync::Arc<engine_chip::library::Library>>,
+    pub controller: Option<chips::Diagnostics>,
+    pub bench_chips: bool,
+    /// Chip bay clock (1/120 s ticks), for lot progress.
+    pub chips_now: u64,
 }
 #[derive(Clone, Copy)]
 pub enum Action {
+    Resonance(super::adventure::resonance::Action),
     Habitat(super::habitats::Action),
     /// Assembler recipe (index + 1, 0 clears) or battery I/O limit in kW.
     SetTarget(IVec3, u32),
@@ -434,11 +444,19 @@ pub fn view(world: &World, player: Vec3) -> View {
             .iter()
             .map(|s| (s.generated, s.drawn))
             .collect(),
+        chips: Some(world.factory.chips.library.clone()),
+        controller: world.factory.focus.and_then(|p| world.factory.chips.diagnostics(p)),
+        bench_chips: at_bench(world, player),
+        chips_now: world.factory.chips.now(),
     }
 }
 
 pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
     match action {
+        Action::Resonance(action) => {
+            let bench = at_bench(world, player);
+            super::adventure::resonance::action(world, bench, action);
+        }
         Action::Habitat(action) => {
             super::habitats::action(world, player * world.voxel_scale.meters(), action);
         }
@@ -882,8 +900,9 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                     }
                     Action::Collect(_) if n.kind == Kind::Assembler && n.stock > 0 => {
                         if let Some(kind) = assembler::stock_kind(n) {
-                            let count = n.stock;
-                            n.stock = 0;
+                            let (count, _) = world.inventory.try_insert(super::inventory::ItemStack::new(
+                                super::inventory::Item::Block(kind.block()), n.stock));
+                            n.stock -= count;
                             world.factory.kits[kind as usize] += count;
                             world.expedition.say(format!("Collected {count} × {}.", kind.name()));
                         }
@@ -892,12 +911,14 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                         // Collect also unloads inputs. Pausing first lets the player safely reconfigure a line.
                         for i in 0..RESOURCE_COUNT {
                             for src in [&mut n.input[i], &mut n.output[i]] {
-                                let amount = (*src).min(64_000_000 - world.expedition.resources[i]);
+                                let amount = super::inventory::resources::collect(
+                                    &mut world.inventory, i,
+                                    (*src).min(64_000_000 - world.expedition.resources[i]));
                                 world.expedition.resources[i] += amount;
                                 *src -= amount;
                             }
                         }
-                        world.expedition.say("Machine inventories collected.");
+                        world.expedition.say("Collected what fits. Remaining supplies stay in the machine.");
                     }
                     _ => {}
                 }
@@ -1047,6 +1068,7 @@ pub fn dismantle(
     }
     world.inventory = inventory;
     world.sync_from_inventory();
+    world.factory.chips.remove(p);
     world.factory.topology = false;
     world.factory.form_matrices(size);
     if world.factory.focus == Some(p) {
@@ -1365,6 +1387,7 @@ impl Factory {
         nets
     }
     pub fn tick(&mut self, dt: f32, size: i32) {
+        self.step_controllers((dt * engine_chip::characterize::TICK_HZ as f32).round() as u64);
         for n in self.nodes.values_mut() {
             if n.enabled
                 && matches!(
@@ -1402,6 +1425,7 @@ impl Factory {
             self.form_matrices(size);
             self.validate_packets();
             self.topology = true;
+            self.chips.topology_changed();
         }
         // Buffers before this tick's work; the difference afterwards is what
         // the factory made and used (production statistics).
@@ -1425,7 +1449,8 @@ impl Factory {
             }
             let before = n.energy;
             if pile::is_pile(n) {
-                let outcome = pile::step(n);
+                // A controller holding the pile inserts the rods: no fission.
+                let outcome = if self.chips.allows(p) { pile::step(n) } else { pile::hold(n) };
                 n.status = outcome.status();
                 n.flow = n.energy.saturating_sub(before) as i32;
                 if outcome == pile::Outcome::Meltdown {
@@ -1485,8 +1510,12 @@ impl Factory {
         self.distribute_power();
         extraction::route_water(self);
         self.cursor = self.cursor.wrapping_add(1);
-        for n in self.nodes.values_mut() {
+        for (p, n) in self.nodes.iter_mut() {
             if !n.enabled || !n.kind.processor() {
+                continue;
+            }
+            if !self.chips.allows(*p) {
+                n.status = "Held by controller";
                 continue;
             }
             if n.recipe.is_none() {
@@ -1725,6 +1754,8 @@ pub struct Probe {
     pub shell_of: Option<Kind>,
     /// Storage: (stored, capacity, rate) of its energy pool.
     pub pool: Option<(u32, u32, u32)>,
+    /// Installed controller: part, revision and output state.
+    pub controller: Option<String>,
 }
 
 pub fn probe(world: &World, cell: IVec3) -> Option<Probe> {
@@ -1745,6 +1776,7 @@ pub fn probe(world: &World, cell: IVec3) -> Option<Probe> {
         grid: world.factory.grid(pos),
         shell_of,
         pool: world.factory.pool_of(pos),
+        controller: world.factory.chips.summary(pos),
     })
 }
 

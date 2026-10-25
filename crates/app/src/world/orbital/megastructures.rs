@@ -27,7 +27,7 @@ pub const PENUMBRA_M:f64=12_000.0/SKY_SCALE;
 /// Coverage for supported atmospheric crowns only, not celestial objects.
 pub const RANGE_M:f32=20_000.0;
 
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Kind { Foundry,TwinHabitat,MirrorArray,DeadRelay }
 impl Kind {
     pub fn name(self)->&'static str {match self {
@@ -82,12 +82,22 @@ impl Observer {
 }
 
 pub fn contacts(seed:u32,day:&DayNightCycle,viewer:Vec3)->Vec<Contact> {
+    contacts_inner(seed,day,viewer,true)
+}
+
+/// Ephemerides need only geometry; do not evaluate weather and solar lighting
+/// for every future sample in the service ledger.
+pub(super) fn geometric_contacts(seed:u32,day:&DayNightCycle,viewer:Vec3)->Vec<Contact> {
+    contacts_inner(seed,day,viewer,false)
+}
+
+fn contacts_inner(seed:u32,day:&DayNightCycle,viewer:Vec3,lit:bool)->Vec<Contact> {
     let time=seconds(day);
     let observer=Observer::new(viewer,time);
     // Lighting gives the local sun direction. Rotate the same world-origin
     // direction into inertial space for the planet's cylindrical eclipse test.
     let spin=planet_spin(time);
-    let sun=spin*day.lighting().sun_dir.as_dvec3().normalize();
+    let sun=if lit {spin*day.lighting().sun_dir.as_dvec3().normalize()} else {DVec3::Y};
     let mut result=Vec::with_capacity(4);
     for (kind,salt) in [(Kind::Foundry,0x10a1_u32),(Kind::TwinHabitat,0x10a2),(Kind::MirrorArray,0x10a3),(Kind::DeadRelay,0x10a4)] {
         // One of each, as the lore has it ("the Loom", "the Continuum"). Three

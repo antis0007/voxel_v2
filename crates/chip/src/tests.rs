@@ -56,7 +56,7 @@ fn ports_are_typed_and_need_one_driver() {
     d.connect(&r, Pin { part: osc, port: "clk".into() }, Pin { part: rom, port: "vdd".into() }).unwrap();
     route_dirty(&mut d, &r);
     let c = compile(&d, &r);
-    assert!(c.errors().any(|e| e.message.contains("carries")), "{:?}", c.diagnostics);
+    assert!(c.errors().any(|e| e.message.contains("Type Mismatch")), "{:?}", c.diagnostics);
     assert!(!c.ok());
 }
 
@@ -68,7 +68,7 @@ fn unpowered_module_fails_with_a_connect_fix() {
     d.disconnect(&Pin { part: rom, port: "vdd".into() });
     route_dirty(&mut d, &r);
     let c = compile(&d, &r);
-    let e = c.errors().find(|e| e.message.contains("unpowered")).unwrap();
+    let e = c.errors().find(|e| e.message.contains("Unpowered")).unwrap();
     assert_eq!(e.fix, Some(Fix::Connect { part: rom, port: "vdd".into() }));
 }
 
@@ -80,7 +80,7 @@ fn no_program_memory_means_no_execution() {
     d.remove(&r, rom).unwrap();
     route_dirty(&mut d, &r);
     let c = compile(&d, &r);
-    let e = c.errors().find(|e| e.message.contains("cannot execute")).unwrap();
+    let e = c.errors().find(|e| e.message.contains("No Program ROM")).unwrap();
     assert_eq!(e.fix, Some(Fix::Add(Role::Rom)));
     assert!(c.report.is_none());
 }
@@ -145,7 +145,7 @@ fn routing_is_deterministic_and_incremental() {
 fn manual_wires_survive_reroute() {
     let r = reg();
     let mut d = sentinel(&r);
-    let net = d.nets.iter().find(|n| n.name.starts_with("imem")).unwrap().id;
+    let net = d.nets.iter().find(|n| n.name.starts_with("IMEM")).unwrap().id;
     let drawn = d.nets.iter().find(|n| n.id == net).unwrap().paths.clone();
     d.draw(net, drawn.clone());
     route_all(&mut d, &r);
@@ -191,7 +191,7 @@ fn an_alu_off_the_core_bus_adds_no_throughput() {
     without.disconnect(&Pin { part: alu, port: "op".into() });
     route_dirty(&mut without, &r);
     let c = compile(&without, &r);
-    assert!(c.diagnostics.iter().any(|d| d.severity == Severity::Warning && d.message.contains("no throughput")));
+    assert!(c.diagnostics.iter().any(|d| d.severity == Severity::Warning && d.message.contains("ALU Unused")));
     let (a, b) = (compile(&with, &r).report.unwrap(), c.report.unwrap());
     assert!(b.cycles_per_wake > a.cycles_per_wake);
     assert!(b.idle_w >= a.idle_w * 0.99, "the stranded ALU still leaks");
@@ -206,7 +206,7 @@ fn combinational_loops_are_rejected() {
     d.connect(&r, Pin { part: alu, port: "carry_out".into() }, Pin { part: other, port: "carry_in".into() }).unwrap();
     d.connect(&r, Pin { part: other, port: "carry_out".into() }, Pin { part: alu, port: "carry_in".into() }).unwrap();
     route_dirty(&mut d, &r);
-    assert!(has(&d, &r, "Combinational loop"));
+    assert!(has(&d, &r, "Combinational Loop"));
 }
 
 #[test]
@@ -218,8 +218,8 @@ fn firmware_must_fit_the_hardware() {
     assert!(c.errors().any(|e| e.fix == Some(Fix::SampleAtLeast(125))), "{:?}", c.diagnostics);
     d.firmware.sample_ms = 250;
     d.firmware.channels = 2;
-    assert!(has(&d, &r, "ADC channel"));
-    assert!(has(&d, &r, "add SRAM"));
+    assert!(has(&d, &r, "Sensors 2 / 1"));
+    assert!(has(&d, &r, "RAM 5 / 4 B"));
 }
 
 #[test]

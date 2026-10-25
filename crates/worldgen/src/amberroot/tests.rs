@@ -193,7 +193,10 @@ fn digest(c: &WorldSampleConfig, coords: impl Iterator<Item = IVec3>) -> Vec<(IV
 #[test]
 fn generator_34_is_untouched_away_from_the_grove() {
     for seed in SEEDS {
-        let new = cfg(seed, S::OneMeter);
+        // Exactly the grove's own version step: later generators change
+        // spawn-side terrain for their own reasons.
+        let mut new = cfg(seed, S::OneMeter);
+        new.generator_version = VERSION;
         let mut old = new;
         old.generator_version = VERSION - 1;
         // Spawn-side chunks, far outside the grove's reach.
@@ -241,4 +244,30 @@ fn chunk_order_and_entry_point_do_not_change_the_grove() {
     .join()
     .expect("thread");
     assert_eq!(forward, backward);
+}
+
+#[test]
+fn generator_43_palette_adds_teal_crowns_and_moss_only_from_43() {
+    let new = cfg(2_738_958_700, S::OneMeter);
+    let mut old = new;
+    old.generator_version = PALETTE_VERSION - 1;
+    assert!(!grove(&old).palette && grove(&new).palette);
+    let count = |c: &WorldSampleConfig| {
+        let p = grove(c);
+        let (mut moss, mut teal) = (0, 0);
+        for iz in -30..=30 {
+            for ix in -30..=30 {
+                let w = p.o + Vec2::new(ix as f32, iz as f32) * 2.0;
+                let top = cell(c, w.x, ground(c, w.x, w.y) - 0.5, w.y);
+                moss += (crate::sample_block(c, top) == B::GroveMoss) as u32;
+                for y in (10..60).step_by(3) {
+                    teal += (crate::sample_block(c, top + IVec3::Y * y) == B::PineLeaves) as u32;
+                }
+            }
+        }
+        (moss, teal)
+    };
+    assert_eq!(count(&old), (0, 0), "generator 42 grove must not change");
+    let (moss, teal) = count(&new);
+    assert!(moss > 50 && teal > 50, "palette barely shows: moss {moss}, teal {teal}");
 }

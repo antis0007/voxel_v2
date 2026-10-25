@@ -682,7 +682,8 @@ impl World {
                 .map(|(&c, v)| (c, Arc::clone(v)))
                 .collect();
             self.snapshot_cache = super::WorldSnapshot {
-                water_levels: Arc::new(self.water_levels.snapshot(chunks.keys().copied())),
+                water_levels: Arc::new(self.water_levels.snapshot(chunks.keys().copied())
+                    .with_precision(&self.environment.water_deficit)),
                 chunks: Arc::new(chunks),
                 regions: self.regions.view.clone(),
                 cfg: self.sample_config(),

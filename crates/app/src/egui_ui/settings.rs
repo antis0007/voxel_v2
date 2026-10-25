@@ -99,17 +99,15 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
         }
     });
     let mut auto = crate::quality::auto_enabled();
-    ui.checkbox(&mut auto, "Lower quality automatically if the game runs slowly")
-        .on_hover_text("Turns settings down one at a time while the frame rate stays low. It never raises them again.");
+    ui.checkbox(&mut auto, "Automatic Quality");
     crate::quality::set_auto_enabled(auto);
     ui.separator();
     let mut resolution = crate::render::scene_scale_percent();
     ui.add(
         egui::Slider::new(&mut resolution, crate::render::MIN_SCENE_SCALE_PERCENT..=100)
             .suffix("%")
-            .text("Render resolution"),
-    )
-    .on_hover_text("Draws the 3D world smaller and scales it up. Text and menus stay sharp. The best way to gain speed without losing anything.");
+            .text("Render Resolution"),
+    );
     crate::render::set_scene_scale_percent(resolution);
     let mut clouds_on = crate::render::clouds_enabled();
     ui.checkbox(&mut clouds_on, "Clouds");

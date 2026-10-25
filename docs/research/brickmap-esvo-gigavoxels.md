@@ -1,5 +1,15 @@
-# Brickmap, ESVO and GigaVoxels: sparse GPU voxel storage
-Source: Laine and Karras, "Efficient Sparse Voxel Octrees", I3D 2010, https://research.nvidia.com/publication/efficient-sparse-voxel-octrees (confirmed; assumes static geometry); Crassin et al., "GigaVoxels", SI3D 2009, DOI 10.1145/1507149.1507152 (confirmed); van Schaik 2016 Brickmap: no primary source found, unverified (only a hobbyist devlog saying bricks are fast to modify).
-Adopt: 8^3 bricks as the unit of storage in a GPU-resident brick pool with a shallow sparse index; out-of-core streaming for distant data; per-brick empty/solid bitmasks to skip work (community-reported, unverified).
-Reject: deep pointer octrees with per-node allocation; ESVO contour and normal compression (static-geometry assumption); GigaVoxels ray-guided streaming as our mutation path.
-Why: Octrees restructure on every edit and are poor for mutable cell state, while flat 8^3 bricks mutate in place and fit the low-end iGPU memory budget.
+# Sparse voxel storage
+
+Reviewed 2026-10-24; C03/C14/R10. [Laine/Karras ESVO](https://research.nvidia.com/publication/2010-02_efficient-sparse-voxel-octrees) presents compact storage, contour/normal encoding and ray casting. GigaVoxels (Crassin et al., DOI 10.1145/1507149.1507152) and the brief's van Schaik 2016 Brickmap attribution were not independently fetched in this pass; do not treat them as mutable-world benchmarks.
+
+## What we adopt
+
+Retain the accepted 8³ production-brick unit while S1 measures alternatives in isolation. A sparse index, pooled pages and per-brick dirty/optional-plane metadata provide explicit allocation and wake boundaries.
+
+## What we reject
+
+Do not claim all octrees are unsuitable for editing, or use rendering compression as the authoritative simulation format without measured update costs. Do not infer on-demand plane memory from base-cell storage alone.
+
+## What we improve
+
+C03 computes pool/index/header/halo/free-list costs; C14 adds every allocated plane and history/mirror byte. Compare mutation, residency and eviction workloads before a new data structure is accepted.

@@ -1,7 +1,7 @@
-# 0021: Player-designed microcontrollers (H1 slice)
+# 0021: Player-designed microcontrollers (H1, first H2 slice)
 
-Status: first slice implemented. Prepared blanks only; lithographic
-fabrication (masks, wafer lots, binning) is the next phase.
+Status: H1 implemented; a first planar fabrication slice (H2) implemented
+with game-preset durations and materials.
 
 ## Decision
 
@@ -32,6 +32,42 @@ fabrication (masks, wafer lots, binning) is the next phase.
 - Save 34 appends the chip library, installed controllers and the bay clock
   as length-prefixed RON after the dropped stacks. Saves 1-33 load with an
   empty library. Decode rejects unissued serials and a package present twice.
+
+## H1 completion
+
+- Sockets on pumps (Tank Fill: tanks on the fluid network), processors
+  (Crate Fill: crates on the item network, fullest compartment) and arcane
+  piles (Heat Guard: own core heat; a held pile has its rods in, coolant
+  still works). A part installs only where its task fits.
+- Watchdog module: with one on the peripheral bus the core restarts after
+  a brownout; without one a brownout while running hangs the core (output
+  off) until the player resets it. Each wake spends two instructions
+  kicking the watchdog. `Model.recovers` defaults to true for revisions
+  released before the module existed. `COMPILER_VERSION` is 2.
+- Compiler messages follow `crates/app/src/egui_ui/UI_RULES.md`: states and
+  counts, no prose.
+
+## H2 slice: wafer lots
+
+- `fab::route(layers)` is an ordered planar route: clean, oxidize, pattern
+  diffusion, implant, anneal, gate, contact, then per metal layer a
+  dielectric and via mask and the metal itself, passivate, probe, package.
+  Every exposure follows a resist coat; resist strip is a sealed organic
+  clean and removes no oxide. No real recipes or mixtures appear.
+- A mask set is content-addressed from the revision fingerprint and the
+  patterned sites per layer, made once and reused by every lot.
+- A lot is billed up front (wafer, mask blanks on the first lot, resist,
+  solvent, dopant, furnace gas, metal, filters for the clean hood) and then
+  advances at game time from the bay clock. Each step writes a record from
+  `mix(lot seed, step)`: film thickness, overlay, dose, residue. Outcomes do
+  not depend on service cadence and survive a save mid-route.
+- Yield `Y = exp(-D·A)` with D in defects/cm², raised by each contamination
+  event; an exposure whose overlay exceeds the process tolerance opens a
+  fraction of that layer's features. Speed bins A/B/C come from a per-die
+  critical-path spread. All bins run the same firmware; the bin rates the
+  clock. Energy per step is not drawn in this slice.
+- Labs are content rows: Open Bench (18/cm², sigma 8%) and Clean Hood
+  (4/cm², sigma 3%, filters per step).
 
 ## Rejected
 

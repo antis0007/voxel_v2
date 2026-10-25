@@ -1,0 +1,411 @@
+AUTOMATIC CODEX WORKFLOW FOR A RUST / WGPU VOXEL GAME
+Prepared 21 October 2026
+
+Purpose
+-------
+Use this in the LOCAL Codex app with the actual game repository open. It asks
+Codex to implement the smallest useful improvement loop, then exercise it.
+This file is a setup prompt, not an already-installed workflow or a benchmark
+of your game.
+
+Recommended starting point: GPT-6.1 Sol, default/Medium reasoning, Standard
+speed. Use Fast selectively if its higher usage is acceptable. Keep local
+LLM inference off the game GPU during performance comparisons.
+
+HOW TO USE
+----------
+1. Open the actual current game project in the Codex desktop app.
+2. Start a local task in an isolated Git worktree, if the project uses Git.
+3. Paste the ONE-TIME IMPLEMENTATION PROMPT below.
+4. Let Codex complete a real baseline run and one measured improvement. Ensure
+   the workflow itself is available from the scheduled task's starting branch.
+5. After that succeeds, create a project-scoped scheduled task using the
+   RECURRING TASK PROMPT. A reasonable starting policy is one bounded pass
+   when the computer is idle. Select the actual project and worktree mode.
+6. The local machine must be awake, the app running, and the project/GPU
+   available. The setup must report any missing access honestly.
+
+The one-time prompt is deliberately detailed. Recurring sessions should load
+the short project skill and compact state, not this entire document.
+
+=======================================================================
+ONE-TIME IMPLEMENTATION PROMPT — COPY FROM HERE
+=======================================================================
+
+Implement and run a practical automatic improvement workflow for this game.
+Do the implementation, baseline capture, and one useful improvement; do not
+stop after proposing an architecture.
+
+Goals:
+- Reduce time and tokens spent on repeated exploration, noisy logs, and
+  unsuccessful edit/build cycles.
+- Automatically find real correctness, performance, streaming, and visual
+  problems using evidence from the running game.
+- Improve one reproducible problem per pass and verify the outcome.
+- Learn from verified results through concise project instructions and
+  repeatable checks.
+- Preserve this Rust + raw wgpu engine. Do not introduce Bevy.
+
+The target machine is Windows 11 with an RTX 4090, 24 GB. Verify the actual
+execution environment and GPU rather than assuming you have access to it.
+A 144 FPS target corresponds to about 6.94 ms per frame, but resolution,
+quality, and workload must be recorded before claiming the target is met.
+Use current project settings as the initial baseline if these are unspecified.
+
+1. Inspect only what is needed
+-----------------------------
+Find the actual repository and current worktree root. Read applicable
+AGENTS.md instructions, Cargo manifests/lockfile, build/run commands, the
+renderer entry point, existing profiling/capture/review modes, and relevant
+tests. Reuse existing scripts and conventions.
+
+Confirm the actual wgpu version, graphics backend, adapter, build profile,
+assets/save requirements, and launch path. Do not assume a previous prototype
+or remote repository is the current game.
+
+Produce a compact map of the code needed for terrain, meshing, rendering,
+streaming, and simulation. Keep details out of the root instruction file unless
+they are needed for most tasks. Use targeted rg or symbol navigation.
+
+Preserve unrelated work and current configuration. Use one writer per worktree.
+Read-only investigation/review can be delegated when it resolves a specific
+uncertainty. Do not have agents edit the same files concurrently. Serialize GPU
+benchmarks and keep other heavy builds out of CPU timing runs.
+
+2. Reduce avoidable context overhead
+-----------------------------------
+If RTK is already installed, verify it with rtk --version and rtk gain.
+Otherwise use the current official Windows package:
+    winget install rtk-ai.rtk
+
+Inspect existing project instructions/hooks before initialization. Configure
+the project integration with:
+    rtk init --codex
+
+Merge and inspect changes; preserve existing instructions and hooks. Restart
+Codex if needed. Report the exact native trust/restart action if the user must
+perform it. Do not bypass trust or broaden permissions to make setup appear
+complete.
+
+Verify the integration in a LOCAL Codex app thread with one ordinary supported
+command. Confirm that important diagnostics and failure exit status survive
+filtering. Record whether command rewriting actually ran. RTK hook support
+does not imply that it runs in cloud-orchestrated sessions.
+
+Keep raw logs recoverable. Exclude structured benchmark JSON, profiler traces,
+and diagnostic output that must be parsed exactly from lossy filtering.
+Retrieve full failing output when the summary is insufficient. Treat rtk gain
+as an estimate of filtered command-output savings, not total session tokens.
+
+Add Serena only if repeated cross-file navigation is a material cost or it is
+already available. It is optional; do not delay the measurement loop for it.
+Use the free language-server backend, not a new local inference model.
+
+Current documented installation with uv already available:
+    uv tool install -p 3.13 serena-agent
+    serena init
+    serena setup codex
+
+The last command requires the Codex CLI on PATH. For an app-only setup, use
+Serena's documented MCP configuration instead of assuming that command works.
+Preserve existing MCP configuration. Setup registers the server; optional
+activation/reminder hooks are a separate configuration step.
+
+Before using Serena in any worktree, discover and activate that exact worktree
+root and verify the active project. Do not permanently bind every session to
+the main checkout. Use the Codex context and Rust Analyzer. WGSL support has
+different capabilities from Rust; do not assume WGSL reference search exists.
+
+Keep only useful MCP integrations enabled. Do not add Kev/Ollaya or an LLM
+router as a prerequisite. Never run local inference on the same GPU during
+game measurements.
+
+3. Establish one reproducible actual-game command
+-----------------------------------------------
+Reuse the existing task runner and capture/review mode. If none exists, add
+the smallest suitable entry point. A cargo xtask interface is an option only
+if implemented in this repository; do not claim it already exists.
+
+Start with one existing problem scene and one short camera route. Expand only
+when another scenario is needed to verify the chosen change.
+
+The command should:
+- Build or run the appropriate optimized game configuration.
+- Exercise the actual game renderer and relevant simulation.
+- Exit predictably after the scenario, with a timeout for a hung run.
+- Save a compact machine-readable report, actual PNG captures, and full logs.
+- Return a nonzero status for objective validation/correctness failures.
+- Preserve the baseline and candidate results separately.
+
+Record the seed/save and asset revision, camera pose/path/FOV, resolution,
+view distance, graphics settings, fixed simulation timestep, time of day,
+weather/exposure, relevant temporal state, build commit, adapter/backend,
+and available driver information.
+
+For static captures, wait for the required chunks and pipelines to be ready
+and capture a specified frame. Do not rely only on an arbitrary sleep.
+For streaming captures, deliberately exercise loading and record its behavior.
+Keep warmed static and streaming scenarios separate.
+
+A synthetic shader demo, placeholder scene, or software-rendered substitute
+does not establish the visual or GPU performance of the real game on the 4090.
+If only such a fallback is available, label its validation limits.
+
+4. Measure the real bottleneck
+-----------------------------
+Reuse existing CPU instrumentation, or add a few low-overhead timings around
+world generation, meshing, culling, upload preparation, simulation, and command
+encoding. Avoid a large profiling dependency stack.
+
+Use native wgpu timestamp queries or a wgpu-profiler version compatible with
+the project's CURRENT wgpu dependency. Do not upgrade the engine merely to
+adopt the latest profiler. Check adapter feature support. Gather GPU timing
+results asynchronously rather than stalling every frame for readback.
+
+Report:
+- Frame-time p50, p95, and p99, plus a defined hitch count.
+- CPU stages and GPU passes separately, when actually measured.
+- Streaming queue depth and time until newly visible chunks are ready.
+- Draw calls, triangles/mesh bytes, upload bytes, and chunk counts if available.
+- Tracked resource allocation growth where useful; distinguish it from physical
+  VRAM usage.
+- Time spent building/testing and the number of unsuccessful edit cycles.
+
+Do not confuse CPU queue submission time with GPU execution time. Do not
+blindly add overlapping CPU/GPU or pass durations into a frame latency total.
+
+Benchmark the same optimized profile and settings before and after. Keep
+instrumentation consistent. Run capture readbacks outside the timed window.
+Record VSync/frame caps; distinguish capped gameplay pacing from an explicitly
+uncapped performance measurement. Use repeated short runs to establish
+variance; do not choose an arbitrary percentage and call it statistically real.
+
+Leave unavailable metrics marked unavailable. A successful compile or passing
+unit tests alone does not prove graphics correctness or higher FPS.
+
+5. Select and fix one observed problem
+-------------------------------------
+Create a small ranked issue queue from concrete evidence. Each entry needs
+a symptom, reproduction/scenario, evidence, affected area, proposed next check,
+and status. Start with roughly the top three useful items.
+
+Prioritize:
+1. Crashes, validation errors, broken frames, visible holes/seams, or correctness
+   defects that make other measurements unreliable.
+2. The largest measured frame-time or streaming problem.
+3. A visible quality issue at a known camera view.
+4. Repeated workflow overhead that prevents useful iteration.
+
+Examples of hypotheses to investigate only when evidence points there:
+- Rebuilding unchanged chunks or needlessly invalidating neighbors.
+- Meshing/world generation blocking the frame thread.
+- Too much command submission, resource churn, or per-frame allocation.
+- Unbounded upload bursts or synchronous readbacks causing hitches.
+- Too much terrain/shadow overdraw or expensive material sampling.
+- LOD boundary topology, inconsistent normals/light sampling, depth precision,
+  or shadow parameters causing visible terrain defects.
+- Simulation updating inactive regions or repeatedly scanning stable state.
+
+State the hypothesis and success criterion before editing. Make the smallest
+coherent change. Use a focused existing test, or add one meaningful regression
+test for a real defect when appropriate. Do not invent a large generic suite.
+
+For visual work, use the project's established art direction and references.
+Check terrain/material readability, coherent lighting, distance silhouettes,
+LOD continuity, effects consistency, and important gameplay silhouettes.
+Make a deliberate visual change, then inspect it. Pixel differences measure
+change; they do not establish beauty. If the direction is subjective and not
+settled, leave a clearly explained visual candidate with before/after images.
+
+6. Verify and retain only a supported improvement
+-----------------------------------------------
+Run the relevant checks and replay exactly the same scenario. Open the actual
+before/after screenshots at full resolution, including useful crops.
+
+For a performance claim, show the measured frame/stage result, settings, repeat
+count, and normal variance. A difference within noise is inconclusive.
+For a visual claim, explain what visibly changed and confirm correctness and
+performance did not regress beyond the recorded acceptance criteria.
+For a correctness fix, reproduce the failure before and demonstrate the
+relevant behavior afterward where feasible.
+
+Do not make the result look faster by silently lowering resolution, view
+distance, density, simulation workload, or visual quality. Do not weaken tests,
+replace reference images, or relax tolerances to make the candidate pass.
+
+Keep a verified patch in an isolated reviewable branch/worktree. Revert only
+your own unsuccessful candidate edits; preserve other work. Do not publish,
+push, or merge unless that action has already been authorized in this project.
+
+If a baseline defect prevents performance comparison, establish correctness
+first and clearly label which performance conclusions remain unverified.
+
+7. Persist useful learning without growing the prompt forever
+------------------------------------------------------------
+Create or update one repository skill, such as:
+    .agents/skills/voxel-improve/SKILL.md
+
+Use existing local skill-authoring instructions if present. Keep the root
+AGENTS.md addition short: constraints, the real commands, and where the skill
+lives. Store longer implementation details with the skill, not in every prompt.
+Keep repository workflow changes in version control with the rest of the work.
+
+Keep the workflow scaffolding in its own commit, separate from an experimental
+game fix. Before enabling a schedule, verify that its chosen starting revision
+contains the skill, measurement command, and required configuration. Smoke-test
+the real command and skill discovery in a fresh worktree from that revision.
+An unmerged setup branch is not automatically present in a main-based worktree.
+If the scheduler can use the setup branch, configure that explicitly; otherwise
+complete the project's normal integration step first. If that step needs an
+approval not already granted, leave the task ready but inactive and identify
+the exact remaining prerequisite.
+
+The skill should define the actual measure/fix/replay/inspect/compare process
+and the real commands discovered or implemented above.
+
+Maintain a concise evidence log and queue:
+- Scenario and base commit.
+- Candidate branch/commit or patch.
+- Measured before/after values and image paths.
+- Accepted, rejected, inconclusive, or blocked status.
+- At most a few verified lessons or known failed approaches.
+
+Fresh scheduled worktrees need access to previous run state. Use the task's
+supported persistent memory if available; otherwise establish and document a
+small, stable local artifact/state location within the project's authorized
+access. Do not assume an unmerged branch's files appear in the next worktree.
+Avoid simultaneous writes; use a lock or a single active run.
+
+Separate "verified candidate" from "integrated into the main game." Read the
+pending-candidate queue before each pass and avoid proposing the same fix
+again against an unchanged base. If the integration queue is blocked or full,
+report that state instead of accumulating duplicate branches.
+
+Cap the queue and lesson summary. Keep detailed logs/images as artifacts that
+are loaded only when relevant. Do not append full transcripts. A changed
+instruction must address observed waste or an error; verify it on a comparable
+task before claiming that it improves efficiency. Never automatically rewrite
+the user's goals, approval rules, art direction, or acceptance criteria.
+
+8. Bound recurring work and finish the first real pass
+-----------------------------------------------------
+A recurring pass should attempt one candidate, with an initial soft budget
+of about 30 minutes after ordinary environment startup. Record actual time.
+If a build or prerequisite exceeds the budget, finish a useful checkpoint
+rather than looping indefinitely.
+
+Do not add nextest, sccache, Tracy, RenderDoc, multiple model providers, or an
+agent swarm as prerequisites. Add a tool only to resolve a measured bottleneck.
+Keep Cargo caches; avoid routine cargo clean. Start build diagnosis with the
+existing relevant build command plus --timings.
+
+Complete one baseline and one improvement if the environment permits.
+If blocked, complete all independent setup work and identify the exact missing
+access or observation. Do not claim an optimization has been validated.
+
+Finish with:
+- What is installed/configured and what still needs a local trust/restart.
+- Exact commands to reproduce the scenario.
+- What was found, changed, and actually verified.
+- A compact before/after table and links to the real images.
+- The candidate branch/commit and integration status.
+- The skill, persistent-state location, and the final short recurring prompt.
+- Whether a native project scheduled task was actually created.
+
+If native scheduling is available in this session and the user has specified
+a schedule, configure the task with the actual project, local execution, and
+worktree mode. Otherwise provide the exact ready-to-use task settings and
+prompt. Do not substitute a cloud reminder for local game/GPU execution.
+
+=======================================================================
+END OF ONE-TIME IMPLEMENTATION PROMPT
+=======================================================================
+
+
+RECURRING TASK PROMPT
+--------------------
+Use $voxel-improve in this game's current worktree. Read the compact prior-run
+state and pending-candidate queue, then find one reproducible correctness,
+performance, streaming, or visual-quality issue from the actual game.
+
+Measure the baseline, make one narrow change, run relevant checks, replay the
+same scene, open the before/after images, and compare the measurements. Use
+one writer and one GPU benchmark at a time. Keep resolution, quality, workload,
+and acceptance criteria fixed. Treat noisy or missing results as inconclusive.
+
+Keep only a verified candidate in a reviewable branch/worktree. Do not push,
+merge, weaken checks, or overwrite visual baselines without existing
+authorization. Avoid duplicating pending candidates from earlier runs.
+
+Update the bounded evidence log with the base/candidate revisions, metrics,
+image paths, result, and a few verified lessons. Aim for one candidate and
+about 30 minutes; stop at a useful checkpoint if prerequisites consume that
+budget. Return a short result with evidence, integration status, and the next
+most useful issue. Say plainly when no supported improvement was found.
+
+
+OPTIONAL FOLLOW-UP FOR A SPECIFIC PROBLEM
+---------------------------------------
+Use $voxel-improve to investigate [visible symptom or frame-time spike].
+Reproduce it using the existing scenario before editing. Inspect the actual
+renderer output and timing data, make one focused fix, and verify it against
+the same baseline. Preserve visual quality and the existing engine architecture.
+
+
+RESEARCH NOTES AND PRIMARY SOURCES
+---------------------------------
+Checked 21 October 2026. Capabilities and versions should be rechecked when
+installing substantially later.
+
+- Current official model guidance recommends GPT-6.1 Sol for complex coding,
+  Luna for focused repeatable tasks, and Astra for the hardest work.
+  https://learn.chatgpt.com/docs/models
+
+- Fast and Ultrafast trade higher usage for inference speed. They do not
+  accelerate Rust compilation or reduce the number of required game captures.
+  https://learn.chatgpt.com/docs/agent-configuration/speed
+
+- Native project scheduled tasks can use worktrees and require the local
+  computer/app/project to remain available.
+  https://learn.chatgpt.com/docs/automations
+  https://learn.chatgpt.com/docs/environments/git-worktrees
+
+- Current local Codex hooks support command rewriting after trust review.
+  Cloud orchestration has different hook support.
+  https://learn.chatgpt.com/docs/hooks
+
+- RTK's supported agents, Windows installation, and savings methodology:
+  https://www.rtk-ai.app/docs/getting-started/installation/
+  https://www.rtk-ai.app/docs/getting-started/supported-agents/
+  https://github.com/rtk-ai/rtk/blob/develop/docs/guide/resources/savings-explained.md
+
+- Serena installation, app integration, and language support:
+  https://oraios.github.io/serena/02-usage/010_installation.html
+  https://oraios.github.io/serena/02-usage/030_clients.html
+  https://oraios.github.io/serena/01-about/020_programming-languages.html
+
+- wgpu timing and profiling; choose compatible versions:
+  https://wgpu.rs/doc/wgpu_examples/timestamp_queries/index.html
+  https://docs.rs/crate/wgpu-profiler/latest
+
+- Actual image comparisons in wgpu's own testing:
+  https://github.com/gfx-rs/wgpu/blob/trunk/docs/testing.md
+
+- Cargo build timing reports:
+  https://doc.rust-lang.org/cargo/reference/timings.html
+
+- Repository skill discovery:
+  https://learn.chatgpt.com/docs/build-skills
+
+- Controlled evaluation of project instructions:
+  https://developers.openai.com/blog/maintaining-software-with-the-gpt-6-family
+
+- Flint was announced on October 21. A ready-to-use 24 GB RTX 4090 + Codex
+  deployment was not verified. The published >220 tokens/second figure is
+  for a 64 GB RTX Spark.
+  https://blogs.nvidia.com/blog/local-ai-gtc-rtx-dgx-spark-station-sync/
+  https://huggingface.co/RecursiveSI
+
+- Ollaya v0.15.0 adds Largha and Decima 2.3 support. This does not by itself
+  establish a faster end-to-end coding workflow.
+  https://github.com/ollaya-dev/ollaya/releases/tag/v0.15.0

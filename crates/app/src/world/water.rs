@@ -37,13 +37,13 @@ pub fn surface_at(world: &World, point: Vec3, scale: f32) -> Option<Vec3> {
     if climbed == 24 || world.get(top + IVec3::Y).is_solid() {
         return None;
     }
-    let volume = world.water_volume(top);
-    if volume == 0 {
+    let fill = world.water_fill(top);
+    if fill == 0.0 {
         return None;
     }
     Some(Vec3::new(
         point.x,
-        (top.y as f32 + volume as f32 / 8.0) * scale,
+        (top.y as f32 + fill) * scale,
         point.z,
     ))
 }
@@ -53,8 +53,15 @@ pub fn surface_at(world: &World, point: Vec3, scale: f32) -> Option<Vec3> {
 #[derive(Clone, Default)]
 pub struct WaterSnapshot {
     chunks: FastMap<IVec3, Arc<FastMap<IVec3, u8>>>,
+    pub precision: super::environment::Fractions,
 }
 impl WaterSnapshot {
+    pub fn with_precision(mut self, precision: &super::environment::Fractions) -> Self {
+        self.precision = precision.clone(); self
+    }
+    pub fn deficit(&self, p: IVec3) -> u64 {
+        self.precision.get(&(p.x,p.y,p.z)).copied().unwrap_or(0)
+    }
     pub fn get(&self, p: &IVec3) -> Option<&u8> {
         self.chunks.get(&chunk_coord_from_world_block(*p))?.get(p)
     }
@@ -78,7 +85,7 @@ impl WaterSnapshot {
     )> + 'a {
         let changed = self.chunks.iter().filter_map(move |(&q, current)| {
             let previous = old.chunks.get(&q);
-            if previous.is_some_and(|p| Arc::ptr_eq(p, current)) {
+            if previous.is_some_and(|p| Arc::ptr_eq(p, current)) && !self.precision.changed(&old.precision,q) {
                 None
             } else {
                 Some((q, previous.map(AsRef::as_ref), Some(current.as_ref())))
@@ -87,7 +94,10 @@ impl WaterSnapshot {
         let removed = old.chunks.iter().filter_map(move |(&q, previous)| {
             (!self.chunks.contains_key(&q)).then_some((q, Some(previous.as_ref()), None))
         });
-        changed.chain(removed)
+        let fractional = self.precision.changed_chunks(&old.precision)
+            .filter(|q| !self.chunks.contains_key(q) && !old.chunks.contains_key(q))
+            .map(|q| (q,None,None));
+        changed.chain(removed).chain(fractional)
     }
 }
 
@@ -198,9 +208,10 @@ impl WaterLevels {
     pub fn snapshot(&self, coords: impl Iterator<Item = IVec3>) -> WaterSnapshot {
         WaterSnapshot {
             chunks: coords.filter_map(|c| self.chunks.get(&c).map(|m| (c, Arc::clone(m)))).collect(),
+            precision: Default::default(),
         }
     }
     pub fn snapshot_all(&self) -> WaterSnapshot {
-        WaterSnapshot { chunks: self.chunks.clone() }
+        WaterSnapshot { chunks: self.chunks.clone(), precision: Default::default() }
     }
 }

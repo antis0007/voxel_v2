@@ -43,7 +43,7 @@ pub(crate) fn cycles(design: &Design, registry: &Registry, d: &mut Vec<Diagnosti
                         stack.push((j, s, 0));
                     }
                     1 => {
-                        err(d, format!("Combinational loop through module #{}: logic with no register would oscillate", comb[j]), None);
+                        err(d, format!("Combinational Loop: #{}", comb[j]), None);
                         return;
                     }
                     _ => {}

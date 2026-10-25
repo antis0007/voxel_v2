@@ -1,0 +1,228 @@
+VOXEL GAME: VISUAL DIRECTION AND IMPLEMENTATION PROMPTS
+Rust + WGPU | 21 October 2026
+
+HOW TO USE THIS PACK
+
+Give the coding agent the shared contract below, the five supplied images, and ONE numbered implementation prompt at a time. The intended order is 1 through 9. Complete and inspect each result before starting work that depends on it. Independent asset and HUD work can run in parallel only with separate file ownership and an agreed interface; one integrator owns shared rendering changes. Prompt 6 carries the user's latest explicit direction: precise pixel art inspired by the Noita slot reference, with gold/silver bookbinding and magitech details.
+
+This is a critique and implementation specification, not a report of changes made to the game. The current repository, executable, render captures and profiler traces were not supplied here. Earlier reports of passing tests, shader repairs, cloud grading, horizon work and new content are context to verify in the current checkout.
+
+EVIDENCE AND ART DIRECTION
+
+I inspected image(1).png, the annotated game view; image(2).png, the Noita reference; image(3).png and image(4).png, the game's water views; and image(5).png, the small Noita UI reference. Image 5 is a 38x18-pixel crop of two slots, not a complete inventory-screen reference. The red labels in image 1 are annotations. The center blocks may be a material test arrangement. The partly visible right HUD might be cropped by the capture; a layout defect needs confirmation in a full frame.
+
+The main visual problems are inconsistent shape and material design, excessive small-scale texture contrast, weak separation of lighting values, and water that reads as luminous translucent slabs. Existing shade is visible under the roof and on trunks. These pictures do not establish that shadows, AO, depth-aware water or other effects are absent, only that the final image is not communicating their intended result strongly enough. They cannot establish frame pacing, physics correctness, fluid transport, temporal stability or a particular shader bug.
+
+Priority observations:
+
+1. WATER: Images 3 and 4 show mint-colored vertical slabs, a repeated bright horizontal band, rectangular bright outlines and oversized pale loops on the surface. At close range, the loops dominate the view. Their intended role is uncertain: foam, caustics and reflection require different spatial behavior. The top and side treatments look disconnected. Check actual material IDs and state before deciding what those blocks represent.
+2. TERRAIN: Grass has dense lime mottling across almost every visible region. Pale yellow-green soil sides weaken the distinction between plant cover and earth. Stone repeats conspicuous scratch/cross motifs. More resolution alone will not supply material structure.
+3. BUILDINGS: The roof is a dense field of narrow regular bands. Wood, roof covering and the masonry in the water views need clearer construction logic, differentiated scale and more restrained repetition.
+4. TREES: Image 1 mixes rounded faceted crowns with dense cubic crowns. Image 3 also shows very flat left-side crowns on long thin trunks. This may involve generation, LOD or both. The goal is intentional species structure and coherent style, not simply more leaf blocks.
+5. LIGHT: Bright ground and foliage compete at similar values. Open sun, canopy shade, eaves and contact points need stronger but readable separation. Preserve daylight; do not reproduce Noita's near-black areas everywhere.
+6. CLOUDS: The marked cloud has an abrupt straight-looking right edge, also visible in image 3. It is a reproducible visual symptom, not proof of a texture, ray-march or history bug.
+7. HUD: Image 1 spreads related information across an oversized MP bar, detached MP number, ability icons, separate keycaps, faint spell label, survival rows and inventory strip. The broad compass adds weight at the top. Group information by player task and verify fit in uncropped frames.
+8. WAND: Preserve the warm palette, deliberate chunky silhouette, recognizable construction and magical focus. It is a useful quality reference for the rest of the world. Refine its light and flame without replacing its identity.
+
+Proposed direction: an enchanted, tactile voxel wilderness with an ornate gold-and-silver grimoire interface. Keep deliberate block and pixel shapes, use structured low-noise materials, give vegetation strong silhouettes and porous crowns, and reserve vivid emission for spells, fire and discoveries. Water and atmosphere may be smooth phenomena while remaining consistent with the world palette. Use warm wood and highlights, cooler readable shade, varied natural greens and restrained magical accents. The interface uses dark leather, metal inlay, bookbinding corners, silver clasps and small purposeful mechanisms. Concentrate elaborate ornament on expanded book/inventory panels while retaining crisp compact combat controls. This is an original direction, not an instruction to copy another game's assets.
+
+The supplied Noita frame succeeds through quiet background masses, stronger terrain edges, localized firelight and colored action accents. Its material marks explain rock, moss and timber. Transfer that attention hierarchy and the visible relationship between physical events and effects. Its 2D darkness and exact HUD layout are not universal prescriptions for first-person 3D.
+
+Complementary's official comparison shows convincing depth, readable submerged terrain, coherent reflections and foliage that remains recognizably blocky. Its Reimagined and Unbound styles are different default settings, with Reimagined preserving Minecraft's characteristic visual elements and Unbound leaning toward realism [S1]. Photon documents a broad set of lighting, atmosphere, material and temporal effects [S2]. Treat these as references to evaluate, not a checklist to implement wholesale.
+
+SHARED CONTRACT — PREPEND TO EVERY IMPLEMENTATION PROMPT
+
+You are improving the existing Rust/WGPU voxel game. Implement the requested slice, inspect it in the running game, and correct defects found during that inspection. A plan, shader that compiles, unit-test count or synthetic substitute render is not sufficient evidence of visual success.
+
+Inspect repository instructions, git status, Cargo.lock, the actual render/simulation entry points and relevant asset paths first. Preserve unrelated work and loading of currently supported saves through explicit versioning/migration; never silently reinterpret stored material IDs or state. Backward compatibility does not imply old executables must read newly extended saves unless that is already required. Earlier agents collided in terrain and water shaders: establish file ownership before parallel edits, isolate work when necessary, and never reset or overwrite another agent's changes. Use the project's locked WGPU version and documented target platforms. Do not upgrade dependencies as a substitute for diagnosing the issue.
+
+Use the existing material IDs and authoritative world state. Separate immutable material definitions from mutable state; rendering, collision, spells, fluid and saves must agree on identity and changes. Different representations are allowed when ownership and transfers are explicit. Keep the working wand and the intentional voxel identity. The approved UI direction is exact pixel-grid art with gold/silver bookbinding and magitech; preserve that direction in all UI-related changes.
+
+Prefer small explicit Rust modules and typed data at real boundaries. Keep artistic parameters in a compact named configuration. Avoid parallel replacement renderers, duplicate world stores, generic frameworks, gratuitous crates, per-frame heap churn and unbounded work queues. Coalesce dirty rebuild/re-evaluation notifications; do not coalesce ordered impulses, transfers or reactions without proving equivalence. Define bounded admission/backpressure before accepting authoritative work and preserve already accepted causal work. Reuse existing working capabilities before adding new ones.
+
+Capture comparable before/after evidence using the same seed, camera, time, weather, exposure policy, resolution, render scale, view distance and UI scale. Also show short motion captures where temporal behavior matters. Keep a neutral daylight view and an albedo/debug view so attractive sunset, fog, bloom or blur cannot conceal a defect.
+
+Measure on the actual named hardware/backend. Report frame-time distributions, relevant CPU/GPU cost and memory; unsupported GPU timing is unavailable, not zero. Declare a budget before the change. Use focused tests for numerical, ownership, persistence and interface risks; judge visual design through actual captures. Do not add tests merely to assert that an art parameter equals its new value.
+
+Finish with: what changed; actual cause where diagnosed; files and boundaries affected; real screenshots/clips; checks and timings; remaining defects. Distinguish implemented, compiled, visually verified and performance-measured. If runtime capture is blocked, name the blocker and mark the result NOT VISUALLY VERIFIED. Do not claim parity with Minecraft shaders or superiority to Noita without the corresponding evidence.
+
+PROMPT 1 — ESTABLISH THE BASELINE; FIX COLOUR AND CLOUD CORRECTNESS
+
+Apply the shared contract. Establish a small repeatable visual-review path and repair the reproducible cloud artifact before expensive aesthetic additions.
+
+Use the existing capture/profiling tools where available. Save camera bookmarks for the supplied house/grass view, the water installation, a canopy view and a cave with one emissive light. Include a neutral material view and a short repeatable walk/turn route. Record the current baseline before modifying rendering. Add only the missing lightweight capture/configuration support needed to repeat these views.
+
+Trace colour from assets and procedural/vertex colours through lighting, intermediates, post-processing, UI and presentation. Document texture formats and where sRGB decoding, linear-light operations, tone mapping and final display encoding occur. Fix any demonstrated double conversion, wrong data-map decoding, premature clamp or exposure inconsistency. Keep numerical normal/roughness/depth data out of colour decoding. If linear HDR already exists, repair and reuse it. Match APIs to Cargo.lock; do not blindly copy examples from current WGPU documentation. The official colour guide explains the automatic conversions [S3].
+
+Reproduce the cloud's abrupt edge. Inspect the current implementation: representation bounds, coordinates, addressing, ray intervals if applicable, alpha/transmittance, render-target coverage and history. Prior context mentions a half-resolution cloud/history path; verify whether it is present now. Compare current-frame-only and accumulated output. Add narrowly useful debug views for density/coverage, bounds, history weight and compositing.
+
+Find and repair the responsible layer. Where temporal accumulation exists, handle invalid history, disocclusion, camera cuts, resize, render-scale changes and world-origin shifts. Check previous/current camera transforms and jitter conventions, and account for moving clouds or changing density when deciding whether history remains valid. Inspect cloud motion/weather changes as well as camera motion. Check target dimensions, odd viewport sizes and whether every output pixel is initialized. Avoid fixing an unexplained edge by adding noise octaves, samples or blur. Keep the chosen cloud style coherent; blocky clouds are acceptable when their shape is intentional.
+
+Acceptance: the same cloud no longer shows an unintended rectangular cut in stationary and rotating/translated camera captures; resizing does not reveal stale regions; debug colour values follow the documented pipeline; the wand and HUD keep stable colour. Supply the paired captures and measured cost. Leave broader lighting aesthetics for Prompt 5.
+
+PROMPT 2 — REPAIR THE WATER SEEN IN IMAGES 3 AND 4
+
+Apply the shared contract. Make the pictured liquid read as coherent water, with credible depth and flow cues, while preserving actual fluid quantities and terrain boundaries.
+
+First verify the material IDs and expected phase/flow state. Locate the owners of water geometry, surface heights, side faces, normals, material coordinates, opacity/refraction, reflection, foam/caustics and depth inputs. Reproduce the bright band, repeated rectangular outlines, mint sides and giant pale loops. Check whether any rectangular outlines are selection/debug overlays before assigning them to the material. Isolate geometry, diffuse/transmission, reflection, foam/caustics and post-processing with debug toggles. Verify the actual projection/depth convention and depth linearization, including reversed-Z if used, and straight-versus-premultiplied alpha, blend factors and linear-light compositing. Never subtract nonlinear depth values as if they were world-space distances. Diagnose causes before retuning parameters.
+
+Remove internal or duplicate faces where appropriate and make adjacent exposed surfaces agree across cells and chunk boundaries. Derive visible heights and exposed boundaries from actual fluid state. Distinguish still free surfaces, exposed liquid sides and falling sheets according to that state. Do not fill nonexistent cells or smooth the surface through terrain. Keep voxel-built shorelines; avoid accidental cube seams within a connected body of water.
+
+Use one coherent optical treatment: restrained normals, view-dependent reflection/transmission, thickness-dependent absorption and readable shallow-bed visibility. Use consistent distance units for attenuation, for example T = exp(-absorption * distance), with physically sensible nonnegative parameters [S6]. Treat screen-space depth differences as an approximation; provide a stable fallback for invalid, foreground, off-screen, vertical-face and underwater cases. Avoid bright default side tint and repeated edge highlights masquerading as volume. Prevent refraction from pulling foreground geometry into water. Start with a reliable environment-reflection fallback; advanced reflections remain optional and measured.
+
+Determine what the large looping pattern represents. If caustics, place the effect on appropriate submerged receiving surfaces and restrict it by depth/illumination; do not print huge bright loops over the free surface [S7]. If foam, localize it to supported contact, falling-water, compression or agitation evidence and let it decay. Do not outline every cell. If the necessary simulation signal is absent, implement an honest restrained approximation and document it.
+
+Keep decorative waves separate from transported volume. Use world-consistent coordinates and available flow data for directional motion. Match top/side treatment, handle depth/blend order deliberately, and invalidate relevant temporal history after edits. The result must remain attractive with bloom and caustics disabled.
+
+Acceptance: matched images of the supplied stepped installation, a still pool and a shallow bank, plus a short orbit/flow clip around an obstacle. Water reads correctly at close range and grazing angles; internal bright bands and giant surface loops are gone; submerged geometry remains legible where appropriate; edits and chunk boundaries do not open seams. Report mesh/transparency/GPU cost. Shader-only changes must not be described as improved fluid physics.
+
+PROMPT 3 — REPLACE THE DOMINANT MATERIALS WITH A COHERENT ASSET SET
+
+Apply the shared contract. Improve the actual assets and sampling for grass tops, soil sides, stone, ore, wood, roof covering and masonry. The target is deliberate material structure at a consistent scale, visible in neutral light.
+
+Inspect whether the current surfaces come from imported tiles, procedural generation, vertex colour, shader noise or a mixture. Identify each source of the lime speckle, pale soil, repeated stone crosses, narrow roof bands and uniform brick grid. Set a common base texel density and palette using the wand's deliberate stylization as a reference. Keep stable material IDs and resource semantics.
+
+Author structured textures or controlled procedural patterns. Grass needs quieter base areas and grouped variation; soil needs earthy structure distinct from grass; stone needs coherent masses, occasional fractures and mineral inclusions; ore should read as inclusions in its host material; wood needs grain aligned with construction; roof covering needs an intentional shingle/plank logic; masonry needs believable unit scale and mortar. Build primary shape, secondary structure and restrained fine detail in that order. Increasing random noise, saturation or image resolution does not meet this objective.
+
+Use a small set of compatible variants and stable world-scale variation to break repetition. Respect directional materials: do not randomly rotate wood grain, shingles or masonry. Keep grass transitions intentional without melting all voxel boundaries. Coordinate albedo, roughness, restrained normals and any emission; avoid giving dry stone, soil and wood identical plastic highlights. Review the assets in an unlit/albedo gallery as well as the final renderer.
+
+Audit texture sampling and minification. Use the existing atlas safely or an array when justified by its constraints. Generate correct mip levels, prevent neighbouring-tile bleed, preserve valid sampling derivatives through repeated UV mapping, and handle foliage alpha coverage if applicable. The tile-filtering issues described in GPU Gems are relevant checks, not a diagnosis of the current screenshot [S5]. Preserve crisp nearby pixel clusters while controlling distance shimmer; global blur is not the solution.
+
+Acceptance: a material gallery and the exact house/ground camera at close, middle and far ranges; a slow walk to expose shimmer; roof and walls readable as different construction roles; grass no longer looks like uniform fluorescent confetti; stone no longer reads as repeated cross stamps. Include asset dimensions/memory, sampling changes, performance delta and before/after comparisons.
+
+PROMPT 4 — REDESIGN TREE SHAPES AND VEGETATION COMPOSITION
+
+Apply the shared contract. Replace the inconsistent rounded, solid cubic and pancake tree appearances with a coherent voxel-compatible vegetation language. Inspect generation and every rendered LOD before blaming the generator.
+
+First repair one representative existing species and its LODs end to end. Then apply the proven structure to a small contrasting set, preferably three existing species or ecological roles: for example a broad branching tree, a tall light-barked tree and a tiered conifer. Build each from a recognizable trunk, tapered branching structure, grouped foliage masses and intentional openings. Vary branching angles, crown asymmetry and age/size within species rules. Do not merely rescale one crown or add random leaf occupancy. Preserve resource identity, cutting behavior and collision semantics. Preserve generated/harvested trees across save/load and chunk reload; version generation or retain persisted placements rather than silently regrowing or moving trees in existing worlds. Apply new generation to new regions unless an explicit migration is implemented.
+
+Test silhouettes without textures first. The crown must feel connected to the trunk and branch structure. Retain a deliberate chunky style that belongs beside the wand. Remove arbitrary smooth blobs unless they are an intentional species feature expressed consistently across its LODs. Use porous leaf clusters or cutout geometry only where the renderer can handle them economically; do not turn each decorative leaf into an independently updated entity.
+
+Make render LOD preserve silhouette, crown density and species identity, with stable thresholds and transitions. Check the flat left-side crowns in image 3 at several distances. Avoid abrupt canopy collapse, exposed trunk changes and shadow disagreement. If adding wind, anchor motion sensibly and update shadow and temporal inputs consistently; do not make whole trunks wiggle like grass.
+
+Compose ground vegetation in groups: tree margins, open glades, soil patches, limited flowers and understory. Use available slope, moisture or cover data where useful, without inventing a new ecology framework for this pass. Keep quiet ground and readable travel lanes. Do not cover every tile or solve the problem solely by increasing instance count.
+
+Acceptance: silhouette comparison for all species, several deterministic variants, the original forest camera and a walk through LOD distances. Species remain identifiable without their colour. The grove reads as a set of living forms, not repeated poles beneath flat plates. Report instance/triangle/overdraw costs and show that existing edited areas and saves remain intact.
+
+PROMPT 5 — MAKE LIGHT, ATMOSPHERE AND MAGIC BELONG TO ONE WORLD
+
+Apply the shared contract. After the colour and asset repairs, tune sun, sky, shadow, local light, exposure and atmosphere as a coherent lighting system. Preserve bright readable daytime and the wand's appearance.
+
+Use the original neutral daylight view as the first acceptance scene. Establish distinct open sunlight, canopy interior, roof/eave shade and contact values. Diagnose ambient wash, surface normals, shadow bias/resolution and sky visibility before tuning a global grade. Keep shadow detail readable. If AO is used, apply it to the intended lighting contribution and avoid black halos or indiscriminate darkening of direct light.
+
+Repair existing directional shadows before replacing them. Check stability while walking, foliage/caster coverage, edited-geometry invalidation, light leaks into solid caves and local contact grounding. Couple sky and distance fog to the same sun/time/weather parameters. Use restrained atmospheric depth; do not use fog walls to conceal missing chunks or silhouettes.
+
+Make localized physical events feel present. A held flame should illuminate nearby relevant surfaces within a bounded light budget; heated or burning materials should emit according to their state; wetness should alter the same material already rendered. Consume existing authoritative signals; if a required signal does not exist, identify the interface needed for Prompt 8 instead of inventing visual-only wetness/combustion simulation here. Keep emissive colours readable through exposure and restrained bloom. Do not add a shadow-casting light for every particle or give unrelated effects conflicting lighting rules. VFX consume authoritative state and do not implement their own hidden material reactions.
+
+Keep the wand's recognizable construction. Refine flame shape and emission so the orange mass has a readable focus and animation, while aim targets remain visible. Preserve first-person/HUD sharpness through temporal and post-processing effects. Use one documented exposure policy with stable transitions between outdoor, indoor and cave views.
+
+Only after these fundamentals pass, add one measured higher-quality feature if a specific remaining defect justifies it, such as better local indirect lighting or restrained volumetrics. Integrate with the current renderer; do not replace it wholesale with deferred rendering or path tracing for this task.
+
+Acceptance: paired daylight, under-canopy, interior, dusk and cave captures; a grayscale readability check; moving flame and outdoor-to-cave footage. Lighting reveals geometry and material rather than washing everything lime or crushing shade. Report pass timings and the visual contribution of each enabled optional effect.
+
+PROMPT 6 — BUILD A PIXEL-PERFECT GOLD/SILVER GRIMOIRE HUD
+
+Apply the shared contract. The user explicitly wants the compact Noita slot language in image 5, transformed into elaborate bookbinding, silver/gold metalwork and restrained steampunk-like magitech. Treat this as original pixel art with precise craftsmanship. Preserve existing actions, bindings, inventory rules, spell semantics and accessibility settings. Verify the apparently clipped right panel in a full-frame capture.
+
+Inspect the 38x18 reference at its native pixel grid. Use its compact square cells, dark recessed interiors, crisp one-pixel highlights and strong selected-slot edge as structural inspiration. Start a documented component grid with 18x18 logical-pixel slot bodies, 2-pixel gutters, 4-pixel internal grouping spacing, 8-pixel separation between major groups and icons fitting a 14x14 field; adjust these initial dimensions only when measured readability or the existing content requires it. Use integer coordinates, a common icon baseline and consistent stroke widths. Draw original icons and ornament with purposeful pixel clusters.
+
+Build an art kit before distributing one-off frames around the HUD: dark leather or lacquer recesses; aged gold structural borders; cool silver inlays, clasps and functional brackets; ivory lettering; a small turquoise/magical accent. Suggested starting palette: recess #121519, leather #29221F, gold shadow #654728, gold #B58A42, gold highlight #F1D68A, silver shadow #4B5663, silver #AAB8C5, silver highlight #EAF0EB, parchment #E6D8B8, magic #70C9CF. These are proposed colours, not sampled claims about Noita. Keep metal shading in deliberate short ramps; avoid smooth gradient bevels and noisy leather grain.
+
+Use bookbinder corner plates, tiny rivets, recessed engraving, stitched leather edges, page tabs and restrained rune/gear mechanisms. Ornament should explain construction or function. Gold gives structure and selected-state emphasis; silver carries clasps, dividers and hover/focus details. The combat HUD gets small corners and fine borders. Expanded inventory and wand editing may gain an elaborate spine, embossed covers, page margins and clasps. Keep ornament outside the icon/number field and let a compact mode preserve readability on smaller displays.
+
+Implement empty, occupied, selected, hovered, keyboard-focused, disabled and recharge/cooldown states that exist in the game. Reserve the strongest gold frame for selection; use a distinct silver inset/corner cue for hover/focus without displacing the selected state. Distinguish states by shapes as well as colour. Keep cooldown masks inside the content area; avoid obscuring costs/counts. Group active wand, ordered spell state, mana, recharge and contextual bindings together. Any visual cast order must match the real spell system. Keep health/status clear, the hotbar stable, the central aim region open and navigation restrained. Replace stranded R/T keycaps with properly attached actions derived from current bindings. Do not turn critical resources into decorative gauges that are hard to read.
+
+Make pixel-perfect rendering a technical contract: final physical-pixel coordinates align to an integer-scaled logical grid; nearest sampling for the UI sprite atlas; no fractional-scale transforms or filtered sprite rotation; fixed-size corners with tiled or integer-compatible nine-slice edges; snapped text baselines and deliberate bitmap-font sizing. Start from a 640x360 reference layout with natural 2x/3x/4x scales at 720p/1080p/1440p. Derive actual logical extents from the drawable size and chosen integer scale; do not stretch a fixed UI image to fill every aspect ratio. Account for drawable dimensions and DPI without applying scale twice. On incompatible viewport sizes, reflow and use integer margins instead of stretching the atlas. Start normal text around 7-9 logical pixels in capital height and verify actual legibility; offer crisp larger UI/font settings rather than forcing small text.
+
+Composite the pixel interface after world temporal AA, upscaling, bloom, depth of field and exposure/colour grading, using correct colour/alpha handling. World render scale must not blur UI. Respect reduced-motion settings and keep any metal glint brief and nonessential. Do not require constant pulsing, spinning gears or glow to make the interface feel magical.
+
+Acceptance: an in-engine component sheet at native scale and integer enlargements, plus actual full HUD/inventory/wand views at 720p, 1080p and 1440p, relevant UI scales and a wide aspect ratio. Inspect nearest-pixel crops: no uneven borders, resampling blur, icon clipping or broken edge repeats. Verify keyboard/pointer focus, rebound labels and warning states against bright grass, reflective water and dark caves. Deliver the atlas/component rules, functional screens and integration costs. A large attractive concept image alone does not pass.
+
+PROMPT 7 — VERIFY TERRAIN CONTINUITY, EDITS AND DISTANT COVERAGE
+
+Apply the shared contract. Review the existing resident terrain, horizon/proxy, shadow-caster and streaming work. Earlier repairs and passing synthetic tests are context, not proof that current in-game transitions work. Do not blindly reimplement completed work.
+
+Locate the actual resident/proxy ownership and publication path. Establish explicit coverage: a visible region retains a valid resident or appropriate uploaded fallback until its replacement is ready. Publish compatible versions coherently; reject stale asynchronous results after edits. Do not reveal a missing region because an upload was scheduled but not completed.
+
+Align geometry and material evaluation where resident meshes meet distant representations. Verify shared heights and compatible normals/material rules at applicable boundaries, and use a real transition/stitch where needed. Any temporary overlap needs deliberate depth handling. Do not claim continuity merely because a radial discard or depth sink hides one static seam.
+
+Preserve edited terrain, caves and overhangs. A heightfield cannot faithfully represent arbitrary topology: retain appropriate meshes/proxies or explicitly limit that representation. Do not regenerate away player edits or fill visible caves with a distant shell. Match distant shadow coverage and invalidate affected shadows, mesh buffers and temporal history after changes.
+
+Exercise the actual walk/fly route through residency boundaries, including rapid turns, an edited slope, a cave mouth and water near an edited shoreline. Artificially delay chunk generation/upload enough to reveal coverage defects. Check visual seams separately from collision/navigation continuity. Limit queued rebuilds and upload work while preserving authoritative edits.
+
+Acceptance: no visible holes, duplicate bright strips, stale terrain flashes or abrupt material/light changes on the route; edited cavities persist; collision agrees with what the player can interact with; timings show streaming stalls and memory honestly. Report which previously described fixes were already correct and the specific remaining defects repaired.
+
+PROMPT 8 — BUILD ONE COUPLED MATERIAL-PHYSICS SCENE
+
+Apply the shared contract. Implement a small playable workshop demonstrating connected material rules: oil ignites, wood heats/chars, water crosses a chunk boundary, sufficiently heated water becomes steam, and a weakened support releases a bounded physical fragment. The resulting char, material quantities and displaced objects persist. Keep the slice to one chamber, the named materials and one support/body transition. Implement internal checkpoints for transport/accounting, thermal reactions, then body transition and visual coupling. If a required solver is absent, integrate the smallest justified existing solution; do not turn the slice into a new general-purpose physics engine.
+
+Inspect existing simulation, collision, material, save and streaming ownership. Reuse the authoritative world. Define stable material properties separately from mutable quantity, fuel, damage and thermal state, using named documented gameplay units. Use a common conserved quantity for water and steam, such as integer material-mass units; cell counts or raw fill fractions across phases are not an accounting unit. Choose one authoritative thermal representation with compatible derived temperature/phase behavior; document heat inputs, losses and phase-conversion rules. Record each supported transfer/reaction and its products or explicit sinks. Water becoming steam transfers quantity; burning fuel must not disappear without an accounting rule. Define the oil/water model explicitly; water should not simply erase an oil fire because particle effects overlap.
+
+Run authoritative changes on fixed simulation ticks independently of rendering. Use bounded active regions and dirty work scheduling justified by physical dependencies, not just the camera frustum. Define ownership and activation across chunk faces, edges and corners. An unavailable chunk is not empty space: preserve unresolved transfers, debit a source only with destination acceptance, and document a deferred-transfer or temporary no-transfer boundary while loading/activating dependencies within the residency budget. Preserve that policy across saves. Bound resident memory separately from persisted world size.
+
+Never silently lose material, pending transfers or authoritative reactions when a work budget is exhausted. Define admission/backpressure before accepting additional authoritative actions. Coalesce dirty notifications, not ordered physical events. Finish the current logical tick or retain its resumable stage without advancing dependent simulation time. Expose simulation slowdown/backlog rather than skipping causality. Reduce decorative effects first. Compare overload outcomes after equal completed ticks and drained work, not equal wall-clock duration.
+
+Render wetness, char, flame, smoke/steam and emission from the same authoritative state. A particle illustrates a reaction; it does not become a second reaction system. Batch dirty mesh, collider and GPU-buffer updates. Avoid rebuilding all chunks or synchronously reading the entire simulation back from the GPU every frame. Physics resolution and visual detail may differ, but interaction boundaries must agree.
+
+Reuse the current rigid-body solver if present. On support failure, transfer terrain material into a body exactly once. Prepare expensive collider work separately if necessary, then commit terrain removal and replacement-body collision ownership together on one authoritative tick; never activate both owners or leave neither active. Define how the body blocks/displaces fluid without overwriting occupied fluid cells and deleting their contents. Bound fracture work and fragment count through explicit deterministic rules, retaining remaining physical material. Visual/shadow updates consume the committed generation and reject stale results.
+
+Persist changed cells, quantities, relevant body state and pending causal work. Specify inactive-region behavior: a documented paused/coarse policy is acceptable for the slice, but turning away must not extinguish fire and reload must not reset it. Do not promise analytical catch-up or universal continuous simulation without implementing it.
+
+Acceptance: a real playable capture of the full chain plus focused checks. In common quantity units, liquid water + water vapour + separately held container/in-flight/deferred quantities + explicitly recorded outflow/sinks equals initial water within the declared tolerance, counting each quantity exactly once. Translating the setup across a chunk boundary preserves behavior within tolerance. Equal input and completed tick counts give equivalent state with 30/60/144 FPS rendering on the tested platform. Detached material has exactly one collision owner on every committed tick. Save during burning/boiling, reload and compare against uninterrupted ticks. Artificially small work budgets preserve accounting and causal backlog; compare after equal completed ticks and drained pending work. Stale visual/shadow geometry clears within a documented update deadline. Report active cells/bodies, CPU/GPU costs and limits; this slice alone does not prove superiority to Noita.
+
+PROMPT 9 — INTEGRATE, PROFILE AND PROVE THE RESULT
+
+Apply the shared contract. Integrate the completed slices into one coherent playable build and inspect the combined result. Run the original daylight/house, water, canopy, cave and streaming routes, then the material-physics workshop. Preserve known-good captures for regressions.
+
+Declare named hardware, driver/backend, resolution, render scale, settings and draw distance. Use a proposed first High baseline of 2560x1440 at 60 FPS (16.67 ms per frame); treat 120 FPS (8.33 ms) as a further measured performance target. These are goals, not predictions. If the available system differs from the user's RTX 4090 machine, record the actual system and do not extrapolate results as measured 4090 performance.
+
+Measure warmed-up p50/p95/p99 total frame times and relevant CPU simulation/render-preparation and GPU pass times. State sample duration/frame count, route and warm-up conditions. Collect GPU timings asynchronously without per-frame blocking readbacks. Show uncapped throughput separately from VSync/capped presentation. Include mesh work, uploads, transparency/overdraw, active simulation quantities and memory. CPU and GPU may overlap; do not add every timing as if all work were serial. Record shader/streaming stalls separately from steady-state behavior. Declare the target percentile/pass criterion before measurement and include the workshop with its simulation and accepted visual effects active.
+
+Optimize the measured bottleneck while preserving the approved appearance and material rules. Reuse allocations, batch updates, cull invisible rendering work, bound light/particle costs and reduce redundant passes where justified. Invisibility alone cannot delete authoritative simulation. Validate adapter features, limits and texture-format usages for optional paths [S4]. Keep a supported baseline rather than assuming every device has the review machine's capabilities.
+
+Create a small set of quality presets that adjust rendering cost: shadow coverage/resolution, cloud/fog sampling, reflections, decorative vegetation/particles and optional indirect light. Keep physics rules, save contents, gameplay-significant interactions and meaningful foliage occlusion consistent across presets. Preserve material identity and colour direction on every tier. Do not claim performance gains obtained by quietly reducing resolution, view distance or simulation scope.
+
+Acceptance: paired full-frame images from the original cameras, short motion clips, measured frame-time/memory results, interaction tests and a concise issue list. Judge each result on material identity, silhouette, light/depth, water, HUD, temporal stability and performance. Expand to additional biomes/content only after the initial outdoor area, water installation and cave/workshop read as parts of the same game. An attractive still plus unmeasured slowdowns is unfinished.
+
+WHAT WOULD JUSTIFY THE LONGER-TERM GOAL
+
+Graphics superiority is a multidimensional target: coherent art, material response, lighting, water, vegetation, visibility, temporal stability and performance. Fix exact reference scenes and settings for comparison. A different sunset, camera or resource pack is not a controlled measurement. Artistic preference remains a human judgment; technical artifact and timing checks complement it.
+
+Noita's official FAQ describes material-based liquids, gases, sand, rigid bodies and simplified chemistry/electricity/thermodynamics [S8]. Its developer talk specifically addresses continuous-world scaling and destructible rigid bodies [S9]. The meaningful target is broader dependable interactions and playable consequences in 3D, not simply more particles.
+
+For illustration, 256x256 is 65,536 cells; 256x256x256 is 16,777,216. Adding a dimension multiplies this particular dense grid by 256 before extra state, neighbours or rendering. This is arithmetic, not a benchmark of either engine. Sparse active work, explicit transfer ownership and deliberate detail levels are therefore architectural requirements to evaluate.
+
+After the workshop proves the integration, expand by one coupled interaction at a time: buoyant/flow-blocking debris; heat conduction and phase changes; wet conductive paths; support failure redirecting liquid; material growth and magic that alters actual collision/resource state. Select the next interaction for its gameplay consequence and measured cost. Keep one material/world truth while allowing specialized solvers and render representations.
+
+REFERENCE SOURCES
+
+[S1] Complementary official styles and comparison images:
+https://www.complementary.dev/shaders/
+https://www.complementary.dev/assets/img/editedScreenshots/styleComparison.png
+https://www.complementary.dev/assets/img/newScreenshots/reim1_oldGrowth.jpg
+
+[S2] Photon creator repository and feature description:
+https://github.com/sixthsurge/photon
+
+[S3] WGPU official sRGB/colour-format guide (read the repository's matching version for APIs):
+https://wgpu.rs/doc/wgpu/documentation/color/srgb/index.html
+
+[S4] WGPU Adapter capability and format queries:
+https://wgpu.rs/doc/wgpu/struct.Adapter.html
+
+[S5] NVIDIA GPU Gems 2, Chapter 12, Tile-Based Texture Mapping:
+https://developer.nvidia.com/gpugems/gpugems2/part-ii-shading-lighting-and-shadows/chapter-12-tile-based-texture-mapping
+
+[S6] Google Filament material documentation, transmission and absorption:
+https://google.github.io/filament/main/materials.html
+
+[S7] NVIDIA GPU Gems, Chapter 2, Rendering Water Caustics:
+https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-2-rendering-water-caustics
+
+[S8] Noita official game description and physics FAQ:
+https://www.noitagame.com/
+
+[S9] Petri Purho / Nolla Games, GDC 2019, Exploring the Tech and Design of Noita:
+https://www.gdcvault.com/play/1025695/Exploring-the-Tech-and-Design/
+
+References establish the described properties and engineering concepts. The recommendations and acceptance targets in this pack are proposed design choices for this project, not claims that the screenshots reveal a particular implementation or that another engine uses the exact proposed architecture.

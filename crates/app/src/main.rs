@@ -1,4 +1,5 @@
 mod dungeon_review;
+mod workshop_review;
 use anyhow::Result;
 use glam::{DVec2, IVec3, Mat4, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
@@ -56,7 +57,7 @@ use mesh::build_outline_vertices;
 use perf::{
     CpuFrameStats, FrameCounters, PerfSample, PerfSnapshot, PerfTracker, snapshot_from_samples,
 };
-use player::{FlyMode, FpsCounter, Input, Player, update_player};
+use player::{FlyMode, FpsCounter, Input, Player};
 use render::{
     AtmosphereMode, ChunkCache, ChunkStreamer, Gpu, GpuBootstrap, GpuPendingInit, MAX_TORCH_LIGHTS,
     RenderDebugView, TorchLight, build_draw_list, render_distance_settings,
@@ -115,6 +116,7 @@ struct BenchmarkConfig {
     cpu_mib: Option<usize>,
     gpu_mib: Option<usize>,
     profile_physics: bool,
+    adaptive_clouds: bool,
     warmup_seconds: f32,
     duration_seconds: f32,
     motion: BenchmarkMotionMode,
@@ -126,6 +128,10 @@ struct BenchmarkConfig {
     review_time_of_day: Option<f32>,
     review_time_end: Option<f32>,
     review_sky_time: Option<f32>,
+    /// Absolute world days for reproducible orbital poses/passes, independent
+    /// of the sun and cloud clocks. Held at the start throughout warmup.
+    review_orbital_time: Option<f64>,
+    review_orbital_time_end: Option<f64>,
     /// Calendar day for reviews of seasons and sky events.
     review_day: Option<u32>,
     terrain_camera: Option<[f32; 5]>,
@@ -174,6 +180,7 @@ impl Default for BenchmarkConfig {
             cpu_mib: None,
             gpu_mib: None,
             profile_physics: false,
+            adaptive_clouds: false,
             warmup_seconds: 4.0,
             duration_seconds: 8.0,
             motion: BenchmarkMotionMode::Static,
@@ -185,6 +192,8 @@ impl Default for BenchmarkConfig {
             review_time_of_day: None,
             review_time_end: None,
             review_sky_time: None,
+            review_orbital_time: None,
+            review_orbital_time_end: None,
             review_day: None,
             terrain_camera: None,
             terrain_sweep: false,
@@ -247,6 +256,11 @@ fn parse_benchmark_config() -> BenchmarkConfig {
     let mut config = BenchmarkConfig::default();
 
     for arg in std::env::args().skip(1) {
+        if arg == "--benchmark-adaptive-clouds" {
+            config.enabled = true;
+            config.adaptive_clouds = true;
+            continue;
+        }
         if arg == "--benchmark-tollkeeper-review" {
             config.tollkeeper_review=true;
             config.enabled=true;
@@ -384,6 +398,16 @@ fn parse_benchmark_config() -> BenchmarkConfig {
         }
         if let Some(value) = arg.strip_prefix("--benchmark-sky-time=") {
             config.review_sky_time = value.parse::<f32>().ok().filter(|v| v.is_finite() && *v >= 0.0);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--benchmark-orbital-time=") {
+            config.review_orbital_time = value.parse::<f64>().ok()
+                .filter(|v| v.is_finite() && *v >= 0.0 && *v < u32::MAX as f64);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--benchmark-orbital-time-end=") {
+            config.review_orbital_time_end = value.parse::<f64>().ok()
+                .filter(|v| v.is_finite() && *v >= 0.0 && *v < u32::MAX as f64);
             continue;
         }
         if let Some(value) = arg.strip_prefix("--benchmark-review-day=") {
@@ -551,7 +575,7 @@ fn water_surface_above_m(world: &World, eye: Vec3) -> f32 {
         }
         cell = above;
     }
-    let fill = (world.water_volume(cell) as f32 / 8.0).clamp(0.0, 1.0);
+    let fill = world.water_fill(cell).clamp(0.0, 1.0);
     (cell.y as f32 + fill) * world.voxel_scale.meters()
 }
 
@@ -908,7 +932,9 @@ fn reset_gameplay_input(
 }
 
 const TORCH_LIGHT_RADIUS: f32 = 18.0;
-const TORCH_LIGHT_COLOR: [f32; 3] = [1.00, 0.48, 0.20];
+// Warm lamplight keeps pale stone, timber and brass distinguishable; the
+// visible flame retains its hotter core and orange edge in the material pass.
+const TORCH_LIGHT_COLOR: [f32; 3] = [1.00, 0.64, 0.36];
 const TORCH_LIGHT_STRENGTH: f32 = 4.40;
 // Amber gills: a small warm pool under each clump, well below a torch.
 const AMBER_LIGHT_RADIUS: f32 = 9.0;
@@ -933,9 +959,9 @@ fn held_torch_light(
         position: (eye
             + (forward * 0.42 + right * 0.18 + Vec3::new(0.0, -0.28, 0.0)) * inv_world_scale)
             * world_scale,
-        radius: TORCH_LIGHT_RADIUS,
+        radius: if lumen_lantern { 22.0 } else { TORCH_LIGHT_RADIUS },
         color: if lumen_lantern {
-            [0.30, 0.90, 0.74]
+            [0.88, 1.00, 0.90]
         } else {
             TORCH_LIGHT_COLOR
         },
@@ -1411,9 +1437,17 @@ fn main() -> Result<()> {
     env_logger::init();
     crash_log::install();
 
+    if let Some(path) = std::env::args().find_map(|arg| arg.strip_prefix("--capture-menu=").map(str::to_owned)) {
+        return pollster::block_on(egui_ui::menu_capture::run(std::path::Path::new(&path)));
+    }
+
     if let Some(path) = std::env::args().find_map(|arg| arg.strip_prefix("--headless=").map(str::to_owned)) {
         std::process::exit(headless::main(&path));
     }
+    anyhow::ensure!(
+        !std::env::args().any(|arg| arg.starts_with("--ca-cpu-region")),
+        "--ca-cpu-region=x,y,z currently requires --headless=<command-document.ron>"
+    );
     let benchmark_config = parse_benchmark_config();
     if let Some(value)=std::env::args().find_map(|arg|arg.strip_prefix("--benchmark-generator-version=").map(str::to_owned)) {
         let version=value.parse::<u32>()?;
@@ -1538,6 +1572,7 @@ fn main() -> Result<()> {
     let mut focused = true;
     let mut occluded = false;
     let mut next_background_frame = Instant::now();
+    let mut next_menu_frame = Instant::now();
     let mut mode = AppMode::WorldSelect;
     let mut saves = world::storage::SaveService::new();
     let mut library = world::storage::WorldLibrary::new(!benchmark_config.enabled);
@@ -1545,6 +1580,8 @@ fn main() -> Result<()> {
     let mut next_library_refresh = Instant::now();
     let mut exit_pending = false;
     let mut last = Instant::now();
+    let mut outline = Vec::new();
+    let mut invert_outline = Vec::new();
     let mut simulation_clock = simulation::SimulationClock::default();
     let mut sky_time = 0.0f32;
     // Eased 0..1 'inside a cosmos chamber', and the last sky event announced.
@@ -1575,6 +1612,7 @@ fn main() -> Result<()> {
         .sandbox_review
         .then(sandbox_review::SandboxReview::default);
     let mut wand_review = wand_review::Review::from_env(benchmark_config.enabled);
+    let mut workshop_review = workshop_review::Review::from_env(benchmark_config.enabled);
     let mut receiver_review = receiver_review::Review::from_env(benchmark_config.enabled);
     let open_block_scene = std::env::args().any(|arg| arg == "--benchmark-water-block");
     let mut water_review = benchmark_config.water_review.then(|| {
@@ -1825,6 +1863,11 @@ fn main() -> Result<()> {
                             PhysicalKey::Code(KeyCode::KeyF) if fresh_press && grabbed && !creative.any_ui_open() => {
                                 input.interact = true;
                             }
+                            PhysicalKey::Code(KeyCode::KeyL) if fresh_press && grabbed && !creative.any_ui_open() => {
+                                if let Some(w) = world.as_mut() {
+                                    w.expedition.toggle_lamp();
+                                }
+                            }
                             PhysicalKey::Code(player::NEXT_SPELL_KEY) if fresh_press && grabbed && !creative.any_ui_open() => { input.cycle_spell=true; }
                             PhysicalKey::Code(KeyCode::KeyE) | PhysicalKey::Code(KeyCode::Tab)
                                 if fresh_press && (key.physical_key != PhysicalKey::Code(KeyCode::Tab) || !creative.show_palette) => {
@@ -1920,9 +1963,11 @@ fn main() -> Result<()> {
                                 if pressed && (!grabbed || creative.any_ui_open()) { return; }
                                 if button == MouseButton::Middle && pressed { input.pick_block = true; }
                                 if button == MouseButton::Left {
+                                    input.break_pressed |= pressed && !input.break_block;
                                     input.break_block = pressed;
                                 }
                                 if button == MouseButton::Right {
+                                    input.place_pressed |= pressed && !input.place_block;
                                     input.place_block = pressed;
                                 }
                             }
@@ -1955,9 +2000,8 @@ fn main() -> Result<()> {
 
                             let progress = pending.progress();
                             let loading_ui = LoadingUiState {
-                                title: "Initializing renderer".to_string(),
-                                detail: progress.detail.to_string(),
-                                progress_01: progress.progress_01,
+                                title: progress.detail.to_string(),
+                                progress_01: Some(progress.progress_01),
                             };
 
                             egui_ui.begin_frame(window.as_ref());
@@ -2026,9 +2070,8 @@ fn main() -> Result<()> {
 
                             egui_ui.begin_frame(window.as_ref());
                             egui_ui.build_loading_ui(&LoadingUiState {
-                                title: "Initializing renderer".to_string(),
-                                detail: "Starting chunk meshing workers…".to_string(),
-                                progress_01: 0.88,
+                                title: "Starting".to_string(),
+                                progress_01: Some(0.88),
                             });
 
                             let render_result = gpu.render_loading_frame(
@@ -2086,9 +2129,8 @@ fn main() -> Result<()> {
 
                             egui_ui.begin_frame(window.as_ref());
                             egui_ui.build_loading_ui(&LoadingUiState {
-                                title: "Initializing renderer".to_string(),
-                                detail: "Preparing fluid simulation resources…".to_string(),
-                                progress_01: 0.96,
+                                title: "Starting".to_string(),
+                                progress_01: Some(0.96),
                             });
 
                             let render_result = gpu.render_loading_frame(
@@ -2220,8 +2262,8 @@ fn main() -> Result<()> {
                                     // diagnostics default uncapped.
                                     gpu.set_vsync(terrain_review::option("VOXEL_BENCHMARK_NORMAL_PRESENT")
                                         && preferences.loaded.vsync);
-                                    render::set_cloud_adaptive_enabled(false);
-                                    // Benchmark quality must stay fixed across the measured run.
+                                    render::set_cloud_adaptive_enabled(benchmark_state.config.adaptive_clouds);
+                                    // World quality stays fixed; cloud adaptation is opt-in.
                                     quality::set_auto_enabled(false);
                                     let (cpu,_)=render::world_residency_budgets_mib();
                                     let gpu_budget=render::gpu_residency_limit_mib();
@@ -2360,6 +2402,7 @@ fn main() -> Result<()> {
                                     }
                                     cloud_weather.reset(selected_seed);
                                     physics_enabled = benchmark_state.config.profile_physics;
+                                    if workshop_review.is_some() { physics_enabled = true; }
                                     freeze_time = benchmark_state.config.saved_review;
                                     if wand_review.is_some() {day_night.set_time_of_day(0.5);freeze_time=true;}
                                     if benchmark_state.config.capture_frames && !benchmark_state.config.capture_hud { egui_ui.show_hud = false; }
@@ -2766,14 +2809,21 @@ fn main() -> Result<()> {
                             }
                             egui_ui.expedition = world.as_ref().map(|w|w.expedition.clone());
                             egui_ui.factory = world.as_ref().map(|w|world::factory::view(w,player.pos)).unwrap_or_default();
-                            egui_ui.orbital = world.as_ref().map(|w| {
-                                world::orbital::view(w, &day_night, &player)
-                            }).unwrap_or_default();
+                            // The ledger includes a day of pass predictions. Do not
+                            // build its presentation while playing or on other pages.
+                            let orbital_open = creative.show_palette && egui_ui.ctx.data(|d|
+                                d.get_temp::<u32>(egui::Id::new("inventory_page")) == Some(8));
+                            if orbital_open {
+                                egui_ui.orbital = world.as_ref().map(|w| {
+                                    world::orbital::view(w, &day_night, &player)
+                                }).unwrap_or_default();
+                            }
                             egui_ui.adventure = world
                                 .as_ref()
                                 .map(|w| {
                                     let origin = player.pos * w.voxel_scale.meters();
                                     let mut view = w.adventure.view();
+                                    view.workshop_available = w.generator_version >= 48 && w.world_type != WorldType::Superflat;
                                     view.quest =
                                         w.adventure.quest_marker(&w.sample_config(), origin);
                                     if world::orbital::receiver::focused(w, &player) {
@@ -2811,9 +2861,8 @@ fn main() -> Result<()> {
                             }
                             if spawning {
                                 egui_ui.build_loading_ui(&LoadingUiState {
-                                    title: "Preparing your world".into(),
-                                    detail: format!("Spawn terrain ready: {} / {} chunks", spawn_progress.0, spawn_progress.1),
-                                    progress_01: spawn_progress.0 as f32 / spawn_progress.1 as f32,
+                                    title: "Loading world".into(),
+                                    progress_01: (spawn_progress.1 > 0).then(|| spawn_progress.0 as f32 / spawn_progress.1 as f32),
                                 });
                             }
                             let mut cpu_stats = CpuFrameStats::default();
@@ -2931,6 +2980,11 @@ fn main() -> Result<()> {
                                             creative.tool = creative::ToolKind::Hand;
                                             player.selected_block = block;
                                         }
+                                }
+                                UiAction::Chip(action) => {
+                                    if let Some(w) = world.as_mut() {
+                                        world::factory::chips::chip_action(w, player.pos, action);
+                                    }
                                 }
                                 UiAction::RequestOrbital(cell, channel) => {
                                     if let Some(w) = world.as_mut() {
@@ -3050,6 +3104,7 @@ fn main() -> Result<()> {
                                         &mut pending_tool_action,
                                     );
                                     mode = AppMode::WorldSelect;
+                                    egui_ui.show_title_screen();
                                     release_mouse(window, &mut grabbed);
                                     physics_enabled = false;
                                     fluid_sim.set_enabled(false);
@@ -3087,8 +3142,10 @@ fn main() -> Result<()> {
                             combat_audio.set_active(matches!(mode,AppMode::Playing) && focused && !spawning);
                             let mut draw_list = Vec::new();
                             let mut visible_missing = (0, 0);
-                            let mut outline = Vec::new();
-                            let mut invert_outline = Vec::new();
+                            if spawning || creative.any_ui_open() || !matches!(mode, AppMode::Playing) {
+                                outline.clear();
+                                invert_outline.clear();
+                            }
                             let mut nearby_torch_count = 0usize;
                             let render_world =
                                 !matches!(mode, AppMode::WorldSelect) && world.is_some();
@@ -3098,10 +3155,7 @@ fn main() -> Result<()> {
                                 && let Some(world) = world.as_mut()
                             {
                                 let gameplay_start = Instant::now();
-                                world.expedition.tick(gameplay_dt);
                                 creative.update_feedback(gameplay_dt);
-                                let machine_size=world::factory::step(world);
-                                world.factory.tick(gameplay_dt,machine_size);
 
                                 let benchmark_camera_active = benchmark_motion_active(benchmark.as_ref());
                                 let mut active_input = if benchmark_camera_active {
@@ -3129,8 +3183,15 @@ fn main() -> Result<()> {
                                     input.wheel = 0.0;
                                 }
 
-                                if benchmark_camera_active {
-                                    if let Some(benchmark_state) = benchmark.as_ref() {
+                                let mut simulation_budget = None;
+                                for _ in 0..simulation_steps {
+                                if !fluid_sim.prepare_step() { break; }
+                                let gameplay_dt = simulation::STEP_SECONDS;
+                                outline.clear();
+                                invert_outline.clear();
+                                if creative.any_ui_open() || (!grabbed && !benchmark_camera_active) { active_input.clear(); }
+                                if benchmark_camera_active
+                                    && let Some(benchmark_state) = benchmark.as_ref() {
                                         apply_benchmark_camera_motion(
                                             benchmark_state,
                                             &mut player,
@@ -3139,67 +3200,98 @@ fn main() -> Result<()> {
                                         terrain_review::frame(&mut player, world, benchmark_state.motion_started_at.elapsed().as_secs_f32(), &mut dirty_blocks, &mut dirty_chunks);
                                         horizon_review::frame(&mut player, world, benchmark_state.horizon_route_started_at.map_or(0.0,|t|t.elapsed().as_secs_f32()), &mut dirty_blocks, &mut dirty_chunks);
                                     }
-                                } else {
-                                    for _ in 0..simulation_steps {
-                                        world::adventure::enemy_review_input(world,&mut player,&mut active_input);
+                                let (mut place_edit, mut break_edit, mut can_act) = (false, false, false);
+                                let melee_consumed = simulation::fixed::gameplay(
+                                    world, &mut player, &mut active_input, !benchmark_camera_active,
+                                    |hook, world, player, active_input| {
+                                        match hook {
+                                            simulation::fixed::Hook::BeforePlayer => {
+                                                if !benchmark_camera_active {
+                                        world::adventure::enemy_review_input(world,player,active_input);
+                                        if let Some(review) = workshop_review.as_mut() {
+                                            review.input(world, player, active_input);
+                                        }
                                         if benchmark.as_ref().is_some_and(|b|b.config.tollkeeper_review) {
-                                            world::adventure::tollkeeper_review_input(world,&mut player,&mut active_input);
+                                            world::adventure::tollkeeper_review_input(world,player,active_input);
                                         }
-                                        if let Some(review)=sandbox_review.as_mut(){review.input(&mut player,&mut active_input,simulation::STEP_SECONDS);}
+                                        if let Some(review)=sandbox_review.as_mut(){review.input(player,active_input,simulation::STEP_SECONDS);}
                                         if let Some(review) = water_review.as_mut() {
-                                            review.input(&mut player, &mut active_input, world.voxel_scale.meters(), simulation::STEP_SECONDS);
+                                            review.input(player, active_input, world.voxel_scale.meters(), simulation::STEP_SECONDS);
                                         }
-                                        update_player(
-                                        &mut player,
-                                        &mut active_input,
-                                        world,
-                                        simulation::STEP_SECONDS,
-
-                                        );
-                                        if let Some(review)=sandbox_review.as_mut(){review.observe(&player);}
+                                                }
+                                                simulation::fixed::Actions::default()
+                                            }
+                                            simulation::fixed::Hook::BeforeAdventure => {
+                                                if !benchmark_camera_active {
+                                        if let Some(review)=sandbox_review.as_mut(){review.observe(player);}
                                         if let Some(review) = water_review.as_mut()
-                                            && let Some(shot) = review.observe(&player, world.voxel_scale.meters()) {
+                                            && let Some(shot) = review.observe(player, world.voxel_scale.meters()) {
                                                 let root = std::env::var_os("VOXEL_CAPTURE_DIR").map(std::path::PathBuf::from)
                                                     .unwrap_or_else(|| "target/water-review".into());
                                                 gpu.request_capture(root.join(format!("{shot}.png")));
                                             }
-                                    }
-                                }
+                                                }
                                 if player.on_ground
                                     && player.pos.y
                                         > world.sample_config().min_world_y() as f32 + 8.0
                                 {
                                     last_safe_player_pos = player.pos;
                                 }
-                                rescue_from_void(world, &mut player, last_safe_player_pos);
+                                rescue_from_void(world, player, last_safe_player_pos);
                                 if let Some(review)=wand_review.as_mut() {
-                                    review.input(world,&mut player,&mut creative,&mut active_input,&mut dirty_blocks,&mut dirty_chunks);
+                                    review.input(world,player,&mut creative,active_input,&mut dirty_blocks,&mut dirty_chunks);
                                 }
                                 let edit_repeat_interval = creative.edit_repeat_interval_seconds();
-                                let mut place_edit = consume_tool_action(
-                                    active_input.place_block,
+                                if active_input.place_pressed { place_was_down = false; }
+                                if active_input.break_pressed { break_was_down = false; }
+                                place_edit = consume_tool_action(
+                                    active_input.place_block || active_input.place_pressed,
                                     &mut place_was_down,
                                     &mut place_repeat_timer,
                                     edit_repeat_interval,
                                     gameplay_dt,
                                 );
-                                let mut break_edit = consume_tool_action(
-                                    active_input.break_block,
+                                break_edit = consume_tool_action(
+                                    active_input.break_block || active_input.break_pressed,
                                     &mut break_was_down,
                                     &mut break_repeat_timer,
                                     if creative.tool==creative::ToolKind::ExplosiveWand {f32::INFINITY}else{edit_repeat_interval},
                                     gameplay_dt,
                                 );
 
-                                let hart_review_cast = benchmark.as_ref().is_some_and(|b| b.config.hart_review.is_some()) && world::adventure::hart_review_cast(world, &mut player);
-                                let tollkeeper_review_cast=benchmark.as_ref().is_some_and(|b|b.config.tollkeeper_review) && world::adventure::tollkeeper_review_cast(world,&mut player);
+                                let hart_review_cast = benchmark.as_ref().is_some_and(|b| b.config.hart_review.is_some()) && world::adventure::hart_review_cast(world, player);
+                                let tollkeeper_review_cast=benchmark.as_ref().is_some_and(|b|b.config.tollkeeper_review) && world::adventure::tollkeeper_review_cast(world,player);
                                 let enemy_review_cast=world::adventure::enemy_review_casting(world);
-                                let can_act=(grabbed || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning;
+                                can_act=(grabbed || workshop_review.is_some() || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning;
                                 if !can_act {world.adventure.cancel_cast_input();}
-                                combat_audio.set_active(matches!(mode,AppMode::Playing) && (focused || wand_review.as_ref().is_some_and(|r|r.automatic)) && !spawning);
+                                combat_audio.set_active(matches!(mode,AppMode::Playing) && (focused || workshop_review.is_some() || wand_review.as_ref().is_some_and(|r|r.automatic)) && !spawning);
                                 world.adventure.hand_slot = creative.selected_slot;
-                                if world::adventure::tick(world,&mut player,gameplay_dt,(active_input.cast_spell || active_input.cast_pressed || enemy_review_cast || hart_review_cast || tollkeeper_review_cast)&&can_act,active_input.cycle_spell&&can_act,break_edit&&can_act&&creative.tool==creative::ToolKind::Hand) {break_edit=false;}
+                                                simulation::fixed::Actions {
+                                                    cast: (active_input.cast_spell || active_input.cast_pressed || enemy_review_cast || hart_review_cast || tollkeeper_review_cast) && can_act,
+                                                    cycle: active_input.cycle_spell && can_act,
+                                                    melee: break_edit && can_act && creative.tool == creative::ToolKind::Hand,
+                                                }
+                                            }
+                                        }
+                                    },
+                                );
+                                if melee_consumed { break_edit = false; }
+                                if let Some(review) = workshop_review.as_mut() {
+                                    review.after(world, &mut player, &mut creative, &mut day_night, &mut saves,
+                                        &mut dirty_blocks, &mut dirty_chunks);
+                                    if review.reloaded {
+                                        review.reloaded = false;
+                                        fluid_sim.reset_for_world(world.voxel_scale);
+                                        chunk_streamer.reset();
+                                        let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
+                                        chunk_cache.reset_with_snapshot(center, &world.snapshot_near(center, 4));
+                                        chunk_streamer.queue_needed_visible(&chunk_cache, center);
+                                    }
+                                    if let Some(path) = review.capture() { gpu.request_capture(path); }
+                                }
                                 input.cast_pressed=false;
+                                input.place_pressed=false;
+                                input.break_pressed=false;
                                 world::adventure::enemy_review_checkpoint(world,&mut player,&mut day_night,&mut saves);
                                 input.cycle_spell=false;
                                 if benchmark.as_ref().is_some_and(|b| b.config.hart_review.is_some()) {
@@ -3255,11 +3347,21 @@ fn main() -> Result<()> {
                                     input.pick_block = false;
                                 }
                                 egui_ui.target_block = hit.map(|(cell, _)| world.get(cell));
+                                egui_ui.target_environment = hit.and_then(|(cell, _)|
+                                    world::environment::inspect::at(world, cell));
+                                egui_ui.environment_lag = world.environment.lag_seconds();
                                 egui_ui.target_machine =
                                     hit.and_then(|(cell, _)| world::factory::probe(world, cell));
                                 egui_ui.target_cell_temp_c = hit.and_then(|(cell, _)| {
                                     let t = world.sandbox.cell(cell).temperature;
-                                    (t > 35.0).then_some(t)
+                                    t.is_finite().then_some(t)
+                                });
+                                egui_ui.target_volume_ul = hit.map(|(cell, _)| {
+                                    if world.get(cell) == BlockId::Water {
+                                        world.water_microlitres(cell)
+                                    } else {
+                                        engine_core::environment::cell_volume(world.voxel_scale)
+                                    }
                                 });
                                 // A bounded second probe distinguishes empty sky from an unreachable face.
                                 let sight = hit.or_else(|| world::raycast_block_precise(
@@ -3288,7 +3390,9 @@ fn main() -> Result<()> {
                                             creative.show_palette = true;
                                             egui_ui.ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), 8u32));
                                             break_edit=false;place_edit=false;
-                                        } else if world::adventure::reliquaries::interact(world,&player) {
+                                        } else if world::adventure::reliquaries::interact(world,&player)
+                                            || hit.is_some_and(|(cell, _)| world::environment::inspect::clear(world, cell))
+                                            || hit.is_some_and(|(cell, _)| world::environment::cultivation::compost(world, cell, creative.selected_slot)) {
                                             break_edit=false;place_edit=false;
                                         } else {
                                             let outcome = world::undercrown::interact(world, &player);
@@ -3572,10 +3676,15 @@ fn main() -> Result<()> {
                                                             .consume_from_hotbar(creative.selected_slot, item);
                                                         world.sync_from_inventory();
                                                     } else {
+                                                        world.expedition.say("Cannot place here: clear the space or open a water outlet.");
                                                         continue;
                                                     }
                                                 } else {
                                                     world.set(cell, place_block);
+                                                    if world.get(cell) != place_block {
+                                                        world.expedition.say("Cannot place here: clear the space or open a water outlet.");
+                                                        continue;
+                                                    }
                                                 }
                                                 dirty_blocks.insert(cell);
                                                 mark_chunk_and_neighbors_dirty(
@@ -3603,13 +3712,11 @@ fn main() -> Result<()> {
                                     if explosive_edit && !spell_blast {world.sync_from_inventory();}
                                 }
                                 if let Some(review)=sandbox_review.as_ref(){fluid_sim.set_enabled(review.running());}
-                                fluid_sim.update(
-                                    world,
-                                    &player,
-                                    gameplay_dt,
-                                    &mut dirty_blocks,
-                                    &mut dirty_chunks,
-                                    simulation::WorldSimulation::live_budget(),
+                                simulation::fixed::finish(
+                                    fluid_sim, world, &player, &mut day_night,
+                                    &mut dirty_blocks, &mut dirty_chunks,
+                                    *simulation_budget.get_or_insert_with(|| simulation::WorldSimulation::live_budget(world)),
+                                    false, !freeze_time,
                                 );
                                 if let Some(review)=wand_review.as_mut()
                                     && let Some(shot)=review.observe(world,&player,&creative,&preview) {
@@ -3631,6 +3738,9 @@ fn main() -> Result<()> {
                                     if reloaded {chunk_streamer.reset();let c=chunk_coord_from_world_block(player.pos.floor().as_ivec3());chunk_cache.reset_with_snapshot(c,&world.snapshot_near(c,4));chunk_streamer.queue_needed_visible(&chunk_cache,c);}
                                     if let Some(shot)=shot&& let Some(root)=std::env::var_os("VOXEL_CAPTURE_DIR") {gpu.request_capture(std::path::PathBuf::from(root).join(shot));}
                                 }
+                                }
+                                let eye = player.eye(world.voxel_scale);
+                                let forward = player.forward_dir();
                                 cpu_stats.gameplay_ms =
                                     gameplay_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -3747,7 +3857,7 @@ fn main() -> Result<()> {
                                     culling_start.elapsed().as_secs_f32() * 1000.0;
                                 if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 let held_torch =
-                                    held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp);
+                                    held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp_enabled());
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, &chunk_cache, player.pos, world_scale);
@@ -3795,9 +3905,6 @@ fn main() -> Result<()> {
                                 nearby_torch_count = nearby_torches.len();
 
                                 let weather_start = Instant::now();
-                                if !freeze_time {
-                                    day_night.advance(gameplay_dt);
-                                }
                                 let day_speed = DEFAULT_DAY_LENGTH_SECONDS
                                     / day_night.day_length_seconds().max(1.0);
                                 let sky_motion_rate = 0.55 + day_speed * 0.65;
@@ -3964,7 +4071,7 @@ fn main() -> Result<()> {
                                     culling_start.elapsed().as_secs_f32() * 1000.0;
                                 if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 let held_torch =
-                                    held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp);
+                                    held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp_enabled());
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, &chunk_cache, player.pos, world_scale);
@@ -4147,9 +4254,20 @@ fn main() -> Result<()> {
                             // Orbits run at a fixed pace of their own whenever the day is not
                             // running at its default speed (long day, frozen time); otherwise a
                             // slow or stopped day parks every station and skyhook in the sky.
+                            let orbital_review = benchmark.as_ref().filter(|b| b.auto_started)
+                                .and_then(|b| b.config.review_orbital_time.map(|start| {
+                                    let progress = if b.measuring {
+                                        (b.phase_started_at.elapsed().as_secs_f64()
+                                            / b.config.duration_seconds.max(0.001) as f64).clamp(0.0, 1.0)
+                                    } else { 0.0 };
+                                    start + (b.config.review_orbital_time_end.unwrap_or(start) - start) * progress
+                                }));
                             let default_pace = !freeze_time
                                 && (day_night.day_length_seconds() - DEFAULT_DAY_LENGTH_SECONDS).abs() < 0.5;
-                            if default_pace {
+                            if let Some(days) = orbital_review {
+                                sky_day.set_day_index(days.floor() as u32);
+                                sky_day.set_time_of_day(days.fract() as f32);
+                            } else if default_pace {
                                 sky_clock = None;
                                 if matches!(mode, AppMode::Playing) {
                                     sky_day.advance(simulation_clock.lead_seconds());
@@ -4228,9 +4346,8 @@ fn main() -> Result<()> {
                                     }
                             if preparing_horizon {
                                 egui_ui.build_loading_ui(&LoadingUiState {
-                                    title: "Preparing distant terrain".into(),
-                                    detail: "Building destination coverage".into(),
-                                    progress_01: 0.0,
+                                    title: "Loading terrain".into(),
+                                    progress_01: None,
                                 });
                             }
                             let overlay = |device: &wgpu::Device, queue: &wgpu::Queue,
@@ -4239,7 +4356,9 @@ fn main() -> Result<()> {
                                 egui_ui.end_frame(window.as_ref(), device, queue, encoder,
                                     target_view, width, height);
                             };
-                            let render_result = if preparing_horizon {
+                            // The opaque title/browser needs only its UI pass,
+                            // without the world's render setup and postprocessing.
+                            let render_result = if preparing_horizon || matches!(mode, AppMode::WorldSelect) {
                                 gpu.render_loading_frame([0.025, 0.035, 0.05], overlay)
                             } else { gpu.render_cached_with_overlay(
                                 &chunk_cache,
@@ -4270,6 +4389,13 @@ fn main() -> Result<()> {
                                 eprintln!("[benchmark] failed native rendering: {:?}",render_result.as_ref().err());
                                 let _=gpu.device.poll(wgpu::PollType::Poll);
                                 elwt.exit();return;
+                            }
+                            if !preparing_horizon && !spawning
+                                && workshop_review.as_mut().is_some_and(workshop_review::Review::finished) {
+                                let _ = gpu.device.poll(wgpu::PollType::Poll);
+                                render::flush_review_captures();
+                                elwt.exit();
+                                return;
                             }
                             match render_result {
                                 Ok(()) => {
@@ -4317,6 +4443,13 @@ fn main() -> Result<()> {
                                                 physics.simulated_chunks_last_step, physics.applied_updates_last_step,
                                                 physics.source_bytes as f64/1048576.0, physics.source_failed,
                                                 physics.writeback_pressure, physics.recovering);
+                                            if review.config.profile_physics && let Some(w)=world.as_ref() {
+                                                let env=&w.environment;
+                                                println!("[environment-profile] tick={} target={} lag_s={} serviced={} blocked={} patches={} pending={} sediment={} fractions={} reserved_bytes={} sky_chunks={} first_event={:?} sky_cursor={:?}",
+                                                    env.tick,env.target_tick,env.lag_seconds(),env.serviced,env.blocked,
+                                                    env.patches.len(),env.due.len(),env.sediment.len(),env.water_deficit.len(),env.reserved_bytes(),
+                                                    env.sky.len(),env.due.first(),env.due.first().and_then(|(_,p)|env.light.get(p)).map(|q|(q.next_y,q.shade)));
+                                            }
                                         }
                                     }
                                     perf_tracker.push(sample);
@@ -4491,9 +4624,13 @@ fn main() -> Result<()> {
                         elwt.set_control_flow(ControlFlow::WaitUntil(Instant::now()+Duration::from_millis(100)));
                     } else if !focused && !benchmark_config.enabled && Instant::now() < next_background_frame {
                         elwt.set_control_flow(ControlFlow::WaitUntil(next_background_frame));
+                    } else if !benchmark_config.enabled && matches!(mode, AppMode::WorldSelect)
+                        && Instant::now() < next_menu_frame {
+                        elwt.set_control_flow(ControlFlow::WaitUntil(next_menu_frame));
                     } else {
                         window.request_redraw();
                         next_background_frame = Instant::now() + Duration::from_millis(100);
+                        next_menu_frame = Instant::now() + Duration::from_secs_f64(1.0 / 60.0);
                     }
                 }
             }

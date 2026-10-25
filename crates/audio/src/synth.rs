@@ -20,6 +20,8 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
         20 => 0.45,
         22 => 0.65,
         23 => 0.42,
+        24 => 0.24,
+        25 => 0.75,
         _ => 0.55,
     };
     let mut seed = 0x7f4a7c15u32
@@ -81,6 +83,8 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
             21 => 120.0 - 85.0 * u,
             22 => 220.0 + 660.0 * u,
             23 => 520.0 - 340.0 * u,
+            24 => 170.0 + 100.0 * (-t * 35.0).exp(),
+            25 => 110.0 + 40.0 * (-t * 5.0).exp(),
             _ => 2200.0 - 1700.0 * u,
         };
         phase += std::f32::consts::TAU * pitch / RATE as f32;
@@ -184,6 +188,12 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
                     + low * 1.25 * (-t * 6.0).exp()
                     + tone * 0.18 * (-t * 14.0).exp()
             }
+            24 => low * 1.5 * (-t * 18.0).exp()
+                + high * 0.32 * (-t * 70.0).exp()
+                + tone * 0.20 * (-t * 28.0).exp(),
+            25 => low * 1.8 * (-t * 3.0).exp()
+                + soft_noise * 0.6 * (-t * 5.0).exp()
+                + tone * 0.09 * (-t * 8.0).exp(),
             _ => low * 0.8 + tone * 0.3,
         };
         data.push(sample * attack * tail * 0.65);

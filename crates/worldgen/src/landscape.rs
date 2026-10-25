@@ -479,7 +479,11 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32
     // Hypsometric curve from abyssal oceanic crust (-18..+4m) across the continental
     // shelf (+8..+14m) to continental interiors (+18..+36m).
     let shelf_t = smoothstep(-0.48, 0.22, tect.continentalness);
-    let abyssal_t = smoothstep(-0.12, -0.78, tect.continentalness);
+    let abyssal_t = if version >= 37 {
+        1.0 - smoothstep(-0.78, -0.12, tect.continentalness)
+    } else {
+        smoothstep(-0.12, -0.78, tect.continentalness)
+    };
     let craton_t = smoothstep(0.05, 0.65, tect.continentalness);
 
     let ocean_floor = -4.5 - abyssal_t * 14.5 + hills * 0.28;
@@ -531,7 +535,12 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32
     // 4. Divergent continental rift graben & mid-ocean spreading ridge:
     let horst_shoulders =
         (-((tect.boundary_dist - 64.0) / 34.0).powi(2)).exp() * (-tect.boundary_stress).max(0.0);
-    if tect.continentalness > -0.05 {
+    if version >= 37 {
+        // A coast must not change elevation abruptly at a plate threshold.
+        let land = smoothstep(-0.15, 0.05, tect.continentalness);
+        h += horst_shoulders * (14.0 + 1.5 * land)
+            - tect.rift_graben * (6.0 + 13.5 * land);
+    } else if tect.continentalness > -0.05 {
         // Sunken rift valley (graben) often deep enough to host rift lakes or sea inlets,
         // bordered by uplifted horst fault-block escarpments.
         h -= tect.rift_graben * 19.5;
@@ -607,6 +616,19 @@ pub fn preview_surface_lod(
     (column.height as f32 + 1.0, column.surface)
 }
 
+/// Canonical horizon policy beyond the exact 64 m rings. Keep the existing
+/// fixed 8 m macro evaluator (stable shared knots/cache policy), but do not
+/// sample metre-scale residuals into hundred-metre triangles. All canonical
+/// far rings use this SAME policy, including refinement scouts.
+pub fn preview_surface_canonical(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, BlockId) {
+    if cfg.generator_version < 38 || cfg.world_type == WorldType::Superflat {
+        return preview_surface_lod(cfg, x, z, 8.0);
+    }
+    let s = preview_landscape_with_footprints(cfg, x, z, 8.0, 64.0);
+    let column = column_from_landscape(cfg, x, z, s);
+    (column.height as f32 + 1.0, column.surface)
+}
+
 pub(super) fn preview_column_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> ColumnSample {
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
         return super::sample_column(cfg, x, z);
@@ -615,6 +637,12 @@ pub(super) fn preview_column_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footpr
 }
 
 pub(super) fn preview_landscape_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> Landscape {
+    preview_landscape_with_footprints(cfg, x, z, footprint, footprint)
+}
+
+fn preview_landscape_with_footprints(
+    cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32, detail_footprint: f32,
+) -> Landscape {
     let wx = cfg.world_x(x);
     let wz = cfg.world_z(z);
     let probe = footprint.clamp(8.0, 96.0);
@@ -632,7 +660,7 @@ pub(super) fn preview_landscape_lod(cfg: &WorldSampleConfig, x: i32, z: i32, foo
     let hx = height_at(wx + probe, wz);
     let hz = height_at(wx, wz + probe);
     let slope0 = (((hx - h0) / probe).powi(2) + ((hz - h0) / probe).powi(2)).sqrt();
-    let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25);
+    let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25, detail_footprint);
     classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, 0.25)
 }
 
@@ -822,7 +850,7 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
             slope += (sx * sx + sz * sz).sqrt() * weight;
         }
     }
-    let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h, slope, sediment);
+    let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h, slope, sediment, cfg.voxel_meters());
     classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, sediment)
 }
 
@@ -830,6 +858,10 @@ fn classify_landscape(
     cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32, slope: f32,
     temperature: f32, moisture: f32, sediment: f32,
 ) -> Landscape {
+    let drainage = super::drainage::sample(cfg, wx, wz);
+    let h = h + (drainage.bed_m.min(h) - h) * drainage.bank;
+    let moisture = (moisture + drainage.bank * 0.24).min(1.0);
+    let sediment = (sediment + drainage.bank * 0.35).min(1.0);
     let alpine = if cfg.generator_version >= 9 {
         h > 124.0 || (h > 98.0 && temperature < 0.24) || (h > 84.0 && slope > 0.78)
     } else if cfg.generator_version >= 7 {
@@ -963,6 +995,7 @@ fn apply_macro_shaping(
     mut h: f32,
     mut slope: f32,
     sediment: f32,
+    footprint: f32,
 ) -> (f32, f32, f32, f32) {
     let (mut temperature, mut rain) = climate(wx, wz, cfg.seed);
     if cfg.generator_version >= 5 {
@@ -995,10 +1028,12 @@ fn apply_macro_shaping(
     // Damp high-frequency 6m surface chatter right across the shoreline band
     // (10.5..15.5m) so beaches do not develop isolated 1-voxel water slits/puddles.
     let shore_calm = smoothstep(0.85, 3.6, (h - 12.0).abs());
-    h += (value_noise2(wx / 6.0, wz / 6.0, cfg.seed.wrapping_add(83)) - 0.5)
+    if cfg.generator_version < 38 {
+        h += (value_noise2(wx / 6.0, wz / 6.0, cfg.seed.wrapping_add(83)) - 0.5)
         * (0.65 + slope.min(1.0) * 1.3)
         * shore_calm;
-    if cfg.generator_version >= 3 {
+    }
+    if (3..37).contains(&cfg.generator_version) {
         // A real inland watershed, not a platform placed after world generation.
         // The central clearing is dry, gently graded and joins 320 m of dry land.
         let distance = wx.hypot(wz);
@@ -1050,8 +1085,8 @@ fn apply_macro_shaping(
         h = h * (1.0 - spawn_pad) + spawn_height * spawn_pad;
         slope = slope * (1.0 - clearing) + 0.08 * clearing * (1.0 - spawn_pad);
     }
-    if cfg.generator_version >= 5 {
-        // Residual landforms below the erosion grid's 8 m sampling interval.
+    if (5..38).contains(&cfg.generator_version) {
+        // Historical residual landforms below the erosion grid's 8 m sampling interval.
         // Soft soil has hummocks, dry ground has wind-aligned dunes, exposed
         // uplands have broken ribs and gullies rather than uniformly noisy hills.
         let a = value_noise2(wx / 23.0, wz / 23.0, cfg.seed.wrapping_add(9203));
@@ -1147,6 +1182,38 @@ fn apply_macro_shaping(
         } else {
             11.05 - (11.42 - h) * 0.40
         };
+    }
+    if cfg.generator_version >= 37 {
+        let distance = wx.hypot(wz);
+        // A broad, irregular foothill basin. The old 28..55 m blend could
+        // join a 26 m clearing directly to a 150 m mountain wall.
+        let warp = (value_noise2(wx / 240.0, wz / 240.0, cfg.seed.wrapping_add(9061)) - 0.5) * 0.3;
+        let reach = distance * (1.0 + warp);
+        let meadow = 26.0 + (value_noise2(wx / 100.0, wz / 100.0,
+            cfg.seed.wrapping_add(9011)) - 0.5) * 4.0;
+        let blend = smoothstep(115.0, 580.0, reach);
+        h = meadow + (h - meadow) * blend;
+        slope = slope * blend + 0.04 * (1.0 - blend);
+        let spawn = 1.0 - smoothstep(8.0, 26.0, distance);
+        h += (26.0 - h) * spawn;
+    }
+    if cfg.generator_version >= 39 && cfg.world_type != WorldType::Superflat {
+        let (relief, landform_slope) = super::landforms::relief(cfg, wx, wz, h);
+        h += relief;
+        slope = slope.hypot(landform_slope);
+    }
+    if cfg.generator_version >= 38 && cfg.world_type != WorldType::Superflat {
+        let (relief, detail_slope) = super::terrain_detail::sample(
+            cfg, wx, wz, h, slope, temperature, moisture, sediment, footprint,
+        );
+        h += relief;
+        slope = slope.hypot(detail_slope);
+    }
+    if cfg.generator_version >= 49 && cfg.world_type != WorldType::Superflat {
+        // Evaluate against the final natural coast, after the spawn basin and
+        // landforms. Earlier shoreline relief was erased by those later stages.
+        // Authored river/village grading below still has final authority.
+        h = super::terrain_variety::coastal_shoulders(h, wx, wz, cfg.seed);
     }
     if cfg.generator_version >= 14 && cfg.world_type != WorldType::Superflat {
         h = super::valley::carve(cfg, wx, wz, h);
@@ -1519,6 +1586,41 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         surface = s;
         filler = f;
         vegetation = v;
+    }
+    if cfg.generator_version >= 37 {
+        // Leave a usable first factory meadow beside the route junction.
+        let yard = ((cfg.world_x(x) + 38.0) / 24.0).hypot((cfg.world_z(z) - 18.0) / 19.0);
+        vegetation *= smoothstep(1.0, 1.7, yard);
+    }
+    if cfg.generator_version >= engine_core::environment::ENVIRONMENT_GENERATOR {
+        let drainage = super::drainage::sample(cfg, cfg.world_x(x), cfg.world_z(z));
+        if drainage.bank > 0.5 {
+            surface = if s.slope > 0.2 { BlockId::Gravel } else { BlockId::Mud };
+            filler = if s.sediment > 0.65 { BlockId::Clay } else { BlockId::Dirt };
+            vegetation *= if drainage.water_m.is_some() { 0.0 } else { 0.6 };
+        }
+    }
+    if cfg.generator_version >= 47 {
+        // Wider occupied stands alternate with open glades. Keep all upstream
+        // water, route, yard and site exclusions: zero density stays zero.
+        let wx = cfg.world_x(x);
+        let wz = cfg.world_z(z);
+        let stand = value_noise2(wx / 83.0, wz / 83.0, cfg.seed.wrapping_add(45131));
+        let wooded = matches!(s.biome, Biome::Forest | Biome::Taiga | Biome::Rainforest);
+        let envelope = smoothstep(0.28, 0.64, stand);
+        vegetation *= if wooded { 0.10 + 1.48 * envelope } else { 0.10 + 0.90 * envelope };
+        // Coherent exposed forest soil under closed stands, rather than a
+        // uniform lawn. It is actual editable surface material, not a decal.
+        if wooded && surface == BlockId::Grass && vegetation > 0.60 && stand > 0.60
+            && value_noise2(wx / 23.0, wz / 23.0, cfg.seed.wrapping_add(47131)) > 0.58 {
+            surface = BlockId::Dirt;
+        }
+    } else if cfg.generator_version >= 45 {
+        // One stand envelope for resident and horizon columns. Existing site,
+        // rock and water exclusions remain multiplicative, never overridden.
+        let stand = value_noise2(cfg.world_x(x) / 83.0, cfg.world_z(z) / 83.0,
+            cfg.seed.wrapping_add(45131));
+        vegetation *= 0.18 + 0.82 * smoothstep(0.25, 0.62, stand);
     }
     let height = cfg.clamp_height(cfg.blocks_for_height(s.height));
     ColumnSample {

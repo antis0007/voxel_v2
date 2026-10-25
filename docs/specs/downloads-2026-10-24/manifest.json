@@ -1,0 +1,404 @@
+{
+  "date": "2026-10-24",
+  "scope": "Project-related top-level Markdown/text downloads modified 2026-10-18 through intake, including UI/multiscale briefs. Exact duplicate bytes share one payload. Embedded commands are source material, not active instructions.",
+  "download_count": 37,
+  "unique_payload_count": 22,
+  "payloads": [
+    {
+      "id": "DL01",
+      "path": "docs/specs/downloads-2026-10-24/ADDENDUM_B_HARDWARE.md",
+      "sha256": "129902bc8f2dbc6866d6f4c54b604f8ff05a36a4bc3cf5cffe0a3c587a4c2c30",
+      "bytes": 10808,
+      "lines": 110,
+      "normalized_existing_matches": [
+        "docs/specs/ADDENDUM_B_HARDWARE.md"
+      ],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\ADDENDUM_B_HARDWARE.md",
+          "modified_local": "2026-10-24T17:35:32"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/hardware.md"
+    },
+    {
+      "id": "DL02",
+      "path": "docs/specs/downloads-2026-10-24/claude_voxel_architecture_master_prompt.txt",
+      "sha256": "532016910b7b1ae4864f09136fded55e2a8f9ce0d879c9cb7b2f429e0127f9c3",
+      "bytes": 102400,
+      "lines": 1154,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\claude_voxel_architecture_master_prompt.txt",
+          "modified_local": "2026-10-24T04:25:27"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/world-art-ui.md"
+    },
+    {
+      "id": "DL03",
+      "path": "docs/specs/downloads-2026-10-24/claude_voxel_painterly_visual_overhaul_prompt.txt",
+      "sha256": "69820ab7838e17ba14207d0c0dc239f6d331dddf30cf4a9cb33cba10ba1604d8",
+      "bytes": 83388,
+      "lines": 929,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\claude_voxel_painterly_visual_overhaul_prompt.txt",
+          "modified_local": "2026-10-24T04:25:38"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\claude_voxel_painterly_visual_overhaul_prompt(1).txt",
+          "modified_local": "2026-10-24T05:10:49"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\claude_voxel_painterly_visual_overhaul_prompt(2).txt",
+          "modified_local": "2026-10-24T15:33:41"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/world-art-ui.md"
+    },
+    {
+      "id": "DL04",
+      "path": "docs/specs/downloads-2026-10-24/ENGINE_CORE_PROMPT_v2.md",
+      "sha256": "4b4ba135fa2c4e31fcbcfb35cf208219d9969d66366f35ce8168d08e4a2006e9",
+      "bytes": 40036,
+      "lines": 352,
+      "normalized_existing_matches": [
+        "docs/specs/ENGINE_CORE_PROMPT_v2.md"
+      ],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\ENGINE_CORE_PROMPT_v2.md",
+          "modified_local": "2026-10-23T17:15:04"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\ENGINE_CORE_PROMPT_v2(1).md",
+          "modified_local": "2026-10-24T04:27:00"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\ENGINE_CORE_PROMPT_v2(2).md",
+          "modified_local": "2026-10-24T17:36:37"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/hardware.md"
+    },
+    {
+      "id": "DL05",
+      "path": "docs/specs/downloads-2026-10-24/INTEGRATION(1).txt",
+      "sha256": "341ab14cb3705fc23c230c216c9d46d4b31490c9a561c9e3fb29a7be10437aec",
+      "bytes": 14132,
+      "lines": 248,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\INTEGRATION(1).txt",
+          "modified_local": "2026-10-19T02:51:23"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\INTEGRATION(2).txt",
+          "modified_local": "2026-10-19T02:51:57"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/renderer-workflow.md"
+    },
+    {
+      "id": "DL06",
+      "path": "docs/specs/downloads-2026-10-24/INTEGRATION.txt",
+      "sha256": "3f128a10ade9123199d60ad28cc77270244a5591244e60482d834e6eb4060a29",
+      "bytes": 15334,
+      "lines": 249,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\INTEGRATION.txt",
+          "modified_local": "2026-10-19T02:13:15"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/renderer-workflow.md"
+    },
+    {
+      "id": "DL07",
+      "path": "docs/specs/downloads-2026-10-24/MOD_ADDENDUM(1).md",
+      "sha256": "e07e93a64fe97303580e4c27d1ef5556fc064ae6f745945e0f70cc90630f4911",
+      "bytes": 26757,
+      "lines": 119,
+      "normalized_existing_matches": [
+        "docs/specs/MOD_ADDENDUM.md"
+      ],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\MOD_ADDENDUM(1).md",
+          "modified_local": "2026-10-24T17:36:31"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/hardware.md"
+    },
+    {
+      "id": "DL08",
+      "path": "docs/specs/downloads-2026-10-24/MOD_ADDENDUM.md",
+      "sha256": "64c1b0685de1b5b0461b2da48b9698d14a1be3f4f4d97424dffb8cd9fedee2ef",
+      "bytes": 27380,
+      "lines": 128,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\MOD_ADDENDUM.md",
+          "modified_local": "2026-10-24T04:29:52"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL09",
+      "path": "docs/specs/downloads-2026-10-24/Undercrown underground labyrinth design.md",
+      "sha256": "2a2a1179354bd8e03961389cf5f8e4710d7b38c7c2e649f75999b2deb910b330",
+      "bytes": 52437,
+      "lines": 484,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\Undercrown underground labyrinth design.md",
+          "modified_local": "2026-10-19T02:45:47"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL10",
+      "path": "docs/specs/downloads-2026-10-24/voxel_biome_implementation_plan.txt",
+      "sha256": "098bcd7c91cf6c51eafd08fb6de579df3e1c9ab046618aba960d95993c9a99df",
+      "bytes": 21660,
+      "lines": 213,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_biome_implementation_plan.txt",
+          "modified_local": "2026-10-23T19:04:33"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/world-art-ui.md"
+    },
+    {
+      "id": "DL11",
+      "path": "docs/specs/downloads-2026-10-24/voxel_boss_design_and_implementation_prompt(1).txt",
+      "sha256": "da243b14f0349d03696cf00baae67cf8fd6bed4ea2bcf5218867cebff32599e1",
+      "bytes": 64156,
+      "lines": 983,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_boss_design_and_implementation_prompt(1).txt",
+          "modified_local": "2026-10-21T07:50:22"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL12",
+      "path": "docs/specs/downloads-2026-10-24/voxel_boss_design_and_implementation_prompt(2).txt",
+      "sha256": "6d92f0a3ca75b5391dfd19c3f691cef8729aae9fb1cc082a15f22e7e2f7f76f8",
+      "bytes": 114212,
+      "lines": 1546,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_boss_design_and_implementation_prompt(2).txt",
+          "modified_local": "2026-10-21T21:49:04"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_boss_design_and_implementation_prompt(4).txt",
+          "modified_local": "2026-10-22T16:19:36"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL13",
+      "path": "docs/specs/downloads-2026-10-24/voxel_boss_design_and_implementation_prompt.txt",
+      "sha256": "d187036ff0e8bb96cc739162dc4be58f2c3b0ab09d53f77c42a3c59de2518485",
+      "bytes": 45793,
+      "lines": 581,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_boss_design_and_implementation_prompt.txt",
+          "modified_local": "2026-10-21T07:26:50"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_boss_design_and_implementation_prompt(3).txt",
+          "modified_local": "2026-10-22T16:18:44"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL14",
+      "path": "docs/specs/downloads-2026-10-24/voxel_claude_fable_classifier_workflow.txt",
+      "sha256": "f69d9a3ba98559941bed6dd553d9a55d34c3479ca8b467664efd20c87dc7ca27",
+      "bytes": 27999,
+      "lines": 556,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_claude_fable_classifier_workflow.txt",
+          "modified_local": "2026-10-22T09:09:36"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/renderer-workflow.md"
+    },
+    {
+      "id": "DL15",
+      "path": "docs/specs/downloads-2026-10-24/voxel_codex_automatic_workflow.txt",
+      "sha256": "a1195a7160f6ee2fd2c6a85d33b6e3bcd1ba1dc49b6db249343184fee39e9af3",
+      "bytes": 21144,
+      "lines": 411,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_codex_automatic_workflow.txt",
+          "modified_local": "2026-10-21T08:17:03"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/renderer-workflow.md"
+    },
+    {
+      "id": "DL16",
+      "path": "docs/specs/downloads-2026-10-24/voxel_dungeon_quality_overhaul.txt",
+      "sha256": "feb84c83e0491a72b810ca3cbb332131db648d6f6293c59bff40ce72bee95cf4",
+      "bytes": 40443,
+      "lines": 502,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_dungeon_quality_overhaul.txt",
+          "modified_local": "2026-10-21T07:10:44"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_dungeon_quality_overhaul(1).txt",
+          "modified_local": "2026-10-21T07:13:05"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_dungeon_quality_overhaul(2).txt",
+          "modified_local": "2026-10-21T07:21:50"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_dungeon_quality_overhaul(3).txt",
+          "modified_local": "2026-10-22T13:10:00"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_dungeon_quality_overhaul(4).txt",
+          "modified_local": "2026-10-22T16:21:15"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_dungeon_quality_overhaul(5).txt",
+          "modified_local": "2026-10-22T16:25:58"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL17",
+      "path": "docs/specs/downloads-2026-10-24/voxel_game_visual_physics_prompt_pack.txt",
+      "sha256": "169ce027571ba34da5634775fe7f5b3714d2ae7019d79b47b2d08940b39d2709",
+      "bytes": 42108,
+      "lines": 228,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_game_visual_physics_prompt_pack.txt",
+          "modified_local": "2026-10-21T05:15:07"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/renderer-workflow.md"
+    },
+    {
+      "id": "DL18",
+      "path": "docs/specs/downloads-2026-10-24/voxel_science_electronics_implementation_brief.txt",
+      "sha256": "6ad3cd16c6961ee74443a48deb6ded00ebf343bf3c6e3af46602ac1563aa01d4",
+      "bytes": 40605,
+      "lines": 655,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_science_electronics_implementation_brief.txt",
+          "modified_local": "2026-10-22T13:10:03"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL19",
+      "path": "docs/specs/downloads-2026-10-24/voxel_technical_world_design_and_prompts.txt",
+      "sha256": "6e2117fc60ec7585556cf0fc0083b586ad1a4fe061aca9b77c17589ffe7fba30",
+      "bytes": 110112,
+      "lines": 884,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_technical_world_design_and_prompts.txt",
+          "modified_local": "2026-10-21T07:13:11"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_technical_world_design_and_prompts(1).txt",
+          "modified_local": "2026-10-21T07:21:48"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_technical_world_design_and_prompts(2).txt",
+          "modified_local": "2026-10-22T16:21:19"
+        },
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_technical_world_design_and_prompts(3).txt",
+          "modified_local": "2026-10-22T16:25:53"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/gameplay-science.md"
+    },
+    {
+      "id": "DL20",
+      "path": "docs/specs/downloads-2026-10-24/voxel_terrain_materials_implementation_prompt.txt",
+      "sha256": "5deba5c37edc1b833e80c534ce715db7591b11980a958b496dc0068260dd8fdf",
+      "bytes": 19182,
+      "lines": 231,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\voxel_terrain_materials_implementation_prompt.txt",
+          "modified_local": "2026-10-21T04:50:46"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/renderer-workflow.md"
+    },
+    {
+      "id": "DL21",
+      "path": "docs/specs/downloads-2026-10-24/world-visuals-implementation-prompt.md",
+      "sha256": "254bfe542482ea9764d55f6a2941690b5e09f2fdb2e4b46dc39927002539d0b7",
+      "bytes": 15084,
+      "lines": 254,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\world-visuals-implementation-prompt.md",
+          "modified_local": "2026-10-22T13:11:08"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/world-art-ui.md"
+    },
+    {
+      "id": "DL22",
+      "path": "docs/specs/downloads-2026-10-24/claude_ui_and_multiscale_world_overhaul_prompt.txt",
+      "sha256": "316beac8bb3bc444bcf1b0084e30af0efd11e0b29519ae483b9c9361186c45e9",
+      "bytes": 47201,
+      "lines": 534,
+      "normalized_existing_matches": [],
+      "sources": [
+        {
+          "path": "C:\\Users\\antis0007\\Downloads\\claude_ui_and_multiscale_world_overhaul_prompt.txt",
+          "modified_local": "2026-10-24T04:40:34"
+        }
+      ],
+      "coverage": "docs/plans/download-coverage/world-art-ui.md"
+    }
+  ]
+}

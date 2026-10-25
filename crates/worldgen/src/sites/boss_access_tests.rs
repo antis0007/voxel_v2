@@ -63,6 +63,16 @@ fn boss_layouts_vary_between_sites() {
     }
 }
 
+/// Generator 39's campus survey left no Foundry site near spawn; from 51 every
+/// boss family can be reached again.
+#[test]
+fn every_boss_family_is_sited_from_generator_51() {
+    let all = shrines(&cfg(51, VoxelScalePreset::OneMeter));
+    for f in FAMILIES {
+        first(&all, f);
+    }
+}
+
 #[test]
 fn boss_shrines_exist_only_from_generator_32() {
     let old = cfg(31, VoxelScalePreset::OneMeter);
