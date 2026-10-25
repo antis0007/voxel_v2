@@ -1,5 +1,6 @@
 use engine_core::{CHUNK_SIZE, floor_div};
 use glam::{DVec3, IVec3, Vec3};
+use std::collections::HashMap;
 
 /// Edge length of the grid the render origin snaps to.
 pub const ORIGIN_GRID_VOXELS: i32 = 4096;
@@ -51,6 +52,94 @@ impl RenderOrigin {
     }
 }
 
+/// Per-draw placement read from vertex buffer slot 1.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DrawTransform {
+    pub offset: [f32; 4],
+    /// Unit quaternion `xyzw`; the identity until bent chunks need it (decision 0025).
+    pub rotation: [f32; 4],
+}
+
+impl DrawTransform {
+    pub const IDENTITY: DrawTransform = DrawTransform { offset: [0.0; 4], rotation: [0.0, 0.0, 0.0, 1.0] };
+
+    /// Instance-step layout at slot 1, shared by the world and shadow pipelines.
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<DrawTransform>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &Self::ATTRIBUTES,
+    };
+    const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4];
+}
+
+const _: [(); 32] = [(); std::mem::size_of::<DrawTransform>()];
+
+/// One frame's table of draw transforms, one slot per chunk.
+///
+/// The main pass and every shadow cascade take slots from the same table, so a
+/// chunk drawn by several passes reads one transform. A draw selects its slot
+/// through `first_instance`.
+#[derive(Default)]
+pub struct DrawOffsets {
+    transforms: Vec<DrawTransform>,
+    slots: HashMap<IVec3, u32>,
+    buffer: Option<wgpu::Buffer>,
+    capacity: usize,
+}
+
+impl DrawOffsets {
+    /// Clears the table and puts `absolute` in `ABSOLUTE_SLOT`.
+    pub fn begin_frame(&mut self, absolute: DrawTransform) {
+        self.transforms.clear();
+        self.slots.clear();
+        self.transforms.push(absolute);
+    }
+
+    /// Returns `chunk`'s slot, computing its transform on first use this frame.
+    pub fn slot(&mut self, chunk: IVec3, transform: impl FnOnce() -> DrawTransform) -> u32 {
+        if let Some(&slot) = self.slots.get(&chunk) {
+            return slot;
+        }
+        let slot = self.transforms.len() as u32;
+        self.transforms.push(transform());
+        self.slots.insert(chunk, slot);
+        slot
+    }
+
+    /// Writes the table to the GPU, growing the buffer if needed.
+    ///
+    /// Call once per frame after every draw list has taken its slots and before
+    /// the first pass binds the buffer: a pass that already bound it would keep
+    /// the replaced buffer.
+    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.transforms.is_empty() {
+            return;
+        }
+        if self.buffer.is_none() || self.transforms.len() > self.capacity {
+            self.capacity = self.transforms.len().next_power_of_two().max(4096);
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("draw offsets"),
+                size: (self.capacity * std::mem::size_of::<DrawTransform>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        if let Some(buffer) = &self.buffer {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&self.transforms));
+        }
+    }
+
+    /// The uploaded table, bound at vertex slot 1.
+    pub fn buffer(&self) -> Option<&wgpu::Buffer> {
+        self.buffer.as_ref()
+    }
+}
+
+#[cfg(test)]
+#[path = "origin_gpu_tests.rs"]
+mod origin_gpu_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +167,18 @@ mod tests {
         let off = o.chunk_offset(chunk);
         assert_eq!(off, [3_008.0, -64.0, 768.0, 0.0]);
         assert_eq!(o.absolute_offset(), [-897_024.0, 0.0, 1_003_520.0, 0.0]);
+    }
+
+    #[test]
+    fn draw_offsets_dedupe_chunks_and_reserve_slot_zero() {
+        let mut d = DrawOffsets::default();
+        d.begin_frame(DrawTransform::IDENTITY);
+        let a = d.slot(IVec3::new(1, 0, 0), || DrawTransform::IDENTITY);
+        let b = d.slot(IVec3::new(-1, 0, 0), || DrawTransform::IDENTITY);
+        assert_eq!((a, b), (1, 2));
+        assert_eq!(d.slot(IVec3::new(1, 0, 0), || panic!("recomputed")), 1);
+        d.begin_frame(DrawTransform::IDENTITY);
+        assert_eq!(d.slot(IVec3::new(-1, 0, 0), || DrawTransform::IDENTITY), 1);
     }
 
     #[test]

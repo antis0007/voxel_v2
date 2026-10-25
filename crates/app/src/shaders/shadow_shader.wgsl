@@ -18,6 +18,10 @@ struct VsIn {
     @location(0) pos : vec3<f32>,
     @location(3) surface : vec4<f32>,
     @location(4) ao_strength : f32,
+    // Per-draw transform at vertex slot 1 (render/origin.rs DrawTransform).
+    @location(5) draw_offset : vec4<f32>,
+    // Reserved for bent chunks; no shader math reads it yet.
+    @location(6) draw_rotation : vec4<f32>,
 };
 struct ShadowVertex {
     @builtin(position) clip: vec4<f32>,
@@ -27,7 +31,7 @@ struct ShadowVertex {
 
 @vertex
 fn vs_main(in: VsIn) -> ShadowVertex {
-    var p = in.pos;
+    var p = in.pos + in.draw_offset.xyz;
     var out: ShadowVertex;
     out.parent = select(0u, 1u, in.ao_strength < 0.0);
     out.world_xz = p.xz * gen.world_scale;

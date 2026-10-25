@@ -20,6 +20,10 @@ struct VsIn {
     @location(2) normal      : vec3<f32>,
     @location(3) surface     : vec4<f32>,
     @location(4) ao_strength : f32,
+    // Per-draw transform at vertex slot 1 (render/origin.rs DrawTransform).
+    @location(5) draw_offset : vec4<f32>,
+    // Reserved for bent chunks; no shader math reads it yet.
+    @location(6) draw_rotation : vec4<f32>,
 };
 
 struct VsOut {
@@ -302,9 +306,11 @@ fn vs_main(in: VsIn) -> VsOut {
     let camera_relative = in.surface.z >= CAMERA_RELATIVE_FLAG;
     let surface_key = select(in.surface.z, in.surface.z - CAMERA_RELATIVE_FLAG, camera_relative);
     let geometry_kind=f32(u32(round(max(surface_key,0.0)))%64u);
-    var model_pos = in.pos;
+    // Every vertex-position read goes through the per-draw offset.
+    let pos = in.pos + in.draw_offset.xyz;
+    var model_pos = pos;
     if geometry_kind == 34.0 {
-        model_pos = tuft_wind_position(in.pos, in.surface.y, scale, light.torch_meta.y,
+        model_pos = tuft_wind_position(pos, in.surface.y, scale, light.torch_meta.y,
             light.weather_globals[0].zw * light.weather_globals[0].y);
     }
     // Embers carry surface.w = -4; flame sway must not move them.
@@ -316,7 +322,7 @@ fn vs_main(in: VsIn) -> VsOut {
         // seed moved each voxel as a cube.
         let lift = flame_lift(in.surface.w);
         let sway = lift * lift;
-        let phase = dot(in.pos, vec3<f32>(0.73, 1.17, 0.41));
+        let phase = dot(pos, vec3<f32>(0.73, 1.17, 0.41));
         let flame_time = light.torch_meta.y;
         let wave = sin(flame_time * 6.7 - lift * 2.6 + phase);
         let flutter = sin(flame_time * 10.9 - lift * 3.4 + phase * 1.7);
@@ -351,7 +357,7 @@ fn vs_main(in: VsIn) -> VsOut {
             * (0.02 * life);
         // Spawned near the tip, so the rise carries the ember out of the flame.
         let rise = vec3<f32>(0.0, 0.24 * life, 0.0);
-        model_pos = in.pos + (drift + rise) / scale + rest * (grow - 1.0);
+        model_pos = pos + (drift + rise) / scale + rest * (grow - 1.0);
     }
     out.water_optics = vec2<f32>(10.0, 1.0);
     // surface.w = 8 + k + sky/2, k = depth*4 + 256*pinned (see mesh/memory.rs).
@@ -461,7 +467,7 @@ fn vs_main(in: VsIn) -> VsOut {
     // Decode BEFORE interpolation, so gradients and biome averages are linear.
     out.base_color = terrain_srgb_to_linear(in.color);
     out.relative_pos = vertex_relative;
-    out.voxel_pos  = in.pos;
+    out.voxel_pos  = pos;
     out.normal     = terrain_safe_unit3(in.normal, vec3<f32>(0.0, 1.0, 0.0));
     out.surface    = in.surface;
     out.surface.z = geometry_kind;

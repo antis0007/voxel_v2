@@ -6,6 +6,7 @@ use crate::world::CHUNK_SIZE;
 #[cfg(test)]
 #[path = "shadow_contract.rs"]
 mod contract;
+use super::origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform};
 use super::{coverage::ResidentCoverage, horizon::GpuMesh};
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub fn enabled() -> bool {
@@ -87,6 +88,8 @@ pub struct ShadowRenderer {
     horizon_generation: u64,
     resident_coverage: ResidentCoverage,
     parent_draw_lists: [Vec<(usize, std::ops::Range<u32>)>; CASCADE_COUNT],
+    /// Draw-offset slot of each `draw_lists` entry, index for index.
+    draw_slots: [Vec<u32>; CASCADE_COUNT],
     /// One indirect buffer per cascade: writes to a shared one would all land
     /// before submit and every cascade would read the last list.
     indirect: [super::streaming::indirect_draws::IndirectDraws; CASCADE_COUNT],
@@ -183,15 +186,18 @@ impl ShadowRenderer {
                 module: shadow_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex3>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 52, shader_location: 4 },
-                    ],
-                }],
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex3>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 52, shader_location: 4 },
+                        ],
+                    },
+                    DrawTransform::LAYOUT,
+                ],
             },
             fragment: Some(wgpu::FragmentState {
                 module: shadow_shader,
@@ -273,6 +279,7 @@ impl ShadowRenderer {
             horizon_generation: u64::MAX,
             resident_coverage: ResidentCoverage::default(),
             parent_draw_lists: std::array::from_fn(|_| Vec::new()),
+            draw_slots: std::array::from_fn(|_| Vec::new()),
             indirect: std::array::from_fn(|_| Default::default()),
             multidraw: false,
         }
@@ -543,18 +550,48 @@ impl ShadowRenderer {
     pub fn renders_cascade(&self, i: usize) -> bool {
         self.frame_cascades & (1 << i) != 0
     }
-    /// Writes this frame's cascade lists as indirect arguments when multi-draw
-    /// is active. Call after `build_cascade_draw_lists`, before `render`.
-    pub fn prepare_indirect(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cache: &ChunkCache) {
+    /// Takes draw-offset slots for this frame's cascade lists.
+    ///
+    /// Also writes indirect arguments when multi-draw is active. Call after
+    /// `build_cascade_draw_lists` and before `offsets` is uploaded.
+    pub fn prepare_draws(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cache: &ChunkCache,
+        offsets: &mut DrawOffsets,
+        transform: impl Fn(glam::IVec3) -> DrawTransform,
+    ) {
         self.multidraw = super::streaming::indirect_draws::active();
-        if !self.multidraw {
-            return;
-        }
         for i in 0..CASCADE_COUNT {
-            if self.renders_cascade(i) {
-                self.indirect[i].prepare(device, queue, cache, self.draw_lists[i].iter().copied());
+            if !self.renders_cascade(i) {
+                continue;
+            }
+            self.draw_slots[i].clear();
+            self.draw_slots[i].extend(self.draw_lists[i].iter().map(|&c| offsets.slot(c, || transform(c))));
+            if self.multidraw {
+                let coords = self.draw_lists[i].iter().copied();
+                self.indirect[i].prepare(device, queue, cache, coords, |c| offsets.slot(c, || transform(c)));
             }
         }
+    }
+
+    /// Cascade 0's pipeline and bind group, its uniform set to `light_view_proj`.
+    #[cfg(test)]
+    pub(in crate::render) fn test_cascade(
+        &self,
+        queue: &wgpu::Queue,
+        light_view_proj: Mat4,
+    ) -> (&wgpu::RenderPipeline, &wgpu::BindGroup) {
+        let uniform = ShadowGenUniform {
+            light_view_proj: light_view_proj.to_cols_array_2d(),
+            world_scale: 1.0,
+            time: 0.0,
+            wind: [0.0; 2],
+            resident_coverage: ResidentCoverage::default(),
+        };
+        queue.write_buffer(&self.gen_buffers[0], 0, bytemuck::bytes_of(&uniform));
+        (&self.pipeline, &self.gen_bind_groups[0])
     }
 
     pub fn build_cascade_draw_lists(&mut self, cache: &ChunkCache, horizon: Option<&GpuMesh>) {
@@ -629,6 +666,7 @@ impl ShadowRenderer {
         horizon: Option<&'a GpuMesh>,
         timestamp_query_set: Option<&'a wgpu::QuerySet>,
         timestamp_queries: &[Option<(u32, u32)>; CASCADE_COUNT],
+        draw_offsets: &wgpu::Buffer,
     ) {
         for i in 0..CASCADE_COUNT {
             if !self.renders_cascade(i) {
@@ -656,18 +694,20 @@ impl ShadowRenderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.gen_bind_groups[i], &[]);
+            pass.set_vertex_buffer(1, draw_offsets.slice(..));
             let mut bound_page = None;
             if self.multidraw {
                 self.indirect[i].draw(&mut pass, cache);
             }
-            for coord in self.draw_lists[i].iter().filter(|_| !self.multidraw) {
+            let direct = self.draw_lists[i].iter().zip(&self.draw_slots[i]).filter(|_| !self.multidraw);
+            for (coord, &slot) in direct {
                 if let Some(slice) = cache.draw_slice(*coord) {
                     if bound_page != Some(slice.page) {
                         pass.set_vertex_buffer(0, slice.vertices.slice(..));
                         pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
                         bound_page = Some(slice.page);
                     }
-                    pass.draw_indexed(slice.index_range, slice.base_vertex, 0..1);
+                    pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
                 }
             }
             if let Some(horizon) = horizon {
@@ -675,7 +715,7 @@ impl ShadowRenderer {
                     let page = &horizon.pages[*page_index];
                     pass.set_vertex_buffer(0, page.vertices.slice(..));
                     pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(indices.clone(), 0, 0..1);
+                    pass.draw_indexed(indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                 }
             }
         }

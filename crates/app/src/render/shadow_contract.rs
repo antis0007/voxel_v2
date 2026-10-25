@@ -42,6 +42,13 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
         0,
         bytemuck::cast_slice(&[0u32, 1, 2, 0, 2, 3]),
     );
+    let draw_offsets = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("contract draw offset"),
+        size: std::mem::size_of::<DrawTransform>() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&draw_offsets, 0, bytemuck::bytes_of(&DrawTransform::IDENTITY));
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("contract depth"),
         size: wgpu::Extent3d {
@@ -122,6 +129,7 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
             pass.set_pipeline(&renderer.pipeline);
             pass.set_bind_group(0, &renderer.gen_bind_groups[0], &[]);
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            pass.set_vertex_buffer(1, draw_offsets.slice(..));
             pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..6, 0, 0..1);
         }

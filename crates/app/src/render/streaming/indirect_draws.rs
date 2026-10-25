@@ -16,10 +16,15 @@ pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Recorded once at device creation from the adapter's downlevel flags.
-pub fn set_supported(adapter: &wgpu::Adapter) {
+/// Recorded once at device creation from the adapter and device capabilities.
+///
+/// Each draw selects its draw-offset slot through `first_instance`, so without
+/// `INDIRECT_FIRST_INSTANCE` every draw goes through the direct path instead.
+pub fn set_supported(adapter: &wgpu::Adapter, device_features: wgpu::Features) {
     let flags = adapter.get_downlevel_capabilities().flags;
-    SUPPORTED.store(flags.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION), Ordering::Relaxed);
+    let supported = flags.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION)
+        && device_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+    SUPPORTED.store(supported, Ordering::Relaxed);
 }
 
 pub fn active() -> bool {
@@ -50,12 +55,14 @@ pub(in crate::render) struct IndirectDraws {
 impl IndirectDraws {
     /// Writes arguments for the meshes at `coords` (in order, skipping ones with
     /// no geometry) and records the per-page runs. Returns (draws, indices).
+    /// `slot_of` gives each mesh's draw-offset slot, written to `first_instance`.
     pub(in crate::render) fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cache: &ChunkCache,
         coords: impl Iterator<Item = IVec3>,
+        mut slot_of: impl FnMut(IVec3) -> u32,
     ) -> (usize, usize) {
         let mut pages = Vec::new();
         let mut indices = 0usize;
@@ -67,7 +74,7 @@ impl IndirectDraws {
                 instance_count: 1,
                 first_index: slice.index_range.start,
                 base_vertex: slice.base_vertex,
-                first_instance: 0,
+                first_instance: slot_of(coord),
             };
             indices += args.index_count as usize;
             bytes.extend_from_slice(args.as_bytes());
