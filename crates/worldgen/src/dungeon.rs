@@ -1883,11 +1883,24 @@ pub fn cosmos_review_view(cfg: &WorldSampleConfig, around: Vec3) -> Option<(Vec3
 /// showcase injected into the world. Used to compare physical voxel scales.
 pub fn inhabited_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec3, Vec3)> {
     if cfg.generator_version < 46 || cfg.world_type == WorldType::Superflat { return None; }
-    let accepts = |kind| match name {
-        "library" => matches!(kind, v2::Kind::Library | v2::Kind::Scriptorium),
-        "infirmary" => kind == v2::Kind::Infirmary,
-        "refectory" => kind == v2::Kind::Refectory,
-        "armory" => kind == v2::Kind::Armory,
+    use v2::{Damage as D, Kind as K};
+    let accepts = |r: &v2::Room| match name {
+        "library" => matches!(r.kind, K::Library | K::Scriptorium),
+        "infirmary" => r.kind == K::Infirmary,
+        "refectory" => r.kind == K::Refectory,
+        "armory" => r.kind == K::Armory,
+        "crypt" => r.kind == K::Crypt,
+        "ossuary" => r.kind == K::Ossuary,
+        "shrine" => r.kind == K::Shrine,
+        "cistern" => matches!(r.kind, K::Cistern | K::Sluice),
+        "garden" => r.kind == K::Garden,
+        "barracks" => r.kind == K::Barracks,
+        "store" => r.kind == K::Store,
+        "cells" => r.kind == K::Cells,
+        "overgrown" => r.damage == D::Overgrown && !r.kind.is_puzzle(),
+        "collapsed" => r.damage == D::Collapsed && !r.kind.is_puzzle(),
+        "fallen" => r.damage == D::Collapsed && !r.sealed
+            && !matches!(r.kind, K::Library | K::Scriptorium | K::Refectory | K::Infirmary | K::Armory | K::Pitfall | K::Labyrinth),
         _ => false,
     };
     let (ix, iz) = (cell_index(300.0), cell_index(0.0));
@@ -1896,8 +1909,14 @@ pub fn inhabited_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec
             for x in ix - ring..=ix + ring {
                 if (x - ix).abs().max((z - iz).abs()) != ring { continue; }
                 let Some(c) = complex_at(cfg, x, z) else { continue; };
-                let Some(r) = c.rooms.iter().find(|r| accepts(r.kind)) else { continue; };
+                let Some(r) = c.rooms.iter().find(|r| accepts(r)) else { continue; };
                 let (cx, cz) = r.centre();
+                if name == "fallen" {
+                    // From the far end of the room up into its broken vault.
+                    let (qx, qz) = v2::fall_centre(r);
+                    let ex = if qx < r.w() * 0.5 { r.x1 - 1.5 } else { r.x0 + 1.5 };
+                    return Some((Vec3::new(ex, r.floor + 1.7, cz), Vec3::new(r.x0 + qx, r.floor + r.h, r.z0 + qz)));
+                }
                 // The central cross is always free of furniture and remains
                 // comparable across 1 m, 0.5 m and 0.25 m generated voxels.
                 let eye = Vec3::new(cx, r.floor + 1.7, cz);

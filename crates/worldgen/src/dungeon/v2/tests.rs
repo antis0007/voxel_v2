@@ -360,3 +360,9 @@ mod rooms;
 
 #[path = "tests_pin.rs"]
 mod pin;
+
+#[path = "tests_ruin.rs"]
+mod ruin_layer;
+
+#[path = "tests_view.rs"]
+mod view;

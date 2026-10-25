@@ -96,8 +96,7 @@ fn damage(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32, dwall: f32) 
         Damage::Collapsed if (rx - w * 0.5).abs() < 1.2 || (rz - d * 0.5).abs() < 1.2 => None,
         Damage::Collapsed => {
             // A rubble cone under a hashed ceiling breach, off the centre lane.
-            let qx = if h(r, 21) < 0.5 { w * 0.27 } else { w * 0.73 };
-            let qz = if h(r, 22) < 0.5 { d * 0.27 } else { d * 0.73 };
+            let (qx, qz) = super::collapse::centre(r);
             let reach = w.min(d) * 0.22 * (1.0 - fy / (r.h * 0.9)).max(0.0);
             let wobble = value_noise3(rx * 0.7, fy * 0.7, rz * 0.7, r.salt) * 1.2;
             ((rx - qx).hypot(rz - qz) + wobble < reach)
@@ -111,6 +110,9 @@ fn damage(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32, dwall: f32) 
                 return Some(if hash3(i, 1, k, r.salt) > 0.5 { B::GlowCap } else { B::RedCap });
             }
             // Roots hanging from the ceiling on a loose grid.
+            if c.version >= super::ruin::VERSION && v <= 0.5 {
+                return super::ruin::root(r, rx, rz, fy, v);
+            }
             let (gx, gz) = ((rx / 3.0).floor() as i32, (rz / 3.0).floor() as i32);
             let root = hash2(gx, gz, r.salt.wrapping_add(3));
             let (ox, oz) = (gx as f32 * 3.0 + 1.5, gz as f32 * 3.0 + 1.5);
