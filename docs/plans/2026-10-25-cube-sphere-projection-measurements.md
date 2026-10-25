@@ -4,6 +4,8 @@ Date: 2026-10-25. Branch `space-phase1`. Code: `crates/core/src/cube_sphere/dist
 
 Input to W01's SDD, which picks the face-to-sphere projection. ADR 0024 is unchanged.
 
+Three candidates are measured: Gnomonic, Tangent and Spherified. The COBE quadrilateralized spherical cube, the fourth candidate in the space port design (`docs/plans/2026-10-24-soa-space-port-design.md`, section 4.3), was not measured.
+
 ## Result
 
 Distortion is `distortion::measure(p, 513)`: 513 x 513 cell centres over one face (the six faces are rotations of each other; `every_face_measures_the_same` checks it to 1e-9). Cost is the best of 7 passes (5 `just bench cube_sphere` runs and the 2 median-of-3 passes inside `just verify`), divided by the 1,024 calls in one iteration.
@@ -26,9 +28,19 @@ Reading the table:
 
 ADR 0024 states "area ratio about 1.6 with a plain gnomonic map". The measurement does not show that. The gnomonic area ratio is 3 sqrt(3) = 5.196 analytically and 5.176 measured. The gnomonic length ratio is 2.118 (analytically 3 / sqrt(2) = 2.121), so the length ratio is not 1.6 either. None of the three measured quantities gives 1.6 for gnomonic. The smaller figures belong to the other maps: 1.412 (Tangent area and length) and 1.327 (Spherified area).
 
+## Determinism
+
+Tangent's `to_sphere` calls `f64::tan` and its `from_sphere` calls `f64::atan`. Both come from the platform libm and are not correctly rounded, so results can differ in the last bits between the MSVC CRT and glibc. Gnomonic and Spherified `to_sphere` use only `+ * / sqrt`, which IEEE 754 rounds exactly, so they are bit-reproducible across platforms. Spherified `from_sphere` is not covered by that claim: its Newton loop stops on a `hypot` test, which is libm too.
+
+Worldgen calls `to_sphere` once per column and determinism is a project invariant. W01 must either accept the libm difference for Tangent or ship its own `tan`.
+
 ## Recommendation for W01's SDD
 
-Use Tangent: its area ratio of 1.412 is 6% above Spherified's 1.327, its edge-length ratio of 1.412 is better than Spherified's 1.727, and its inverse is closed-form at 12 ns per call against 132 ns for Spherified's Newton solve; Gnomonic is out at an area ratio of 5.2. If the SDD needs an exactly equal-area map, none of the three qualifies.
+Use Tangent if W01 accepts the libm difference above or ships its own `tan`. Its area ratio of 1.412 is 6% above Spherified's 1.327, its edge-length ratio of 1.412 is better than Spherified's 1.727, and its inverse is closed-form at 12 ns per call against 132 ns for Spherified's Newton solve. Gnomonic is out at an area ratio of 5.2.
+
+If bit-reproducibility wins, use Spherified: it has the best area ratio, a cheaper forward map (7.8 ns per column against 8.9), and an expensive inverse that runs per query rather than per column.
+
+If the SDD needs an exactly equal-area map, none of the three measured maps qualifies, and the COBE quadrilateralized spherical cube was not measured.
 
 ## Commands
 

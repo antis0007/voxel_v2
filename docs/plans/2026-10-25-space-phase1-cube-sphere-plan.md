@@ -298,3 +298,12 @@ fn spherified_is_better_than_gnomonic() {
 - [ ] **Step 5: Bench.** `crates/core/benches/cube_sphere.rs`: per projection, time `to_sphere` for a 32 x 32 column grid (one chunk's columns) and `from_sphere` for 1024 directions. Run `just bench cube_sphere`; do not run `just bench-save`.
 - [ ] **Step 6: Measurement record.** Write `docs/plans/2026-10-25-cube-sphere-projection-measurements.md`: one table with the three projections × (`area_ratio`, `max_angle_deviation_deg`, `max_edge_length_ratio`, `to_sphere` ns per column, `from_sphere` ns per call), the exact commands, the machine (CPU name), and one recommendation line for W01's SDD. State that ADR 0024's "area ratio about 1.6 with a plain gnomonic map" is not what the measurement shows (3√3 ≈ 5.2 for area; give the measured length ratio too, which may be the quantity 0024 meant). Do not edit ADR 0024.
 - [ ] **Step 7: `just verify`, then commit** `core: cube-sphere distortion measurement and projection record` (code, bench, record).
+
+## Implementation notes
+
+Where the code differs from the plan and the space port design (section 4.3):
+
+- Edge tables are derived per call at runtime, only on edge crossings (`step_on` in `edges.rs`). Section 4.3 asked for `const fn` tables. Steps inside a face do no derivation.
+- The Spherified inverse is Gauss-Newton on the 3-equation residual `dir - spherify(c)` in the two unknowns `(s, t)`, solved through the 2 x 2 normal equations.
+- `QuarterTurns` keeps its count in a private field, always in `0..=3`. Build it with `new` (reduces modulo 4), read it with `get`, undo it with `inverse`; `IDENTITY` is the zero turn.
+- `FaceGrid::new` rejects a half extent above `MAX_HALF` (`i32::MAX / 2`), so the doubled coordinates in `step_on` fit in `i32`.
