@@ -2,6 +2,7 @@
 use super::{BodyId, Spin, System};
 use crate::data::{OrbitDef, RotationPeriod, SystemDef};
 use crate::kepler::{Elements, G};
+use crate::spin::lock_phase;
 use crate::validate::{SystemError, validate};
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -84,18 +85,27 @@ impl System {
                 system.set_binary_rails(a, b, &binary.orbit, &rails);
             }
         }
-        for (i, body) in bodies.iter().enumerate() {
-            let spin = body.rotation.as_ref().map(|r| Spin {
-                tilt: r.tilt_deg.to_radians(),
-                north: r.north_deg.to_radians(),
-                period_ticks: match r.period {
-                    RotationPeriod::Seconds(s) => rails.ticks(s),
-                    RotationPeriod::Locked => system.period_ticks[i],
-                },
-                locked: r.period == RotationPeriod::Locked,
-            });
-            system.spin.push(spin);
-        }
+        let spins = bodies.iter().enumerate().map(|(i, body)| {
+            body.rotation.as_ref().map(|r| {
+                let locked = r.period == RotationPeriod::Locked;
+                let mut spin = Spin {
+                    tilt: r.tilt_deg.to_radians(),
+                    north: r.north_deg.to_radians(),
+                    period_ticks: match r.period {
+                        RotationPeriod::Seconds(s) => rails.ticks(s),
+                        RotationPeriod::Locked => system.period_ticks[i].max(1),
+                    },
+                    locked,
+                    phase0: 0.0,
+                };
+                if locked {
+                    let (relative, _) = system.relative_state(BodyId(i as u16), 0);
+                    spin.phase0 = lock_phase(&spin, relative);
+                }
+                spin
+            })
+        });
+        system.spin = spins.collect();
         Ok(system)
     }
 

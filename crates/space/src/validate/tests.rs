@@ -157,7 +157,7 @@ fn binary_definitions_are_checked() {
 }
 
 #[test]
-fn locked_spin_needs_the_bodys_own_orbit() {
+fn locked_spin_needs_an_orbit_or_a_binary_partner() {
     let locked = RotationDef {
         period: RotationPeriod::Locked,
         tilt_deg: 0.0,
@@ -170,8 +170,24 @@ fn locked_spin_needs_the_bodys_own_orbit() {
     assert!(is_bad_orbit(validate(&s), "s"));
 
     let mut b = binary();
-    b.bodies[1].rotation = Some(locked);
-    assert!(is_bad_orbit(validate(&b), "a"));
+    b.bodies[0].rotation = Some(locked);
+    assert!(is_bad_orbit(validate(&b), "pair"));
+}
+
+#[test]
+fn binary_components_may_lock_to_their_partner() {
+    let locked = RotationDef {
+        period: RotationPeriod::Locked,
+        tilt_deg: 0.0,
+        north_deg: 0.0,
+    };
+    let mut b = binary();
+    b.bodies[1].rotation = Some(locked.clone());
+    b.bodies[2].rotation = Some(locked.clone());
+    validate(&b).unwrap();
+    let mut nested = binary_around_star();
+    nested.bodies[0].rotation = Some(locked);
+    validate(&nested).unwrap();
 }
 
 #[test]

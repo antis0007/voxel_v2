@@ -3,6 +3,8 @@ mod data;
 #[cfg(test)]
 mod fixtures;
 mod kepler;
+mod path;
+mod spin;
 mod system;
 mod validate;
 
@@ -11,5 +13,6 @@ pub use data::{
     parse,
 };
 pub use kepler::{Elements, G, solve_kepler};
+pub use path::orbit_path;
 pub use system::{BodyId, Snapshot, Spin, System};
 pub use validate::{SystemError, validate};

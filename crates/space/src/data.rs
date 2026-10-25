@@ -68,15 +68,22 @@ pub struct BinaryDef {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RotationPeriod {
     Seconds(f64),
-    /// Spin period equals the body's own orbital period.
+    /// Spin period equals the body's own orbital period, or its binary's for
+    /// a component, with +X facing the parent at tick 0. Exact only for a
+    /// circular orbit whose normal is the spin axis; otherwise it librates.
     Locked,
 }
 
+/// Spin axis and period. The body turns positively about its axis, so a
+/// retrograde spin is a tilt past 90 degrees.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RotationDef {
     pub period: RotationPeriod,
+    /// Angle of the spin axis from system +Y, degrees.
     pub tilt_deg: f64,
-    /// Direction the spin axis leans: degrees in the XZ plane from +X toward -Z.
+    /// Azimuth the axis tilts toward: degrees in the XZ plane from +X toward
+    /// -Z, a positive turn about +Y. Matching an orbit's normal takes
+    /// `tilt = i` and `north = node - 90`.
     pub north_deg: f64,
 }
 

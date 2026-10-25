@@ -20,10 +20,13 @@ pub struct Spin {
     pub tilt: f64,
     /// Direction the axis leans, radians in the XZ plane from +X toward -Z.
     pub north: f64,
-    /// Ticks per turn; a locked body uses its orbit's period in ticks.
+    /// Ticks per turn, at least 1. A locked body uses its orbit's period in
+    /// ticks, or its binary's for a component.
     pub period_ticks: u64,
     /// Spin period follows the body's own orbit.
     pub locked: bool,
+    /// Spin angle at tick 0, radians; turns a locked body's +X to its parent.
+    pub phase0: f64,
 }
 
 /// One star system on rails, stored as columns in parent-first order.
@@ -101,6 +104,11 @@ impl System {
     /// Spin data, if the body rotates.
     pub fn spin(&self, b: BodyId) -> Option<Spin> {
         self.spin[b.0 as usize]
+    }
+
+    /// Parent-relative orbit; `None` for the root.
+    pub(crate) fn elements(&self, b: BodyId) -> Option<&Elements> {
+        self.elements[b.0 as usize].as_ref()
     }
 
     /// Gravity at the surface in m/s², 0 for a body without radius.

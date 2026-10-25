@@ -143,12 +143,26 @@ impl Elements {
         let (sin_e, cos_e) = ea.sin_cos();
         let minor = (1.0 - self.e * self.e).sqrt();
         let rate = self.a * self.mean_motion() / (1.0 - self.e * cos_e);
-        // In-plane (x toward periapsis, y a quarter turn ahead) is laid out as
-        // (x, 0, -y) so that motion turns the same way as a positive turn about +Y.
-        let position = DVec3::new(self.a * (cos_e - self.e), 0.0, -self.a * minor * sin_e);
         let velocity = DVec3::new(-rate * sin_e, 0.0, -rate * minor * cos_e);
         let rotation = self.plane_rotation();
-        (rotation * position, rotation * velocity)
+        (
+            rotation * self.flat_position(sin_e, cos_e),
+            rotation * velocity,
+        )
+    }
+
+    /// Parent-relative position (m) at eccentric anomaly `ea`, system frame.
+    pub(crate) fn position_at_eccentric(&self, ea: f64) -> DVec3 {
+        let (sin_e, cos_e) = ea.sin_cos();
+        self.plane_rotation() * self.flat_position(sin_e, cos_e)
+    }
+
+    /// Position in the flat frame from the eccentric anomaly's sine and cosine.
+    fn flat_position(&self, sin_e: f64, cos_e: f64) -> DVec3 {
+        let minor = (1.0 - self.e * self.e).sqrt();
+        // In-plane (x toward periapsis, y a quarter turn ahead) is laid out as
+        // (x, 0, -y) so that motion turns the same way as a positive turn about +Y.
+        DVec3::new(self.a * (cos_e - self.e), 0.0, -self.a * minor * sin_e)
     }
 }
 

@@ -140,7 +140,7 @@ fn check_body(def: &SystemDef, index: &Index<'_>, body: &BodyDef) -> Result<(), 
         (Some(_), false, _) => return Err(bad(id, "root body cannot have an orbit")),
         (None, true, None) => return Err(bad(id, "body needs an orbit around its parent")),
     }
-    check_rotation(body)
+    check_rotation(body, component_of.is_some())
 }
 
 fn is_component(def: &SystemDef, index: &Index<'_>, body: &BodyDef) -> bool {
@@ -187,7 +187,8 @@ fn check_orbit(orbit: &OrbitDef, who: &str) -> Result<(), SystemError> {
     Ok(())
 }
 
-fn check_rotation(body: &BodyDef) -> Result<(), SystemError> {
+/// A binary component locks to its partner on the binary's shared period.
+fn check_rotation(body: &BodyDef, component: bool) -> Result<(), SystemError> {
     let Some(rotation) = &body.rotation else {
         return Ok(());
     };
@@ -199,9 +200,10 @@ fn check_rotation(body: &BodyDef) -> Result<(), SystemError> {
         RotationPeriod::Seconds(s) => {
             positive(s, id, "rotation period must be finite and positive")
         }
-        RotationPeriod::Locked if body.orbit.is_none() => {
-            Err(bad(id, "locked rotation needs the body's own orbit"))
-        }
+        RotationPeriod::Locked if body.orbit.is_none() && !component => Err(bad(
+            id,
+            "locked rotation needs an orbit or a binary partner",
+        )),
         RotationPeriod::Locked => Ok(()),
     }
 }
