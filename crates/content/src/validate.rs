@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(B::Lava.sim().flow, 21, "lava is 12x as viscous: 255 / 12");
         // 373.15 K is 3731.5 tenths, exactly half a step; round() goes away from zero.
         assert_eq!(B::Water.sim().boil, 3732);
-        assert_eq!(B::Ice.sim().melt, 3082, "308.15 K");
+        assert_eq!(B::Ice.sim().melt, 2732, "273.15 K is half a step too");
         assert_eq!(B::Water.sim().boils_into, MaterialId::from(B::Steam));
         assert_eq!(B::Log.sim().burns_into, MaterialId::from(B::Ash));
         assert_eq!(B::Stone.sim().melts_into, MaterialId::NONE);

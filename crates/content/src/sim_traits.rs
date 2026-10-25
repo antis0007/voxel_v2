@@ -3,9 +3,10 @@
 //! Rows are authored in real units (kelvin, W/(m·K), J/(kg·K), S/m) and packed
 //! into the integer `SimMaterial` row at load. Packing uses only IEEE basic
 //! operations (multiply, divide, compare, round), so the table is identical on
-//! every machine. The values are tuned to match `simulation/thermal.rs` (ice
-//! melts at 35 °C because the ambient is 20 °C); the science profile
-//! (docs/PLAN2.md Phase D) replaces them with measured constants.
+//! every machine. Phase points are physical (ice melts at 0 °C): the window
+//! game's thermal pass relaxes toward a local climate ambient and holds a
+//! latent store at the point. The science profile (docs/PLAN2.md Phase D)
+//! replaces the remaining game-tuned constants with measured ones.
 use super::{ALL_BLOCK_IDS, BlockId, MATERIAL_TABLE, MaterialDef, MatterState};
 use engine_core::material::{MaterialId, MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::reaction::SimRules;

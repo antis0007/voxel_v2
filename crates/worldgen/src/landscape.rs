@@ -92,14 +92,8 @@ fn climate(x: f32, z: f32, seed: u32) -> (f32, f32) {
     (temp, rain)
 }
 
-/// Cheap far-field ecology, using the same climate as editable terrain.
-/// No erosion tiles are allocated to place visual vegetation.
-pub fn visual_ecology(
-    cfg: &WorldSampleConfig,
-    x: f32,
-    z: f32,
-    height: f32,
-) -> (f32, f32, f32) {
+/// Heat and wetness (0..1) below the 30 m lapse start.
+pub fn lowland_climate(cfg: &WorldSampleConfig, x: f32, z: f32) -> (f32, f32) {
     let (mut heat, mut wet) = climate(x, z, cfg.seed);
     if cfg.generator_version >= 5 {
         heat = ((heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0);
@@ -111,14 +105,25 @@ pub fn visual_ecology(
     if cfg.generator_version >= 33 {
         (heat, wet) = super::terrain_variety::regional_climate(x, z, cfg.seed, heat, wet);
     }
-    heat = (heat
-        - (height - 30.0).max(0.0)
-            * if cfg.generator_version >= 7 {
-                0.0018
-            } else {
-                0.0035
-            })
-    .clamp(0.0, 1.0);
+    (heat, wet)
+}
+
+/// `lowland_climate` heat at `height` metres.
+pub fn lapse_heat(cfg: &WorldSampleConfig, heat: f32, height: f32) -> f32 {
+    let per_metre = if cfg.generator_version >= 7 { 0.0018 } else { 0.0035 };
+    (heat - (height - 30.0).max(0.0) * per_metre).clamp(0.0, 1.0)
+}
+
+/// Cheap far-field ecology, using the same climate as editable terrain.
+/// No erosion tiles are allocated to place visual vegetation.
+pub fn visual_ecology(
+    cfg: &WorldSampleConfig,
+    x: f32,
+    z: f32,
+    height: f32,
+) -> (f32, f32, f32) {
+    let (heat, wet) = lowland_climate(cfg, x, z);
+    let heat = lapse_heat(cfg, heat, height);
     let grove = value_noise2(x / 270.0, z / 270.0, cfg.seed.wrapping_add(3127)) * 0.72
         + value_noise2(x / 87.0, z / 87.0, cfg.seed.wrapping_add(3157)) * 0.28;
     (heat, wet, grove)

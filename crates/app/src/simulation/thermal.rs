@@ -1,6 +1,7 @@
 //! Sparse heat exchange, finite fuel, and conservative gas transport.
 use super::{
     cellular::{admission, changed},
+    heat,
     residency::Residency,
     sandbox::ThermalCell,
 };
@@ -18,15 +19,6 @@ const DIRS: [IVec3; 6] = [
 pub(super) fn active(b: B) -> bool {
     matches!(b, B::Fire | B::Smoke | B::Steam | B::Lava)
 }
-fn fuel(b: B) -> f32 {
-    match b {
-        B::Log => 160.0,
-        B::Planks => 100.0,
-        B::Leaves | B::PineLeaves | B::Bush => 30.0,
-        B::MushroomStem => 60.0,
-        _ => 0.0,
-    }
-}
 pub(super) fn step(
     s: &mut Residency,
     w: &mut World,
@@ -35,7 +27,7 @@ pub(super) fn step(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> usize {
-    let Some((b, _)) = s.read(w, p) else { return 0 };
+    let Some((b, volume)) = s.read(w, p) else { return 0 };
     if b == B::Fire {
         w.sandbox.note_fire(p);
     }
@@ -80,7 +72,7 @@ pub(super) fn step(
     for (slot, &q) in neighbours.iter_mut().zip(&positions[1..]) {
         *slot = s.read(w, q).unwrap_or((B::Air, 0));
     }
-    let mut c = w.sandbox.cell(p);
+    let mut c = w.sandbox.cell_for(p, b);
     if b == B::Steam && c.gas == 0 {
         c.gas = 8;
         c.temperature = 120.0;
@@ -93,34 +85,41 @@ pub(super) fn step(
         c.temperature = 700.0;
     }
     w.sandbox.set(p, c);
-    // Equal heat capacity lattice: each pair exchanges equal/opposite energy.
-    // One sixth of the difference prevents overshoot even with six neighbours.
-    for &q in &positions[1..] {
+    // Each face moves equal and opposite energy; capacities turn it into
+    // temperature, so water warms slowly and copper passes heat on quickly.
+    let own = heat::of(b);
+    for (&q, &(nb, _)) in positions[1..].iter().zip(&neighbours) {
         if !w.sandbox.can_admit(&[q]) {
             continue;
         }
-        let mut n = w.sandbox.cell(q);
-        let transfer = (c.temperature - n.temperature) * 0.04;
-        if transfer.abs() > 0.01 {
-            c.temperature -= transfer;
-            n.temperature += transfer;
+        let other = heat::of(nb);
+        let mut n = w.sandbox.cell_for(q, nb);
+        let flow = (c.temperature - n.temperature) * heat::conductance(own, other);
+        if flow.abs() > 0.01 {
+            c.temperature -= flow / own.capacity;
+            n.temperature += flow / other.capacity;
             w.sandbox.set(q, n);
             w.activity.wake(q);
         }
     }
-    // The atmosphere is an open ambient heat reservoir, with slow cooling.
-    c.temperature += (20.0 - c.temperature)
-        * if matches!(b, B::Air | B::Steam | B::Smoke) {
-            0.025
-        } else {
-            0.002
-        };
+    // Open air is the reservoir at the local climate ambient. Ice under water
+    // or ground has no air contact and changes only by conduction, so a lake
+    // freezes from its surface down.
+    let exposed = neighbours[..position_count - 1].iter().any(|(nb, _)| heat::of(*nb).gas);
+    let rate = if matches!(b, B::Air | B::Steam | B::Smoke) {
+        0.025
+    } else if b == B::Ice && !exposed {
+        0.0
+    } else {
+        0.002 / own.capacity
+    };
+    c.temperature += (w.sandbox.climate.ambient_for(p, b) - c.temperature) * rate;
     w.sandbox.set(p, c);
     let mut count = 0;
     let mut replace = None;
     let mut steam_at = None;
-    if fuel(b) > 0.0 && c.temperature >= 260.0 {
-        c.fuel = fuel(b);
+    if own.fuel > 0.0 && own.ignite_c.is_some_and(|t| c.temperature >= t) {
+        c.fuel = own.fuel;
         replace = Some(B::Fire);
     }
     if b == B::Fire {
@@ -188,21 +187,31 @@ pub(super) fn step(
             }
         }
     }
-    if b == B::Ice && c.temperature >= 35.0 {
+    if b == B::Ice
+        && let Some(point) = own.melt_c
+        && heat::latent(&mut c, point, true, own.fusion_k)
+    {
         replace = Some(B::Water);
         c.gas = if crate::world::environment::State::enabled(w.generator_version) && c.gas > 0 { c.gas } else { 8 };
-        c.temperature = 12.0;
     }
-    if b == B::Water && c.temperature >= 100.0 {
+    if b == B::Water && own.boil_c.is_some_and(|t| c.temperature >= t) {
         replace = Some(B::Steam);
-        c.gas = s.read(w, p).unwrap().1;
-        c.temperature = 100.0;
+        c.gas = volume;
+        c.fuel = 0.0;
+        c.temperature = own.boil_c.unwrap_or(c.temperature);
+    } else if b == B::Water
+        && volume >= 8
+        && let Some(point) = own.cool_c
+        && heat::latent(&mut c, point, false, own.fusion_k)
+    {
+        // Only a full cell freezes: World::set refuses ice from a partial one.
+        replace = Some(B::Ice);
     }
     if b == B::Steam {
         if c.gas == 0 {
             c.gas = 8;
         }
-        if c.temperature < 75.0 {
+        if own.cool_c.is_some_and(|t| c.temperature < t) {
             replace = Some(B::Water);
         }
     }
@@ -252,7 +261,8 @@ pub(super) fn step(
         // Vent only at the explicit open upper world boundary.
         if p.y + 1 >= w.sample_config().max_world_y() && s.prepare(w, &[p]) {
             w.set(p, B::Air);
-            w.sandbox.set(p, ThermalCell::default());
+            let air = w.sandbox.ambient_cell(p, B::Air);
+            w.sandbox.set(p, air);
             changed(p, blocks, chunks);
             return count + 1;
         }
@@ -308,7 +318,7 @@ pub(super) fn step(
             w.sandbox.set(q, n);
             if c.gas == 0 {
                 w.set(p, B::Air);
-                c = ThermalCell::default();
+                c = w.sandbox.ambient_cell(p, B::Air);
             }
             w.sandbox.set(p, c);
             if exact {
@@ -322,7 +332,14 @@ pub(super) fn step(
             break;
         }
     }
-    if active(b) || (c.temperature - 20.0).abs() >= 0.25 {
+    let now = s.read(w, p).map_or(b, |(id, _)| id);
+    if w.sandbox.settled(p, now, c) {
+        // Water at its floor is settled though the air ambient is colder.
+        w.sandbox.cells.remove(&super::sandbox::key(p));
+    } else {
+        w.activity.wake(p);
+    }
+    if active(now) {
         w.activity.wake(p);
     }
     count

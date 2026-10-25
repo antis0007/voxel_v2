@@ -27,8 +27,8 @@ fn in_block(subject: Cell, neighbour: Option<Cell>) -> [Cell; 8] {
 #[test]
 fn ice_melts_water_boils_and_steam_condenses_at_the_tabled_points() {
     for (b, kelvin, becomes) in [
-        (B::Ice, 310.0, B::Water),
-        (B::Ice, 300.0, B::Ice),
+        (B::Ice, 280.0, B::Water),
+        (B::Ice, 270.0, B::Ice),
         (B::Water, 374.0, B::Steam),
         (B::Water, 300.0, B::Water),
         (B::Water, 273.0, B::Ice),

@@ -98,7 +98,7 @@ contracted capability; adapters also wait for their named prerequisites.
 | C05 | powder | A | M1.5 | C04 | L: property-driven movement; momentum pending |
 | C06 | liquid | A | M1 | C04 | L: 64-level CA, legacy fractional water; pressure pending |
 | C07 | gas | A | M1.5 | C04 | L: movement/reactions; mixture/oxygen pending |
-| C08 | thermal | A | M1.5 | C04 | L: temperature diffusion; exact ledger/latent heat pending |
+| C08 | thermal | A | M1.5 | C04 | L: climate ambient, table-driven conduction, latent fusion (window game); exact ledger and `engine_sim` ambient pending |
 | C09 | reactions/fire | A | M1.5 | C08 | L: reactions.ron; oxygen and complete pair policy pending |
 | C10 | support/collapse | A | M1.5 | C04 | P: authoritative support relaxation and collapse events |
 | C11 | light | B | M1.5 | C03,C14 | L: voxel/render light; gameplay planes pending |

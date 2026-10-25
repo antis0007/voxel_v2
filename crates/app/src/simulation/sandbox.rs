@@ -47,17 +47,31 @@ pub struct Sandbox {
     /// Bounded burning-cell index used only to feed local lights. Entries are
     /// validated against the world before use and are never serialized.
     pub fire_lights: HashSet<IVec3>,
+    /// Runtime ambient; synced from the world and day clock every fixed step.
+    pub climate: super::climate::Climate,
 }
 pub fn key(p: IVec3) -> (i32, i32, i32) {
     (p.x, p.y, p.z)
 }
 impl Sandbox {
+    /// The recorded cell, or one at the local air or ground ambient.
     pub fn cell(&self, p: IVec3) -> ThermalCell {
-        self.cells.get(&key(p)).copied().unwrap_or_default()
+        self.cells.get(&key(p)).copied().unwrap_or_else(|| self.ambient_cell(p, BlockId::Air))
+    }
+    /// The recorded cell, or one at the ambient `block` sees at `p`.
+    pub fn cell_for(&self, p: IVec3, block: BlockId) -> ThermalCell {
+        self.cells.get(&key(p)).copied().unwrap_or_else(|| self.ambient_cell(p, block))
+    }
+    pub fn ambient_cell(&self, p: IVec3, block: BlockId) -> ThermalCell {
+        ThermalCell { temperature: self.climate.ambient_for(p, block), ..ThermalCell::default() }
+    }
+    /// True when the cell carries nothing its absence would not.
+    pub fn settled(&self, p: IVec3, block: BlockId, c: ThermalCell) -> bool {
+        (c.temperature - self.climate.ambient_for(p, block)).abs() < 0.25 && c.fuel <= 0.0 && c.gas == 0
     }
     pub fn set(&mut self, p: IVec3, c: ThermalCell) -> bool {
         let k = key(p);
-        if (c.temperature - 20.0).abs() < 0.25 && c.fuel <= 0.0 && c.gas == 0 {
+        if self.settled(p, BlockId::Air, c) {
             self.cells.remove(&k);
             return true;
         }

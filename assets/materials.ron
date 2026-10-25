@@ -1035,7 +1035,7 @@
             thermal: (
                 conductivity: 2.2,
                 capacity: 2090.0,
-                melt: Some(308.15),
+                melt: Some(273.15),
                 boil: None,
                 ignite: None,
                 cool: None,

@@ -31,6 +31,7 @@ mod generation_cache;
 pub mod landscape;
 pub mod ecology;
 pub mod drainage;
+pub mod river_ice;
 pub mod lore;
 mod ore_geology;
 pub mod prism_sanctum;
@@ -1188,6 +1189,10 @@ pub fn sample_block_with(
         if cfg.generator_version >= 14
             && let Some(surface) = profiles.river_top(cfg, p.x, p.z)
                 && cfg.world_y(p.y) < surface {
+                    let depth = surface - cfg.world_y(p.y);
+                    if depth <= river_ice::MAX_M && depth <= river_ice::thickness_m(cfg, p.x, p.z, surface) {
+                        return BlockId::Ice;
+                    }
                     return BlockId::Water;
                 }
         return BlockId::Air;

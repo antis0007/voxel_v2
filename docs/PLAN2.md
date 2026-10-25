@@ -179,6 +179,7 @@ Token rationale: today an agent cannot measure performance at all, so perf claim
 - `engine_content` builds the 256-row `SIM_TABLE` and validates the file at startup and in tests, citing `assets/materials.ron:LINE`.
 - **Finding:** Dirt, Clay and Mud are `Powder` in the table, and today's sim never moves them. Deriving movement from `matter_state` alone would make terrain collapse, so cohesion is a real property (cohesive powders resolve to Solid).
 - **Ambient problem:** values are game-tuned to `thermal.rs` (ice melts at 308.15 K), because the ambient is 293.15 K. The science profile replaces them in Phase D.
+  Resolved for the window game (2026-10-24): `simulation/climate.rs` gives each cell a climate ambient (biome heat, altitude lapse, ground depth, day/night swing), `simulation/heat.rs` reads conductivity, capacity and phase points from this table, and ice melts at 273.15 K behind a latent store. `engine_sim` still uses its flat 293.15 K ambient, so ice there now melts at room temperature.
 - Packing uses only IEEE basic operations, and 373.15 K is exactly half a step (3731.5 tenths), so it rounds to 3732 on every machine.
 - Nothing reads the new columns yet; scenario hashes are unchanged, 389 tests pass.
 

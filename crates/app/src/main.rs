@@ -3405,7 +3405,7 @@ fn main() -> Result<()> {
                                 egui_ui.target_machine =
                                     hit.and_then(|(cell, _)| world::factory::probe(world, cell));
                                 egui_ui.target_cell_temp_c = hit.and_then(|(cell, _)| {
-                                    let t = world.sandbox.cell(cell).temperature;
+                                    let t = world.sandbox.cell_for(cell, world.get(cell)).temperature;
                                     t.is_finite().then_some(t)
                                 });
                                 egui_ui.target_volume_ul = hit.map(|(cell, _)| {

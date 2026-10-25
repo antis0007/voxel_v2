@@ -15,7 +15,12 @@ pub struct Conditions {
 /// recompute a regional drainage plan whose moisture result is discarded.
 pub fn temperature_c(cfg: &WorldSampleConfig, p: Vec3) -> i32 {
     let (heat, _, _) = landscape::visual_ecology(cfg, p.x, p.z, p.y);
-    (heat * 50.0 - 15.0).round() as i32
+    heat_celsius(heat).round() as i32
+}
+
+/// Climate heat (0..1) in °C: -15 to 35.
+pub fn heat_celsius(heat: f32) -> f32 {
+    heat * 50.0 - 15.0
 }
 
 pub fn conditions(cfg: &WorldSampleConfig, p: Vec3, shade: u32) -> Conditions {
@@ -23,7 +28,7 @@ pub fn conditions(cfg: &WorldSampleConfig, p: Vec3, shade: u32) -> Conditions {
     Conditions {
         moisture_per_mille: ((wet + super::drainage::sample(cfg, p.x, p.z).bank * 0.24).min(1.0) * 1_000.0)
             .round() as u32,
-        temperature_c: (heat * 50.0 - 15.0).round() as i32,
+        temperature_c: heat_celsius(heat).round() as i32,
         shade_per_mille: shade,
     }
 }
