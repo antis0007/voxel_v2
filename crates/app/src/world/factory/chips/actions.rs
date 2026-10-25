@@ -15,6 +15,14 @@ impl Bay {
             Action::NewProject(_, _) if self.library.projects.len() >= MAX_PROJECTS => "Project Limit".into(),
             Action::Release { .. } if self.library.revisions.len() >= MAX_REVISIONS => "Revision Limit".into(),
             Action::Prototype(_) | Action::StartLot { .. } if self.library.stock.len() + self.installed.len() >= MAX_PARTS => "Part Limit".into(),
+            Action::NewProject(_, design) | Action::SaveDraft { design, .. } | Action::Release { design, .. }
+                if design.sane(registry).is_err() =>
+            {
+                "Invalid Design".into()
+            }
+            Action::Scrap(serial) => {
+                if Arc::make_mut(&mut self.library).scrap(serial) { "Part Scrapped".into() } else { String::new() }
+            }
             Action::NewProject(name, design) => {
                 Arc::make_mut(&mut self.library).add_project(&name, design);
                 format!("Project {name}")

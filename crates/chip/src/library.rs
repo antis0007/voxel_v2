@@ -181,6 +181,7 @@ impl Library {
 
     /// Reject a decoded library whose cross-references do not hold.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_designs(&crate::registry::Registry::builtin())?;
         for r in &self.revisions {
             if self.project(r.project).is_none() || r.id > self.next_revision {
                 return Err(format!("revision {} has no project or a bad id", r.id));
@@ -197,6 +198,18 @@ impl Library {
             }
         }
         Ok(())
+    }
+
+    fn validate_designs(&self, registry: &crate::registry::Registry) -> Result<(), String> {
+        for d in self.projects.iter().map(|p| &p.draft).chain(self.revisions.iter().map(|r| &r.design)) {
+            d.sane(registry)?;
+        }
+        Ok(())
+    }
+
+    /// Drop one stocked part (scrap); returns whether it was in stock.
+    pub fn scrap(&mut self, serial: u32) -> bool {
+        self.take(serial).is_some()
     }
 
     /// Serial numbers are minted only here; the owner checks installed ones.

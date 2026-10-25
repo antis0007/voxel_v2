@@ -1,5 +1,9 @@
 //! Designer keys, undo history and the module palette.
 use super::chip_editor::{Editor, Tool};
+use super::UiAction;
+use crate::world::factory::chips::Action;
+use egui::Color32;
+use engine_chip::design::Design;
 use super::{chip_canvas, icons};
 use crate::world::factory::chips::registry;
 use egui::RichText;
@@ -68,3 +72,21 @@ pub(super) fn palette(ui: &mut egui::Ui, ed: &mut Editor) {
     ui.small(format!("Rotation {}°", u32::from(ed.rot) * 90));
 }
 
+/// Pasted design text becomes a new project. Unknown modules and broken
+/// wires are reported by the compiler like any other design.
+pub(super) fn paste(ui: &mut egui::Ui, ed: &mut Editor, action: &mut UiAction) {
+    let Some((text, ok)) = ed.paste.as_mut() else { return };
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width() - 80.0).char_limit(1 << 16));
+        let parsed = ron::from_str::<Design>(text).ok().filter(|d| d.sane(registry()).is_ok());
+        if ui.button("Load").clicked() {
+            *ok = parsed.is_some();
+            if let Some(d) = parsed {
+                *action = UiAction::Chip(Action::NewProject(d.name.clone(), d));
+            }
+        }
+    });
+    if !*ok {
+        ui.small(RichText::new("Invalid Design Text").color(Color32::from_rgb(235, 120, 90)));
+    }
+}

@@ -3,6 +3,7 @@
 //! installed in that pump. The tank outflow is a test fixture standing in
 //! for a consumer.
 use super::*;
+use crate::world::factory::extraction::WATER_CAPACITY;
 use engine_chip::fab::Provenance;
 use crate::headless::Session;
 use crate::world::BlockId;

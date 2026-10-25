@@ -6,13 +6,13 @@
 //! reads the tanks on the pump's fluid network, is serviced only when due
 //! (a min-queue of wake ticks), and pays its energy from the pump's buffer in
 //! whole 250 J units. With an empty buffer it browns out: output off.
-use super::{Factory, Kind, Network, Node, extraction::WATER_CAPACITY, power::JOULES_PER_UNIT};
+use super::{Factory, Kind, Node, power::JOULES_PER_UNIT};
 use crate::fast_hash::FastMap;
 use engine_chip::design::Design;
 use engine_chip::firmware::OPEN;
 use engine_chip::library::Library;
 use engine_chip::registry::Registry;
-use engine_chip::firmware::{Sensor, Task};
+use engine_chip::firmware::Task;
 use engine_chip::runtime::{MAX_CHANNELS, State};
 use glam::IVec3;
 use serde::{Deserialize, Serialize};
@@ -40,20 +40,6 @@ pub fn registry() -> &'static Registry {
 /// Machines with a controller socket: pumps, processors and generators.
 pub fn controllable(kind: Kind) -> bool {
     kind == Kind::Pump || kind == Kind::Generator || kind.processor()
-}
-
-/// Whether a firmware task has sensors and an output on this machine.
-pub fn fits(task: Task, node: &Node) -> bool {
-    match task {
-        Task::FillBand => node.kind == Kind::Pump,
-        Task::StockBand => node.kind.processor(),
-        Task::HeatGuard => super::pile::is_pile(node),
-    }
-}
-
-type Key = (i32, i32, i32);
-fn key(p: IVec3) -> Key {
-    (p.x, p.y, p.z)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,6 +87,8 @@ pub enum Action {
     Reset(IVec3),
     /// Start a wafer lot of a revision in a lab ("bench" or "clean").
     StartLot { revision: u32, lab: String },
+    /// Discard one stocked part.
+    Scrap(u32),
 }
 
 /// What the machine panel shows about an installed controller.
@@ -224,36 +212,6 @@ impl Bay {
 
 }
 
-/// Channel sources for a task, in position order: tanks on the machine's
-/// fluid networks, crates on its item networks, or the machine itself.
-fn sensors(fluids: &[Network], items: &[Network], nodes: &FastMap<IVec3, Node>, p: IVec3, sensor: Sensor) -> Vec<IVec3> {
-    let (networks, kind) = match sensor {
-        Sensor::TankLevel => (fluids, Kind::Tank),
-        Sensor::CrateLevel => (items, Kind::Storage),
-        Sensor::CoreHeat => return vec![p],
-    };
-    let mut found: Vec<IVec3> = networks
-        .iter()
-        .filter(|n| n.ports.contains(&p))
-        .flat_map(|n| n.ports.iter().copied())
-        .filter(|q| *q != p && nodes.get(q).is_some_and(|n| n.kind == kind))
-        .collect();
-    found.sort_by_key(|q| (q.x, q.y, q.z));
-    found.dedup();
-    found
-}
-
-/// A channel reading in permille: tank water, the fullest crate
-/// compartment, or pile heat.
-fn level(sensor: Sensor, n: &Node) -> u16 {
-    let (v, max) = match sensor {
-        Sensor::TankLevel => (n.water, WATER_CAPACITY),
-        Sensor::CrateLevel => (n.input.iter().copied().max().unwrap_or(0), super::CAPACITY),
-        Sensor::CoreHeat => (n.progress, super::pile::MAX_HEAT),
-    };
-    (u64::from(v.min(max)) * 1000 / u64::from(max.max(1))) as u16
-}
-
 impl Factory {
     /// One fixed world step for every installed controller that is due.
     pub(super) fn step_controllers(&mut self, ticks: u64) {
@@ -298,10 +256,17 @@ impl Factory {
                 *l = self.nodes.get(q).map_or(OPEN, |n| level(sensor, n));
             }
             let Some(node) = self.nodes.get_mut(&p) else { continue };
-            c.state.service(model, now, node.energy > 0, |i| levels.get(i).copied().unwrap_or(OPEN));
-            let paid = c.state.pay(UNIT_NJ, node.energy);
-            node.energy -= paid;
-            self.stats.power(0, paid);
+            // A generator feeds its own controller from its fuel: the burning
+            // portion pays, fuel on hand keeps a cold, held generator's
+            // controller alive. Anything else needs charge in its buffer.
+            let generator = node.kind.generator();
+            let powered = node.energy > 0 || (generator && (node.burn > 0 || node.input.iter().any(|&v| v > 0)));
+            c.state.service(model, now, powered, |i| levels.get(i).copied().unwrap_or(OPEN));
+            let from_buffer = c.state.pay(UNIT_NJ, node.energy);
+            node.energy -= from_buffer;
+            let from_fuel = if generator { c.state.pay(UNIT_NJ, node.burn) } else { 0 };
+            node.burn -= from_fuel;
+            self.stats.power(0, from_buffer + from_fuel);
             bay.queue.push(Reverse((c.state.due(), k)));
         }
         for k in orphans {
@@ -314,6 +279,14 @@ impl Factory {
 
 mod actions;
 mod save;
+mod sensors;
+pub use sensors::fits;
+use sensors::{level, sensors};
+
+type Key = (i32, i32, i32);
+fn key(p: IVec3) -> Key {
+    (p.x, p.y, p.z)
+}
 pub use actions::{chip_action, resources, review_fixture};
 
 #[cfg(test)]

@@ -123,7 +123,35 @@ pub fn rotate_local(spec: &ModuleSpec, rot: u8, at: (u8, u8)) -> (u8, u8) {
     }
 }
 
+/// Largest die side a design may have.
+pub const MAX_SIDE: u8 = 64;
+
 impl Design {
+    /// Structural bounds any stored design must meet: die size, layer
+    /// count, known modules inside the die, pins on placed parts, wires on
+    /// the die. Electrical rules are `compile`'s job.
+    pub fn sane(&self, registry: &Registry) -> Result<(), String> {
+        let max = registry.process(&self.process).map_or(1, |p| p.max_layers);
+        if !(1..=MAX_SIDE).contains(&self.width) || !(1..=MAX_SIDE).contains(&self.height) || !(1..=max).contains(&self.layers) {
+            return Err(format!("design {}: die or layers out of range", self.name));
+        }
+        for p in &self.parts {
+            let (_, _, w, h) = self.rect(registry, p).ok_or_else(|| format!("unknown module {}", p.module))?;
+            if u16::from(p.x) + u16::from(w) > u16::from(self.width) || u16::from(p.y) + u16::from(h) > u16::from(self.height) {
+                return Err(format!("part {} off the die", p.id));
+            }
+        }
+        for n in &self.nets {
+            if n.pins.iter().any(|pin| self.part(pin.part).is_none()) {
+                return Err(format!("net {} names a missing part", n.id));
+            }
+            if n.paths.iter().flatten().any(|s| s.x >= self.width || s.y >= self.height || s.layer >= self.layers) {
+                return Err(format!("net {} leaves the die", n.id));
+            }
+        }
+        Ok(())
+    }
+
     pub fn new(name: &str, process: &str, width: u8, height: u8, layers: u8) -> Self {
         Self {
             name: name.to_string(),

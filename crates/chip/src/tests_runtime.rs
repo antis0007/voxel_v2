@@ -25,7 +25,7 @@ fn revisions_are_immutable_and_releases_check_staleness() {
     assert_eq!(lib.revision(a).unwrap().design.firmware.sample_ms, 250);
     assert_eq!(lib.revision(b).unwrap().letter(), "B");
     assert!(lib.model(b).unwrap().wake_ticks > lib.model(a).unwrap().wake_ticks);
-    lib.edit(p, |d| d.parts.clear());
+    lib.edit(p, |d| { d.parts.clear(); d.nets.clear(); });
     let g = lib.project(p).unwrap().generation;
     assert!(matches!(lib.release(&r, p, g), Err(ReleaseError::Failed(_))));
     let s = lib.package(a, crate::fab::Provenance::Prepared).unwrap();

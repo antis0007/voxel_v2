@@ -45,25 +45,42 @@ fn socket(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut UiAction) {
     });
     let node = view.focused.as_ref().map(|(_, n)| n);
     let Some(d) = view.controller.as_ref() else {
-        let fitting: Vec<_> = library
-            .stock
-            .iter()
-            .filter_map(|p| Some((p, library.revision(p.revision)?)))
-            .filter(|(_, r)| node.is_some_and(|n| fits(r.model.task, n)))
-            .collect();
-        if fitting.is_empty() {
+        // One row per (revision, bin), lowest serial first: lots make dozens.
+        let mut groups: Vec<(u32, engine_chip::fab::Grade, u32, u32)> = Vec::new();
+        for p in &library.stock {
+            let Some(rev) = library.revision(p.revision) else { continue };
+            if !node.is_some_and(|n| fits(rev.model.task, n)) {
+                continue;
+            }
+            match groups.iter_mut().find(|g| (g.0, g.1) == (p.revision, p.grade)) {
+                Some(g) => {
+                    g.2 += 1;
+                    g.3 = g.3.min(p.serial);
+                }
+                None => groups.push((p.revision, p.grade, 1, p.serial)),
+            }
+        }
+        if groups.is_empty() {
             ui.label(RichText::new("Socket Empty").color(icons::GOLD));
         }
-        ui.horizontal_wrapped(|ui| {
-            for (p, rev) in fitting {
-                let name = library.project(rev.project).map_or("?", |p| p.name.as_str());
-                let m = rev.model;
-                let tip = format!("{} · {} Ch · Wake {} ms · {:.1} mW", m.task.label(), m.channels, m.wake_ticks * 1000 / 120, m.idle_nw as f32 / 1e6);
-                if ui.button(format!("{name} {} #{} {:?}", rev.letter(), p.serial, p.grade)).on_hover_text(tip).clicked() {
-                    *action = UiAction::Chip(Action::Install(pos, p.serial));
+        for (revision, grade, count, serial) in groups.into_iter().take(8) {
+            let Some(rev) = library.revision(revision) else { continue };
+            let name = library.project(rev.project).map_or("?", |p| p.name.as_str());
+            ui.horizontal(|ui| {
+                let label = format!("{name} {} · Bin {grade:?} ×{count}", rev.letter());
+                let r = ui.button(label).on_hover_ui(|ui| {
+                    let m = rev.model;
+                    ui.small(format!("{} · {} Ch · Wake {} ms · {:.1} mW", m.task.label(), m.channels, m.wake_ticks * 1000 / 120, m.idle_nw as f32 / 1e6));
+                    ui.small(format!("Rated {:.0}% Clock", grade.clock_factor() * 100.0));
+                });
+                if r.clicked() {
+                    *action = UiAction::Chip(Action::Install(pos, serial));
                 }
-            }
-        });
+                if ui.small_button("Scrap").clicked() {
+                    *action = UiAction::Chip(Action::Scrap(serial));
+                }
+            });
+        }
         return;
     };
     let rev = library.revision(d.package.revision);

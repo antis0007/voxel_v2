@@ -1283,7 +1283,9 @@ pub(super) fn draw(
             }
             if node.kind.generator() {
                 generator_panel(ui, *pos, node, view.focused_grid, inventory, action);
-                super::chip_panel::section(ui, view, *pos, action);
+                if crate::world::factory::chips::controllable(node.kind) {
+                    super::chip_panel::section(ui, view, *pos, action);
+                }
                 return;
             }
             if matches!(node.kind, Kind::CokeOven | Kind::BlastFurnace) {

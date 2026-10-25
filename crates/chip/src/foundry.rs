@@ -47,7 +47,14 @@ impl Library {
     /// Start a lot; the caller has paid `lot_bill`.
     pub fn start_lot(&mut self, registry: &Registry, revision: u32, lab: &str, now: u64) -> Result<u32, &'static str> {
         if self.lots.len() >= MAX_LOTS {
-            return Err("Lot Limit");
+            // Retire the oldest packaged lot; its parts keep their provenance.
+            let done = self.lots.iter().position(|l| l.records.last().is_some_and(|r| r.kind == crate::fab::StepKind::Package));
+            match done {
+                Some(i) => {
+                    self.lots.remove(i);
+                }
+                None => return Err("Lot Limit"),
+            }
         }
         registry.lab(lab).ok_or("Unknown Lab")?;
         let rev = self.revision(revision).ok_or("No Such Revision")?;

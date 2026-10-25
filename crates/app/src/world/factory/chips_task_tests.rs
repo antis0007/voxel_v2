@@ -87,9 +87,9 @@ fn heat_guard_keeps_an_uncooled_pile_below_meltdown() {
     let (mut peak, mut held) = (0, 0);
     run(&mut f, 120 * 60, |f| {
         let n = f.nodes.get_mut(&p).unwrap();
-        // The load draws all output; a grid battery keeps one unit for the
-        // controller (an empty generator cannot power its own controller).
-        n.energy = 1;
+        // The load draws the whole buffer; the controller runs on the
+        // burning fuel portion.
+        n.energy = 0;
         peak = peak.max(n.progress);
         held += u32::from(n.status == "Held by controller");
     });
@@ -154,4 +154,16 @@ fn a_wafer_lot_is_paid_once_runs_at_game_time_and_survives_a_save() {
     let o = a.lots[0].outcome.unwrap();
     assert!(o.good > 0 && a.stock.len() == usize::from(o.good));
     eprintln!("lot 1 (open bench): {} dies, {} good, bins {:?}, {} slow", o.dies, o.good, o.bins, o.slow);
+}
+
+#[test]
+fn parts_can_be_scrapped_and_bad_designs_are_refused() {
+    let mut f = Factory::default();
+    let serial = part(&mut f, sentinel(registry()), Task::FillBand);
+    assert_eq!(f.chips.action(&f.nodes, Action::Scrap(serial), |_| true), "Part Scrapped");
+    assert!(f.chips.library.stock.is_empty());
+    let mut bad = sentinel(registry());
+    bad.layers = 9;
+    assert_eq!(f.chips.action(&f.nodes, Action::NewProject("Bad".into(), bad), |_| true), "Invalid Design");
+    assert_eq!(f.chips.library.projects.len(), 1);
 }

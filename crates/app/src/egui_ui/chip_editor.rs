@@ -237,7 +237,7 @@ fn toolbar(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, action: &mut U
             }
         }
         ui.separator();
-        for l in 0..ed.design.layers {
+        for l in 0..ed.design.layers.min(3) {
             let on = !ed.hidden[usize::from(l)];
             let text = RichText::new(format!("M{}", l + 1)).color(if on { icons::PAPER } else { Color32::GRAY });
             let r = ui.selectable_label(ed.layer == l, text).on_hover_text(format!("[{}] · [RMB] Hide", l + 1));
@@ -291,26 +291,7 @@ fn toolbar(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, action: &mut U
             });
         }
     });
-    paste(ui, ed, action);
-}
-
-/// Pasted design text becomes a new project. Unknown modules and broken
-/// wires are reported by the compiler like any other design.
-fn paste(ui: &mut egui::Ui, ed: &mut Editor, action: &mut UiAction) {
-    let Some((text, ok)) = ed.paste.as_mut() else { return };
-    ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width() - 80.0).char_limit(1 << 16));
-        let parsed = ron::from_str::<Design>(text).ok().filter(|d| d.width > 0 && d.height > 0 && d.width <= 64 && d.height <= 64);
-        if ui.button("Load").clicked() {
-            *ok = parsed.is_some();
-            if let Some(d) = parsed {
-                *action = UiAction::Chip(Action::NewProject(d.name.clone(), d));
-            }
-        }
-    });
-    if !*ok {
-        ui.small(RichText::new("Invalid Design Text").color(Color32::from_rgb(235, 120, 90)));
-    }
+    chip_tools::paste(ui, ed, action);
 }
 
 #[cfg(test)]

@@ -122,7 +122,7 @@ fn two_lots_from_one_mask_set_are_comparable_and_revisions_stay_fixed() {
     let rev = lib.release(&r, p, 0).unwrap();
     lib.start_lot(&r, rev, "clean", 0).unwrap();
     // Editing the draft mid-lot does not touch the lot's revision.
-    lib.edit(p, |d| d.parts.clear());
+    lib.edit(p, |d| { d.parts.clear(); d.nets.clear(); });
     lib.start_lot(&r, rev, "clean", 0).unwrap();
     finish(&mut lib, &r);
     let (a, b) = (lib.lots[0].outcome.unwrap(), lib.lots[1].outcome.unwrap());

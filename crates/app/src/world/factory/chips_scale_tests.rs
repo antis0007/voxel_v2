@@ -2,6 +2,7 @@
 //! profile. Reuses the pump rig from `chips_tests.rs`.
 use super::tests::rig;
 use super::*;
+use crate::world::factory::extraction::WATER_CAPACITY;
 use engine_chip::fab::Provenance;
 use engine_chip::presets::{sentinel, twin_watch};
 
