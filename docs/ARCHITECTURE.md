@@ -54,6 +54,7 @@ One world has one `VoxelScalePreset` (1 m, 0.5 m, 0.25 m per cell). Generation i
 | Terrain, biomes, structures | `crates/worldgen/src/` (`lib.rs` sampling layer, one module per feature) |
 | Block properties | `assets/materials.ron`, `crates/content/src/lib.rs` |
 | Cellular, rigid, thermal | `crates/app/src/simulation/` |
+| Star systems on rails | `crates/space/src/`, `assets/star_systems.ron` |
 | Factory, inventory, recipes | `crates/app/src/world/factory*`, `inventory.rs`, `assets/{machines,recipes}.ron` |
 | Spells, enemies, bosses | `crates/app/src/world/adventure/`, `assets/{spells,bestiary}.ron` |
 | Save format | `crates/app/src/world/storage.rs`, `regions.rs` |
