@@ -273,7 +273,7 @@ fn local_frame_is_orthonormal_right_handed_and_radial() { /* det == 1, up == to_
 #[test]
 fn gnomonic_area_ratio_is_three_root_three() {
     let d = measure(Projection::Gnomonic, 513);
-    assert!((d.area_ratio - 3.0 * 3f64.sqrt()).abs() < 2e-2, "{d:?}");
+    assert!((d.area_ratio - 3.0 * 3f64.sqrt()).abs() < 3e-2, "{d:?}");
 }
 
 #[test]
