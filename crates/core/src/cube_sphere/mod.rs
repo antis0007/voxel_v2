@@ -5,6 +5,9 @@
 use crate::coords::CHUNK_SIZE;
 use glam::IVec3;
 
+mod edges;
+pub use edges::{QuarterTurns, Step};
+
 /// One of the six cube faces, named by its outward normal.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
