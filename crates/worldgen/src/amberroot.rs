@@ -38,6 +38,11 @@ thread_local! {
 }
 static PLANS: OnceLock<Mutex<HashMap<Key, Option<Arc<Plan>>>>> = OnceLock::new();
 
+/// True while the grove plan surveys terrain; later plans stand aside then.
+pub(super) fn probing() -> bool {
+    PROBING.get()
+}
+
 fn plan(cfg: &WorldSampleConfig) -> Option<Arc<Plan>> {
     if cfg.generator_version < VERSION
         || cfg.world_type == WorldType::Superflat

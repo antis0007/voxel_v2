@@ -23,10 +23,42 @@ const LIP_M: f32 = 0.4;
 const CREST_M: f32 = 0.3;
 /// Bank crest width beyond the water edge; water stops at its outer side.
 const CREST_WIDTH_M: f32 = 2.5;
+/// Upstream hops counted for a node's flow; about two kilometres of catchment.
+const FLOW_DEPTH: u32 = 10;
+/// Upstream nodes, the node itself included, before a reach carries water.
+const WET_FLOW: u32 = 4;
+/// Widest half-width a channel reaches, metres.
+const MAX_HALF_WIDTH_M: f32 = 14.0;
 
 thread_local! {
     static REACHES: RefCell<FastMap<Key, [f32; STATIONS]>> = RefCell::new(FastMap::default());
     static LEVELS: RefCell<FastMap<Key, f32>> = RefCell::new(FastMap::default());
+    static FLOWS: RefCell<FastMap<Key, u32>> = RefCell::new(FastMap::default());
+}
+
+/// Nodes draining through `(x, z)` within `FLOW_DEPTH` hops, itself included.
+/// A bounded stand-in for catchment area: headwaters count 1, a trunk that
+/// gathers several valleys counts dozens.
+fn flow(cfg: &WorldSampleConfig, x: i32, z: i32) -> u32 {
+    fn upstream(cfg: &WorldSampleConfig, x: i32, z: i32, depth: u32) -> u32 {
+        let mut n = 1;
+        if depth > 0 {
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    if (dx, dz) != (0, 0) && outlet(cfg, x + dx, z + dz) == Outlet::Downhill(x, z) {
+                        n += upstream(cfg, x + dx, z + dz, depth - 1);
+                    }
+                }
+            }
+        }
+        n
+    }
+    cached(&FLOWS, (cfg.seed, cfg.world_type as u8, cfg.generator_version, x, z), || upstream(cfg, x, z, FLOW_DEPTH))
+}
+
+/// Channel half-width scale before the along-reach widening and pulse.
+fn base_width(rainfall: f32, flow: u32) -> f32 {
+    (1.6 + 1.25 * (flow as f32).sqrt()) * (0.75 + 0.5 * rainfall)
 }
 
 fn cached<V: Copy>(
@@ -68,6 +100,16 @@ fn shared<V: Copy>(map: &'static Shared<V>, key: Key, make: impl FnOnce() -> V) 
     v
 }
 
+/// True while the valley or grove plan surveys terrain. Plans that read the
+/// carved preview must stand aside then: the survey sees terrain without those
+/// carves, and caching a plan from it would depend on which thread asked first.
+pub(crate) fn standing_aside() -> bool {
+    crate::valley::probing() || crate::amberroot::probing()
+}
+
+/// A channel sample that leaves the terrain as it is.
+pub(super) const NONE: Channel = Channel { bank: 0.0, bed_m: f32::MAX, water_m: None, levee_m: None };
+
 /// Pre-carve ground top at one metre, so every voxel size sees the same plan.
 fn ground(cfg: &WorldSampleConfig, p: Vec2) -> f32 {
     let base = WorldSampleConfig { voxel_scale: VoxelScalePreset::OneMeter, ..*cfg };
@@ -103,7 +145,8 @@ fn stations(cfg: &WorldSampleConfig, from: (i32, i32), to: (i32, i32)) -> [f32; 
             let t = k as f32 / (STATIONS - 1) as f32;
             let p = source.center_m + delta * t + across * bend_offset(weights, length, t);
             // Both bank crests too: a reach along a side slope has one low bank.
-            let side = (2.5 + source.rainfall * 3.5) * (0.85 + 0.3 * t) + CREST_WIDTH_M;
+            let half = (base_width(source.rainfall, flow(cfg, from.0, from.1)) * (0.85 + 0.3 * t) * 1.3).min(MAX_HALF_WIDTH_M);
+            let side = half + CREST_WIDTH_M;
             let low = ground(cfg, p).min(ground(cfg, p + across * side)).min(ground(cfg, p - across * side));
             low - FREEBOARD_M
         })
@@ -166,16 +209,20 @@ pub(super) fn sample(
                 Outlet::ClosedBasin => (
                     (p - source.center_m).length(),
                     level(cfg, a, b),
-                    source.rainfall > 0.35,
+                    source.rainfall > 0.35 && flow(cfg, a, b) >= WET_FLOW - 1,
                     9.0 + source.rainfall * 9.0,
                 ),
                 Outlet::Downhill(c, d) => {
                     let target = node(cfg, c, d);
-                    let (distance, t, width) = super::meander(cfg, (a, b), source, target, p);
+                    let (distance, t, shape) = super::meander(cfg, (a, b), source, target, p);
+                    // `meander` widens and pulses its own rainfall width; keep that
+                    // shape and rescale it to the flow this reach carries.
+                    let f = flow(cfg, a, b);
+                    let width = (shape / (2.5 + source.rainfall * 3.5) * base_width(source.rainfall, f)).min(MAX_HALF_WIDTH_M);
                     if distance - width > FIT_REACH_M {
                         continue;
                     }
-                    (distance, reach_surface(cfg, (a, b), (c, d), t), source.rainfall > 0.3, width)
+                    (distance, reach_surface(cfg, (a, b), (c, d), t), source.rainfall > 0.25 && f >= WET_FLOW, width)
                 }
             };
             let edge = distance - width;
@@ -183,12 +230,14 @@ pub(super) fn sample(
                 continue;
             }
             bank = bank.max(1.0 - crate::smoothstep(width, width + 8.0, distance));
-            let depth = (0.9 + 0.18 * width).clamp(1.6, 3.2);
+            // A dry reach is a shallow swale with soft sides, not a cut channel,
+            // so headwaters do not score every slope with grooves.
+            let (depth, side) = if wet { ((0.9 + 0.18 * width).clamp(1.6, 3.2), 0.7) } else { ((0.3 + 0.12 * width).min(1.4), 0.3) };
             let profile = if edge <= 0.0 {
                 let r = distance / width;
                 surface - LIP_M - (depth - LIP_M) * (1.0 - r * r)
             } else {
-                surface - LIP_M + 0.7 * edge + 0.5 * (edge - 6.0).max(0.0).powi(2)
+                surface - LIP_M + side * edge + 0.5 * (edge - 6.0).max(0.0).powi(2)
             };
             ceiling = ceiling.min(profile);
             if wet && nearest.is_none_or(|(e, _, _)| edge < e) {

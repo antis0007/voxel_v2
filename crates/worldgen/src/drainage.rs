@@ -156,6 +156,11 @@ fn sample_window(cfg: &WorldSampleConfig, x: f32, z: f32, window: std::ops::Rang
     let ix = (x / SPACING).floor() as i32;
     let iz = (z / SPACING).floor() as i32;
     if fits(cfg) {
+        // The grove's hollow and pools are shaped before this carve, and a
+        // river cut through them would break their walls.
+        if fit::standing_aside() || crate::amberroot::reserves(cfg, x, z) {
+            return fit::NONE;
+        }
         return fit::sample(cfg, p, (ix, iz), window);
     }
     let mut best = Channel::default();
@@ -216,7 +221,9 @@ fn meander(cfg: &WorldSampleConfig, edge: (i32, i32), source: Node, target: Node
     // 1.9) cannot bring the bank here, so skip the trigonometry.
     let max_width = (2.5 + source.rainfall * 3.5) * 1.15 * 1.3;
     let chord = (p - (source.center_m + delta * t)).length();
-    let reach = if fits(cfg) { FIT_REACH_M } else { 8.0 };
+    // Fitted channels can be wider than this rainfall estimate (flow scales
+    // them), so they keep a margin covering the widest fitted half-width.
+    let reach = if fits(cfg) { FIT_REACH_M + 8.0 } else { 8.0 };
     if chord > 0.2 * length + 1.9 * (max_width + reach) {
         return (chord, t, max_width);
     }
@@ -259,5 +266,6 @@ fn bend_offset([s1, s2, s3, _]: [f32; 4], length: f32, t: f32) -> f32 {
 }
 
 mod fit;
+pub(crate) use fit::standing_aside;
 #[cfg(test)]
 mod tests;

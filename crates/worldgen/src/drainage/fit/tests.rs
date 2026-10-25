@@ -34,7 +34,7 @@ fn river_fit_water_never_stands_above_dry_ground() {
         }
     }
     println!("river fit wet={wet} deep={deep} walls={walls} worst={worst:.1}");
-    assert!(wet > 1_000, "only {wet} wet columns");
+    assert!(wet > 500, "only {wet} wet columns");
     assert!(deep * 2 > wet, "{deep} of {wet} wet columns are two voxels deep");
     assert!(worst <= 3.0 && walls * 100 <= wet, "{walls} walls, worst {worst:.1} m");
 }

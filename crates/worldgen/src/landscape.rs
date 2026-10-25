@@ -84,7 +84,17 @@ struct TileCache {
 }
 static TILES: OnceLock<Mutex<TileCache>> = OnceLock::new();
 
-fn climate(x: f32, z: f32, seed: u32) -> (f32, f32) {
+/// Generator 53 stretches the climate fields about threefold so a biome
+/// region spans kilometres instead of a 700 m patchwork.
+pub const CLIMATE_SCALE_GENERATOR: u32 = 53;
+
+/// Raw temperature and rainfall fields, each 0..1 (about 0.14..0.86 in
+/// practice), before the contrast, ecotone and regional stages in
+/// `lowland_climate`. Pure function of metre position, seed and version.
+pub(crate) fn climate(x: f32, z: f32, seed: u32, version: u32) -> (f32, f32) {
+    if version >= CLIMATE_SCALE_GENERATOR {
+        return climate_regional(x, z, seed);
+    }
     let wx = x + (value_noise2(x / 420.0, z / 420.0, seed.wrapping_add(7)) - 0.5) * 180.0;
     let wz = z + (value_noise2(x / 390.0, z / 390.0, seed.wrapping_add(9)) - 0.5) * 180.0;
     let temp = value_noise2(wx / 700.0, wz / 700.0, seed.wrapping_add(11));
@@ -92,15 +102,32 @@ fn climate(x: f32, z: f32, seed: u32) -> (f32, f32) {
     (temp, rain)
 }
 
+/// Rotated, two-octave climate at kilometre scale. Each octave turns its own
+/// way so the value-noise lattice never lines regions up into squares.
+fn climate_regional(x: f32, z: f32, seed: u32) -> (f32, f32) {
+    let turn = |x: f32, z: f32, (c, s): (f32, f32)| (x * c - z * s, x * s + z * c);
+    let n = |(x, z): (f32, f32), w: f32, salt: u32| value_noise2(x / w, z / w, seed.wrapping_add(salt));
+    let (a, b, c, d) = ((0.82, 0.57), (0.39, -0.92), (-0.66, 0.75), (0.95, 0.31));
+    let warp_x = (n(turn(x, z, a), 1300.0, 7) - 0.5) * 560.0 + (n(turn(x, z, b), 410.0, 8) - 0.5) * 120.0;
+    let warp_z = (n(turn(x, z, c), 1210.0, 9) - 0.5) * 560.0 + (n(turn(x, z, d), 380.0, 10) - 0.5) * 120.0;
+    let (wx, wz) = (x + warp_x, z + warp_z);
+    let temp = n(turn(wx, wz, b), 2100.0, 11) * 0.72 + n(turn(wx, wz, c), 820.0, 12) * 0.28;
+    let rain = n(turn(wx, wz, d), 1600.0, 23) * 0.72 + n(turn(wx, wz, a), 640.0, 24) * 0.28;
+    // Summing octaves narrows the spread; restore the single-octave range.
+    let spread = |v: f32| ((v - 0.5) * 1.3 + 0.5).clamp(0.0, 1.0);
+    (spread(temp), spread(rain))
+}
+
 /// Heat and wetness (0..1) below the 30 m lapse start.
 pub fn lowland_climate(cfg: &WorldSampleConfig, x: f32, z: f32) -> (f32, f32) {
-    let (mut heat, mut wet) = climate(x, z, cfg.seed);
+    let (mut heat, mut wet) = climate(x, z, cfg.seed, cfg.generator_version);
     if cfg.generator_version >= 5 {
         heat = ((heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0);
         wet = ((wet - 0.5) * 1.4 + 0.5).clamp(0.0, 1.0);
     }
     if cfg.generator_version >= 15 {
-        (heat, wet) = super::terrain_variety::climate(x, z, cfg.seed, heat, wet);
+        let soft = cfg.generator_version >= CLIMATE_SCALE_GENERATOR;
+        (heat, wet) = super::terrain_variety::climate(x, z, cfg.seed, heat, wet, soft);
     }
     if cfg.generator_version >= 33 {
         (heat, wet) = super::terrain_variety::regional_climate(x, z, cfg.seed, heat, wet);
@@ -178,7 +205,7 @@ pub fn tectonic_zoom(generator_version: u32) -> f32 {
     if generator_version >= 15 { 2.4 } else { 1.0 }
 }
 
-type TectonicKey = (u32, u32, u32, u32);
+type TectonicKey = (u32, u32, u32, u32, bool);
 
 thread_local! {
     // Tectonics depend only on XZ. Cave-column generation used to recompute the
@@ -192,8 +219,22 @@ thread_local! {
         = const { std::cell::Cell::new(None) };
 }
 
+/// Generator 53: continents dominate. Oceanic plates are rarer, and the plates
+/// beside the origin are no longer forced oceanic, so spawn sits inland and the
+/// sea is a coast some way off rather than a basin next door.
+pub const LAND_GENERATOR: u32 = 53;
+
+/// Plate sample at a generator version's zoom and continental bias.
+pub fn sample_tectonics(wx: f32, wz: f32, seed: u32, version: u32) -> TectonicSample {
+    sample_tectonics_with(wx, wz, seed, tectonic_zoom(version), version >= LAND_GENERATOR)
+}
+
 pub fn sample_tectonics_zoomed(wx: f32, wz: f32, seed: u32, zoom: f32) -> TectonicSample {
-    let key = (wx.to_bits(), wz.to_bits(), seed, zoom.to_bits());
+    sample_tectonics_with(wx, wz, seed, zoom, false)
+}
+
+fn sample_tectonics_with(wx: f32, wz: f32, seed: u32, zoom: f32, landward: bool) -> TectonicSample {
+    let key = (wx.to_bits(), wz.to_bits(), seed, zoom.to_bits(), landward);
     if let Some((last, value)) = TECTONIC_LAST.get()
         && last == key {
             return value;
@@ -201,7 +242,7 @@ pub fn sample_tectonics_zoomed(wx: f32, wz: f32, seed: u32, zoom: f32) -> Tecton
     let value = match TECTONIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
         Some(hit) => hit,
         None => {
-            let value = sample_tectonics_uncached(wx, wz, seed, zoom);
+            let value = sample_tectonics_uncached(wx, wz, seed, zoom, landward);
             TECTONIC_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 if cache.len() >= 32_768 {
@@ -216,7 +257,7 @@ pub fn sample_tectonics_zoomed(wx: f32, wz: f32, seed: u32, zoom: f32) -> Tecton
     value
 }
 
-fn sample_tectonics_uncached(wx: f32, wz: f32, seed: u32, zoom: f32) -> TectonicSample {
+fn sample_tectonics_uncached(wx: f32, wz: f32, seed: u32, zoom: f32, landward: bool) -> TectonicSample {
     let (wx, wz) = (wx / zoom, wz / zoom);
     const PLATE_SCALE: f32 = 540.0;
     // Mantle convection plumes warp plate sutures into organic, curving arcs.
@@ -239,8 +280,12 @@ fn sample_tectonics_uncached(wx: f32, wz: f32, seed: u32, zoom: f32) -> Tectonic
         // Supercontinent cycle + plate hash determines continental (> 0) vs oceanic (< 0) lithosphere.
         let macro_craton = value_noise2(cx / 1350.0, cz / 1350.0, seed.wrapping_add(37));
         let plate_h = hash2(ix, iz, seed.wrapping_add(4153));
-        let mut buoyancy = (macro_craton * 0.62 + plate_h * 0.38 - 0.44) * 2.2;
-        if ix == 0 && iz == 0 {
+        let mut buoyancy = (macro_craton * 0.62 + plate_h * 0.38 - if landward { 0.32 } else { 0.44 }) * 2.2;
+        if landward {
+            if (ix.abs() + iz.abs()) <= 1 {
+                buoyancy = buoyancy.max(0.42);
+            }
+        } else if ix == 0 && iz == 0 {
             // The origin plate is a coastal continental craton so the starter watershed
             // is anchored on land while neighboring plates can form deep oceans.
             buoyancy = buoyancy.max(0.42);
@@ -456,7 +501,7 @@ fn mountain_ridged_multifractal(
 // subduction trenches, volcanic island/cordilleran arcs, rift grabens, and
 // fold-and-thrust mountain belts) with connected, walkable valleys.
 fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32 {
-    let tect = sample_tectonics_zoomed(x, z, seed, tectonic_zoom(version));
+    let tect = sample_tectonics(x, z, seed, version);
     // Generator 15: mountain ranges are larger and rarer, so most of a continent is
     // plain, plateau and foothill and the relief is concentrated in real belts.
     let (range_zoom, mask_lo, mask_hi) = if version >= 15 {
@@ -578,7 +623,7 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32, footprint: f
         let mountain = smoothstep(42.0, 108.0, h);
         let fold = (sx * 0.018 + (sz * 0.006).sin() * 2.0).sin().abs();
         h += mountain * fold.powf(1.65) * if version >= 9 { 16.0 } else { 28.0 };
-        let (heat, wet) = climate(wx, wz, seed);
+        let (heat, wet) = climate(wx, wz, seed, version);
         let mesa = smoothstep(0.52, 0.75, heat) * (1.0 - smoothstep(0.32, 0.5, wet));
         let terrace = (h / 9.0).floor() * 9.0 + smoothstep(0.25, 0.85, (h / 9.0).fract()) * 9.0;
         h += (terrace - h) * mesa * 0.85;
@@ -879,9 +924,15 @@ fn classify_landscape(
     let h = if cfg.generator_version >= super::drainage::RIVER_FIT_GENERATOR {
         // Fitted channels give the ground top directly: a carve ceiling and a
         // bank floor that keeps water from standing above dry ground.
+        // Lakes join the same way; ceilings combine by minimum, floors by maximum.
+        // A lake's banks override the dry swales it absorbs (wet rivers never
+        // reach a lake), so only its own ceiling caps its floor.
         let raw = h + cfg.voxel_meters();
-        let fill = drainage.levee_m.map_or(f32::MIN, |l| l.min(raw + super::drainage::LEVEE_CAP_M));
-        raw.min(drainage.bed_m).max(fill) - cfg.voxel_meters()
+        let lake = super::lakes::sample(cfg, wx, wz);
+        let ceiling = drainage.bed_m.min(lake.ceiling_m);
+        let river_fill = drainage.levee_m.map_or(f32::MIN, |l| l.min(raw + super::drainage::LEVEE_CAP_M)).min(ceiling);
+        let lake_fill = lake.floor_m.map_or(f32::MIN, |l| l.min(raw + lake.floor_cap_m)).min(lake.ceiling_m);
+        raw.min(ceiling).max(river_fill.max(lake_fill)) - cfg.voxel_meters()
     } else {
         h + (drainage.bed_m.min(h) - h) * drainage.bank
     };
@@ -1022,7 +1073,7 @@ fn apply_macro_shaping(
     sediment: f32,
     footprint: f32,
 ) -> (f32, f32, f32, f32) {
-    let (mut temperature, mut rain) = climate(wx, wz, cfg.seed);
+    let (mut temperature, mut rain) = climate(wx, wz, cfg.seed, cfg.generator_version);
     if cfg.generator_version >= 5 {
         // Preserve coherent weather regions while making the dry/cold extremes
         // reachable; interpolated climate noise otherwise favours green forest.
@@ -1030,7 +1081,8 @@ fn apply_macro_shaping(
         rain = ((rain - 0.5) * 1.4 + 0.5).clamp(0.0, 1.0);
     }
     if cfg.generator_version >= 15 {
-        (temperature, rain) = super::terrain_variety::climate(wx, wz, cfg.seed, temperature, rain);
+        let soft = cfg.generator_version >= CLIMATE_SCALE_GENERATOR;
+        (temperature, rain) = super::terrain_variety::climate(wx, wz, cfg.seed, temperature, rain, soft);
     }
     if cfg.generator_version >= 33 {
         (temperature, rain) =
@@ -1477,7 +1529,7 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         }
         if cfg.generator_version >= 9 && wx.hypot(wz) > 110.0 {
             let tect =
-                sample_tectonics_zoomed(wx, wz, cfg.seed, tectonic_zoom(cfg.generator_version));
+                sample_tectonics(wx, wz, cfg.seed, cfg.generator_version);
             if matches!(s.biome, Biome::Ocean) {
                 if s.height < 1.0 || tect.trench > 0.35 {
                     // Abyssal basaltic ocean floor & subduction trench ooze.
@@ -1625,6 +1677,21 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
             vegetation *= if drainage.water_m.is_some() { 0.0 } else { 0.6 };
         }
     }
+    if cfg.generator_version >= super::lakes::LAKES_GENERATOR {
+        let lake = super::lakes::sample(cfg, cfg.world_x(x), cfg.world_z(z));
+        match lake.kind {
+            Some(kind) if lake.edge_m < 3.0 => {
+                (surface, filler) = super::lakes::shore_blocks(kind);
+                vegetation = 0.0;
+            }
+            // An oasis keeps a green ring in the dry ground around it.
+            Some(super::lakes::LakeKind::Oasis) if lake.edge_m < 14.0 => {
+                surface = BlockId::Grass;
+                vegetation = 1.2;
+            }
+            _ => {}
+        }
+    }
     if cfg.generator_version >= 47 {
         // Wider occupied stands alternate with open glades. Keep all upstream
         // water, route, yard and site exclusions: zero density stays zero.
@@ -1672,12 +1739,13 @@ struct BedrockColumn {
 }
 
 thread_local! {
-    static BEDROCK_LAST: std::cell::Cell<Option<((u32, u32, u32), BedrockColumn)>>
+    static BEDROCK_LAST: std::cell::Cell<Option<((u32, u32, u32, bool), BedrockColumn)>>
         = const { std::cell::Cell::new(None) };
 }
 
-fn bedrock_column(wx: f32, wz: f32, seed: u32) -> BedrockColumn {
-    let key = (wx.to_bits(), wz.to_bits(), seed);
+fn bedrock_column(wx: f32, wz: f32, seed: u32, version: u32) -> BedrockColumn {
+    let scaled = version >= CLIMATE_SCALE_GENERATOR;
+    let key = (wx.to_bits(), wz.to_bits(), seed, scaled);
     if let Some((last, column)) = BEDROCK_LAST.get()
         && last == key {
             return column;
@@ -1688,13 +1756,14 @@ fn bedrock_column(wx: f32, wz: f32, seed: u32) -> BedrockColumn {
     // Warm lowland-climate regions are sedimentary sandstone country; elsewhere a
     // mountain is grey stone. The far-terrain shader tints rock by the same heat
     // field, so near and distant slopes agree.
-    let (base_heat, _) = climate(wx, wz, seed);
+    let (base_heat, _) = climate(wx, wz, seed, version);
     let (heat, _) = super::terrain_variety::climate(
         wx,
         wz,
         seed,
         ((base_heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0),
         0.5,
+        scaled,
     );
     let period = 34.0 + 22.0 * value_noise2(wx / 1600.0, wz / 1600.0, seed.wrapping_add(9955));
     let column = BedrockColumn {
@@ -1707,7 +1776,7 @@ fn bedrock_column(wx: f32, wz: f32, seed: u32) -> BedrockColumn {
     column
 }
 
-fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> BlockId {
+fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample, version: u32) -> BlockId {
     let dip_coord = wx * tect.boundary_normal[0] + wz * tect.boundary_normal[1];
     let tilt = (dip_coord * 0.012).sin() * (6.0 + tect.boundary_proximity * 10.0);
     let fold = tect.fold_wave * (4.0 + tect.orogeny * 12.0);
@@ -1716,7 +1785,7 @@ fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample) -> B
         heat,
         region,
         period,
-    } = bedrock_column(wx, wz, seed);
+    } = bedrock_column(wx, wz, seed, version);
     let strat_y = wy + tilt + fold + warp + tect.fault_throw;
     if tect.volcanism > 0.46 || tect.rift_graben > 0.5 {
         let dike = (dip_coord * 0.07 + wy * 0.03 + warp * 0.1).sin().abs();
@@ -1763,7 +1832,7 @@ fn sample_stratigraphic_bed(
     version: u32,
 ) -> BlockId {
     if version >= 15 {
-        return bedrock_v15(wx, wy, wz, seed, tect);
+        return bedrock_v15(wx, wy, wz, seed, tect, version);
     }
     // Paleostratigraphic coordinate tilted along plate dip, folded in orogenic belts,
     // and displaced vertically across fault planes.
@@ -1842,7 +1911,7 @@ fn stratum_v15(
     if below > 30.0 && fleck > 0.62 {
         return BlockId::FungalSoil;
     }
-    bedrock_v15(meters.x, meters.y, meters.z, seed, tect)
+    bedrock_v15(meters.x, meters.y, meters.z, seed, tect, cfg.generator_version)
 }
 
 pub(super) fn geological_stratum(
@@ -1857,10 +1926,10 @@ pub(super) fn geological_stratum(
     // Generator 34 swaps the scattered ores for placed ore bodies.
     let meters = p.as_vec3() * cfg.voxel_meters();
     let below = depth as f32 * cfg.voxel_meters();
-    let tect = sample_tectonics_zoomed(meters.x, meters.z, cfg.seed, tectonic_zoom(cfg.generator_version));
+    let tect = sample_tectonics(meters.x, meters.z, cfg.seed, cfg.generator_version);
     let rock = geological_stratum_legacy(cfg, p, column_height, depth, Some(tect));
     let host = if super::ore_geology::is_scattered_ore(rock) {
-        bedrock_v15(meters.x, meters.y, meters.z, cfg.seed, &tect)
+        bedrock_v15(meters.x, meters.y, meters.z, cfg.seed, &tect, cfg.generator_version)
     } else {
         rock
     };
@@ -1895,12 +1964,7 @@ fn geological_stratum_legacy(
 
     if cfg.generator_version >= 9 {
         let tect = tect.unwrap_or_else(|| {
-            sample_tectonics_zoomed(
-                meters.x,
-                meters.z,
-                cfg.seed,
-                tectonic_zoom(cfg.generator_version),
-            )
+            sample_tectonics(meters.x, meters.z, cfg.seed, cfg.generator_version)
         });
         let dip_coord = meters.x * tect.boundary_normal[0] + meters.z * tect.boundary_normal[1];
         let strike_coord = -meters.x * tect.boundary_normal[1] + meters.z * tect.boundary_normal[0];
@@ -2076,17 +2140,14 @@ mod tectonics_and_oceans {
         let mut strata_blocks = std::collections::HashSet::new();
         let mut mountain_surfaces = std::collections::HashSet::new();
 
+        // Generator 53 keeps spawn inland, so the sea sits kilometres away:
+        // the grid covers about 8 km rather than 2 km.
         for gz in -10..=10 {
             for gx in -10..=10 {
-                let x = gx * 96;
-                let z = gz * 96;
+                let x = gx * 384;
+                let z = gz * 384;
                 let s = sample(&cfg, x, z);
-                let tect = sample_tectonics_zoomed(
-                    x as f32,
-                    z as f32,
-                    cfg.seed,
-                    tectonic_zoom(cfg.generator_version),
-                );
+                let tect = sample_tectonics(x as f32, z as f32, cfg.seed, cfg.generator_version);
                 if tect.orogeny > 0.22
                     || tect.volcanism > 0.25
                     || tect.trench > 0.20

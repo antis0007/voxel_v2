@@ -26,11 +26,14 @@ mod seam_route;
 #[cfg(test)]
 mod gen_probe;
 #[cfg(test)]
+mod map_probe;
+#[cfg(test)]
 mod horizon_agreement;
 mod generation_cache;
 pub mod landscape;
 pub mod ecology;
 pub mod drainage;
+pub mod lakes;
 pub mod river_ice;
 pub mod lore;
 mod ore_geology;
@@ -926,10 +929,8 @@ impl Profiles for CachedProfiles {
     fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
         let inherited = valley::river_top(cfg, cfg.world_x(x), cfg.world_z(z));
         let regional = drainage::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
-        match (inherited, regional) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        }
+        let lake = lakes::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
+        [inherited, regional, lake].into_iter().flatten().reduce(f32::max)
     }
 }
 

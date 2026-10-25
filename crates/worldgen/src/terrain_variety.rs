@@ -8,13 +8,16 @@ use super::{BlockId, WATER_LEVEL_METERS, hash2, smoothstep, value_noise2};
 
 /// Widens the climate extremes and roughens biome borders so neighbouring
 /// biomes interleave in patches instead of meeting along smooth contours.
-pub(super) fn climate(wx: f32, wz: f32, seed: u32, heat: f32, wet: f32) -> (f32, f32) {
+/// `soft` (generator 53) keeps the borders irregular but stops them breaking
+/// a region into speckle.
+pub(super) fn climate(wx: f32, wz: f32, seed: u32, heat: f32, wet: f32, soft: bool) -> (f32, f32) {
     let patch_t = value_noise2(wx / 52.0, wz / 52.0, seed.wrapping_add(9601)) - 0.5;
     let patch_m = value_noise2(wx / 47.0, wz / 47.0, seed.wrapping_add(9603)) - 0.5;
     let fine_t = value_noise2(wx / 13.0, wz / 13.0, seed.wrapping_add(9607)) - 0.5;
     let fine_m = value_noise2(wx / 12.0, wz / 12.0, seed.wrapping_add(9611)) - 0.5;
-    let heat = (heat - 0.5) * 1.12 + 0.5 + patch_t * 0.14 + fine_t * 0.05;
-    let wet = (wet - 0.5) * 1.10 + 0.5 + patch_m * 0.14 + fine_m * 0.05;
+    let (patch, fine) = if soft { (0.05, 0.015) } else { (0.14, 0.05) };
+    let heat = (heat - 0.5) * 1.12 + 0.5 + patch_t * patch + fine_t * fine;
+    let wet = (wet - 0.5) * 1.10 + 0.5 + patch_m * patch + fine_m * fine;
     (heat.clamp(0.0, 1.0), wet.clamp(0.0, 1.0))
 }
 
