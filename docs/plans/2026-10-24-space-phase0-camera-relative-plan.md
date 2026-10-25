@@ -102,7 +102,7 @@ fn origin_holds_inside_hysteresis_band() {
 #[test]
 fn chunk_offsets_are_exact_far_from_spawn() {
     let o = RenderOrigin { voxel: IVec3::new(897_024, 0, -1_003_520) };
-    let chunk = IVec3::new(28_126, -2, -31_361);
+    let chunk = IVec3::new(28_126, -2, -31_336);
     let off = o.chunk_offset(chunk);
     assert_eq!(off, [3_008.0, -64.0, 768.0, 0.0]);
     assert_eq!(o.absolute_offset(), [-897_024.0, 0.0, 1_003_520.0, 0.0]);
