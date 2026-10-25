@@ -36,6 +36,17 @@ fn hash(b: &[u8]) -> u64 {
 pub const UI_SCALE_MIN: f32 = 0.75;
 pub const UI_SCALE_MAX: f32 = 2.5;
 pub const UI_SCALE_DEFAULT: f32 = 1.5;
+/// Smallest logical screen, in egui points, the fixed-width panels are laid out for.
+pub const UI_MIN_POINTS: [f32; 2] = [800.0, 450.0];
+
+/// Zoom for `ui_scale`, lowered when display scaling would leave fewer than
+/// `UI_MIN_POINTS`; past that the inventory and workbench slide off screen.
+pub fn fitted_ui_zoom(ui_scale: f32, physical: [f32; 2], native_ppp: f32) -> f32 {
+    let wanted = ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
+    let native = native_ppp.max(0.25);
+    let fit = (physical[0] / (native * UI_MIN_POINTS[0])).min(physical[1] / (native * UI_MIN_POINTS[1]));
+    if fit.is_finite() && fit > 0.0 { wanted.min(fit.max(0.5)) } else { wanted }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Preferences {
@@ -561,6 +572,19 @@ mod tests {
         body.extend_from_slice(&hash(&body).to_le_bytes());
         let decoded = Preferences::decode(&body).expect("legacy preferences must decode");
         assert_eq!(decoded.ui_scale, UI_SCALE_DEFAULT);
+    }
+
+    #[test]
+    fn ui_zoom_keeps_the_preference_until_the_panels_would_not_fit() {
+        // 1080p and 720p at 100% display scaling keep the chosen scale.
+        assert_eq!(fitted_ui_zoom(1.5, [1920.0, 1080.0], 1.0), 1.5);
+        assert_eq!(fitted_ui_zoom(1.5, [1280.0, 720.0], 1.0), 1.5);
+        // 720p at 150% display scaling would leave 569 x 320 points.
+        let zoom = fitted_ui_zoom(1.5, [1280.0, 720.0], 1.5);
+        assert!((1280.0 / (1.5 * zoom) - UI_MIN_POINTS[0]).abs() < 1e-3);
+        assert!(720.0 / (1.5 * zoom) >= UI_MIN_POINTS[1] - 1e-3);
+        // A minimised window has no size to fit.
+        assert_eq!(fitted_ui_zoom(2.0, [0.0, 0.0], 1.0), 2.0);
     }
 
     #[test]

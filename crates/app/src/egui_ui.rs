@@ -1811,10 +1811,12 @@ impl EguiUi {
     pub fn begin_frame(&mut self, window: &Window) {
         typography::apply(&self.ctx);
         // Keep widget dimensions in egui points across resolutions; only the
-        // explicit user preference changes their size.
-        self.ctx.set_zoom_factor(self.ui_scale.clamp(
-            crate::preferences::UI_SCALE_MIN,
-            crate::preferences::UI_SCALE_MAX,
+        // explicit user preference changes their size, capped so the panels fit.
+        let size = window.inner_size();
+        self.ctx.set_zoom_factor(crate::preferences::fitted_ui_zoom(
+            self.ui_scale,
+            [size.width as f32, size.height as f32],
+            window.scale_factor() as f32,
         ));
         self.ctx.data_mut(|d| {
             d.insert_temp(
