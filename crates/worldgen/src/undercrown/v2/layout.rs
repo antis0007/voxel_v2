@@ -208,6 +208,10 @@ pub(super) fn build(cfg: &WorldSampleConfig, ax: f32, az: f32, s: f32, ground: f
     let tunnel_boxes: Vec<_> = tunnels.iter().map(|t| t.bounds()).collect();
     let index = Index::build(min, max, &feature_boxes, &space_boxes, &tunnel_boxes);
     let clear = props.iter().map(|p| p.pos).collect();
-    (rooms, props, Layout { anchor: Vec3::new(ax, l + 1.0, az), spaces, tunnels, features, min, max, clear, index, version: cfg.generator_version })
+    let mut layout = Layout { anchor: Vec3::new(ax, l + 1.0, az), spaces, tunnels, features, min, max, clear, index, version: cfg.generator_version };
+    if layout.version >= super::settle::VERSION {
+        super::settle::settle(&mut layout);
+    }
+    (rooms, props, layout)
 }
 

@@ -19,6 +19,7 @@ mod feature;
 mod fine;
 mod fixtures;
 mod glow;
+mod grove;
 mod furnish;
 mod houses;
 mod index;
@@ -26,6 +27,7 @@ mod layout;
 mod layout_chasm;
 mod layout_deep;
 mod layout_dress;
+mod settle;
 mod shape;
 mod site;
 #[cfg(test)]
@@ -38,6 +40,8 @@ mod tests_grid;
 mod tests_reach;
 #[cfg(test)]
 mod tests_pin;
+#[cfg(test)]
+mod tests_clip;
 
 pub use layout::author;
 
@@ -173,10 +177,21 @@ impl Layout {
     fn sample_with(&self, m: Vec3, v: f32, mech: Mech, deco: bool) -> Option<B> {
         let cell = self.index.at(m);
         for &fi in &cell.features {
-            if let Some(b) = self.features[fi as usize].sample(m, v, mech) {
+            let f = &self.features[fi as usize];
+            if let Some(b) = f.sample(m, v, mech) {
+                // Fitted dressing was probed at a coarser spacing than a
+                // torch is wide; where it still meets the room, the room wins.
+                if f.kind.fitted() && self.ground(cell, m, v, mech, deco) != Some(B::Air) {
+                    continue;
+                }
                 return Some(b);
             }
         }
+        self.ground(cell, m, v, mech, deco)
+    }
+
+    /// The spaces, passages and their dressing at a point, with no features.
+    fn ground(&self, cell: &index::Cell, m: Vec3, v: f32, mech: Mech, deco: bool) -> Option<B> {
         let mut shell: Option<(Style, bool, Owner)> = None;
         let mut floor: Option<Style> = None;
         // A passage keeps its ramp where it runs into a cavern, whose ragged

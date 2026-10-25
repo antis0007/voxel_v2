@@ -4,6 +4,7 @@
 //! dressing in `furnish`.
 //! Each one owns a box; outside it, it says nothing.
 use super::furnish::{Fit, Here};
+use super::grove::{Grove, Lamp, Pipe};
 use super::{Mech, palette};
 use crate::undercrown::plan::Style;
 use crate::{BlockId as B, hash2, hash3};
@@ -43,6 +44,11 @@ pub enum Kind {
     Reliquary { floor: f32 },
     /// Furniture, fixtures and houses; see `furnish`.
     Fit(Fit),
+    /// Generator 52 mushrooms, lanterns and ice pipes, each fitted to the
+    /// room; see `grove` and `settle`.
+    Grove(Grove),
+    Lamps(Vec<Lamp>),
+    Pipes(Vec<Pipe>),
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +56,13 @@ pub struct Feature {
     pub lo: Vec3,
     pub hi: Vec3,
     pub kind: Kind,
+}
+
+impl Kind {
+    /// Dressing placed by `settle`, which gives way to the room.
+    pub fn fitted(&self) -> bool {
+        matches!(self, Kind::Grove(_) | Kind::Lamps(_) | Kind::Pipes(_))
+    }
 }
 
 impl Feature {
@@ -221,6 +234,9 @@ impl Feature {
                 (ring && fy < 0.5 + 2.0 * v).then_some(if fy < 0.5 + v { B::StarGlass } else { B::GoldBlock })
             }
             Kind::Fit(ref fit) => fit.sample(&Here { lo: self.lo, hi: self.hi, m, v }, mech),
+            Kind::Grove(ref grove) => grove.sample(m, v),
+            Kind::Lamps(ref all) => all.iter().find_map(|s| s.sample(m, v)),
+            Kind::Pipes(ref all) => all.iter().find_map(|s| s.sample(m, v)),
         }
     }
 }
