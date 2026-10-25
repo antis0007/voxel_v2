@@ -1,0 +1,8 @@
+{
+  "cube_sphere/from_sphere_1024_gnomonic": 4730,
+  "cube_sphere/from_sphere_1024_spherified": 133161,
+  "cube_sphere/from_sphere_1024_tangent": 12625,
+  "cube_sphere/to_sphere_32x32_gnomonic": 3969,
+  "cube_sphere/to_sphere_32x32_spherified": 8116,
+  "cube_sphere/to_sphere_32x32_tangent": 9319
+}
