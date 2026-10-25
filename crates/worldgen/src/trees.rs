@@ -3,6 +3,8 @@ use super::{BlockId, IVec3, TreeProfile, WorldSampleConfig, hash2, hash3, landsc
 use glam::Vec3Swizzles;
 
 mod forms;
+pub(crate) mod giant;
+mod skeleton;
 mod woodland;
 pub(crate) use forms::TreeForm;
 
@@ -163,6 +165,7 @@ fn distance_to_segment(p: glam::Vec3, a: glam::Vec3, b: glam::Vec3) -> (f32, f32
 
 pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> BlockId {
     use glam::Vec3;
+    if tree.form == TreeForm::Giant { return giant::block(cfg, &tree, p); }
     let scale = cfg.voxel_meters();
     let q = (p - IVec3::new(tree.anchor_x, tree.ground_y, tree.anchor_z)).as_vec3() * scale;
     let height = tree.trunk_h as f32 * scale;
@@ -203,7 +206,7 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     match tree.form {
         TreeForm::Umbrella => return forms::umbrella(cfg, &tree, p, &frame()),
         TreeForm::Weeping => return forms::weeping(cfg, &tree, p, &frame()),
-        TreeForm::Classic | TreeForm::HighCrown => {}
+        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant => {}
     }
     if whorled {
         let base = (tree.branch_start_y - tree.ground_y) as f32 * scale;
@@ -318,6 +321,14 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     }
 }
 
+/// `crown_reach` and `crown_top` together; skeleton crowns are built once.
+pub(super) fn crown_bounds(cfg: &WorldSampleConfig, tree: &TreeProfile) -> (f32, f32) {
+    if tree.form == TreeForm::Giant {
+        return giant::bounds(cfg, tree);
+    }
+    woodland::bounds(cfg, tree).unwrap_or_else(|| (crown_reach(cfg, tree), crown_top(cfg, tree)))
+}
+
 /// Horizontal distance (metres) from the anchor to the outermost leaf this tree
 /// can place. Mirrors `block()` limb by limb with the same hashes, so the LOD
 /// proxy can cover exactly the footprint the voxel crown occupies.
@@ -325,6 +336,8 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     use glam::Vec2;
     let scale = cfg.voxel_meters();
     let radius = tree.canopy_radius as f32 * scale;
+    if tree.form == TreeForm::Giant { return giant::bounds(cfg, tree).0; }
+    if let Some((reach, _)) = woodland::bounds(cfg, tree) { return reach; }
     if woodland::applies(cfg, tree) { return radius * 1.35 + scale; }
     // `block()` offsets the crown by the lean in metres, not voxels.
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
@@ -369,6 +382,8 @@ pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     let scale = cfg.voxel_meters();
     let height = tree.trunk_h as f32 * scale;
     let crown_h = tree.canopy_height as f32 * scale;
+    if tree.form == TreeForm::Giant { return giant::bounds(cfg, tree).1; }
+    if let Some((_, top)) = woodland::bounds(cfg, tree) { return top; }
     if woodland::applies(cfg, tree) { return height + crown_h + scale; }
     if let Some(top) = forms::crown_top(cfg, tree, height, crown_h) {
         return top;

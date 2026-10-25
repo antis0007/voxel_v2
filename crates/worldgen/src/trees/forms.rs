@@ -21,6 +21,8 @@ pub(crate) enum TreeForm {
     Weeping,
     /// Tall bare stem under an irregular needle crown: dry-ground pines.
     HighCrown,
+    /// Generator 52 landmark broadleaf (see `giant.rs`).
+    Giant,
 }
 
 /// Same leaf surface as open crowns: `field < 0.83 + edge * 0.24`.
@@ -183,7 +185,7 @@ pub(super) fn weeping(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f: 
 pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile, radius: f32, lean_len: f32) -> Option<f32> {
     let scale = cfg.voxel_meters();
     let crown = match tree.form {
-        TreeForm::Classic | TreeForm::HighCrown => return None,
+        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant => return None,
         TreeForm::Umbrella => {
             let mut reach = radius * 0.55 * THRESHOLD_REACH;
             for limb in 0..umbrella_limbs(tree) {
@@ -208,7 +210,7 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile, radius: f
 /// Highest leaf in metres above the ground voxel for non-classic crowns.
 pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile, height: f32, crown_h: f32) -> Option<f32> {
     let top = match tree.form {
-        TreeForm::Classic | TreeForm::HighCrown => return None,
+        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant => return None,
         TreeForm::Umbrella if cfg.generator_version >= 47 => {
             let mut rise = 0.0f32;
             for limb in 0..umbrella_limbs(tree) {

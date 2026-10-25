@@ -1846,39 +1846,66 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         * surface_detail_weight(metric_footprint * PIXEL_RES);
     var color = base * (1.0 + grain * 0.24 + mottling * 0.06 + mineral_grain * 0.09);
     if kind == 5 {
+        // Grey-olive bark with moss on up faces and lichen on the sides. Logs
+        // also build houses, so the wood keeps part of its warm base colour.
+        let luma = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let olive = vec3<f32>(luma) * vec3<f32>(1.34, 1.32, 1.02);
+        let moss_tone = vec3<f32>(luma) * vec3<f32>(1.20, 1.46, 0.62);
+        let moss_patch = surface_noise_filtered(physical_uv * 1.9 + vec2<f32>(5.0, -23.0), metric_footprint * 1.9);
         if abs(normal.y) > 0.5 {
             let center = fract(uv) - vec2<f32>(0.5);
             let rings = sin(length(center) * 70.0 + surface_noise(uv * 6.0) * 2.0) * fine_fade;
-            color = base * vec3<f32>(1.32, 1.22, 1.05) * (1.0 + rings * 0.18 + grain * 0.2);
+            let wood = base * vec3<f32>(1.32, 1.22, 1.05) * (1.0 + rings * 0.18 + grain * 0.2);
+            // Exposed upper bark holds moss; bare patches still show the grain.
+            let moss = smoothstep(0.30, 0.58, moss_patch) * select(0.0, 0.92, normal.y > 0.0);
+            color = mix(wood, moss_tone * (0.90 + mottling * 0.4), moss);
         } else {
             let bark = surface_noise_filtered(physical_uv * vec2<f32>(4.5, 0.65), metric_footprint * 4.6);
             let age = surface_noise_filtered(physical_uv / 2.7 + vec2<f32>(37.0, -13.0), metric_footprint / 2.7);
-            let grey_bark = vec3<f32>(dot(base, vec3<f32>(0.2126, 0.7152, 0.0722)))
-                * vec3<f32>(1.02, 1.06, 0.91);
-            color = mix(base, grey_bark, smoothstep(0.44, 0.78, age) * 0.52)
-                * (0.68 + smoothstep(0.22, 0.76, bark) * 0.52);
+            let furrow = 0.70 + smoothstep(0.22, 0.76, bark) * 0.50;
+            var bark_color = mix(base, olive, 0.34 + smoothstep(0.40, 0.80, age) * 0.26) * furrow;
+            let lichen = smoothstep(0.64, 0.80, surface_noise_filtered(physical_uv * 2.6 + vec2<f32>(-9.0, 31.0),
+                metric_footprint * 2.6));
+            let lichen_tone = vec3<f32>(luma) * vec3<f32>(1.62, 1.66, 1.30);
+            bark_color = mix(bark_color, lichen_tone, lichen * 0.42);
+            // Broad moss runs follow the furrows on the sides.
+            let creep = smoothstep(0.60, 0.82, age) * smoothstep(0.38, 0.62, moss_patch);
+            color = mix(bark_color, moss_tone * furrow, creep * 0.45);
         }
     } else if kind == 6 {
-        // Reference crowns read as connected olive/teal masses. Use the same
-        // metric field on every face; per-texel hue lotteries made the canopy
-        // noisy nearby and changed its colour when the detail filtered away.
-        let grove = surface_noise_filtered(landscape_p / 34.0 + vec2<f32>(8.0, 61.0), metric_footprint / 34.0);
+        // Three painted tones per crown lobe, chosen by face orientation:
+        // sunlit tops lean yellow-green, sides keep the mid green and
+        // undersides take the cool sky bounce instead of sinking to dark
+        // green. Every term is a smooth metric field, so the tone survives
+        // when the detail filters away and no motif repeats per voxel.
         let pine = smoothstep(-0.02, 0.02, base.b - base.r);
-        let autumn = vec3<f32>(0.24, 0.13, 0.045);
-        let green_mass = mix(base, vec3<f32>(dot(base, vec3<f32>(0.2126, 0.7152, 0.0722))), 0.22)
-            * vec3<f32>(0.82, 0.83, 0.80);
-        let broadleaf = mix(green_mass, autumn, smoothstep(0.68, 0.90, grove) * 0.32);
-        let needles = base * mix(0.86, 1.02, land_tone);
+        let luma = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let grove = surface_noise_filtered(landscape_p / 34.0 + vec2<f32>(8.0, 61.0), metric_footprint / 34.0);
         let crown_uv = (p.xz + p.y * vec2<f32>(0.41, -0.23)) * cam.world_params.x;
         let crown_mass = surface_noise_filtered(crown_uv / 4.8, metric_footprint * 0.27);
-        let crown_tone = mix(vec3<f32>(0.65, 0.78, 0.85), vec3<f32>(1.16, 1.12, 0.80),
-            smoothstep(0.20, 0.80, crown_mass));
-        // Do not stamp the same leaf diamond into every grid cell: even a
-        // low-contrast motif becomes a checker across a broad crown plane.
-        let leaf_cluster = surface_noise_filtered(texel_centre(crown_uv) * 3.0
-            + vec2<f32>(17.0, -9.0), metric_footprint * 3.8);
-        color = mix(broadleaf, needles, pine) * crown_tone
-            * (0.97 + leaf_cluster * 0.06);
+        // Neighbouring groves drift between warm and cool greens.
+        let mid = mix(base, vec3<f32>(luma), 0.16)
+            * mix(vec3<f32>(0.80, 0.86, 0.80), vec3<f32>(0.90, 0.90, 0.70), grove);
+        var lobe_top = mid * vec3<f32>(1.62, 1.46, 0.56);
+        var lobe_under = mix(mid, vec3<f32>(luma) * vec3<f32>(0.80, 0.98, 1.18), 0.66);
+        var lobe_side = mid * (0.92 + crown_mass * 0.16);
+        // Rare autumn-gold stands: one regional field, soft at its edges.
+        let gold = smoothstep(0.85, 0.91, surface_noise_filtered(landscape_p / 260.0
+            + vec2<f32>(23.0, -57.0), metric_footprint / 260.0)) * (1.0 - pine);
+        lobe_top = mix(lobe_top, vec3<f32>(luma) * vec3<f32>(2.30, 1.62, 0.42), gold);
+        lobe_side = mix(lobe_side, vec3<f32>(luma) * vec3<f32>(1.86, 1.10, 0.30) * (0.92 + crown_mass * 0.16), gold);
+        lobe_under = mix(lobe_under, vec3<f32>(luma) * vec3<f32>(1.10, 0.86, 0.80), gold);
+        let up = smoothstep(0.30, 0.90, normal.y);
+        let down = smoothstep(0.30, 0.90, -normal.y);
+        let broadleaf = mix(mix(lobe_side, lobe_top, up), lobe_under, down);
+        // Conifers stay dark value anchors with a narrower tonal range.
+        let needles = base * mix(0.86, 1.02, land_tone)
+            * mix(vec3<f32>(1.0), vec3<f32>(1.16, 1.12, 0.84), up * 0.6)
+            * mix(vec3<f32>(1.0), vec3<f32>(0.92, 1.0, 1.14), down * 0.6);
+        // Leaf clumps break flat voxel planes; filtered out before they alias.
+        let leaf_cluster = surface_noise_filtered(texel_centre(continuous_uv) * 2.2
+            + vec2<f32>(17.0, -9.0), metric_footprint * 2.8);
+        color = mix(broadleaf, needles, pine) * (0.93 + leaf_cluster * 0.14);
     } else if kind == 9 {
         color *= 1.0 + mottling * 0.2;
     } else if kind == 11 {

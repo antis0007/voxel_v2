@@ -641,6 +641,7 @@ pub fn tree_visual_lod(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footpr
 
 pub fn tree_visual_from_profile(cfg: &WorldSampleConfig, tree: TreeProfile) -> TreeVisual {
     let scale = cfg.voxel_meters();
+    let (reach, top) = trees::crown_bounds(cfg, &tree);
     TreeVisual {
         // The first trunk voxel sits one cell above the surface voxel, so the
         // visible trunk base is the top face of ground_y, not its centre.
@@ -653,10 +654,10 @@ pub fn tree_visual_from_profile(cfg: &WorldSampleConfig, tree: TreeProfile) -> T
         // True leaf footprint in metres, from the same limb math as `block()`.
         // Lobes reach well past `canopy_radius`, so a proxy sized from the
         // radius alone shrinks the tree when its LOD changes.
-        radius: trees::crown_reach(cfg, &tree),
+        radius: reach,
         // Proxy crown height is set so base + height + crown_height is the true
         // leaf top, measured from the same base the proxy is drawn from.
-        crown_height: (trees::crown_top(cfg, &tree) - tree.trunk_h as f32 * scale).max(scale),
+        crown_height: (top - tree.trunk_h as f32 * scale).max(scale),
         conifer: tree.conifer,
         seed: (tree.cell_x as u32).wrapping_mul(73856093)
             ^ (tree.cell_z as u32).wrapping_mul(19349663)
@@ -668,14 +669,23 @@ pub fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) 
     tree_profile_evaluated(cfg, cell_x, cell_z, None)
 }
 
-pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footprint: Option<f32>) -> Option<TreeProfile> {
+/// Trunk voxel column of a tree cell, before any placement test.
+pub(crate) fn tree_anchor(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> (i32, i32) {
     let cell_size = cfg.blocks_for_span(12.0);
     let offset_x = (hash2(cell_x, cell_z, cfg.seed.wrapping_add(401)) * cell_size as f32) as i32;
     let offset_z = (hash2(cell_x, cell_z, cfg.seed.wrapping_add(419)) * cell_size as f32) as i32;
-    let anchor_x = cell_x * cell_size + offset_x.min(cell_size - 1);
-    let anchor_z = cell_z * cell_size + offset_z.min(cell_size - 1);
+    (cell_x * cell_size + offset_x.min(cell_size - 1), cell_z * cell_size + offset_z.min(cell_size - 1))
+}
+
+pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footprint: Option<f32>) -> Option<TreeProfile> {
+    let (anchor_x, anchor_z) = tree_anchor(cfg, cell_x, cell_z);
 
     let column_at = |x, z| footprint.map_or_else(|| sample_column(cfg, x, z), |step| landscape::preview_column_lod(cfg, x, z, step));
+    if trees::giant::candidate(cfg, cell_x, cell_z)
+        && let Some(giant) = trees::giant::profile(cfg, (cell_x, cell_z), (anchor_x, anchor_z))
+    {
+        return Some(giant);
+    }
     let column = column_at(anchor_x, anchor_z);
     let ground_y = column.height;
     let woodland_soil = cfg.generator_version >= 11
@@ -766,7 +776,18 @@ pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32,
     } else if cfg.generator_version >= 5 {
         vegetation::shape_profile(cfg, &mut tree);
     }
+    if cfg.generator_version >= trees::giant::VERSION
+        && trees::giant::crowds(cfg, &tree, |x, z| tree_anchor(cfg, x, z))
+    {
+        return None;
+    }
     Some(tree)
+}
+
+/// Highest voxel of any landmark tree whose crown reaches the voxel box
+/// `min..=max` (x, z), so residency can keep the whole crown loaded.
+pub fn giant_tree_top_near(cfg: &WorldSampleConfig, min: (i32, i32), max: (i32, i32)) -> Option<i32> {
+    trees::giant::top_near(cfg, min, max)
 }
 
 pub fn bush_profile_for_cell(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
@@ -997,9 +1018,12 @@ pub fn structure_block(
                 continue;
             };
             let block = tree_block(cfg, tree, p);
-            if block != BlockId::Air
-                && !surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters())
-            {
+            // Giants keep their crowns over trails; only head height is cleared.
+            let cleared = |p: IVec3| {
+                (tree.form != trees::TreeForm::Giant || p.y <= tree.ground_y + cfg.blocks_for_span(4.5))
+                    && surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters())
+            };
+            if block != BlockId::Air && !cleared(p) {
                 return block;
             }
         }

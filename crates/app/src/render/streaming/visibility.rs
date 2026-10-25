@@ -82,7 +82,9 @@ pub(super) fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) ->
     let effective_min = (min_h - cave_margin).min(water_level - CHUNK_SIZE);
     // Ocean surface chunks are required even when the seabed is several chunks
     // lower (especially at quarter-metre voxel scales).
-    let effective_max = (max_h + tree_margin).max(water_level);
+    // Landmark crowns rise above the ordinary tree margin.
+    let giant_top = engine_worldgen::giant_tree_top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1));
+    let effective_max = (max_h + tree_margin).max(water_level).max(giant_top.unwrap_or(i32::MIN));
 
     let min_cy =
         floor_div_i32(effective_min, CHUNK_SIZE).max(floor_div_i32(cfg.min_world_y(), CHUNK_SIZE));
@@ -114,7 +116,9 @@ fn preview_column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) -> Co
     let water_level = cfg.water_level();
     let tree_margin = cfg.blocks_for_span(28.0) + 1;
     let effective_min = (min_h - CHUNK_SIZE * 2).min(water_level - CHUNK_SIZE);
-    let effective_max = (max_h + tree_margin).max(water_level);
+    // Landmark crowns rise above the ordinary tree margin.
+    let giant_top = engine_worldgen::giant_tree_top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1));
+    let effective_max = (max_h + tree_margin).max(water_level).max(giant_top.unwrap_or(i32::MIN));
     let min_cy =
         floor_div_i32(effective_min, CHUNK_SIZE).max(floor_div_i32(cfg.min_world_y(), CHUNK_SIZE));
     let max_cy = floor_div_i32(effective_max, CHUNK_SIZE)
