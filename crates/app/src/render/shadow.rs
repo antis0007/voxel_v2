@@ -6,6 +6,9 @@ use crate::world::CHUNK_SIZE;
 #[cfg(test)]
 #[path = "shadow_contract.rs"]
 mod contract;
+#[cfg(test)]
+#[path = "shadow_frame_contract.rs"]
+mod frame_contract;
 use super::origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform, RenderOrigin};
 use super::{coverage::ResidentCoverage, horizon::GpuMesh};
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -68,6 +71,7 @@ pub struct CascadeView {
     pub inv_view_proj: Mat4,
     /// Precise eye position, world metres.
     pub eye_m: DVec3,
+    /// Render origin the cascade matrices are expressed in.
     pub origin: RenderOrigin,
 }
 
@@ -227,8 +231,8 @@ pub fn world_locked_texel_offset(view_rel: DMat4, origin_m: DVec3, texel_size: f
 
 /// Fits the light projection around a sphere, in origin-frame metres.
 fn fit_cascade(center_m: DVec3, radius: f64, light_dir: DVec3, up: DVec3, origin_m: DVec3, scale: f64) -> CascadeFit {
-    // Use a massive Z-pullback to ensure tall objects and far-away terrain
-    // casting long shadows at sunrise/sunset are never incorrectly clipped.
+    // A large Z-pullback keeps tall objects and far terrain that cast long
+    // shadows at sunrise and sunset inside the light's depth range.
     let z_pullback = 8000.0 * scale;
     // Subtract the origin before anything rounds: far from spawn the
     // absolute centre has no f32 precision left.

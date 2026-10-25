@@ -11,7 +11,7 @@ fn transform(x: f32) -> DrawTransform {
     DrawTransform { offset: [x, 0.0, 0.0, 0.0], ..DrawTransform::IDENTITY }
 }
 
-/// Draws the quad at slots 1 and 2 and returns the depth row through its centre.
+/// Draws the quad at two slots; returns its centre depth row.
 fn depth_row(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

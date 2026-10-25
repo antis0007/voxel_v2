@@ -1,6 +1,6 @@
 use engine_core::{CHUNK_SIZE, floor_div};
+use crate::fast_hash::FastMap;
 use glam::{DVec3, IVec3, Vec3};
-use std::collections::HashMap;
 
 /// Edge length of the grid the render origin snaps to.
 pub const ORIGIN_GRID_VOXELS: i32 = 4096;
@@ -22,9 +22,12 @@ impl RenderOrigin {
     ///
     /// The band spans one grid cell behind and two ahead of the origin on every
     /// axis, so an eye hovering at a cell edge does not re-snap every frame.
-    pub fn follow(current: Option<RenderOrigin>, eye_voxels: DVec3) -> RenderOrigin {
+    /// `bias` voxels are added on every axis after snapping; the band is
+    /// measured from the unbiased origin, so a bias never forces a re-snap.
+    pub fn follow(current: Option<RenderOrigin>, eye_voxels: DVec3, bias: i32) -> RenderOrigin {
+        let bias = IVec3::splat(bias);
         if let Some(origin) = current {
-            let rel = eye_voxels - origin.voxel.as_dvec3();
+            let rel = eye_voxels - (origin.voxel - bias).as_dvec3();
             let lo = -f64::from(ORIGIN_GRID_VOXELS);
             let hi = 2.0 * f64::from(ORIGIN_GRID_VOXELS);
             if [rel.x, rel.y, rel.z].iter().all(|&d| d >= lo && d < hi) {
@@ -32,7 +35,7 @@ impl RenderOrigin {
             }
         }
         let snap = |v: f64| floor_div(v.floor() as i32, ORIGIN_GRID_VOXELS) * ORIGIN_GRID_VOXELS;
-        RenderOrigin { voxel: IVec3::new(snap(eye_voxels.x), snap(eye_voxels.y), snap(eye_voxels.z)) }
+        RenderOrigin { voxel: IVec3::new(snap(eye_voxels.x), snap(eye_voxels.y), snap(eye_voxels.z)) + bias }
     }
 
     /// Origin-relative offset of a chunk's minimum corner, in voxels.
@@ -46,10 +49,46 @@ impl RenderOrigin {
         [-self.voxel.x as f32, -self.voxel.y as f32, -self.voxel.z as f32, 0.0]
     }
 
-    /// Eye position relative to the origin, narrowed to f32 after subtracting.
-    pub fn eye_from_origin(self, eye_voxels: DVec3) -> Vec3 {
-        (eye_voxels - self.voxel.as_dvec3()).as_vec3()
+    /// Shader `eye_from_origin` in metres, computed in f64.
+    ///
+    /// The view matrix already translates by `-residual`, so it is left out
+    /// here; otherwise origin-frame vertices would subtract it twice.
+    pub fn eye_uniform(self, precise_eye_m: DVec3, scale: f64, residual: Vec3) -> Vec3 {
+        (precise_eye_m - self.voxel.as_dvec3() * scale - residual.as_dvec3()).as_vec3()
     }
+}
+
+/// Largest accepted `VOXEL_RENDER_ORIGIN_BIAS` magnitude, in voxels.
+const MAX_ORIGIN_BIAS: i32 = 1 << 24;
+
+/// Parses a `VOXEL_RENDER_ORIGIN_BIAS` value in voxels.
+fn parse_origin_bias(text: &str) -> Result<i32, String> {
+    let bias: i32 = text.trim().parse().map_err(|_| format!("not an integer: {text:?}"))?;
+    if bias % ORIGIN_GRID_VOXELS != 0 || bias.unsigned_abs() > MAX_ORIGIN_BIAS.unsigned_abs() {
+        return Err(format!("{bias} is not a multiple of {ORIGIN_GRID_VOXELS} within +-{MAX_ORIGIN_BIAS}"));
+    }
+    Ok(bias)
+}
+
+/// Debug render-origin bias from `VOXEL_RENDER_ORIGIN_BIAS`, read once.
+///
+/// A nonzero bias moves the origin away from the eye at spawn, so captures
+/// there exercise the origin-frame path with a nonzero origin.
+pub fn origin_bias_voxels() -> i32 {
+    static BIAS: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *BIAS.get_or_init(|| match std::env::var("VOXEL_RENDER_ORIGIN_BIAS") {
+        Err(_) => 0,
+        Ok(text) => match parse_origin_bias(&text) {
+            Ok(bias) => {
+                eprintln!("[render-origin] bias={bias} voxels");
+                bias
+            }
+            Err(reason) => {
+                eprintln!("[render-origin] VOXEL_RENDER_ORIGIN_BIAS ignored: {reason}");
+                0
+            }
+        },
+    })
 }
 
 /// Per-draw placement read from vertex buffer slot 1.
@@ -57,14 +96,14 @@ impl RenderOrigin {
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DrawTransform {
     pub offset: [f32; 4],
-    /// Unit quaternion `xyzw`; the identity until bent chunks need it (decision 0025).
+    /// Unit quaternion `xyzw`; identity until bent chunks (decision 0025).
     pub rotation: [f32; 4],
 }
 
 impl DrawTransform {
     pub const IDENTITY: DrawTransform = DrawTransform { offset: [0.0; 4], rotation: [0.0, 0.0, 0.0, 1.0] };
 
-    /// Instance-step layout at slot 1, shared by the world and shadow pipelines.
+    /// Instance-step layout at slot 1 for world and shadow pipelines.
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<DrawTransform>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -83,7 +122,7 @@ const _: [(); 32] = [(); std::mem::size_of::<DrawTransform>()];
 #[derive(Default)]
 pub struct DrawOffsets {
     transforms: Vec<DrawTransform>,
-    slots: HashMap<IVec3, u32>,
+    slots: FastMap<IVec3, u32>,
     buffer: Option<wgpu::Buffer>,
     capacity: usize,
 }
@@ -150,18 +189,18 @@ mod tests {
 
     #[test]
     fn origin_snaps_with_floor_division() {
-        let o = RenderOrigin::follow(None, DVec3::new(-0.5, 10.0, 900_032.25));
+        let o = RenderOrigin::follow(None, DVec3::new(-0.5, 10.0, 900_032.25), 0);
         assert_eq!(o.voxel, IVec3::new(-4096, 0, 897_024));
     }
 
     #[test]
     fn origin_holds_inside_hysteresis_band() {
-        let o = RenderOrigin::follow(None, DVec3::new(100.0, 0.0, 0.0));
+        let o = RenderOrigin::follow(None, DVec3::new(100.0, 0.0, 0.0), 0);
         for x in [-4095.0, 0.0, 4096.0, 8191.0] {
-            assert_eq!(RenderOrigin::follow(Some(o), DVec3::new(x, 0.0, 0.0)), o);
+            assert_eq!(RenderOrigin::follow(Some(o), DVec3::new(x, 0.0, 0.0), 0), o);
         }
-        assert_ne!(RenderOrigin::follow(Some(o), DVec3::new(8192.0, 0.0, 0.0)), o);
-        assert_ne!(RenderOrigin::follow(Some(o), DVec3::new(-4097.0, 0.0, 0.0)), o);
+        assert_ne!(RenderOrigin::follow(Some(o), DVec3::new(8192.0, 0.0, 0.0), 0), o);
+        assert_ne!(RenderOrigin::follow(Some(o), DVec3::new(-4097.0, 0.0, 0.0), 0), o);
     }
 
     #[test]
@@ -186,10 +225,54 @@ mod tests {
     }
 
     #[test]
-    fn eye_from_origin_keeps_sub_millimetre_precision() {
+    fn eye_uniform_keeps_sub_millimetre_precision() {
         let o = RenderOrigin { voxel: IVec3::new(897_024, 0, 0) };
         let eye = DVec3::new(900_031.999_7, 101.25, 0.5);
-        let rel = o.eye_from_origin(eye);
+        let rel = o.eye_uniform(eye, 1.0, Vec3::ZERO);
         assert!((rel.x as f64 - 3_007.999_7).abs() < 1e-3);
+    }
+
+    #[test]
+    fn origin_bias_offsets_snap_without_moving_the_band() {
+        let biased = RenderOrigin::follow(None, DVec3::new(100.0, 50.0, -20.0), 4096);
+        assert_eq!(biased.voxel, IVec3::new(4096, 4096, 0));
+        let plain = RenderOrigin::follow(None, DVec3::new(100.0, 50.0, -20.0), 0);
+        for x in [-4097.0, -4095.0, 0.0, 8191.0, 8192.0, 20_000.0] {
+            let eye = DVec3::new(x, 50.0, -20.0);
+            let b = RenderOrigin::follow(Some(biased), eye, 4096);
+            assert_eq!(b.voxel - IVec3::splat(4096), RenderOrigin::follow(Some(plain), eye, 0).voxel, "x = {x}");
+        }
+    }
+
+    #[test]
+    fn origin_bias_accepts_grid_multiples_only() {
+        assert_eq!(parse_origin_bias("4096"), Ok(4096));
+        assert_eq!(parse_origin_bias(" -8192 "), Ok(-8192));
+        assert_eq!(parse_origin_bias("0"), Ok(0));
+        for bad in ["100", "abc", "", "4294967296", "-2147483648", "33554432"] {
+            assert!(parse_origin_bias(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn eye_uniform_cancels_view_residual_far_from_spawn() {
+        for (scale, eye) in [
+            (1.0, DVec3::new(897_030.123_4, 101.3, -1_003_511.97)),
+            (0.25, DVec3::new(897_030.123_4, 101.3, -1_003_511.97)),
+        ] {
+            // As render.rs computes it: the part of the eye the f32 view matrix holds.
+            let residual = (eye - eye.as_vec3().as_dvec3()).as_vec3();
+            assert!(residual.x.abs() > 1e-3 && residual.z.abs() > 1e-3, "{residual}");
+            let origin = RenderOrigin::follow(None, eye / scale, 0);
+            let e = origin.eye_uniform(eye, scale, residual);
+            let chunk = origin.voxel / CHUNK_SIZE + IVec3::new(0, 3, 0);
+            let in_chunk = Vec3::new(17.5, 7.25, 9.0);
+            let local = Vec3::from_slice(&origin.chunk_offset(chunk)[..3]) + in_chunk;
+            let drawn = local * scale as f32 - e - residual;
+            let p_abs = (chunk * CHUNK_SIZE).as_dvec3() + in_chunk.as_dvec3();
+            let truth = p_abs * scale - eye;
+            let err = (drawn.as_dvec3() - truth).abs().max_element();
+            assert!(err < 1e-4, "scale {scale}: drawn {drawn} truth {truth} err {err}");
+        }
     }
 }

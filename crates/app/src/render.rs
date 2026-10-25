@@ -818,7 +818,7 @@ struct CameraUniform {
     resident_coverage: coverage::ResidentCoverage,
     /// xyz: `RenderOrigin` in voxels, the frame chunk vertices are drawn in.
     render_origin: [i32; 4],
-    /// xyz: eye minus the render origin in metres, less the view matrix residual.
+    /// xyz: eye minus render origin, metres, less the view residual.
     eye_from_origin: [f32; 4],
 }
 
@@ -1201,9 +1201,9 @@ pub struct Gpu {
     shadow_renderer: shadow::ShadowRenderer,
     /// Indirect arguments for the main terrain pass (multi-draw path).
     chunk_indirect: streaming::indirect_draws::IndirectDraws,
-    /// Per-chunk draw transforms shared by the main pass and every shadow cascade.
+    /// Per-chunk draw transforms for the main pass and shadow cascades.
     draw_offsets: DrawOffsets,
-    /// Frame chunk vertices are drawn in; `None` until the first camera upload.
+    /// Chunk vertex frame; `None` before the first camera upload.
     render_origin: Option<RenderOrigin>,
     horizon_detail: horizon::detail::Gpu,
     world_surface_bind_group: wgpu::BindGroup,
@@ -3883,11 +3883,9 @@ impl Gpu {
         let eye = precise_eye.as_vec3();
         let residual = (precise_eye - eye.as_dvec3()).as_vec3();
         let eye_voxels = precise_eye / f64::from(world_scale);
-        let render_origin = RenderOrigin::follow(self.render_origin, eye_voxels);
+        let render_origin = RenderOrigin::follow(self.render_origin, eye_voxels, origin::origin_bias_voxels());
         self.render_origin = Some(render_origin);
-        // The view matrix already translates by -residual, so the shader's eye
-        // term leaves it out; otherwise origin-frame vertices would subtract it twice.
-        let eye_from_origin = render_origin.eye_from_origin(eye_voxels) * world_scale - residual;
+        let eye_from_origin = render_origin.eye_uniform(precise_eye, f64::from(world_scale), residual);
         let cur_forward = forward.normalize();
         // Callers supply a conventional 0 = near, 1 = far projection. The scene is
         // drawn reverse-Z into a 32-bit float depth buffer: 24-bit forward-Z gave
@@ -4482,7 +4480,9 @@ impl Gpu {
             );
         }
         // Main-pass slots and indirect arguments are taken before the upload; the
-        // offset table must be complete before any pass binds it.
+        // offset table must be complete before any pass binds it. This work and
+        // the upload count toward terrain encode time, not shadow time.
+        let main_prepare_start = Instant::now();
         let multidraw = !paused && streaming::indirect_draws::active();
         for key in draw_list.iter() {
             self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
@@ -4497,6 +4497,7 @@ impl Gpu {
             (0, 0)
         };
         self.draw_offsets.upload(&self.device, &self.queue);
+        let main_prepare_ms = main_prepare_start.elapsed().as_secs_f32() * 1000.0;
         if redraw_shadow_map && let Some(draw_offsets) = self.draw_offsets.buffer() {
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
@@ -4526,7 +4527,7 @@ impl Gpu {
         } else {
             0
         };
-        frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0;
+        frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0 - main_prepare_ms;
 
         let terrain_start = Instant::now();
         self.atmosphere.record_sky_probe(&mut encoder, &self.camera_bind_group, &self.lighting_bind_group);
@@ -4644,7 +4645,7 @@ impl Gpu {
                 frame_stats.terrain_indices = terrain_indices;
             }
         }
-        frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0;
+        frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0 + main_prepare_ms;
         if !paused && indirect_lighting_enabled() {
             let timestamps = allocate_pass_timestamp_writes(
                 gpu_query_set.as_ref(),

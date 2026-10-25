@@ -36,7 +36,7 @@ fn vs_main(in: VsIn) -> ShadowVertex {
     // Origin-frame voxels; the light matrix maps origin-frame metres.
     let local = in.pos + in.draw_offset.xyz;
     // Ownership keys on absolute columns: rebuilding them from the integer
-    // origin returns horizon vertices to their exact absolute values.
+    // origin returns horizon vertices to their absolute values within one ulp.
     let absolute = vec3<f32>(gen.render_origin.xyz) + local;
     var p = local;
     var out: ShadowVertex;

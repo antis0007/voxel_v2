@@ -17,7 +17,7 @@ struct Case {
     eye: DVec3,
 }
 
-/// One 32 x 32 quad on the chunk's floor, chunk-local as the uploader writes it.
+/// Chunk-floor 32 x 32 quad in uploader chunk-local coordinates.
 fn chunk_case(chunk: IVec3, eye: DVec3, origin: RenderOrigin) -> Case {
     Case {
         positions: [[0.0, 0.0, 0.0], [0.0, 0.0, 32.0], [32.0, 0.0, 32.0], [32.0, 0.0, 0.0]],
@@ -27,7 +27,7 @@ fn chunk_case(chunk: IVec3, eye: DVec3, origin: RenderOrigin) -> Case {
     }
 }
 
-/// Renders the world shader's vertex stage into a 64 x 64 depth image.
+/// Renders the world shader's vertex stage to 64x64 depth.
 fn depth_image(device: &wgpu::Device, queue: &wgpu::Queue, case: &Case) -> Vec<f32> {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("far chunk world shader"),
@@ -72,7 +72,7 @@ fn depth_image(device: &wgpu::Device, queue: &wgpu::Queue, case: &Case) -> Vec<f
     camera.camera_pos = [eye_m.x as f32, eye_m.y as f32, eye_m.z as f32, 0.0];
     camera.world_params = [SCALE, SCALE.recip(), 0.0, 1000.0];
     camera.render_origin = [case.origin.x, case.origin.y, case.origin.z, 0];
-    let eye_rel = origin.eye_from_origin(case.eye) * SCALE;
+    let eye_rel = origin.eye_uniform(eye_m, f64::from(SCALE), Vec3::ZERO);
     camera.eye_from_origin = [eye_rel.x, eye_rel.y, eye_rel.z, 0.0];
     let lighting = LightingUniform::zeroed();
 
@@ -183,7 +183,7 @@ fn gpu_far_chunk_matches_near_chunk() {
 
     let far_chunk = IVec3::new(28_126, 0, 0);
     let far_eye = DVec3::new(900_048.0, 10.0, 16.0);
-    let origin = RenderOrigin::follow(None, far_eye);
+    let origin = RenderOrigin::follow(None, far_eye, 0);
     let far = depth_image(&device, &queue, &chunk_case(far_chunk, far_eye, origin));
     let diff = max_difference(&near, &far);
     assert!(diff <= 1e-6, "far chunk depth differs from near chunk by {diff}");
@@ -203,11 +203,11 @@ fn gpu_far_chunk_matches_near_chunk() {
     let legacy_diff = max_difference(&near, &depth_image(&device, &queue, &legacy(far_eye)));
     let fraction = DVec3::new(0.3, 0.0, 0.0);
     let near_fraction = depth_image(&device, &queue, &chunk_case(IVec3::ZERO, near_eye + fraction, RenderOrigin { voxel: IVec3::ZERO }));
-    let far_fraction = chunk_case(far_chunk, far_eye + fraction, RenderOrigin::follow(None, far_eye + fraction));
+    let far_fraction = chunk_case(far_chunk, far_eye + fraction, RenderOrigin::follow(None, far_eye + fraction, 0));
     let origin_fraction = max_difference(&near_fraction, &depth_image(&device, &queue, &far_fraction));
     let legacy_fraction = max_difference(&near_fraction, &depth_image(&device, &queue, &legacy(far_eye + fraction)));
     println!(
-        "[far-chunk] max depth diff: origin frame {diff:e} (absolute frame {legacy_diff:e});          eye +0.3 voxel: origin frame {origin_fraction:e} (absolute frame {legacy_fraction:e}) on {:?}",
+        "[far-chunk] max depth diff: origin frame {diff:e} (absolute frame {legacy_diff:e}); eye +0.3 voxel: origin frame {origin_fraction:e} (absolute frame {legacy_fraction:e}) on {:?}",
         adapter.get_info().backend
     );
 }
