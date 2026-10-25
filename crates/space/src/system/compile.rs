@@ -2,7 +2,7 @@
 use super::{BodyId, Spin, System};
 use crate::data::{OrbitDef, RotationPeriod, SystemDef};
 use crate::kepler::{Elements, G};
-use crate::spin::lock_phase;
+use crate::spin::lock_to_orbit;
 use crate::validate::{SystemError, validate};
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -98,9 +98,10 @@ impl System {
                     locked,
                     phase0: 0.0,
                 };
-                if locked {
+                // Validation guarantees a locked body has an orbit or a binary rail.
+                if let (true, Some(elements)) = (locked, &system.elements[i]) {
                     let (relative, _) = system.relative_state(BodyId(i as u16), 0);
-                    spin.phase0 = lock_phase(&spin, relative);
+                    lock_to_orbit(&mut spin, elements, relative);
                 }
                 spin
             })

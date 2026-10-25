@@ -69,8 +69,10 @@ pub struct BinaryDef {
 pub enum RotationPeriod {
     Seconds(f64),
     /// Spin period equals the body's own orbital period, or its binary's for
-    /// a component, with +X facing the parent at tick 0. Exact only for a
-    /// circular orbit whose normal is the spin axis; otherwise it librates.
+    /// a component. The axis is that orbit's normal, so `tilt_deg` must be 0
+    /// and `north_deg` is ignored. +X faces the parent (a component's
+    /// barycenter) at tick 0; the spin runs at the mean motion, so an
+    /// eccentric orbit librates.
     Locked,
 }
 
@@ -79,11 +81,11 @@ pub enum RotationPeriod {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RotationDef {
     pub period: RotationPeriod,
-    /// Angle of the spin axis from system +Y, degrees.
+    /// Angle of the spin axis from system +Y, degrees. Must be 0 for
+    /// `Locked`, whose axis is the orbit normal.
     pub tilt_deg: f64,
     /// Azimuth the axis tilts toward: degrees in the XZ plane from +X toward
-    /// -Z, a positive turn about +Y. Matching an orbit's normal takes
-    /// `tilt = i` and `north = node - 90`.
+    /// -Z, a positive turn about +Y. Ignored for `Locked`.
     pub north_deg: f64,
 }
 
@@ -115,7 +117,7 @@ mod tests {
         let mut sys = binary();
         sys.bodies[3].rotation = Some(RotationDef {
             period: RotationPeriod::Locked,
-            tilt_deg: 12.5,
+            tilt_deg: 0.0,
             north_deg: 90.0,
         });
         sys.bodies[1].rotation = Some(RotationDef {

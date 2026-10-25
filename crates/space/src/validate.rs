@@ -187,7 +187,7 @@ fn check_orbit(orbit: &OrbitDef, who: &str) -> Result<(), SystemError> {
     Ok(())
 }
 
-/// A binary component locks to its partner on the binary's shared period.
+/// A binary component locks to its partner on the binary's shared period and plane.
 fn check_rotation(body: &BodyDef, component: bool) -> Result<(), SystemError> {
     let Some(rotation) = &body.rotation else {
         return Ok(());
@@ -203,6 +203,11 @@ fn check_rotation(body: &BodyDef, component: bool) -> Result<(), SystemError> {
         RotationPeriod::Locked if body.orbit.is_none() && !component => Err(bad(
             id,
             "locked rotation needs an orbit or a binary partner",
+        )),
+        // The axis of a locked body is its orbit normal.
+        RotationPeriod::Locked if rotation.tilt_deg != 0.0 => Err(bad(
+            id,
+            "locked rotation takes its axis from the orbit: tilt_deg must be 0",
         )),
         RotationPeriod::Locked => Ok(()),
     }

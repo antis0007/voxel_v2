@@ -10,12 +10,14 @@ const MIN_SEGMENTS: usize = 3;
 
 /// Writes a closed polyline of `b`'s parent-relative orbit into `out`.
 ///
-/// Samples are uniform in eccentric anomaly, starting at periapsis, and the
-/// last point repeats the first, so `out` draws as a line strip. Add the
-/// parent's position for system coordinates. Uses the fewest segments whose
-/// largest gap to the true ellipse is at most `max_chord_error_m`, capped at
-/// `MAX_POINTS` points; a non-positive or NaN tolerance takes the cap. The
-/// root has no orbit and leaves `out` empty.
+/// Samples are uniform in eccentric anomaly, starting at periapsis. `out`
+/// holds segments + 1 points: the last is a copy of the first, so the path
+/// draws as a line strip as is; skip the last point to draw a line loop.
+/// Add the parent's position for system coordinates. Uses the fewest
+/// segments whose largest gap to the true ellipse is at most
+/// `max_chord_error_m`, capped at `MAX_POINTS` points, closing point
+/// included; a non-positive or NaN tolerance takes the cap. The root has no
+/// orbit and leaves `out` empty.
 pub fn orbit_path(system: &System, b: BodyId, max_chord_error_m: f64, out: &mut Vec<DVec3>) {
     out.clear();
     let Some(elements) = system.elements(b) else {

@@ -1,7 +1,8 @@
 //! Body orientation from spin: axis tilt, spin phase and tidal lock.
+use crate::kepler::Elements;
 use crate::system::{BodyId, Spin, System};
 use glam::{DQuat, DVec3};
-use std::f64::consts::TAU;
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 impl Spin {
     /// Rotation carrying body +Y onto the spin axis, before any spin.
@@ -32,16 +33,20 @@ impl System {
     }
 }
 
-/// Spin angle at tick 0 that turns body +X toward the parent.
+/// Aligns a locked spin with its orbit and faces +X at the parent.
 ///
-/// `relative` is the body's parent-relative position at tick 0. Only the
-/// part of the parent direction across the spin axis can be matched, so the
-/// lock is exact when the axis is the orbit normal and the orbit is circular;
-/// otherwise the body librates about the parent direction.
-pub(crate) fn lock_phase(spin: &Spin, relative: DVec3) -> f64 {
+/// The axis becomes the orbit normal `(sin i·sin node, cos i, sin i·cos node)`,
+/// which is +Y tilted by `i` toward azimuth `node - 90°`; the authored tilt and
+/// north are ignored. `relative` is the body's parent-relative position at
+/// tick 0. The spin runs at the mean motion, so the lock is exact on a
+/// circular orbit and librates on an eccentric one.
+pub(crate) fn lock_to_orbit(spin: &mut Spin, elements: &Elements, relative: DVec3) {
+    spin.tilt = elements.i;
+    spin.north = elements.node - FRAC_PI_2;
     let toward = spin.axis_frame().inverse() * -relative;
-    // A turn of φ about +Y carries +X to (cos φ, 0, -sin φ).
-    f64::atan2(-toward.z, toward.x)
+    // A turn of φ about +Y carries +X to (cos φ, 0, -sin φ). The parent
+    // direction lies in the orbit plane, across the axis, so this is exact.
+    spin.phase0 = f64::atan2(-toward.z, toward.x);
 }
 
 #[cfg(test)]

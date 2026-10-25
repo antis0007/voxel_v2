@@ -16,9 +16,10 @@ pub struct BodyId(pub u16);
 /// Compiled spin of one body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spin {
-    /// Axis tilt from system +Y, radians.
+    /// Axis tilt from system +Y, radians; a locked body's comes from its orbit.
     pub tilt: f64,
-    /// Direction the axis leans, radians in the XZ plane from +X toward -Z.
+    /// Direction the axis leans, radians in the XZ plane from +X toward -Z;
+    /// a locked body's comes from its orbit.
     pub north: f64,
     /// Ticks per turn, at least 1. A locked body uses its orbit's period in
     /// ticks, or its binary's for a component.

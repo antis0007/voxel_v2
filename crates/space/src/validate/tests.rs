@@ -191,6 +191,22 @@ fn binary_components_may_lock_to_their_partner() {
 }
 
 #[test]
+fn locked_spin_rejects_a_tilt_but_ignores_north() {
+    let mut s = two_body();
+    s.bodies[1].rotation = Some(RotationDef {
+        period: RotationPeriod::Locked,
+        tilt_deg: 0.0,
+        north_deg: 75.0,
+    });
+    validate(&s).unwrap();
+    s.bodies[1].rotation.as_mut().unwrap().tilt_deg = 5.0;
+    assert!(is_bad_orbit(validate(&s), "p"));
+    let mut b = binary();
+    b.bodies[1].rotation = s.bodies[1].rotation.clone();
+    assert!(is_bad_orbit(validate(&b), "a"));
+}
+
+#[test]
 fn spin_values_are_checked() {
     for period in [0.0, -480.0, f64::NAN] {
         let mut s = two_body();

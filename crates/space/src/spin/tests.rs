@@ -57,6 +57,8 @@ fn spin_period_returns_to_identity_rotation() {
 fn locked_moon_faces_its_parent_all_orbit() {
     let mut moon_orbit = orbit(1_440.0);
     moon_orbit.e = 0.0;
+    moon_orbit.i_deg = 5.1;
+    moon_orbit.node_deg = 40.0;
     moon_orbit.peri_deg = 40.0;
     moon_orbit.mean_anomaly_deg = 75.0;
     let mut moon = body("m", BodyKind::Moon, Some("p"), Some(moon_orbit));
@@ -69,21 +71,33 @@ fn locked_moon_faces_its_parent_all_orbit() {
     let m = system.id("m").unwrap();
     assert_eq!(system.spin(m).unwrap().period_ticks, 172_800);
     assert_faces(&system, "m", "p");
+    assert_axis_is_orbit_normal(&system, "m", 5.1, 40.0);
 }
 
 #[test]
-fn locked_moon_on_an_inclined_orbit_faces_its_parent_with_a_matching_axis() {
+fn locked_moon_on_a_retrograde_orbit_ignores_north_and_faces_its_parent() {
     let mut moon_orbit = orbit(900.0);
     moon_orbit.e = 0.0;
-    moon_orbit.i_deg = 20.0;
+    moon_orbit.i_deg = 160.0;
     moon_orbit.node_deg = 70.0;
     moon_orbit.mean_anomaly_deg = 200.0;
-    // The orbit normal is (sin i·sin node, cos i, sin i·cos node); an axis
-    // tilted by i toward north = node - 90 points along it.
     let mut moon = body("m", BodyKind::Moon, Some("s"), Some(moon_orbit));
-    moon.rotation = rotation(RotationPeriod::Locked, 20.0, -20.0);
+    moon.rotation = rotation(RotationPeriod::Locked, 0.0, -125.0);
     let def = system(vec![body("s", star(), None, None), moon]);
-    assert_faces(&compile(&def), "m", "s");
+    let system = compile(&def);
+    assert_faces(&system, "m", "s");
+    assert_axis_is_orbit_normal(&system, "m", 160.0, 70.0);
+}
+
+/// Checks that body `b`'s spin axis is the normal of an orbit with `i` and `node`.
+fn assert_axis_is_orbit_normal(system: &System, b: &str, i_deg: f64, node_deg: f64) {
+    let (i, node) = (i_deg.to_radians(), node_deg.to_radians());
+    let normal = DVec3::new(i.sin() * node.sin(), i.cos(), i.sin() * node.cos());
+    let b = system.id(b).unwrap();
+    for tick in [0, 999, 123_456] {
+        let axis = system.orientation(b, tick) * DVec3::Y;
+        assert!((axis - normal).length() < 1e-12, "tick {tick}: {axis:?}");
+    }
 }
 
 #[test]
@@ -93,7 +107,7 @@ fn locked_binary_components_face_each_other() {
     shared.e = 0.0;
     let (i, node) = (shared.i_deg, shared.node_deg);
     for c in &mut def.bodies[..2] {
-        c.rotation = rotation(RotationPeriod::Locked, i, node - 90.0);
+        c.rotation = rotation(RotationPeriod::Locked, 0.0, 0.0);
     }
     let system = compile(&def);
     let pair = system.id("pair").unwrap();
@@ -105,6 +119,8 @@ fn locked_binary_components_face_each_other() {
     assert_faces(&system, "a", "b");
     assert_faces(&system, "b", "a");
     assert_faces(&system, "a", system.name(pair));
+    assert_axis_is_orbit_normal(&system, "a", i, node);
+    assert_axis_is_orbit_normal(&system, "b", i, node);
 }
 
 #[test]
