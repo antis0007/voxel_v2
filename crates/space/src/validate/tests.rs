@@ -1,6 +1,6 @@
 use super::*;
 use crate::data::{BodyKind, RotationDef, RotationPeriod, parse};
-use crate::fixtures::{binary, body, orbit, system, two_body};
+use crate::fixtures::{binary, binary_around_star, body, orbit, system, two_body};
 
 fn is_bad_orbit(r: Result<(), SystemError>, who: &str) -> bool {
     matches!(r, Err(SystemError::BadOrbit { body, .. }) if body == who)
@@ -10,6 +10,7 @@ fn is_bad_orbit(r: Result<(), SystemError>, who: &str) -> bool {
 fn fixtures_are_valid() {
     validate(&two_body()).unwrap();
     validate(&binary()).unwrap();
+    validate(&binary_around_star()).unwrap();
 }
 
 #[test]

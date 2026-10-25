@@ -1,0 +1,148 @@
+//! Compiled star system: bodies in parent-first order, evaluated per tick.
+//!
+//! Positions are f64 rails for rendering and the map. Sim-facing values will
+//! be fixed-point once a consumer exists (space design 8a.4).
+use crate::data::BodyKind;
+use crate::kepler::{Elements, G};
+use glam::DVec3;
+use std::f64::consts::TAU;
+
+mod compile;
+
+/// Index of a body in a compiled system's parent-first storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BodyId(pub u16);
+
+/// Compiled spin of one body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spin {
+    /// Axis tilt from system +Y, radians.
+    pub tilt: f64,
+    /// Direction the axis leans, radians in the XZ plane from +X toward -Z.
+    pub north: f64,
+    /// Ticks per turn; a locked body uses its orbit's period in ticks.
+    pub period_ticks: u64,
+    /// Spin period follows the body's own orbit.
+    pub locked: bool,
+}
+
+/// One star system on rails, stored as columns in parent-first order.
+///
+/// Every column is indexed by `BodyId.0`, and a parent's index is always
+/// below its children's, so one forward pass evaluates the hierarchy.
+#[derive(Clone, Debug)]
+pub struct System {
+    names: Vec<String>,
+    kinds: Vec<BodyKind>,
+    /// Barycenters hold the sum of their two components.
+    mass: Vec<f64>,
+    radius: Vec<f64>,
+    parent: Vec<Option<BodyId>>,
+    /// Parent-relative orbit; `None` only for the root.
+    elements: Vec<Option<Elements>>,
+    /// At least 1 wherever `elements` is `Some`, 0 elsewhere.
+    period_ticks: Vec<u64>,
+    /// Mean anomaly at tick 0, radians.
+    mean_anomaly0: Vec<f64>,
+    spin: Vec<Option<Spin>>,
+}
+
+/// Positions (m) and velocities (m/s) of every body at one tick.
+///
+/// Indexed by `BodyId.0`, system frame, root at the origin.
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub position: Vec<DVec3>,
+    pub velocity: Vec<DVec3>,
+}
+
+impl System {
+    /// Number of bodies.
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    /// True when the system has no bodies; a compiled system always has a root.
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// Finds a body by its data id.
+    pub fn id(&self, name: &str) -> Option<BodyId> {
+        let i = self.names.iter().position(|n| n == name)?;
+        Some(BodyId(i as u16))
+    }
+
+    /// Data id of a body.
+    pub fn name(&self, b: BodyId) -> &str {
+        &self.names[b.0 as usize]
+    }
+
+    /// Kind of a body as authored.
+    pub fn kind(&self, b: BodyId) -> &BodyKind {
+        &self.kinds[b.0 as usize]
+    }
+
+    /// Body the given body orbits; `None` for the root.
+    pub fn parent(&self, b: BodyId) -> Option<BodyId> {
+        self.parent[b.0 as usize]
+    }
+
+    /// Mass in kg; a barycenter's is the sum of its components.
+    pub fn mass(&self, b: BodyId) -> f64 {
+        self.mass[b.0 as usize]
+    }
+
+    /// Radius in metres.
+    pub fn radius(&self, b: BodyId) -> f64 {
+        self.radius[b.0 as usize]
+    }
+
+    /// Spin data, if the body rotates.
+    pub fn spin(&self, b: BodyId) -> Option<Spin> {
+        self.spin[b.0 as usize]
+    }
+
+    /// Gravity at the surface in m/s², 0 for a body without radius.
+    pub fn surface_gravity(&self, b: BodyId) -> f64 {
+        let r = self.radius(b);
+        if r > 0.0 {
+            G * self.mass(b) / (r * r)
+        } else {
+            0.0
+        }
+    }
+
+    /// Writes every body's state at `tick` into `out`, reusing its storage.
+    pub fn evaluate(&self, tick: u64, out: &mut Snapshot) {
+        let n = self.len();
+        out.position.resize(n, DVec3::ZERO);
+        out.velocity.resize(n, DVec3::ZERO);
+        for i in 0..n {
+            let (pos, vel) = self.relative_state(BodyId(i as u16), tick);
+            // Parents precede children, so the parent's entry is already this tick's.
+            let (base_pos, base_vel) = match self.parent[i] {
+                Some(p) => (out.position[p.0 as usize], out.velocity[p.0 as usize]),
+                None => (DVec3::ZERO, DVec3::ZERO),
+            };
+            out.position[i] = base_pos + pos;
+            out.velocity[i] = base_vel + vel;
+        }
+    }
+
+    /// Parent-relative position and velocity at `tick`; zero for the root.
+    pub(crate) fn relative_state(&self, b: BodyId, tick: u64) -> (DVec3, DVec3) {
+        let i = b.0 as usize;
+        let Some(elements) = &self.elements[i] else {
+            return (DVec3::ZERO, DVec3::ZERO);
+        };
+        // Integer reduction first, so the phase at tick 10^12 is the phase at
+        // its remainder bit for bit; a float time would lose digits instead.
+        let period = self.period_ticks[i].max(1);
+        let fraction = (tick % period) as f64 / period as f64;
+        elements.state_at(self.mean_anomaly0[i] + TAU * fraction)
+    }
+}
+
+#[cfg(test)]
+mod tests;

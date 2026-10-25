@@ -64,3 +64,30 @@ pub fn binary() -> SystemDef {
         body("p", BodyKind::Planet, Some("pair"), Some(orbit(90_000.0))),
     ])
 }
+
+/// Star `s` orbited by barycenter `pair` of planets `a` and `b`, listed children first.
+pub fn binary_around_star() -> SystemDef {
+    let mut root = body("s", star(), None, None);
+    root.mass_kg = 2.0e30;
+    root.radius_m = 7.0e8;
+    let mut pair = body("pair", BodyKind::Barycenter, Some("s"), Some(orbit(3.0e7)));
+    // Derived from the components; compile ignores the authored value.
+    pair.mass_kg = 123.0;
+    pair.radius_m = 0.0;
+    let mut shared = orbit(1.0e6);
+    shared.e = 0.4;
+    shared.i_deg = 7.0;
+    shared.node_deg = 35.0;
+    shared.peri_deg = 60.0;
+    shared.mean_anomaly_deg = 15.0;
+    pair.binary = Some(BinaryDef {
+        a: "a".into(),
+        b: "b".into(),
+        orbit: shared,
+    });
+    let mut a = body("a", BodyKind::Planet, Some("pair"), None);
+    a.mass_kg = 1.0e27;
+    let mut b = body("b", BodyKind::GasGiant, Some("pair"), None);
+    b.mass_kg = 5.0e26;
+    system(vec![a, b, pair, root])
+}

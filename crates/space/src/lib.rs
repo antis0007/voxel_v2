@@ -1,8 +1,9 @@
-//! Star systems on rails: schema, validation and (in later modules) evaluation.
+//! Star systems on rails: schema, validation and per-tick evaluation.
 mod data;
 #[cfg(test)]
 mod fixtures;
 mod kepler;
+mod system;
 mod validate;
 
 pub use data::{
@@ -10,4 +11,5 @@ pub use data::{
     parse,
 };
 pub use kepler::{Elements, G, solve_kepler};
+pub use system::{BodyId, Snapshot, Spin, System};
 pub use validate::{SystemError, validate};
