@@ -179,9 +179,10 @@ fn marker_path() -> std::path::PathBuf {
     std::path::Path::new("saves").join("gpu-reset.flag")
 }
 
-/// Record a lost graphics device: in the crash log for support, and as a marker
-/// so the next launch starts with lowered settings instead of repeating it.
-pub fn record_gpu_reset(adapter: &str, reason: &str) {
+/// Record a lost graphics device in the crash log for support and, when
+/// `mark_next_launch`, as a marker so the next launch starts with lowered
+/// settings. Benchmark and capture runs must not lower the player's session.
+pub fn record_gpu_reset(adapter: &str, reason: &str, mark_next_launch: bool) {
     use std::io::Write;
     let _ = std::fs::create_dir_all("saves");
     let line = format!(
@@ -193,7 +194,9 @@ pub fn record_gpu_reset(adapter: &str, reason: &str) {
     if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open("saves/crash.log") {
         let _ = log.write_all(line.as_bytes());
     }
-    let _ = std::fs::write(marker_path(), format!("{adapter}\n{reason}\n"));
+    if mark_next_launch {
+        let _ = std::fs::write(marker_path(), format!("{adapter}\n{reason}\n"));
+    }
 }
 
 /// True once, if the previous session ended in a lost graphics device.
