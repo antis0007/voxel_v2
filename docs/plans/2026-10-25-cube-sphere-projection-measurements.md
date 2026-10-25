@@ -38,7 +38,7 @@ just test cube_sphere
 just bench cube_sphere
 ```
 
-The first prints the three `Distortion` values at 513 samples. `just verify` ran `just bench-check` as well. `just bench-save` was not run, so `crates/core/benches/baselines.json` does not exist and the gate reports the six new benches as having no baseline.
+The first prints the three `Distortion` values at 513 samples. `just verify` ran `just bench-check` as well. `just bench-save cube_sphere` then wrote the six baselines to `crates/core/benches/baselines.json` (median of 3 pinned passes on a quiet machine: `to_sphere` 3.969, 9.319 and 8.116 microseconds, `from_sphere` 4.730, 12.625 and 133.161 microseconds for gnomonic, tangent and spherified), and a later `just bench-check` passed all six within 3%.
 
 ## Machine and bench noise
 
