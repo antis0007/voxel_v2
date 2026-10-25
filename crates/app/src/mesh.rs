@@ -1502,6 +1502,9 @@ fn free_water_level(chunk: &GeneratedChunk, p: IVec3) -> Option<f32> {
 /// columns of different volume slope into each other instead of stepping in
 /// 1/8 m terraces. Halo columns count, so chunks agree on their border corners.
 fn water_corner_height(chunk: &GeneratedChunk, x: i32, z: i32, row: i32) -> f32 {
+    if let Some(ramp) = water_ramp_corner_height(chunk, x, z, row) {
+        return ramp;
+    }
     let (mut sum, mut count) = (0.0, 0u32);
     for (cx, cz) in [(x - 1, z - 1), (x, z - 1), (x - 1, z), (x, z)] {
         if let Some(level) = free_water_level(chunk, IVec3::new(cx, row, cz)) {
@@ -1514,6 +1517,54 @@ fn water_corner_height(chunk: &GeneratedChunk, x: i32, z: i32, row: i32) -> f32 
     } else {
         sum / count as f32
     }
+}
+
+/// Corner height above `row`'s floor where free surfaces one row apart meet,
+/// so a one-voxel flow step meshes as a ramp instead of a vertical wall.
+/// Columns are classified from rows `a..=a + 2` of the row pair alone, so both
+/// cells at the corner compute the same height; at most one pair qualifies.
+/// Deeper drops (waterfalls) return `None` and keep their wall.
+fn water_ramp_corner_height(chunk: &GeneratedChunk, x: i32, z: i32, row: i32) -> Option<f32> {
+    let water = |cx: i32, y: i32, cz: i32| chunk.get_world(IVec3::new(cx, y, cz)) == BlockId::Water;
+    'pair: for a in [row - 1, row] {
+        let (mut sum, mut count, mut low, mut high) = (0.0, 0u32, false, false);
+        for (cx, cz) in [(x - 1, z - 1), (x, z - 1), (x - 1, z), (x, z)] {
+            let top = if water(cx, a + 1, cz) {
+                if water(cx, a + 2, cz) {
+                    continue 'pair;
+                }
+                high = true;
+                a + 1
+            } else if water(cx, a, cz) {
+                low = true;
+                a
+            } else {
+                continue;
+            };
+            let level = free_water_level(chunk, IVec3::new(cx, top, cz)).unwrap_or(0.0);
+            sum += level + (top - row) as f32;
+            count += 1;
+        }
+        if low && high {
+            return Some(sum / count as f32);
+        }
+    }
+    None
+}
+
+/// True when a free water surface sits one row above or below a neighbouring
+/// free surface, which only the exact water mesher draws as a ramp. Both cells
+/// test true, so a chunk whose partner cell lies in the halo still ramps.
+pub(crate) fn has_water_flow_step(chunk: &GeneratedChunk, p: IVec3) -> bool {
+    let water = |q: IVec3| chunk.get_world(q) == BlockId::Water;
+    water(p)
+        && !water(p + IVec3::Y)
+        && [IVec3::X, -IVec3::X, IVec3::Z, -IVec3::Z].into_iter().any(|d| {
+            let q = p + d;
+            let lower = !water(q) && !chunk.get_world(q).is_opaque() && water(q - IVec3::Y);
+            let upper = water(q) && water(q + IVec3::Y) && !water(q + IVec3::Y * 2);
+            lower || upper
+        })
 }
 
 /// Admission bound for exact water appended to a coarse solid mesh. A face
@@ -1532,6 +1583,12 @@ pub fn exact_water_mesh_bytes_upper_bound(chunk: &GeneratedChunk) -> usize {
                         * (1.0 - WATER_SURFACE_INSET) >= 1.0;
                 faces += usize::from(!full_height);
                 faces += usize::from(chunk.get_world(p - IVec3::Y).is_empty());
+                if !submerged {
+                    // A ramped free surface can rise above its voxel and need a
+                    // wall on any side, including toward an opaque neighbour.
+                    faces += 4;
+                    continue;
+                }
                 for delta in [IVec3::X, -IVec3::X, IVec3::Z, -IVec3::Z] {
                     let neighbor = chunk.get_world(p + delta);
                     if neighbor.is_opaque() { continue; }
@@ -1610,20 +1667,31 @@ fn append_water_mesh(mesh: &mut ChunkMesh, chunk: &GeneratedChunk) {
                                 CELLS.map(|(i, j)| Vec3::new(i as f32, 0.0, j as f32))
                             }
                         } else {
-                            if neighbor.is_opaque() {
+                            let above = chunk.get_world(p + offset + IVec3::Y);
+                            if neighbor.is_opaque() && above.is_opaque() {
                                 continue;
                             }
                             // The wall's foot is the neighbour's surface at the shared
-                            // corners: its free level if it has one, the full voxel if
-                            // water sits above it, and the floor if it is dry.
+                            // corners: its free level if it has one, the full voxel
+                            // (or a ramp above it) if water sits above it, a lower
+                            // neighbour's ramp where it rises into this row, and
+                            // the floor if it is dry. Beside an opaque cell only a
+                            // ramp risen above this voxel needs a wall.
                             let floor_at = |cx: i32, cz: i32| match neighbor {
-                                BlockId::Water
-                                    if chunk.get_world(p + offset + IVec3::Y)
-                                        != BlockId::Water =>
-                                {
+                                n if n.is_opaque() => 1.0,
+                                BlockId::Water if above != BlockId::Water => {
                                     water_corner_height(chunk, cx, cz, p.y)
                                 }
+                                BlockId::Water
+                                    if chunk.get_world(p + offset + IVec3::Y * 2)
+                                        != BlockId::Water =>
+                                {
+                                    1.0 + water_corner_height(chunk, cx, cz, p.y + 1)
+                                }
                                 BlockId::Water => 1.0,
+                                _ if chunk.get_world(p + offset - IVec3::Y) == BlockId::Water => {
+                                    (water_corner_height(chunk, cx, cz, p.y - 1) - 1.0).max(0.0)
+                                }
                                 _ => 0.0,
                             };
                             let plane = if positive { 1 } else { 0 };
@@ -1932,3 +2000,5 @@ mod terrace_metric {
 
 #[cfg(test)]
 mod water_depth_probe;
+#[cfg(test)]
+mod water_ramp_probe;

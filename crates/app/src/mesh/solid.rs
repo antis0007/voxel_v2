@@ -31,12 +31,15 @@ impl SolidPlan {
         let mut water = vec![0u64; 3 * P * P];
         // Submerged volume churn must not switch the whole chunk's water
         // tessellation. Only a rendered free fractional surface needs this path.
+        // One-voxel flow steps also need it: only the exact mesher ramps them.
         let partial_water = chunk.water_levels.iter().map(|(&p,&level)|(p,level))
             .chain(chunk.water_deficit.keys().map(|&p|(p,7))).any(|(p, level)| {
             level < 8
                 && chunk.get_world(p) == BlockId::Water
                 && chunk.get_world(p + IVec3::Y) != BlockId::Water
-        });
+        }) || (0..N as i32).any(|y| (0..N as i32).any(|z| (0..N as i32).any(|x| {
+            super::has_water_flow_step(chunk, chunk.chunk * CHUNK_SIZE + IVec3::new(x, y, z))
+        })));
         let mut torches = 0;
         let mut water_faces = 0;
         for y in 0..P {
@@ -273,6 +276,10 @@ impl SolidPlan {
             }
         }
         Some(plan)
+    }
+    #[cfg(test)]
+    pub fn uses_exact_water(&self) -> bool {
+        self.partial_water
     }
     pub fn lod_invariant(&self) -> bool {
         self.patches.is_empty() && !self.torches
