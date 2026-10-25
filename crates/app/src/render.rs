@@ -9,6 +9,7 @@ pub(crate) fn flush_review_captures() {
     }
 }
 mod horizon;
+mod origin;
 mod streaming;
 pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, build_draw_list};
 pub use streaming::{
