@@ -18,7 +18,7 @@ pub struct Distortion {
 /// Measures `p` on `samples_per_axis` squared cell centres of one face.
 ///
 /// The six faces are rotations of one another, so one face gives the whole
-/// answer. Cell centres never reach the face corner, so a ratio is approached
+/// answer. Cell centres never reach the face boundary, so a ratio is approached
 /// from inside and never exceeds its analytic limit. Zero samples count as one.
 pub fn measure(p: Projection, samples_per_axis: u32) -> Distortion {
     measure_face(p, Face::PosY, samples_per_axis)

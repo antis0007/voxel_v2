@@ -38,9 +38,9 @@ fn every_face_measures_the_same() {
 }
 
 #[test]
-fn finer_sampling_approaches_the_corner_from_inside() {
-    let corner_area = [3.0 * 3f64.sqrt(), 2f64.sqrt()];
-    for (p, limit) in [Projection::Gnomonic, Projection::Tangent].into_iter().zip(corner_area) {
+fn finer_sampling_approaches_the_limit_from_inside() {
+    let limits = [3.0 * 3f64.sqrt(), 2f64.sqrt()];
+    for (p, limit) in [Projection::Gnomonic, Projection::Tangent].into_iter().zip(limits) {
         let (coarse, fine) = (measure(p, 129), measure(p, 1025));
         assert!(coarse.area_ratio <= fine.area_ratio, "{p:?}");
         assert!(fine.area_ratio <= limit + 1e-12, "{p:?} {fine:?}");

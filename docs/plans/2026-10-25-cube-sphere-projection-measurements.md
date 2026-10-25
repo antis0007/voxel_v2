@@ -17,8 +17,8 @@ Distortion is `distortion::measure(p, 513)`: 513 x 513 cell centres over one fac
 Field meanings: `area_ratio` is the largest over the smallest solid angle per unit of `(s, t)` area. `max_angle_deviation_deg` is the largest distance of the angle between the two tangents from 90 degrees. `max_edge_length_ratio` is the largest over the smallest arc length per unit of `s`. A map with no distortion reads 1, 0 and 1.
 
 Reading the table:
-- Gnomonic reaches 5.176 at 513 samples. The corner value is 3 sqrt(3) = 5.196; cell centres stop 1/513 short of the corner, so the measure sits 0.4% under it. `finer_sampling_approaches_the_corner_from_inside` checks that finer grids rise toward the limit and never pass it.
-- Tangent area ratio is sqrt(2) = 1.414 at the corner; 1.412 measured.
+- Gnomonic reaches 5.176 at 513 samples. The corner value is 3 sqrt(3) = 5.196; cell centres stop 1/513 short of the corner, so the measure sits 0.4% under it. `finer_sampling_approaches_the_limit_from_inside` checks that finer grids rise toward the limit and never pass it.
+- Tangent area ratio is sqrt(2) = 1.414 between the face centre (largest area per unit of `(s, t)`) and the midpoint of a face edge (smallest); 1.412 measured. The corner is not the extreme for this map.
 - None of the three is equal-area (ratio 1). The best measured is Spherified at 1.327.
 - The angle deviation is 29.7 to 29.9 degrees for all three and tends to 30 degrees. Three faces meet at a cube corner, so the tangents there are 60 or 120 degrees apart on any map. The column does not separate the projections; the other two columns do.
 
