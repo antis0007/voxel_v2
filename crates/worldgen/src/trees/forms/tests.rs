@@ -75,7 +75,7 @@ fn biome_census() {
 fn new_forms_stay_inside_their_crown_bounds() {
     let cfg = cfg(CURRENT_GENERATOR_VERSION);
     let scale = cfg.voxel_meters();
-    let mut checked = [0usize; 4];
+    let mut checked = [0usize; 5];
     for tree in sweep(&cfg) {
         let slot = tree.form as usize;
         if tree.form == TreeForm::Classic || checked[slot] >= 6 {

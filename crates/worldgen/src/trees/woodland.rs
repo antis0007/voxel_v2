@@ -4,6 +4,7 @@ use super::{BlockId as B, IVec3, TreeForm, TreeProfile, WorldSampleConfig, dista
 use glam::{Vec3, Vec3Swizzles};
 
 mod v47;
+mod v52;
 
 #[cfg(test)]
 mod tests;
@@ -29,7 +30,13 @@ pub(super) fn profile(cfg: &WorldSampleConfig, t: &mut TreeProfile, age: f32) {
     t.branch_start_y = t.ground_y + cfg.blocks_for_span(h * if age > 0.76 { 0.38 } else { 0.64 });
 }
 
+/// Exact leaf reach and top (metres) where the crown is a skeleton.
+pub(super) fn bounds(cfg: &WorldSampleConfig, t: &TreeProfile) -> Option<(f32, f32)> {
+    (cfg.generator_version >= 52 && applies(cfg, t)).then(|| v52::bounds(cfg, t))
+}
+
 pub(super) fn block(cfg: &WorldSampleConfig, t: &TreeProfile, p: IVec3) -> B {
+    if cfg.generator_version >= 52 { return v52::block(cfg, t, p); }
     if cfg.generator_version >= 47 { return v47::block(cfg, t, p); }
     let v = cfg.voxel_meters();
     let q = (p - IVec3::new(t.anchor_x, t.ground_y, t.anchor_z)).as_vec3() * v;
