@@ -645,6 +645,19 @@ fn preview_landscape_with_footprints(
 ) -> Landscape {
     let wx = cfg.world_x(x);
     let wz = cfg.world_z(z);
+    let (h, slope, temperature, moisture) = preview_shaped(cfg, wx, wz, footprint, detail_footprint);
+    classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, 0.25)
+}
+
+/// Far-field ground top before drainage carving. It builds no erosion tiles,
+/// so drainage planning can sample far from the chunk being generated.
+pub(super) fn pre_drainage_preview_top(cfg: &WorldSampleConfig, wx: f32, wz: f32) -> f32 {
+    preview_shaped(cfg, wx, wz, 8.0, 8.0).0 + cfg.voxel_meters()
+}
+
+fn preview_shaped(
+    cfg: &WorldSampleConfig, wx: f32, wz: f32, footprint: f32, detail_footprint: f32,
+) -> (f32, f32, f32, f32) {
     let probe = footprint.clamp(8.0, 96.0);
     let height_at = |px: f32, pz: f32| {
         base_height(
@@ -660,8 +673,7 @@ fn preview_landscape_with_footprints(
     let hx = height_at(wx + probe, wz);
     let hz = height_at(wx, wz + probe);
     let slope0 = (((hx - h0) / probe).powi(2) + ((hz - h0) / probe).powi(2)).sqrt();
-    let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25, detail_footprint);
-    classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, 0.25)
+    apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25, detail_footprint)
 }
 
 fn build_tile(key: TileKey) -> Tile {
@@ -859,7 +871,15 @@ fn classify_landscape(
     temperature: f32, moisture: f32, sediment: f32,
 ) -> Landscape {
     let drainage = super::drainage::sample(cfg, wx, wz);
-    let h = h + (drainage.bed_m.min(h) - h) * drainage.bank;
+    let h = if cfg.generator_version >= super::drainage::RIVER_FIT_GENERATOR {
+        // Fitted channels give the ground top directly: a carve ceiling and a
+        // bank floor that keeps water from standing above dry ground.
+        let raw = h + cfg.voxel_meters();
+        let fill = drainage.levee_m.map_or(f32::MIN, |l| l.min(raw + super::drainage::LEVEE_CAP_M));
+        raw.min(drainage.bed_m).max(fill) - cfg.voxel_meters()
+    } else {
+        h + (drainage.bed_m.min(h) - h) * drainage.bank
+    };
     let moisture = (moisture + drainage.bank * 0.24).min(1.0);
     let sediment = (sediment + drainage.bank * 0.35).min(1.0);
     let alpine = if cfg.generator_version >= 9 {
