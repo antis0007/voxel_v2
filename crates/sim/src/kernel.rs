@@ -24,7 +24,7 @@ pub struct StepStats {
 }
 
 /// Voxel position of a block's cell `i` (`idx` order).
-fn cell_pos(anchor: IVec3, i: usize) -> IVec3 {
+pub(crate) fn cell_pos(anchor: IVec3, i: usize) -> IVec3 {
     anchor + IVec3::new((i & 1) as i32, (i >> 2) as i32, ((i >> 1) & 1) as i32)
 }
 

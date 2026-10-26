@@ -7,6 +7,10 @@ use crate::{
 use engine_core::fast_hash::FastMap;
 use glam::IVec3;
 
+mod fine_kernel;
+#[cfg(test)]
+mod step_tests;
+
 /// Borrowed authoritative contents of one block; uniform reads allocate nothing.
 #[derive(Clone, Copy, Debug)]
 pub enum BlockView<'a> {
