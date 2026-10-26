@@ -6,10 +6,14 @@ use crate::{
 };
 use engine_core::fast_hash::FastMap;
 use glam::IVec3;
+use std::collections::VecDeque;
 
 mod fine_kernel;
+mod step;
 #[cfg(test)]
 mod step_tests;
+
+pub use step::{DORMANT_CHECKS_PER_TICK, FineStepStats, MAX_FINE_AWAKE, MatterStepStats};
 
 /// Borrowed authoritative contents of one block; uniform reads allocate nothing.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +57,8 @@ pub struct MatterStore {
     masks: FastMap<IVec3, [u64; 8]>,
     /// Fine blocks the next tick steps; promotion and a changed or pending block add to it.
     awake: Vec<IVec3>,
+    /// Fine blocks that fell asleep: candidates for demotion once uniform and past the hysteresis.
+    dormant: VecDeque<IVec3>,
 }
 
 impl MatterStore {
@@ -62,6 +68,7 @@ impl MatterStore {
             fine: FineStore::new(fine_blocks),
             masks: FastMap::default(),
             awake: Vec::new(),
+            dormant: VecDeque::new(),
         }
     }
 

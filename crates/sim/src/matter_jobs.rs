@@ -23,7 +23,7 @@ impl FineRegion {
         Self { center, radius: 24 }
     }
 
-    fn contains(self, block: IVec3) -> bool {
+    pub(crate) fn contains(self, block: IVec3) -> bool {
         // Widen before subtracting or squaring, including at i32 world limits.
         let x = i128::from(block.x) - i128::from(self.center.x);
         let y = i128::from(block.y) - i128::from(self.center.y);

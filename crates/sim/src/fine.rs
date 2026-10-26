@@ -97,6 +97,11 @@ impl FineStore {
         self.slots.contains_key(&block)
     }
 
+    /// Every fine block, in no particular order.
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = IVec3> + '_ {
+        self.slots.keys().copied()
+    }
+
     /// Split a uniform block into sixty-four equal cells.
     ///
     /// Promoting an already-fine block changes nothing: an authored partial

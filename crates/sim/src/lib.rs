@@ -36,7 +36,10 @@ pub use cell::{
 pub use fine::{
     BLOCK_UNITS, Collapse, FINE_CELLS, FINE_SIZE, FineStore, SUB_BRICK_BYTES, collapsed,
 };
-pub use matter::{BlockView, MatterError, MatterMemory, MatterStore};
+pub use matter::{
+    BlockView, DORMANT_CHECKS_PER_TICK, FineStepStats, MAX_FINE_AWAKE, MatterError, MatterMemory, MatterStepStats,
+    MatterStore,
+};
 pub use matter_jobs::{FineJob, FineJobs, FineJobStats, FineRegion};
 pub use store::{BrickStore, NO_SLOT, PoolFull};
 pub use kernel::{StepStats, step, step_skipping, step_with};
