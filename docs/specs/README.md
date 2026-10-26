@@ -51,6 +51,19 @@ Its [review](../design/PROJECT_AXIOM_REV4_REVIEW.md) and
 contracts and route the complete scope into the master inventory. This does not
 replace the bible's lore or the functional-text rules below.
 
+## Briefs supplied 2026-10-25 (not inputs of record)
+
+Two briefs pasted by the owner on 2026-10-25, after the input freeze in
+[decision 0022](../decisions/0022-master-plan-review.md). Preserved as pasted.
+No decision records them and the master plan does not route them; the
+[W-GEO precedent](../decisions/0023-worldgen-spec-input.md) is the path if the
+human wants that.
+
+| File | Status | SHA-256 |
+|---|---|---|
+| `VARIABLE_SCALE_UNDERGROUND.md` | Complete. Source of [the variable-scale plan](../plans/2026-10-25-variable-scale-and-underground.md) and ADR 0023, which cite it as the owner brief. | `a434c873bda7059cac12ef41faded3edf950f6ec2a04b60a4af996e0f85c26e8` |
+| `LIVING_WORLD.md` | Truncated. The paste stopped at its 50,000-character limit inside §11 Phase III, after "The player can undertake di". Everything past that point is missing; resupplying the full file replaces this copy. | `43ea2c082772c8d41a073d451f917dc770f13d72fc80b8928e6cfcc3bcbff8ce` |
+
 ## Description rules (latest user revision)
 
 The second IV.11a block in the request supersedes the first:
