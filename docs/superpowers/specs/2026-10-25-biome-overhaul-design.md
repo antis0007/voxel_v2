@@ -409,6 +409,90 @@ Codex entries follow the tooltip contract (≤ 50 words, numbers from data). The
   get species requests through a tree API); session 00's underground biomes
   (column coupling agreed with them).
 
+### 12.6 Biome process contract (binding from phase 2; phase 1 must leave room in the schema)
+
+Added 2026-10-25 from owner review. It fixes the data shape that makes the
+decisions above enforceable; the section numbers inside it (§1 to §6) are its own.
+
+### 1. Biomes are assembled, not placed
+A cell's biome is the best-scoring entry in `biomes.ron` against the local fields:
+`temp_mean, temp_range, precip, precip_season, drainage, soil_depth, lithology, slope, aspect, salinity, mana`.
+Each biome declares tolerance curves (trapezoids) per field; score = product. Top two
+scores give the blend weight; `closest-two by distance` is only the tie-break. Border
+effects are computed from exported properties (§3), never from biome-pair tables.
+
+### 2. Every biome exports a process with a deniable input and a routable output
+```ron
+Biome(
+  id: "fen", display: "Mistfen", family: Wetland,
+  tolerances: { temp_mean: (2, 6, 16, 22), precip: (700, 900, 2000, 3000), drainage: (0, 0, 0.2, 0.4), ... },
+  exports: { heat: 0.0, water: 0.9, mineral: 0.1, fuel: 0.6, mana: 0.2 },   // for borders, §3
+  substrate: Peat, rock: Mudstone, cave: FloodedTunnels,
+  process: Process(
+    input:  Field(water_table, min: 0.8),          // deny: drain it
+    reaction: "peat_decay",                         // row in reactions.ron, runs on growth tick
+    output: Gas("methane", rate: 0.02),             // route: cap vents into pipes
+    vent: Surface(spacing_m: 12, jitter: 0.5),
+  ),
+  hazard: Hazard(
+    trigger: Concentration("methane", 0.3),
+    stages: [
+      (cue: Audio("hiss"), visual: Shimmer, at: 0.3),
+      (cue: Audio("whump"), damage: 2, at: 0.5),
+      (lethal: true, effect: Explosion(strength: 3), at: 0.7, requires_ignition: true),
+    ],
+  ),
+  trick: Trick(desc: "methane feeds burners and lights", unlock: Codex("fen_lights")),
+  reclaim: Reclaim(rate_days: 30, suppressed_by: [Light(>=8), Heat(>=300)]),
+  succession: ["burned", "meadow", "scrub", "fen"],  // states; durations in seasons
+  palette: "fen", sound: "fen", sky: "mist",
+)
+```
+Validator rules: `process.input` must be a field the player can change; `process.output`
+must be a material or energy that at least one machine or recipe consumes; `hazard.stages`
+must have ≥2 non-lethal stages before any `lethal: true`; `trick` must reference a codex
+entry; `succession` states must be biomes or declared transient states.
+
+### 3. Borders are computed
+For a cell with blend (A: w, B: 1−w), border effect = f(|exports_A − exports_B|) over the
+blend band (w ∈ 0.3..0.7):
+- heat × water → steam vents, mineral terraces (travertine/sinter), obsidian where heat ≥ 0.8
+- water × mineral → fertile alluvium (oasis farmland), salt crust if drainage < 0.2
+- fuel × heat → fire-scar ecotone, charcoal seams
+- mana × any → resonance anomalies (crystal growth, lights)
+- cold × water → frost hollow, ice lens, thermokarst
+The table of effect rules is small (≤ 12 rows) and keyed by property deltas, so adding a
+biome adds borders for free. Phase 1 reserves `exports` in the schema even if unused.
+
+### 4. Catch-up ("the world remembers")
+Per 32 m cell: 8 bytes — `state: u8 (succession index), age: u16 (seasons), stock: u8 (process accumulator), disturbance: u8 (last event), reclaim: u8, pad`.
+On load after Δt ticks: advance `age` by Δt/season; apply succession transitions in closed
+form; integrate the process output into `stock` capped by storage (a vent cannot bank
+infinite methane); apply reclaim unless suppressed at save time; then realize materials.
+Closed-form only — no simulation while away. `catch_up_replay` scenario asserts that
+leaving for N seasons equals running N seasons live within tolerance.
+
+### 5. Sanity constraints
+- Processes never produce net energy from nothing: every output has an input field that
+  depletes or a solar/geothermal source declared (`source: Geothermal(heat_plane)`).
+- Hazards obey physics: methane is the gas sim's methane; avalanche is a powder mass with
+  support loss; permafrost slump is a thermal → material-state change. No scripted
+  "hazard events" that bypass planes.
+- Far-field cells (coarse bricks) carry `exports` and `state` so the horizon shows the
+  right palette and smoke/steam without realization.
+
+### 6. Phases 2–6, restated as deliverables against this schema
+2. Processes for 6 launch biomes + validator + `biome_report` (process presence per region).
+3. Derived borders + 12-row effect table + capture board.
+4. Hazard stages wired to planes + warning audio cue per hazard + lethal flags per profile.
+5. Catch-up + reclaim + succession with the `catch_up_replay` scenario.
+6. Identity: palettes, sky/fog, sound beds, landmark naming hook from the wonder scheduler.
+
+Reviewer's entry point: `biomes.ron`, the validator, `biome_report` output for three
+seeds, and the capture board. If those four read as the design, the diff is secondary.
+The phase table in §13 keeps its original order; where the two disagree, this contract
+wins from phase 2 onward.
+
 ## 13. Phases
 
 | Phase | Delivers | Save change | Depends on |

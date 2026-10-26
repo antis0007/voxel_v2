@@ -1607,10 +1607,55 @@ fn natural_surface_blended(
         let heather = cool * (1.0 - forest) * smoothstep(0.62, 0.82, mottle);
         turf_color = mix(turf_color, vec3<f32>(0.42, 0.32, 0.40), heather * up * 0.16 * (1.0 - snow));
         if cam.scene_seed.y >= 10u {
-            let savanna = smoothstep(0.50, 0.65, heat) * (1.0 - smoothstep(0.38, 0.53, wet));
-            let rainforest = smoothstep(0.50, 0.65, heat) * smoothstep(0.60, 0.78, wet);
-            turf_color = mix(turf_color, sand * 0.82, savanna * up * 0.24 * (1.0 - coastal_dune));
-            turf_color = mix(turf_color, vec3<f32>(0.30, 0.43, 0.25) * 0.82, rainforest * up * 0.42);
+            // Biome floors. Weights mirror the classify_landscape thresholds in
+            // landscape.rs on the same heat/wet fields, softened into ecotones.
+            // Each biome owns a matted-floor reflectance and one or two patch
+            // materials; tufts, snow, scree and wear are still applied after.
+            // Ramps straddle the worldgen thresholds (0.56 warm, 0.24 polar,
+            // 0.49 / 0.68 / 0.42 / 0.58 / 0.78 / 0.55 moisture, 0.44 heath heat).
+            let warm = smoothstep(0.53, 0.60, heat);
+            let polar = 1.0 - smoothstep(0.21, 0.28, heat);
+            let temperate = (1.0 - polar) * (1.0 - warm);
+            let b_savanna = warm * (1.0 - smoothstep(0.46, 0.53, wet)) * (1.0 - coastal_dune);
+            let b_rainforest = warm * smoothstep(0.65, 0.72, wet);
+            let b_taiga = polar * smoothstep(0.39, 0.46, wet);
+            let b_tundra = polar * (1.0 - smoothstep(0.39, 0.46, wet));
+            let b_heath = temperate * (1.0 - smoothstep(0.42, 0.47, heat))
+                * (1.0 - smoothstep(0.55, 0.61, wet)) * smoothstep(30.0, 36.0, q.y);
+            let b_fen = smoothstep(0.75, 0.81, wet) * smoothstep(15.5, 17.5, q.y) * (1.0 - smoothstep(23.0, 26.0, q.y));
+            let b_forest = temperate * smoothstep(0.52, 0.58, wet) * (1.0 - b_heath) * (1.0 - b_fen);
+            let floor_patch = surface_noise_filtered(q.xz / 9.0 + vec2<f32>(-31.0, 57.0), fp / 9.0);
+            let grove = surface_noise_filtered(q.xz / 41.0 + vec2<f32>(8.0, 61.0), fp / 41.0);
+            let speck = pixel_blob(natural_face_uv(q, normal), PIXEL_RES, vec2<f32>(77.0, -23.0), 0.07, fp);
+            // Savanna: straw gold, greener near groves, bare dust in patches.
+            var savanna_col = mix(vec3<f32>(0.260, 0.205, 0.075), vec3<f32>(0.120, 0.150, 0.052), smoothstep(0.52, 0.72, grove) * 0.7);
+            savanna_col = mix(savanna_col, vec3<f32>(0.310, 0.235, 0.130), smoothstep(0.62, 0.80, floor_patch) * 0.6);
+            // Rainforest: deep saturated green with emerald lights and wet dark soil.
+            var rain_col = mix(vec3<f32>(0.028, 0.095, 0.040), vec3<f32>(0.065, 0.155, 0.048), smoothstep(0.40, 0.70, mottle));
+            rain_col = mix(rain_col, vec3<f32>(0.050, 0.035, 0.020), smoothstep(0.25, 0.45, clumps) * 0.5);
+            // Taiga: blue-green moss floor, rust needle litter under crowns, pale lichen specks.
+            var taiga_col = mix(vec3<f32>(0.040, 0.072, 0.050), vec3<f32>(0.170, 0.090, 0.040), smoothstep(0.50, 0.68, floor_patch) * 0.85);
+            taiga_col = mix(taiga_col, vec3<f32>(0.26, 0.28, 0.24), speck * 0.6);
+            // Tundra: grey-ochre lichen mat, rust moss cushions, grey lichen specks.
+            var tundra_col = mix(vec3<f32>(0.165, 0.160, 0.100), vec3<f32>(0.210, 0.120, 0.050), smoothstep(0.55, 0.75, floor_patch) * 0.75);
+            tundra_col = mix(tundra_col, vec3<f32>(0.28, 0.29, 0.26), speck * 0.8);
+            // Heath: straw grass with heather in broad purple-brown runs and dark wet hollows.
+            var heath_col = mix(vec3<f32>(0.190, 0.165, 0.075), vec3<f32>(0.190, 0.090, 0.150), smoothstep(0.48, 0.66, mottle) * 0.85);
+            heath_col = mix(heath_col, vec3<f32>(0.070, 0.080, 0.040), smoothstep(0.20, 0.42, -clumps) * 0.5);
+            // Fen: deep wet green over peat hollows, rush straw specks.
+            var fen_col = mix(vec3<f32>(0.035, 0.090, 0.045), vec3<f32>(0.065, 0.045, 0.028), smoothstep(0.15, 0.40, -clumps) * 0.7);
+            fen_col = mix(fen_col, vec3<f32>(0.200, 0.180, 0.080), speck * 0.5);
+            // Temperate forest: a cooler, shaded floor than the open meadow.
+            let forest_col = vec3<f32>(0.060, 0.100, 0.048);
+            var floor_col = turf_color;
+            floor_col = mix(floor_col, forest_col, b_forest * 0.55);
+            floor_col = mix(floor_col, heath_col, b_heath);
+            floor_col = mix(floor_col, fen_col, b_fen);
+            floor_col = mix(floor_col, savanna_col, b_savanna);
+            floor_col = mix(floor_col, rain_col, b_rainforest);
+            floor_col = mix(floor_col, taiga_col, b_taiga);
+            floor_col = mix(floor_col, tundra_col, b_tundra);
+            turf_color = mix(turf_color, floor_col, 1.0 - snow);
         }
         // Broad wear patches leave quiet intervals between detailed plants.
         let worn = smoothstep(
@@ -1846,31 +1891,56 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         * surface_detail_weight(metric_footprint * PIXEL_RES);
     var color = base * (1.0 + grain * 0.24 + mottling * 0.06 + mineral_grain * 0.09);
     if kind == 5 {
-        // Grey-olive bark with moss on up faces and lichen on the sides. Logs
-        // also build houses, so the wood keeps part of its warm base colour.
+        // Bark is drawn as plates on the pixel grid: columns 3-4 texels wide,
+        // plates 10-17 texels tall staggered per column, a one-texel dark
+        // furrow between columns and plates, and a one-texel lit edge on the
+        // left of each plate (light from the upper left, as every sprite).
+        // Cut ends show rings and a pale sapwood band. Logs also build
+        // houses, so the wood keeps part of its warm base colour.
         let luma = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let olive = vec3<f32>(luma) * vec3<f32>(1.34, 1.32, 1.02);
+        let olive = vec3<f32>(luma) * vec3<f32>(1.30, 1.28, 1.00);
         let moss_tone = vec3<f32>(luma) * vec3<f32>(1.20, 1.46, 0.62);
         let moss_patch = surface_noise_filtered(physical_uv * 1.9 + vec2<f32>(5.0, -23.0), metric_footprint * 1.9);
+        let texel_w = surface_detail_weight(metric_footprint * PIXEL_RES);
         if abs(normal.y) > 0.5 {
             let center = fract(uv) - vec2<f32>(0.5);
-            let rings = sin(length(center) * 70.0 + surface_noise(uv * 6.0) * 2.0) * fine_fade;
-            let wood = base * vec3<f32>(1.32, 1.22, 1.05) * (1.0 + rings * 0.18 + grain * 0.2);
-            // Exposed upper bark holds moss; bare patches still show the grain.
-            let moss = smoothstep(0.30, 0.58, moss_patch) * select(0.0, 0.92, normal.y > 0.0);
-            color = mix(wood, moss_tone * (0.90 + mottling * 0.4), moss);
+            let radial = length(center) * 2.0;
+            let wobble = surface_noise(uv * 5.0 + vec2<f32>(floor(p.y) * 3.1, 0.0)) - 0.5;
+            let ring_w = surface_detail_weight(metric_footprint * 14.0);
+            let rings = (sin((radial + wobble * 0.12) * 42.0) * 0.5 + 0.5) * ring_w;
+            let heart = vec3<f32>(luma) * vec3<f32>(1.34, 1.04, 0.74);
+            let sapwood = vec3<f32>(luma) * vec3<f32>(1.92, 1.64, 1.16);
+            var cut = mix(heart, sapwood, smoothstep(0.35, 0.95, radial)) * (0.88 + rings * 0.22 + grain * 0.14);
+            let rim = smoothstep(0.88, 0.97, max(abs(center.x), abs(center.y)) * 2.0);
+            cut = mix(cut, base * 0.70, rim);
+            // Moss settles on some upper ends; cut faces still read as wood.
+            let moss = smoothstep(0.44, 0.68, moss_patch) * select(0.0, 0.62, normal.y > 0.0);
+            color = mix(cut, moss_tone * (0.90 + mottling * 0.4), moss);
         } else {
-            let bark = surface_noise_filtered(physical_uv * vec2<f32>(4.5, 0.65), metric_footprint * 4.6);
+            let t = physical_uv * PIXEL_RES;
+            let col_i = floor(t.x / 3.5);
+            let col_x = t.x - col_i * 3.5;
+            let col_hash = surface_hash(vec2<f32>(col_i, 17.0));
+            let plate_h = 10.0 + floor(surface_hash(vec2<f32>(col_i, 41.0)) * 8.0);
+            let plate_i = floor((t.y + col_hash * 23.0) / plate_h);
+            let plate_y = t.y + col_hash * 23.0 - plate_i * plate_h;
+            let plate_id = surface_hash(vec2<f32>(col_i, plate_i) + vec2<f32>(5.0, 61.0));
             let age = surface_noise_filtered(physical_uv / 2.7 + vec2<f32>(37.0, -13.0), metric_footprint / 2.7);
-            let furrow = 0.70 + smoothstep(0.22, 0.76, bark) * 0.50;
-            var bark_color = mix(base, olive, 0.34 + smoothstep(0.40, 0.80, age) * 0.26) * furrow;
-            let lichen = smoothstep(0.64, 0.80, surface_noise_filtered(physical_uv * 2.6 + vec2<f32>(-9.0, 31.0),
-                metric_footprint * 2.6));
+            // Some column seams are deep furrows; the rest are hairline.
+            let deep = step(0.72, col_hash);
+            let furrow = max(step(col_x, 1.0) * mix(0.70, 0.46, deep), step(plate_y, 1.0) * 0.78);
+            let lit_edge = step(1.0, col_x) * step(col_x, 2.0) * step(1.0, plate_y) * 0.09;
+            let plate_value = 0.84 + plate_id * 0.30;
+            var bark_color = mix(base, olive, 0.26 + smoothstep(0.40, 0.80, age) * 0.24)
+                * mix(1.0, plate_value * (1.0 - furrow) + lit_edge, texel_w)
+                * (1.0 + grain * 0.10);
+            let lichen = smoothstep(0.66, 0.82, surface_noise_filtered(physical_uv * 2.6 + vec2<f32>(-9.0, 31.0),
+                metric_footprint * 2.6)) * step(0.5, plate_id);
             let lichen_tone = vec3<f32>(luma) * vec3<f32>(1.62, 1.66, 1.30);
-            bark_color = mix(bark_color, lichen_tone, lichen * 0.42);
-            // Broad moss runs follow the furrows on the sides.
-            let creep = smoothstep(0.60, 0.82, age) * smoothstep(0.38, 0.62, moss_patch);
-            color = mix(bark_color, moss_tone * furrow, creep * 0.45);
+            bark_color = mix(bark_color, lichen_tone * (1.0 - furrow * 0.5), lichen * 0.36);
+            // Moss creeps up the shaded, older runs and sits in the furrows.
+            let creep = smoothstep(0.58, 0.82, age) * smoothstep(0.40, 0.64, moss_patch);
+            color = mix(bark_color, moss_tone * (1.0 - furrow * 0.4), creep * 0.38);
         }
     } else if kind == 6 {
         // Three painted tones per crown lobe, chosen by face orientation:
@@ -1884,8 +1954,20 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         let crown_uv = (p.xz + p.y * vec2<f32>(0.41, -0.23)) * cam.world_params.x;
         let crown_mass = surface_noise_filtered(crown_uv / 4.8, metric_footprint * 0.27);
         // Neighbouring groves drift between warm and cool greens.
-        let mid = mix(base, vec3<f32>(luma), 0.16)
+        var mid = mix(base, vec3<f32>(luma), 0.16)
             * mix(vec3<f32>(0.80, 0.86, 0.80), vec3<f32>(0.90, 0.90, 0.70), grove);
+        if cam.scene_seed.y >= 10u {
+            // Crowns follow the climate their floor does: savanna khaki,
+            // rainforest deep emerald, cold stands grey-green.
+            let climate = terrain_surface_climate(p * cam.world_params.x, metric_footprint);
+            let warm = smoothstep(0.53, 0.60, climate.x);
+            let polar = 1.0 - smoothstep(0.21, 0.30, climate.x);
+            let savanna = warm * (1.0 - smoothstep(0.46, 0.53, climate.y));
+            let rainforest = warm * smoothstep(0.65, 0.72, climate.y);
+            mid = mix(mid, vec3<f32>(luma) * vec3<f32>(1.30, 1.16, 0.54), savanna * 0.60 * (1.0 - pine));
+            mid = mix(mid, vec3<f32>(luma) * vec3<f32>(0.62, 1.12, 0.56), rainforest * 0.55 * (1.0 - pine));
+            mid = mix(mid, vec3<f32>(luma) * vec3<f32>(0.84, 0.98, 0.86), polar * 0.40);
+        }
         var lobe_top = mid * vec3<f32>(1.62, 1.46, 0.56);
         var lobe_under = mix(mid, vec3<f32>(luma) * vec3<f32>(0.80, 0.98, 1.18), 0.66);
         var lobe_side = mid * (0.92 + crown_mass * 0.16);
@@ -1909,19 +1991,36 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
     } else if kind == 9 {
         color *= 1.0 + mottling * 0.2;
     } else if kind == 11 {
-        let plank_uv = uv * vec2<f32>(1.0, 4.0);
-        let local = fract(plank_uv);
-        // Seams are exactly one texel: a plank is 5 texels tall and 20 long.
-        let seam_x = 1.0 - step(0.04, min(local.x, 1.0 - local.x));
-        let seam_y = 1.0 - step(0.12, min(local.y, 1.0 - local.y));
-        let seam = max(seam_x, seam_y);
-        let wood = sin(uv.x*80.0 + surface_noise(uv*vec2<f32>(3.0,18.0))*6.0) * fine_fade;
-        let board = mix(0.5, surface_hash(floor(plank_uv)), medium_fade);
-        color = base * (0.88+board*0.22+wood*0.075) * (1.0-seam*0.48*medium_fade);
-        // Each board takes its own warm/cool tint, so a run of planks does not
-        // read as one repeated texture. Scaled by the same fade as the grain.
-        let board_tint = (surface_hash(floor(plank_uv) + vec2<f32>(3.3, 9.1)) - 0.5) * 2.0;
-        color *= vec3<f32>(1.0 + board_tint * 0.05 * medium_fade, 1.0, 1.0 - board_tint * 0.06 * medium_fade);
+        // Boards 5 texels (25 cm) tall and 1.5-2.5 m long with joints
+        // staggered per row, so a wall never repeats per block. One-texel
+        // dark seams, a one-texel lit top edge, long grain streaks and the
+        // occasional knot; each board has its own warm or cool value.
+        let t = physical_uv * PIXEL_RES;
+        let row = floor(t.y / 5.0);
+        let row_shift = surface_hash(vec2<f32>(row, 3.0)) * 40.0;
+        let len = 30.0 + floor(surface_hash(vec2<f32>(row, 11.0)) * 3.0) * 10.0;
+        let seg = floor((t.x + row_shift) / len);
+        let id = surface_hash(vec2<f32>(seg, row) + vec2<f32>(3.3, 9.1));
+        let local_x = t.x + row_shift - seg * len;
+        let local_y = t.y - row * 5.0;
+        let texel_w = surface_detail_weight(metric_footprint * PIXEL_RES);
+        let streak = surface_noise(vec2<f32>(t.x * 0.045 + id * 13.0, floor(local_y) * 1.7 + id * 5.0)) - 0.5;
+        let knot_x = 4.0 + surface_hash(vec2<f32>(seg, row) + vec2<f32>(23.0, 7.0)) * (len - 8.0);
+        let knot_d = length(vec2<f32>(local_x - knot_x, (local_y - 2.5) * 1.6));
+        let has_knot = step(0.80, surface_hash(vec2<f32>(seg, row) + vec2<f32>(-5.0, 19.0)));
+        let knot_ring = has_knot * step(1.1, knot_d) * step(knot_d, 2.0);
+        let knot_core = has_knot * step(knot_d, 1.1);
+        let seam = max(step(local_y, 1.0), step(local_x, 1.0));
+        let top_light = step(4.0, local_y) * (1.0 - seam);
+        let board_value = 0.86 + id * 0.24;
+        var value = board_value * (1.0 + streak * 0.16 * medium_fade);
+        value = mix(value, value * 0.60, knot_ring * texel_w);
+        value = mix(value, value * 1.10, knot_core * texel_w);
+        value = mix(value, value * 0.52, seam * texel_w);
+        value = mix(value, value * 1.07, top_light * texel_w);
+        let warm = (id - 0.5) * 2.0;
+        let tint = vec3<f32>(1.0 + warm * 0.06, 1.0 + warm * 0.01, 1.0 - warm * 0.08);
+        color = base * mix(vec3<f32>(0.96), vec3<f32>(value) * tint, medium_fade);
     } else if kind == 12 {
         // Large cut-stone courses: read construction first, joints second.
         // Joints are measured in continuous metres so they stay open next to the camera.

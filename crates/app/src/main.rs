@@ -1480,14 +1480,17 @@ fn main() -> Result<()> {
                 let distance = x * x + z * z;
                 let entry = locations
                     .entry(s.biome.label())
-                    .or_insert((i32::MAX, x, z, s.height));
+                    .or_insert((i32::MAX, x, z, s));
                 if distance < entry.0 {
-                    *entry = (distance, x, z, s.height);
+                    *entry = (distance, x, z, s);
                 }
             }
         }
-        for (biome, (_, x, z, height)) in locations {
-            println!("[terrain-survey] {biome}: x={x} z={z} height_m={height:.1}");
+        for (biome, (_, x, z, s)) in locations {
+            println!(
+                "[terrain-survey] {biome}: x={x} z={z} height_m={:.1} temperature={:.2} moisture={:.2}",
+                s.height, s.temperature, s.moisture
+            );
         }
         if let Some((centre, forward)) = engine_worldgen::amberroot::anchor(&cfg) {
             println!(
@@ -1647,7 +1650,7 @@ fn main() -> Result<()> {
             StartupState::Ready { .. } | StartupState::Failed(_)
         );
         let active_gameplay = matches!(mode, AppMode::Playing);
-        elwt.set_control_flow(if !occluded && (focused || benchmark_config.enabled) && (loading || active_gameplay) {
+        elwt.set_control_flow(if (benchmark_config.enabled || (!occluded && focused)) && (loading || active_gameplay) {
             ControlFlow::Poll
         } else {
             ControlFlow::Wait
@@ -1717,8 +1720,10 @@ fn main() -> Result<()> {
                 let Some(window) = window.as_ref() else {
                     return;
                 };
+                // Benchmarks render while occluded: a fullscreen game in front
+                // of the review window must not stall the horizon upload.
                 if matches!(event, WindowEvent::RedrawRequested)
-                    && (occluded || window.inner_size().width == 0 || window.inner_size().height == 0)
+                    && ((occluded && !benchmark_config.enabled) || window.inner_size().width == 0 || window.inner_size().height == 0)
                 {
                     last = Instant::now();
                     simulation_clock = simulation::SimulationClock::default();
@@ -4655,7 +4660,7 @@ fn main() -> Result<()> {
                     // Maintenance also runs while minimized and while waiting for
                     // a final checkpoint; neither capture nor sync blocks the UI.
                     if let Some(w) = world.as_mut()
-                        && (occluded || window.as_ref().is_some_and(|win|win.inner_size().width==0 || win.inner_size().height==0)) {
+                        && ((occluded && !benchmark_config.enabled) || window.as_ref().is_some_and(|win|win.inner_size().width==0 || win.inner_size().height==0)) {
                             let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
                             w.stream_regions(center, render_distance_settings().view_distance_chunks);
                         }
@@ -4672,7 +4677,7 @@ fn main() -> Result<()> {
                     }
                 }
                 if let Some(window) = window.as_ref() {
-                    if occluded || window.inner_size().width == 0 || window.inner_size().height == 0 {
+                    if (occluded && !benchmark_config.enabled) || window.inner_size().width == 0 || window.inner_size().height == 0 {
                         elwt.set_control_flow(ControlFlow::WaitUntil(Instant::now()+Duration::from_millis(100)));
                     } else if !focused && !benchmark_config.enabled && Instant::now() < next_background_frame {
                         elwt.set_control_flow(ControlFlow::WaitUntil(next_background_frame));
