@@ -7,6 +7,9 @@ use crate::validate::{SystemError, validate};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
+/// Fewest ticks per orbit or spin turn that still moves smoothly.
+const MIN_PERIOD_TICKS: u64 = 16;
+
 /// `BodyId` is a u16.
 const MAX_BODIES: usize = u16::MAX as usize + 1;
 
@@ -78,35 +81,40 @@ impl System {
             if let (Some(orbit), Some(parent)) = (&bodies[i].orbit, system.parent[i]) {
                 let mu = G * (system.mass(parent) + system.mass[i]);
                 let (elements, ticks) = rails.elements(orbit, mu);
+                too_fast(ticks, &bodies[i].id)?;
                 system.set_rail(i, elements, ticks, orbit);
             }
             if let Some(binary) = &bodies[i].binary {
                 let (a, b) = components(i, &binary.a, &binary.b)?;
-                system.set_binary_rails(a, b, &binary.orbit, &rails);
+                system.set_binary_rails(a, b, &binary.orbit, &rails, &bodies[i].id)?;
             }
         }
-        let spins = bodies.iter().enumerate().map(|(i, body)| {
-            body.rotation.as_ref().map(|r| {
-                let locked = r.period == RotationPeriod::Locked;
-                let mut spin = Spin {
-                    tilt: r.tilt_deg.to_radians(),
-                    north: r.north_deg.to_radians(),
-                    period_ticks: match r.period {
-                        RotationPeriod::Seconds(s) => rails.ticks(s),
-                        RotationPeriod::Locked => system.period_ticks[i].max(1),
-                    },
-                    locked,
-                    phase0: 0.0,
-                };
-                // Validation guarantees a locked body has an orbit or a binary rail.
-                if let (true, Some(elements)) = (locked, &system.elements[i]) {
-                    let (relative, _) = system.relative_state(BodyId(i as u16), 0);
-                    lock_to_orbit(&mut spin, elements, relative);
-                }
-                spin
-            })
-        });
-        system.spin = spins.collect();
+        for (i, body) in bodies.iter().enumerate() {
+            let Some(r) = body.rotation.as_ref() else {
+                system.spin.push(None);
+                continue;
+            };
+            let locked = r.period == RotationPeriod::Locked;
+            let period_ticks = match r.period {
+                RotationPeriod::Seconds(s) => rails.ticks(s),
+                RotationPeriod::Locked => system.period_ticks[i].max(1),
+            };
+            too_fast(period_ticks, &body.id)?;
+            let mut spin = Spin {
+                tilt: r.tilt_deg.to_radians(),
+                north: r.north_deg.to_radians(),
+                period_ticks,
+                locked,
+                phase0: r.phase_deg.to_radians(),
+            };
+            // Validation guarantees a locked body has an orbit or a binary rail.
+            debug_assert!(!locked || system.elements[i].is_some());
+            if let (true, Some(elements)) = (locked, &system.elements[i]) {
+                let (relative, _) = system.relative_state(BodyId(i as u16), 0);
+                lock_to_orbit(&mut spin, elements, relative);
+            }
+            system.spin.push(Some(spin));
+        }
         Ok(system)
     }
 
@@ -117,10 +125,18 @@ impl System {
     }
 
     /// Splits a binary's relative orbit between its two components.
-    fn set_binary_rails(&mut self, a: BodyId, b: BodyId, orbit: &OrbitDef, rails: &Rails) {
+    fn set_binary_rails(
+        &mut self,
+        a: BodyId,
+        b: BodyId,
+        orbit: &OrbitDef,
+        rails: &Rails,
+        barycenter: &str,
+    ) -> Result<(), SystemError> {
         let (ma, mb) = (self.mass(a), self.mass(b));
         let total = ma + mb;
         let (relative, ticks) = rails.elements(orbit, G * total);
+        too_fast(ticks, barycenter)?;
         // Each component traces the relative orbit scaled by the other's share
         // of the mass; mu scales by the cube so the period stays the pair's.
         let (share_a, share_b) = (mb / total, ma / total);
@@ -137,7 +153,19 @@ impl System {
         };
         self.set_rail(a.0 as usize, comp_a, ticks, orbit);
         self.set_rail(b.0 as usize, comp_b, ticks, orbit);
+        Ok(())
     }
+}
+
+/// Rejects a period too short to step smoothly.
+fn too_fast(ticks: u64, body: &str) -> Result<(), SystemError> {
+    if ticks < MIN_PERIOD_TICKS {
+        return Err(SystemError::BadOrbit {
+            body: body.to_string(),
+            reason: "period is under 16 ticks",
+        });
+    }
+    Ok(())
 }
 
 /// Converts authored periods to whole ticks.

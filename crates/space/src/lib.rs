@@ -1,9 +1,10 @@
-//! Star systems on rails: bodies, orbits and spin as data, evaluated per tick.
+//! Star systems on rails: orbits and spin evaluated from data per tick.
 //!
 //! A system is authored in `assets/star_systems.ron`, checked by `validate` and
 //! compiled by `System::compile` into columns with every parent before its
-//! children. Nothing is stepped. `System::evaluate`, `System::orientation` and
-//! `orbit_path` are pure functions of that data and the integer tick. The phase
+//! children. Nothing is stepped. `System::evaluate` and `System::orientation` are
+//! pure functions of that data and the integer tick; `orbit_path` depends on
+//! the data alone. The phase
 //! of an orbit or a spin comes from `tick % period_ticks` before any float
 //! division, so a tick and the same tick plus one period give identical bits
 //! and a long run never drifts.

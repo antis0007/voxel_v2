@@ -89,7 +89,7 @@ fn check_parents(def: &SystemDef, index: &Index<'_>) -> Result<(), SystemError> 
     Ok(())
 }
 
-/// A chain longer than the body count must revisit a body.
+/// Rejects a body whose parent chain is longer than the body count.
 fn check_acyclic(def: &SystemDef, index: &Index<'_>) -> Result<(), SystemError> {
     for body in &def.bodies {
         let mut at = body;
@@ -187,13 +187,16 @@ fn check_orbit(orbit: &OrbitDef, who: &str) -> Result<(), SystemError> {
     Ok(())
 }
 
+/// Checks a rotation's numbers and the rules for tidal lock.
+///
 /// A binary component locks to its partner on the binary's shared period and plane.
 fn check_rotation(body: &BodyDef, component: bool) -> Result<(), SystemError> {
     let Some(rotation) = &body.rotation else {
         return Ok(());
     };
     let id = body.id.as_str();
-    if !rotation.tilt_deg.is_finite() || !rotation.north_deg.is_finite() {
+    let angles = [rotation.tilt_deg, rotation.north_deg, rotation.phase_deg];
+    if angles.iter().any(|a| !a.is_finite()) {
         return Err(bad(id, "rotation angles must be finite"));
     }
     match rotation.period {
@@ -208,6 +211,10 @@ fn check_rotation(body: &BodyDef, component: bool) -> Result<(), SystemError> {
         RotationPeriod::Locked if rotation.tilt_deg != 0.0 => Err(bad(
             id,
             "locked rotation takes its axis from the orbit: tilt_deg must be 0",
+        )),
+        RotationPeriod::Locked if rotation.phase_deg != 0.0 => Err(bad(
+            id,
+            "locked rotation faces its parent at tick 0: phase_deg must be 0",
         )),
         RotationPeriod::Locked => Ok(()),
     }

@@ -16,15 +16,18 @@ pub struct BodyId(pub u16);
 /// Compiled spin of one body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spin {
-    /// Axis tilt from system +Y, radians; a locked body's comes from its orbit.
+    /// Axis tilt from system +Y, radians.
+    ///
+    /// A locked body takes its orbit's.
     pub tilt: f64,
     /// Direction the axis leans, radians in the XZ plane from +X toward -Z;
     /// a locked body's comes from its orbit.
     pub north: f64,
-    /// Ticks per turn, at least 1. A locked body uses its orbit's period in
-    /// ticks, or its binary's for a component.
+    /// Ticks per turn, at least 1. A locked body uses its own orbit's period
+    /// in ticks, or its binary's for a component.
     pub period_ticks: u64,
-    /// Spin period follows the body's own orbit.
+    /// Spin period follows the orbit: the body's own, or its binary's for
+    /// a component.
     pub locked: bool,
     /// Spin angle at tick 0, radians; turns a locked body's +X to its parent.
     pub phase0: f64,
@@ -51,13 +54,28 @@ pub struct System {
     spin: Vec<Option<Spin>>,
 }
 
-/// Positions (m) and velocities (m/s) of every body at one tick.
+/// Positions (m) and velocities of every body at one tick.
 ///
-/// Indexed by `BodyId.0`, system frame, root at the origin.
+/// Indexed by `BodyId.0`, system frame, root at the origin. Prefer the
+/// `position` and `velocity` accessors to indexing the fields. Velocities are
+/// metres per system second; multiply by the system's `time_scale` for metres
+/// per tick second.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub position: Vec<DVec3>,
     pub velocity: Vec<DVec3>,
+}
+
+impl Snapshot {
+    /// Position of `b` in the system frame, metres.
+    pub fn position(&self, b: BodyId) -> DVec3 {
+        self.position[b.0 as usize]
+    }
+
+    /// Velocity of `b` in the system frame, metres per system second.
+    pub fn velocity(&self, b: BodyId) -> DVec3 {
+        self.velocity[b.0 as usize]
+    }
 }
 
 impl System {
@@ -66,7 +84,7 @@ impl System {
         self.names.len()
     }
 
-    /// True when the system has no bodies; a compiled system always has a root.
+    /// True when there are no bodies, which a compiled system never is.
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }
@@ -155,3 +173,5 @@ impl System {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_rails;

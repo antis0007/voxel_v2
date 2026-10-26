@@ -9,12 +9,13 @@ pub const G: f64 = 6.674_30e-11;
 const MAX_ECCENTRICITY: f64 = 0.999;
 const NEWTON_TOLERANCE: f64 = 1e-14;
 const NEWTON_ITERATIONS: usize = 16;
-/// Halving a bracket of width at most 2 reaches the f64 spacing well before this.
+/// Bisection step cap; halving a width-2 bracket reaches f64 spacing sooner.
 const BISECTION_STEPS: usize = 80;
 
 /// Solves `E - e·sin E = M` for the eccentric anomaly `E`.
 ///
-/// `mean_anomaly` may be any real. A non-finite input gives NaN.
+/// `mean_anomaly` may be any real. The result lies in `[0, 2π]`, both ends
+/// included. A non-finite input gives NaN.
 pub fn solve_kepler(mean_anomaly: f64, e: f64) -> f64 {
     debug_assert!(
         (0.0..=MAX_ECCENTRICITY).contains(&e),
@@ -30,8 +31,8 @@ pub fn solve_kepler(mean_anomaly: f64, e: f64) -> f64 {
     }
     // Solve on [0, π] and mirror, since E(2π - M) = 2π - E(M). Near 2π the f64
     // spacing of M is 8.9e-16; divided by 1 - e·cos E (about 1e-3 at
-    // e = 0.999) that exceeds the 1e-14 tolerance, so Newton can stall there
-    // (8 of 6000 probes did). Near 0 the rounding is proportionally smaller.
+    // e = 0.999) that exceeds the 1e-14 tolerance, so Newton can stall there.
+    // Near 0 the rounding is proportionally smaller.
     if m > PI {
         TAU - solve_lower_half(TAU - m, e)
     } else {
@@ -39,7 +40,7 @@ pub fn solve_kepler(mean_anomaly: f64, e: f64) -> f64 {
     }
 }
 
-/// Eccentric anomaly for `m` in `[0, π]`, Newton first and bisection if it stalls.
+/// Eccentric anomaly for `m` in `[0, π]`; bisection backs up Newton.
 fn solve_lower_half(m: f64, e: f64) -> f64 {
     // The root lies in [0, π]; the final Newton step can land a rounding
     // error outside it, notably a tiny negative value at m = 0.
@@ -62,7 +63,9 @@ fn newton(m: f64, e: f64) -> Option<f64> {
     None
 }
 
-/// Bisection on `[m - e, m + e]`, which brackets the root because `E - M = e·sin E`.
+/// Bisection fallback for `m` in `[0, π]`.
+///
+/// `[m - e, m + e]` brackets the root because `E - M = e·sin E`.
 fn bisect(m: f64, e: f64) -> f64 {
     let (mut lo, mut hi) = (m - e, m + e);
     for _ in 0..BISECTION_STEPS {
@@ -88,11 +91,14 @@ pub struct Elements {
     pub e: f64,
     /// Inclination of the orbit plane to the XZ plane.
     pub i: f64,
-    /// Longitude of the ascending node.
+    /// Longitude of the ascending node, from +X increasing toward -Z, a
+    /// positive rotation about +Y.
     pub node: f64,
-    /// Argument of periapsis, measured from the ascending node: `peri - node`.
+    /// Argument of periapsis: the angle from the ascending node within the
+    /// orbit plane, authored directly as `OrbitDef.peri_deg`.
     pub arg_peri: f64,
-    /// `G·(M_parent + m)` in m³/s².
+    /// Gravitational parameter in m³/s²: `G·(M_parent + m)` for an ordinary
+    /// orbit, `mu_pair·share³` for a binary component.
     pub mu: f64,
 }
 
@@ -138,6 +144,9 @@ impl Elements {
     }
 
     /// Position (m) and velocity (m/s) relative to the parent, system frame.
+    ///
+    /// The velocity is per second of system time; with a `time_scale` other
+    /// than 1, multiply by it for metres per tick second.
     pub fn state_at(&self, mean_anomaly: f64) -> (DVec3, DVec3) {
         let ea = solve_kepler(mean_anomaly, self.e);
         let (sin_e, cos_e) = ea.sin_cos();

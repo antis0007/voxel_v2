@@ -5,18 +5,18 @@ use crate::kepler::{Elements, G};
 use crate::validate::SystemError;
 use std::f64::consts::TAU;
 
-const TICK: f64 = 1.0 / 120.0;
+pub(super) const TICK: f64 = 1.0 / 120.0;
 
-fn home_def() -> SystemDef {
+pub(super) fn home_def() -> SystemDef {
     let text = include_str!("../../../../assets/star_systems.ron");
     parse(text).unwrap().systems.remove(0)
 }
 
-fn compile(def: &SystemDef) -> System {
+pub(super) fn compile(def: &SystemDef) -> System {
     System::compile(def, TICK).unwrap()
 }
 
-fn id(system: &System, name: &str) -> BodyId {
+pub(super) fn id(system: &System, name: &str) -> BodyId {
     system.id(name).unwrap()
 }
 
@@ -29,7 +29,7 @@ fn assert_parent_first(system: &System) {
     }
 }
 
-fn rel(value: DVec3, reference: DVec3) -> f64 {
+pub(super) fn rel(value: DVec3, reference: DVec3) -> f64 {
     (value - reference).length() / reference.length()
 }
 

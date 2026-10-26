@@ -1,4 +1,4 @@
-//! Cost of evaluating a 64-body system for one tick and of one Kepler solve.
+//! Benchmarks one 64-body tick evaluation and a batch of Kepler solves.
 //! `just bench-check` compares both with `baselines.json`.
 use criterion::{Criterion, criterion_group, criterion_main};
 use engine_space::{BodyDef, BodyKind, OrbitDef, Snapshot, System, SystemDef, solve_kepler};
@@ -6,14 +6,14 @@ use std::hint::black_box;
 use std::time::Duration;
 
 const TICK_SECONDS: f64 = 1.0 / 120.0;
-/// About 8.3e6 s of system time: far enough that tick arithmetic must stay in integers.
+/// Tick used for evaluation; about 8.3e6 s of system time at 120 ticks per second.
 const LARGE_TICK: u64 = 1_000_000_000;
 const PLANETS: usize = 9;
 const MOONS_PER_PLANET: usize = 2;
 const SUB_MOONS_PER_MOON: usize = 2;
 const SOLVES: usize = 100_000;
 
-/// Splitmix64 finalizer mapped to `[0, 1)`; fixed so every run builds the same system.
+/// Maps a key to `[0, 1)` with a splitmix64 finalizer, so every run matches.
 fn unit(key: u64) -> f64 {
     let mut z = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -126,7 +126,9 @@ fn evaluate_64_bodies(c: &mut Criterion) {
     });
 }
 
-/// `(M, e)` with M over several turns and e in 0 to 0.97, the range the home data stays within.
+/// `(M, e)` with M over several turns and e in 0 to 0.97, a stress range.
+///
+/// Validation allows e up to 0.999; the home data stays far below 0.97.
 fn solve_pairs() -> Vec<(f64, f64)> {
     (0..SOLVES as u64)
         .map(|k| (60.0 * unit(2 * k) - 20.0, 0.97 * unit(2 * k + 1)))

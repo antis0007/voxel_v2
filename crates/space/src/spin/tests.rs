@@ -2,6 +2,7 @@ use crate::data::{BodyKind, RotationDef, RotationPeriod, SystemDef};
 use crate::fixtures::{binary_around_star, body, orbit, star, system, two_body};
 use crate::system::{Snapshot, System};
 use glam::DVec3;
+use std::f64::consts::FRAC_PI_2;
 
 const TICK: f64 = 1.0 / 120.0;
 
@@ -10,6 +11,7 @@ fn rotation(period: RotationPeriod, tilt_deg: f64, north_deg: f64) -> Option<Rot
         period,
         tilt_deg,
         north_deg,
+        phase_deg: 0.0,
     })
 }
 
@@ -146,4 +148,22 @@ fn a_body_without_rotation_keeps_the_system_frame() {
     let system = compile(&two_body());
     let p = system.id("p").unwrap();
     assert_eq!(system.orientation(p, 12_345), glam::DQuat::IDENTITY);
+}
+
+#[test]
+fn authored_phase_sets_the_spin_angle_at_tick_zero() {
+    let mut turned = rotation(RotationPeriod::Seconds(480.0), 23.4, 30.0).unwrap();
+    turned.phase_deg = 90.0;
+    let mut def = two_body();
+    def.bodies[1].rotation = Some(turned);
+    let system = compile(&def);
+    let p = system.id("p").unwrap();
+    let axis_frame = system.orientation(p, 0) * glam::DQuat::from_rotation_y(-FRAC_PI_2);
+    let mut plain = two_body();
+    plain.bodies[1].rotation = rotation(RotationPeriod::Seconds(480.0), 23.4, 30.0);
+    let reference = compile(&plain).orientation(p, 0);
+    assert!(axis_frame.angle_between(reference) < 1e-12);
+    let quarter = system.spin(p).unwrap().period_ticks / 4;
+    let advanced = compile(&plain).orientation(p, quarter);
+    assert!(system.orientation(p, 0).angle_between(advanced) < 1e-9);
 }

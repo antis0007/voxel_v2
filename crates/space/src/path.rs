@@ -30,9 +30,9 @@ pub fn orbit_path(system: &System, b: BodyId, max_chord_error_m: f64, out: &mut 
     out.push(out[0]);
 }
 
-/// Fewest uniform eccentric-anomaly segments within `error` of an orbit of semi-major axis `a`.
+/// Fewest segments keeping a chord within `error` of an orbit.
 ///
-/// In centred coordinates the ellipse is `(a·cos E, b·sin E)`, an affine image
+/// `a` is the semi-major axis. In centred coordinates the ellipse is `(a·cos E, b·sin E)`, an affine image
 /// of a circle, so a segment spanning `h` about centre `Ec` has its farthest
 /// arc point at `Ec`, where the tangent parallels the chord. That gap is
 /// `(1 - cos(h/2))·a·b / sqrt(a²·sin²Ec + b²·cos²Ec)`, largest at periapsis

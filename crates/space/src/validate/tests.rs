@@ -162,6 +162,7 @@ fn locked_spin_needs_an_orbit_or_a_binary_partner() {
         period: RotationPeriod::Locked,
         tilt_deg: 0.0,
         north_deg: 0.0,
+        phase_deg: 0.0,
     };
     let mut s = two_body();
     s.bodies[1].rotation = Some(locked.clone());
@@ -180,6 +181,7 @@ fn binary_components_may_lock_to_their_partner() {
         period: RotationPeriod::Locked,
         tilt_deg: 0.0,
         north_deg: 0.0,
+        phase_deg: 0.0,
     };
     let mut b = binary();
     b.bodies[1].rotation = Some(locked.clone());
@@ -197,6 +199,7 @@ fn locked_spin_rejects_a_tilt_but_ignores_north() {
         period: RotationPeriod::Locked,
         tilt_deg: 0.0,
         north_deg: 75.0,
+        phase_deg: 0.0,
     });
     validate(&s).unwrap();
     s.bodies[1].rotation.as_mut().unwrap().tilt_deg = 5.0;
@@ -214,6 +217,7 @@ fn spin_values_are_checked() {
             period: RotationPeriod::Seconds(period),
             tilt_deg: 0.0,
             north_deg: 0.0,
+            phase_deg: 0.0,
         });
         assert!(is_bad_orbit(validate(&s), "p"), "spin = {period}");
     }
@@ -222,6 +226,7 @@ fn spin_values_are_checked() {
         period: RotationPeriod::Seconds(480.0),
         tilt_deg: f64::INFINITY,
         north_deg: 0.0,
+        phase_deg: 0.0,
     });
     assert!(is_bad_orbit(validate(&s), "p"));
 }
@@ -238,4 +243,25 @@ fn errors_display_the_offending_id() {
         reason: "period_s must be finite and positive",
     };
     assert_eq!(e.to_string(), "`p`: period_s must be finite and positive");
+}
+
+#[test]
+fn locked_spin_rejects_a_phase() {
+    let mut s = two_body();
+    s.bodies[1].rotation = Some(RotationDef {
+        period: RotationPeriod::Locked,
+        tilt_deg: 0.0,
+        north_deg: 0.0,
+        phase_deg: 10.0,
+    });
+    assert!(is_bad_orbit(validate(&s), "p"));
+    s.bodies[1].rotation = Some(RotationDef {
+        period: RotationPeriod::Seconds(480.0),
+        tilt_deg: 0.0,
+        north_deg: 0.0,
+        phase_deg: 10.0,
+    });
+    validate(&s).unwrap();
+    s.bodies[1].rotation.as_mut().unwrap().phase_deg = f64::NAN;
+    assert!(is_bad_orbit(validate(&s), "p"));
 }
