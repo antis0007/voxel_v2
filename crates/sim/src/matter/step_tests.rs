@@ -101,7 +101,7 @@ fn fine_anchors_cover_a_block_with_8_even_and_27_odd_blocks() {
     assert!(odd.iter().all(|a| (*a - b * 4).cmpge(IVec3::splat(-1)).all() && (*a - b * 4).cmple(IVec3::splat(3)).all()));
     let pair = fine_anchors(&[b, b + IVec3::X], PHASE_OFFSETS[1]);
     assert_eq!(pair.len(), 45, "nine shared face anchors listed once");
-    assert!(pair.windows(2).all(|w| (w[0].z, w[0].y, w[0].x) < (w[1].z, w[1].y, w[1].x)));
+    assert_eq!(distinct(&pair), pair.len(), "each anchor once");
 }
 
 #[test]
@@ -304,4 +304,11 @@ fn the_governor_narrows_on_a_cut_and_widens_after_quiet_ticks() {
     g.observe(&FineStepStats { deferred: 1, ..Default::default() });
     assert_eq!(g.radius(), 12, "an awake cap overflow narrows too");
     assert_eq!(g.region(IVec3::new(5, 6, 7)).radius, 12);
+}
+
+fn distinct(anchors: &[IVec3]) -> usize {
+    let mut sorted = anchors.to_vec();
+    sorted.sort_unstable_by_key(|a| (a.z, a.y, a.x));
+    sorted.dedup();
+    sorted.len()
 }

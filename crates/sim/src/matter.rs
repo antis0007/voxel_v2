@@ -107,12 +107,15 @@ impl MatterStore {
         self.masks.get(&brick).is_some_and(|m| m[word] & bit != 0)
     }
 
+    /// A fine pool slot exists exactly when the block's mask bit is set (`promote` sets the bit only
+    /// after the slot is allocated, `clear_fine` drops both), so one pool lookup answers.
     pub fn block(&self, block: IVec3) -> BlockView<'_> {
-        if self.is_fine(block) {
-            BlockView::Fine(self.fine.cells(block).expect("fine mask owns a pool slot"))
-        } else {
-            let (chunk, local) = split_voxel(block);
-            BlockView::Uniform(self.blocks.get(chunk, local))
+        match self.fine.cells(block) {
+            Some(cells) => BlockView::Fine(cells),
+            None => {
+                let (chunk, local) = split_voxel(block);
+                BlockView::Uniform(self.blocks.get(chunk, local))
+            }
         }
     }
 

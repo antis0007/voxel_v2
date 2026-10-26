@@ -1,8 +1,9 @@
 //! The Margolus pass at 0.25 m: which fine blocks a phase visits and one block's step.
-use super::MatterStore;
+use super::{BlockView, MatterStore};
 use crate::kernel::cell_pos;
 use crate::rules::block_rule;
 use crate::{Cell, FINE_SIZE};
+use engine_core::fast_hash::FastSet;
 use engine_core::reaction::SimRules;
 use glam::IVec3;
 
@@ -30,29 +31,80 @@ fn fine_index(local: IVec3) -> usize {
     (local.x + FINE_SIZE * (local.z + FINE_SIZE * local.y)) as usize
 }
 
+/// Odd-phase anchor offsets per axis, and which neighbour (-1, 0 or +1) the block reaches there.
+const ODD_STEPS: [(i32, i32); 3] = [(-1, -1), (1, 0), (3, 1)];
+
 /// Anchors, in fine coordinates, of this phase's 2×2×2 blocks that touch any of `blocks`, each once,
-/// in `(z, y, x)` order. The even phase tiles a fine block exactly; the odd phase's blocks start one
-/// cell before it and the last ones reach one cell into the next block, which is how fine matter meets
-/// a uniform neighbour.
+/// in the order of `blocks`. The even phase tiles a fine block exactly; the odd phase's blocks start
+/// one cell before it and the last ones reach one cell into the next block, which is how fine matter
+/// meets a uniform neighbour. A block shared with a listed neighbour that comes first in `(z, y, x)`
+/// order is that neighbour's to list, the rule `anchors` uses for bricks.
 pub(super) fn fine_anchors(blocks: &[IVec3], offset: IVec3) -> Vec<IVec3> {
-    let steps: &[i32] = if offset == IVec3::ZERO { &[0, 2] } else { &[-1, 1, 3] };
-    let mut out = Vec::with_capacity(blocks.len() * steps.len().pow(3));
+    if offset == IVec3::ZERO {
+        let mut out = Vec::with_capacity(blocks.len() * 8);
+        for &block in blocks {
+            let origin = block * FINE_SIZE;
+            for dy in [0, 2] {
+                for dz in [0, 2] {
+                    for dx in [0, 2] {
+                        out.push(origin + IVec3::new(dx, dy, dz));
+                    }
+                }
+            }
+        }
+        return out;
+    }
+    let listed: FastSet<IVec3> = blocks.iter().copied().collect();
+    let mut out = Vec::with_capacity(blocks.len() * 27);
     for &block in blocks {
         let origin = block * FINE_SIZE;
-        for &dy in steps {
-            for &dz in steps {
-                for &dx in steps {
-                    out.push(origin + IVec3::new(dx, dy, dz));
+        for (dy, ry) in ODD_STEPS {
+            for (dz, rz) in ODD_STEPS {
+                for (dx, rx) in ODD_STEPS {
+                    let mut claimed = true;
+                    'reach: for sz in rz.min(0)..=rz.max(0) {
+                        for sy in ry.min(0)..=ry.max(0) {
+                            for sx in rx.min(0)..=rx.max(0) {
+                                if (sz, sy, sx) < (0, 0, 0) && listed.contains(&(block + IVec3::new(sx, sy, sz))) {
+                                    claimed = false;
+                                    break 'reach;
+                                }
+                            }
+                        }
+                    }
+                    if claimed {
+                        out.push(origin + IVec3::new(dx, dy, dz));
+                    }
                 }
             }
         }
     }
-    out.sort_unstable_by_key(|a| (a.z, a.y, a.x));
-    out.dedup();
     out
 }
 
 impl MatterStore {
+    /// The eight cells of a block, resolving each distinct block once: the even phase reads one
+    /// block, the odd phase up to eight.
+    fn read_cells(&self, spots: &[(IVec3, IVec3); 8]) -> [Cell; 8] {
+        let mut views: [Option<(IVec3, BlockView<'_>)>; 8] = [None; 8];
+        let mut cells = [Cell::EMPTY; 8];
+        for (i, &(block, local)) in spots.iter().enumerate() {
+            let view = match views.iter().flatten().find(|(b, _)| *b == block) {
+                Some((_, view)) => *view,
+                None => {
+                    let view = self.block(block);
+                    views[i] = Some((block, view));
+                    view
+                }
+            };
+            cells[i] = match view {
+                BlockView::Uniform(cell) => cell,
+                BlockView::Fine(fine) => fine[fine_index(local)],
+            };
+        }
+        cells
+    }
+
     /// Step the fine block at `anchor`. Uniform blocks are read as 64 identical cells and promoted
     /// only when one of their cells changes; every fine block the eight cells lie in is pushed onto
     /// `woken` when anything changed, is pending or stalled.
@@ -66,7 +118,7 @@ impl MatterStore {
         woken: &mut Vec<IVec3>,
     ) -> FineOutcome {
         let spots: [(IVec3, IVec3); 8] = std::array::from_fn(|i| split_fine(cell_pos(anchor, i)));
-        let before: [Cell; 8] = std::array::from_fn(|i| self.fine_cell_at(spots[i].0, fine_index(spots[i].1)));
+        let before = self.read_cells(&spots);
         let mut after = before;
         let outcome = block_rule(rules, &mut after, seed ^ FINE_SEED_SALT, phase_counter, anchor);
         let mut result = FineOutcome { pending: outcome.pending, ..FineOutcome::default() };
