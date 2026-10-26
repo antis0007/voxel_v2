@@ -15,6 +15,8 @@ pub mod portable;
 pub mod stats;
 pub mod recipes;
 pub mod transit;
+#[cfg(test)]
+mod authority_tests;
 pub(crate) use extraction::tick_world;
 
 pub const RESOURCE_COUNT: usize = 22;

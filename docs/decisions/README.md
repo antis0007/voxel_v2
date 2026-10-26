@@ -14,3 +14,4 @@ core reveal, changed permadeath rules) require the human under B.6.
 - [0023: W-GEO/HYDRO/BIO worldgen input](0023-worldgen-spec-input.md).
 - [0024: Cube-sphere planets](0024-cube-sphere-planets.md).
 - [0025: Space track from the Seed of Andromeda review](0025-space-track-soa-port.md).
+- [0034: Player-freedom addendum (07) as an acceptance addendum](0034-player-freedom-addendum.md), proposed; numbered above ADR 0033.
