@@ -263,3 +263,30 @@ fn a_move_that_needs_more_bricks_than_the_pool_has_allocates_none() {
     assert_eq!(stats.stalled_blocks, 0);
     assert!(roomy.bricks_in_use() > 2, "the cells fell into new bricks");
 }
+
+#[test]
+fn step_skipping_nothing_is_step_and_a_skipped_block_never_moves() {
+    let (t, mut a) = (table(), BrickStore::new(2000));
+    tank(&mut a, IVec3::ZERO, IVec3::new(12, 10, 6));
+    fill(&mut a, IVec3::new(1, 1, 1), IVec3::new(4, 7, 5), water(VOLUME_FULL));
+    let mut b = a.clone();
+    for tick in 0..10 {
+        step(&mut a, &t, 3, tick);
+        step_skipping(&mut b, &t, 3, tick, |_| false);
+    }
+    assert_eq!(a.state_hash(), b.state_hash(), "no skip is the plain kernel");
+    // Cells with x <= 4 lie only in blocks anchored at x <= 4, so skipping those freezes them.
+    let mut c = b.clone();
+    for tick in 10..20 {
+        step_skipping(&mut c, &t, 3, tick, |anchor| anchor.x <= 4);
+    }
+    for y in 0..10 {
+        for z in 0..6 {
+            for x in 0..5 {
+                let p = IVec3::new(x, y, z);
+                assert_eq!(at(&c, p), at(&b, p), "a skipped block moved {p}");
+            }
+        }
+    }
+    assert_ne!(c.state_hash(), b.state_hash(), "the free half still moves");
+}

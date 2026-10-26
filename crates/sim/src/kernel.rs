@@ -176,10 +176,14 @@ fn run_phase(
     seed: u32,
     phase_counter: u32,
     bricks: &[BrickCoord],
+    skip: &impl Fn(IVec3) -> bool,
     stats: &mut StepStats,
 ) {
     let mut cache = ChunkCache::new();
     for anchor in anchors(bricks, PHASE_OFFSETS[(phase_counter & 1) as usize]) {
+        if skip(anchor) {
+            continue;
+        }
         if !run_inside_brick(store, rules, seed, phase_counter, anchor, stats) {
             run_straddling(store, &mut cache, rules, seed, phase_counter, anchor, stats);
         }
@@ -189,7 +193,21 @@ fn run_phase(
 
 /// Advance the stored world one tick under `rules`: the material table and the reactions.
 pub fn step(store: &mut BrickStore, rules: &SimRules, seed: u32, tick: u32) -> StepStats {
-    step_with(store, tick, |store, phase_counter, bricks, stats| run_phase(store, rules, seed, phase_counter, bricks, stats))
+    step_skipping(store, rules, seed, tick, |_| false)
+}
+
+/// `step`, leaving every block whose anchor `skip` accepts untouched and uncounted: the blocks that
+/// fine matter owns are stepped at 0.25 m instead (ADR 0023).
+pub fn step_skipping(
+    store: &mut BrickStore,
+    rules: &SimRules,
+    seed: u32,
+    tick: u32,
+    skip: impl Fn(IVec3) -> bool,
+) -> StepStats {
+    step_with(store, tick, |store, phase_counter, bricks, stats| {
+        run_phase(store, rules, seed, phase_counter, bricks, &skip, stats)
+    })
 }
 
 /// The tick driver every backend shares: which bricks each phase steps, and which stay awake after.

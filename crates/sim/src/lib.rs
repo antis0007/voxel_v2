@@ -39,7 +39,7 @@ pub use fine::{
 pub use matter::{BlockView, MatterError, MatterMemory, MatterStore};
 pub use matter_jobs::{FineJob, FineJobs, FineJobStats, FineRegion};
 pub use store::{BrickStore, NO_SLOT, PoolFull};
-pub use kernel::{StepStats, step, step_with};
+pub use kernel::{StepStats, step, step_skipping, step_with};
 pub use offload::{PhaseBlocks, gather, scatter};
 pub use pinned::{
     Dice, HEAT_DEADBAND, HEAT_RATE, HEAT_TICK_INTERVAL, PHASE_OFFSETS, block_base, block_hash, flow_gate, is_heat_phase,
