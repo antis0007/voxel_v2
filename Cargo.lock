@@ -852,6 +852,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_space"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "glam",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "engine_voxel"
 version = "0.1.0"
 dependencies = [

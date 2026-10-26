@@ -1,0 +1,96 @@
+// Provisional numbers until the system-scale spike (decision 0025). Ids only; names come from the human.
+//
+// Units: kg, m, s, degrees. Omitted Option fields are None. Time inside a system is tick time x time_scale.
+// A semi-major axis is not stored; the rails derive it from the period and the combined parent and
+// body mass: a^3 = G (M + m) T^2 / (4 pi^2), G = 6.674_30e-11.
+//
+// Masses
+//   home   M = g R^2 / G for g = 9.81 m/s^2 at R = 20_371 m.
+//   star   M = 4 pi^2 a^3 / (G T^2) for a = 1.5e8 m and the home period T = 11_520 s.
+//   moon   M = g R^2 / G for g = 1.0 m/s^2 at R = 1_000 m.
+//   giant  M = g R^2 / G for g = 24.8 m/s^2 at R = 600_000 m.
+// Periods (home solar day = 480 s, sidereal day = 460.8 s)
+//   home   11_520 s. Solar day 480 s, sidereal 460.8 s (55_296 ticks); year 24 solar days. a = 1.5e8 m.
+//   moon   1_440 s = 3 solar days, 8 per home year; this is the sidereal month, and phases repeat
+//          every ~1_645.7 s. a = 59.8 km = 2.94 home radii = 0.36 of the home Hill
+//          radius (a_home (m / 3M)^(1/3) = 165.8 km), inside the 0.5 limit for stable prograde orbits.
+//   giant  92_160 s = 8 home years. a = 6.0e8 m, 4 times the home orbit.
+// Apparent size from home: star 0.92 deg, moon 2.9 deg at zenith, giant 0.15 deg at closest approach.
+SystemsFile(
+    systems: [
+        SystemDef(
+            id: "home",
+            time_scale: 1.0,
+            bodies: [
+                BodyDef(
+                    id: "star",
+                    kind: Star(temperature_k: 5800.0),
+                    mass_kg: 1.504e28,
+                    radius_m: 1_200_000.0,
+                    parent: None,
+                    orbit: None,
+                ),
+                BodyDef(
+                    id: "home",
+                    kind: Planet,
+                    mass_kg: 6.099_41e19,
+                    radius_m: 20_371.0,
+                    parent: Some("star"),
+                    orbit: Some(OrbitDef(
+                        period_s: 11_520.0,
+                        e: 0.017,
+                        i_deg: 0.0,
+                        node_deg: 0.0,
+                        peri_deg: 100.0,
+                        mean_anomaly_deg: 0.0,
+                    )),
+                    rotation: Some(RotationDef(
+                        period: Seconds(460.8),
+                        tilt_deg: 23.4,
+                        north_deg: 0.0,
+                    )),
+                ),
+                BodyDef(
+                    id: "moon",
+                    kind: Moon,
+                    mass_kg: 1.498e16,
+                    radius_m: 1_000.0,
+                    parent: Some("home"),
+                    orbit: Some(OrbitDef(
+                        period_s: 1_440.0,
+                        e: 0.02,
+                        i_deg: 5.1,
+                        node_deg: 0.0,
+                        peri_deg: 0.0,
+                        mean_anomaly_deg: 0.0,
+                    )),
+                    rotation: Some(RotationDef(
+                        period: Locked,
+                        tilt_deg: 0.0,
+                        north_deg: 0.0,
+                    )),
+                ),
+                BodyDef(
+                    id: "giant",
+                    kind: GasGiant,
+                    mass_kg: 1.3377e23,
+                    radius_m: 600_000.0,
+                    parent: Some("star"),
+                    orbit: Some(OrbitDef(
+                        period_s: 92_160.0,
+                        e: 0.05,
+                        i_deg: 1.3,
+                        node_deg: 100.0,
+                        peri_deg: 270.0,
+                        mean_anomaly_deg: 40.0,
+                    )),
+                    rotation: Some(RotationDef(
+                        period: Seconds(200.0),
+                        tilt_deg: 3.1,
+                        north_deg: 0.0,
+                    )),
+                ),
+            ],
+        ),
+    ],
+)

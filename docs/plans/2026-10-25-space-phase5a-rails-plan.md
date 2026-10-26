@@ -96,7 +96,7 @@ fn invalid_systems_are_typed_errors() {
 - Produces:
   - `pub const G: f64 = 6.674_30e-11;`
   - `pub fn solve_kepler(mean_anomaly: f64, e: f64) -> f64` (eccentric anomaly; `mean_anomaly` any real, reduced internally to `[0, 2π)`).
-  - `#[derive(Clone, Copy, Debug, PartialEq)] pub struct Elements { pub a: f64, pub e: f64, pub i: f64, pub node: f64, pub arg_peri: f64, pub mu: f64 }` (radians, metres, `mu = G·(M_parent + m)` in m³/s²; `arg_peri = peri - node`).
+  - `#[derive(Clone, Copy, Debug, PartialEq)] pub struct Elements { pub a: f64, pub e: f64, pub i: f64, pub node: f64, pub arg_peri: f64, pub mu: f64 }` (radians, metres, `mu` in m³/s² is `G·(M_parent + m)` for an ordinary orbit and `mu_pair·share³` for a binary component; `arg_peri` is the argument of periapsis, authored directly as `peri_deg`).
   - `impl Elements { pub fn from_period(period_s: f64, mu: f64, e: f64, i: f64, node: f64, arg_peri: f64) -> Elements; pub fn state_at(&self, mean_anomaly: f64) -> (DVec3, DVec3); pub fn mean_motion(&self) -> f64; }` (`a = (mu·T²/4π²)^(1/3)`; `state_at` returns parent-relative position (m) and velocity (m/s) in the system frame).
 
 - [ ] **Step 1: Write the failing tests**
