@@ -39,7 +39,7 @@ thread_local! {
 /// Nodes draining through `(x, z)` within `FLOW_DEPTH` hops, itself included.
 /// A bounded stand-in for catchment area: headwaters count 1, a trunk that
 /// gathers several valleys counts dozens.
-fn flow(cfg: &WorldSampleConfig, x: i32, z: i32) -> u32 {
+pub(super) fn flow(cfg: &WorldSampleConfig, x: i32, z: i32) -> u32 {
     fn upstream(cfg: &WorldSampleConfig, x: i32, z: i32, depth: u32) -> u32 {
         let mut n = 1;
         if depth > 0 {

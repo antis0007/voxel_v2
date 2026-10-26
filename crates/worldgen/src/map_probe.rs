@@ -187,3 +187,57 @@ fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
     chunk(&mut out, b"IEND", &[]);
     out
 }
+
+/// Per 4 km block: biome families above 2% of land, lake kinds and coast, for
+/// the spec's variety guarantee (§10.6). Run with `MAP_SEED` and `MAP_VERSION`.
+#[test]
+#[ignore = "variety probe; run explicitly"]
+fn variety_probe() {
+    let cfg = WorldSampleConfig {
+        generator_version: env("MAP_VERSION", CURRENT_GENERATOR_VERSION),
+        seed: env("MAP_SEED", 2_738_958_700u32),
+        world_type: WorldType::Hills,
+        voxel_scale: VoxelScalePreset::OneMeter,
+    };
+    let (block, step, blocks) = (4096i32, 32i32, 4i32);
+    let (mut families_hist, mut lake_blocks, mut coast_blocks) = ([0usize; 15], 0usize, 0usize);
+    let mut worst = (usize::MAX, (0, 0));
+    for bz in 0..blocks {
+        for bx in 0..blocks {
+            let (ox, oz) = (-blocks * block / 2 + bx * block, -blocks * block / 2 + bz * block);
+            let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+            let (mut land, mut lakes, mut coast) = (0usize, std::collections::BTreeSet::new(), false);
+            for z in (oz..oz + block).step_by(step as usize) {
+                for x in (ox..ox + block).step_by(step as usize) {
+                    let c = sample(&cfg, x, z, step as f32);
+                    if c.water.is_some() && c.top <= WATER_LEVEL_METERS {
+                        coast |= (x - ox) % 256 == 0;
+                        continue;
+                    }
+                    if let Some(k) = c.lake {
+                        lakes.insert(format!("{k:?}"));
+                    }
+                    if let Some(b) = c.biome {
+                        if matches!(b, Biome::Coast) {
+                            coast = true;
+                        }
+                        land += 1;
+                        *counts.entry(b.label()).or_default() += 1;
+                    }
+                }
+            }
+            let families = counts.values().filter(|&&n| n * 50 >= land.max(1)).count();
+            families_hist[families.min(14)] += 1;
+            lake_blocks += usize::from(!lakes.is_empty());
+            coast_blocks += usize::from(coast);
+            if families < worst.0 {
+                worst = (families, (ox, oz));
+            }
+            println!("block ({ox},{oz}) families {families} lake kinds {lakes:?} coast {coast} land {land}");
+        }
+    }
+    println!(
+        "variety seed={} v{}: families per block {families_hist:?} | blocks with lakes {lake_blocks}/16 | coast {coast_blocks}/16 | fewest families {} at {:?}",
+        cfg.seed, cfg.generator_version, worst.0, worst.1
+    );
+}

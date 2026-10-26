@@ -90,3 +90,26 @@ fn river_fit_reaches_join_at_node_levels() {
     println!("river fit joins={joins} steps={steps}");
     assert!(steps * 10 <= joins, "{steps} of {joins} reaches end off their target level");
 }
+
+#[test]
+fn catchment_grows_downstream_and_is_zero_before_fit() {
+    let c = cfg(VoxelScalePreset::OneMeter);
+    let mut trunk = 0;
+    let mut headwater = u32::MAX;
+    for z in -8..=8 {
+        for x in -8..=8 {
+            let n = crate::drainage::catchment_at(&c, x as f32 * 192.0, z as f32 * 192.0);
+            assert!(n >= 1, "node {x},{z} drains nothing");
+            if let Outlet::Downhill(a, b) = outlet(&c, x, z) {
+                let down = flow(&c, a, b);
+                assert!(down >= n, "flow falls downstream at {x},{z}: {n} -> {down}");
+            }
+            trunk = trunk.max(n);
+            headwater = headwater.min(n);
+        }
+    }
+    assert_eq!(headwater, 1);
+    assert!(trunk >= 8, "largest catchment only {trunk} nodes");
+    let old = WorldSampleConfig { generator_version: RIVER_FIT_GENERATOR - 1, ..c };
+    assert_eq!(crate::drainage::catchment_at(&old, 0.0, 0.0), 0);
+}

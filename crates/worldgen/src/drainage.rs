@@ -267,5 +267,16 @@ fn bend_offset([s1, s2, s3, _]: [f32; 4], length: f32, t: f32) -> f32 {
 
 mod fit;
 pub(crate) use fit::standing_aside;
+
+/// Nodes draining through the plan node nearest `(x, z)` metres, itself
+/// included, within about two kilometres. Zero before generator 53. A
+/// headwater reads 1; a trunk that gathers several valleys reads dozens.
+pub(crate) fn catchment_at(cfg: &WorldSampleConfig, x: f32, z: f32) -> u32 {
+    if !fits(cfg) || standing_aside() {
+        return 0;
+    }
+    let (ix, iz) = ((x / SPACING).round() as i32, (z / SPACING).round() as i32);
+    fit::flow(cfg, ix, iz)
+}
 #[cfg(test)]
 mod tests;
