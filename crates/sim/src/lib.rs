@@ -7,12 +7,17 @@
 mod anchors;
 pub mod environment;
 mod cell;
+mod fine;
+mod matter;
+mod matter_jobs;
 mod kernel;
 mod offload;
 mod pinned;
 mod react;
 mod rules;
 mod store;
+#[cfg(test)]
+mod fine_tests;
 #[cfg(test)]
 mod heat_tests;
 #[cfg(test)]
@@ -28,6 +33,11 @@ pub use cell::{
     AMBIENT_DECIKELVIN, BRICK_CELLS, BRICK_SIZE, BRICKS_PER_AXIS, BRICKS_PER_CHUNK, BrickCoord, CHUNK_CELLS, Cell,
     Scale, VOLUME_FULL, brick_and_cell, local_of, split_voxel,
 };
+pub use fine::{
+    BLOCK_UNITS, Collapse, FINE_CELLS, FINE_SIZE, FineStore, SUB_BRICK_BYTES, collapsed,
+};
+pub use matter::{BlockView, MatterError, MatterMemory, MatterStore};
+pub use matter_jobs::{FineJob, FineJobs, FineJobStats, FineRegion};
 pub use store::{BrickStore, NO_SLOT, PoolFull};
 pub use kernel::{StepStats, step, step_with};
 pub use offload::{PhaseBlocks, gather, scatter};

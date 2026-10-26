@@ -18,6 +18,7 @@ pub const NO_SLOT: u32 = u32::MAX;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PoolFull;
 
+#[derive(Clone)]
 struct ChunkEntry {
     scale: Scale,
     /// Bit `i` set: brick `i` changed and must be stepped. Clear: not dispatched at all.
@@ -38,6 +39,7 @@ impl ChunkEntry {
     }
 }
 
+#[derive(Clone)]
 pub struct BrickStore {
     capacity: u32,
     /// `bricks * BRICK_CELLS` cells; grows up to `capacity` bricks.
@@ -49,6 +51,17 @@ pub struct BrickStore {
 }
 
 impl BrickStore {
+    /// Reserved payload and index-entry storage; excludes hash-table control
+    /// bytes, allocator overhead, and the owner struct itself.
+    pub(crate) fn allocated_bytes(&self) -> (usize, usize) {
+        (
+            self.pool.capacity() * size_of::<Cell>(),
+            self.free.capacity() * size_of::<u32>()
+                + self.chunks.capacity() * size_of::<(IVec3, ChunkEntry)>()
+                + self.awake_chunks.capacity() * size_of::<IVec3>(),
+        )
+    }
+
     /// A store of at most `capacity` bricks (4 KiB each), the size of the GPU pool.
     pub fn new(capacity: u32) -> Self {
         Self { capacity, pool: Vec::new(), free: Vec::new(), chunks: FastMap::default(), awake_chunks: Vec::new() }
