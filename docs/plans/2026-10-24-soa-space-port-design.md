@@ -1,7 +1,9 @@
 # Space track: Seed of Andromeda review and port design
 
-Status (2026-10-24): decisions recorded in section 9 and decision 0025;
-supporting context, not an input of record. No code has been written against it.
+Status (2026-10-26): reviewed phases 0, 1 and 5a are authorized for local
+integration, in that order, with a test run after each merge. See the
+[integration record](2026-10-26-space-local-integration.md) for results and
+remaining gates. Supporting context, not an input of record.
 
 Requested by the human: "Analyze the SoA code and integrate the best
 implementation concepts for voxel planets and space travel/high tech high
@@ -618,12 +620,15 @@ named tests or captures. Sizes are rough session counts.
 
 | Phase | Content | Exit evidence | Depends on | Size |
 |---|---|---|---|---|
-| 0 | Camera-relative chunk and model rendering (4.2) | capture at x = 1,000,000 m: no jitter; perf within `bench-check` | none | 2 |
-| 1 | `engine_core::cube_sphere`: faces, bases, derived tables, projection candidates, inverse, Jacobian | exhaustive edge tests; area-ratio table for each candidate; round-trip error bounds | C02 SDD face section | 2 |
-| 2 | Planet world type behind a new generator version: bounded faces, edge crossing for player, chunks, CA, bodies | walk a full great circle in a headless scenario; water poured on an edge conserves mass; old generator golden tests unchanged | 1, W08 constants | 4 |
+| 0 | Implemented: camera-relative chunk and shadow rendering (4.2), `bb458f4f` | far-origin capture criteria remain in the phase-0 plan; integration GPU tests in the record; performance gate remains open | none | 2 |
+| 0b | Origin-aware scene-stream model producers (`mesh/models.rs`) | far-origin model captures | 0 | follow-up |
+| 1 | Implemented: `engine_core::cube_sphere`, `8a2a4c87` | edge and projection tests; [measurement record](2026-10-25-cube-sphere-projection-measurements.md); tangent recommendation retains the platform-libm caveat | authorized foundation; C02 planet topology remains open | 2 |
+| 2 | Planet world type behind a new generator version: bounded faces, edge crossing for player, chunks, CA, bodies | walk a full great circle in a headless scenario; water poured on an edge conserves mass; old generator golden tests unchanged | 1, C02/W01 SDDs, W08 constants | 4 |
 | 3 | `planet::sample` on directions; staged gen with column cache | golden heights per generator version; same height from chunk, horizon and patch samplers | 2, W01 | 3 |
 | 4 | Horizon bent onto sphere; sphere patch quadtree; altitude mode blend | fly-up capture from 2 m to 3 radii: no crack, no blank frame; patch build ms in budget | 3, R10 | 4 |
-| 5 | `engine_space` rails, axis rotation, RON system, sky directions from rails, system map | rails tests (solver, barycenter, order, long-time precision); map screenshot; flat-world sky unchanged (golden directions); fixed-point sim sun matches f64 rails within one quantum | 1 | 3 |
+| 5a | Implemented: `engine_space` rails, spin, strict RON system, orbit paths; `e16acdda` | solver, binary, tidal lock and long-time tests; integration results in the integration record | 1 | complete foundation |
+| 5b | Pending: system map UI on `engine_space` | map screenshot and selection/navigation checks | 5a | follow-up |
+| 5 (remaining) | Pending: sky directions and integer simulation sun | flat-world golden directions unchanged; integer sun matches rails within one quantum | 5a | follow-up |
 | 6 | `SpaceState` handoff and gravity; free-flight camera to orbit and back | headless: launch, coast, re-enter, land at the same cell within tolerance | 4, 5, B03 | 3 |
 | 7 | Atmosphere from orbit, stars, gas giants, rings | A/B captures | 4, 5 | 3 |
 | 8 | S9 spike: integer patched conics, transfer windows | spike protocol CSV + ADR | 5 | 2 |
@@ -631,8 +636,10 @@ named tests or captures. Sizes are rough session counts.
 | 10 | Vessel systems and crew (C-F1), routes and sites (C-F2) | `vessel_hull_breach`, `seeded_expedition_sites` | 9, C07, N12, P13 | 6+ |
 | 11 | Multi-body bases and off-screen ledger | leave and return after N days: outputs match the ledger rule | 9, M23 | 4 |
 
-Phases 0, 1 and 5 have no dependency on the M1 slice and touch disjoint files;
-they can run in parallel. Phases 2 to 4 depend on C02/W01/R10 SDDs.
+Phases 0, 1 and 5a integrate in order under the 2026-10-26 authorization.
+Phase 2 still needs C02 and W01 design sections, including worldgen
+determinism and corner topology. Phases 3 and 4 retain W01/R10 dependencies.
+The system-scale spike still decides year length and travel times.
 
 ## 7. Risks
 
@@ -702,9 +709,10 @@ they can run in parallel. Phases 2 to 4 depend on C02/W01/R10 SDDs.
    in the simulation grid, not on screen; 0025 supersedes that clause of 0024.
    Model F is rejected: its edge wedge taxes collision, fluids, meshing, light
    and pathing permanently.
-2. **Schedule: phase 0 starts now; phases 1 and 5 are held** until phase 0
-   lands, then decided again. The rest of the track keeps its master-plan
-   milestones. This document is supporting context, not an input of record.
+2. **Schedule: integrate reviewed phases 0, 1 and 5a locally**, authorized
+   by the human on 2026-10-26. This supersedes the initial phase-1/5 hold
+   only for that work. The rest of the track keeps its design dependencies
+   and master-plan milestones. This document remains supporting context.
 3. **Home planet scale: 32 km face edge, provisional.** The system-scale spike
    may revise it.
 4. **System scale: decided by a small playable spike** (one vessel, two bodies,
@@ -714,5 +722,8 @@ they can run in parallel. Phases 2 to 4 depend on C02/W01/R10 SDDs.
 5. **Proper nouns: open, owned by the human.** Agents keep ids and do not
    invent placeholder names.
 
-Commit hold: this document and 0025 are committed only after the
-`CLAUDE.md` generator-version drift (47 written, 51 in source) has an owner.
+Commit hold resolved 2026-10-26 by the local integration task: `CLAUDE.md`
+now records generator 53, checked against `crates/voxel/src/config.rs`.
+Save format 34 was checked against `world/storage.rs`; no versions or
+historical generator gates were changed. The integration task owns these
+documentation corrections, as requested by the human.

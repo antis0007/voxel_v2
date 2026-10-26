@@ -54,9 +54,9 @@
   - `pub enum SystemError { DuplicateId(String), UnknownParent { body: String, parent: String }, Cycle(String), BadBinary(String), BadOrbit { body: String, reason: &'static str }, Parse(String) }` (`Display` + `std::error::Error`)
   - `pub fn parse(text: &str) -> Result<SystemsFile, SystemError>`; `pub fn validate(def: &SystemDef) -> Result<(), SystemError>`.
 
-Rules: a body with `parent: None` is the root (exactly one per system). Components of a binary have `parent = Some(barycenter id)` and `orbit: None`. `e` must be in `[0, 0.999]`; `period_s > 0`; `mass_kg >= 0` (a barycenter's mass is derived, give `0.0`).
+Rules: a body with `parent: None` is the root (exactly one per system). Components of a binary have `parent = Some(barycenter id)` and `orbit: None`. `e` must be in `[0, 0.999]`; orbit and spin periods round to at least 16 ticks; `mass_kg >= 0`, with strictly positive binary components. A barycenter's mass is derived. `peri_deg` is the argument of periapsis; `phase_deg` sets free-spin phase. Locked bodies require zero authored tilt, spin about their orbit normal, and librate on eccentric orbits. RON parsing rejects unknown fields.
 
-`assets/star_systems.ron`, one system `id: "home"`, header comment: "Provisional numbers until the system-scale spike (decision 0025). Ids only; names come from the human." Bodies: `star` (root, `Star`), `home` (planet around `star`; `radius_m: 20_371.0`; `rotation: Seconds(480.0)` to match the current 480 s day, tilt 23.4; orbit period 24 days of 480 s), `moon` (around `home`, `Locked`), `giant` (`GasGiant` around `star`). No binary in the home file; binaries are covered by test fixtures. Masses: `home` gives 9.81 m/s² surface gravity at `radius_m` (`M = g R² / G`, `G = 6.674_30e-11`); the builder computes the others for plausible periods and states the formula in a RON comment.
+`assets/star_systems.ron`, one system `id: "home"`, header comment: "Provisional numbers until the system-scale spike (decision 0025). Ids only; names come from the human." Bodies: `star` (root, `Star`), `home` (planet around `star`; `radius_m: 20_371.0`; `rotation: Seconds(460.8)` for a 480 s solar day, tilt 23.4; orbit period 24 days of 480 s), `moon` (around `home`, `Locked`), `giant` (`GasGiant` around `star`). No binary in the home file; binaries are covered by test fixtures. Masses: `home` gives 9.81 m/s² surface gravity at `radius_m` (`M = g R² / G`, `G = 6.674_30e-11`); the builder computes the others for plausible periods and states the formula in a RON comment.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -95,7 +95,7 @@ fn invalid_systems_are_typed_errors() {
 **Interfaces:**
 - Produces:
   - `pub const G: f64 = 6.674_30e-11;`
-  - `pub fn solve_kepler(mean_anomaly: f64, e: f64) -> f64` (eccentric anomaly; `mean_anomaly` any real, reduced internally to `[0, 2π)`).
+  - `pub fn solve_kepler(mean_anomaly: f64, e: f64) -> f64` (eccentric anomaly in `[0, 2π]`, including both endpoints; `mean_anomaly` is reduced internally to `[0, 2π)`).
   - `#[derive(Clone, Copy, Debug, PartialEq)] pub struct Elements { pub a: f64, pub e: f64, pub i: f64, pub node: f64, pub arg_peri: f64, pub mu: f64 }` (radians, metres, `mu` in m³/s² is `G·(M_parent + m)` for an ordinary orbit and `mu_pair·share³` for a binary component; `arg_peri` is the argument of periapsis, authored directly as `peri_deg`).
   - `impl Elements { pub fn from_period(period_s: f64, mu: f64, e: f64, i: f64, node: f64, arg_peri: f64) -> Elements; pub fn state_at(&self, mean_anomaly: f64) -> (DVec3, DVec3); pub fn mean_motion(&self) -> f64; }` (`a = (mu·T²/4π²)^(1/3)`; `state_at` returns parent-relative position (m) and velocity (m/s) in the system frame).
 

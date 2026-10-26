@@ -390,6 +390,7 @@ scenario's sub-ulp steps.
 - [ ] **Step 2b: Add the follow-up row "phase 0b: origin-aware scene-stream models (`mesh/models.rs` producers)" to the design doc phase table**
 - [ ] **Step 3: `just session-report`, then pathspec commit of the doc changes**
 
-Commit hold from the design doc applies to the design doc itself: commit it
-only after the `CLAUDE.md` generator-version drift has an owner; if it still
-has none, leave the doc edit uncommitted and say so in the report.
+Documentation hold resolved by the 2026-10-26 local integration task.
+`CLAUDE.md` now matches generator 53 in source; see the
+[integration record](2026-10-26-space-local-integration.md) for validation
+and the remaining performance and visual acceptance limits.

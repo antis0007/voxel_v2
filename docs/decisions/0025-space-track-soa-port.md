@@ -3,6 +3,8 @@
 Date: 2026-10-24. Status: decided by the human (answers to the open questions
 of the [space track design](../plans/2026-10-24-soa-space-port-design.md)).
 Amends one clause of [0024](0024-cube-sphere-planets.md).
+Updated 2026-10-26: the human authorized local integration of reviewed phases
+0, 1 and 5a, in that order, with a test run after each merge.
 
 ## Context
 
@@ -38,7 +40,9 @@ Schedule:
 - Planets use model R. 0024's "within a face, play, meshing and simulation
   stay flat and axis-aligned" holds in the simulation grid, not in rendered
   space. Corner cells treat the missing Margolus cell as solid.
-- Phase 0 starts now. Phases 1 and 5 are decided again after phase 0 lands.
+- The initial phase-1/5 hold is superseded for phases 1 and 5a by the
+  2026-10-26 integration authorization. Phase 5b (system map), the integer
+  simulation sun, and the later planet phases remain pending.
   The design document is supporting context, not an input of record.
 - Home planet face edge 32 km, provisional until the system-scale spike.
 - System scale (year length, transfer times, warp) is set by a small playable
