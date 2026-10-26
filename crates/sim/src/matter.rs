@@ -9,10 +9,12 @@ use glam::IVec3;
 use std::collections::VecDeque;
 
 mod fine_kernel;
+mod governor;
 mod step;
 #[cfg(test)]
 mod step_tests;
 
+pub use governor::{FINE_RADII, FineGovernor, RECOVER_TICKS};
 pub use step::{DORMANT_CHECKS_PER_TICK, FineStepStats, MAX_FINE_AWAKE, MatterStepStats};
 
 /// Borrowed authoritative contents of one block; uniform reads allocate nothing.

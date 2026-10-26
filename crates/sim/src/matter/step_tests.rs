@@ -284,3 +284,24 @@ fn uniform(m: &MatterStore, block: IVec3) -> Cell {
         BlockView::Fine(_) => panic!("{block} is fine"),
     }
 }
+
+#[test]
+fn the_governor_narrows_on_a_cut_and_widens_after_quiet_ticks() {
+    use crate::{FineGovernor, FineStepStats, RECOVER_TICKS};
+    let mut g = FineGovernor::new();
+    assert_eq!(g.radius(), 24);
+    let cut = FineStepStats { truncated: true, ..Default::default() };
+    g.observe(&cut);
+    assert_eq!(g.radius(), 16);
+    g.observe(&cut);
+    g.observe(&cut);
+    assert_eq!(g.radius(), 12, "never below the last level");
+    let quiet = FineStepStats::default();
+    for _ in 0..RECOVER_TICKS {
+        g.observe(&quiet);
+    }
+    assert_eq!(g.radius(), 16);
+    g.observe(&FineStepStats { deferred: 1, ..Default::default() });
+    assert_eq!(g.radius(), 12, "an awake cap overflow narrows too");
+    assert_eq!(g.region(IVec3::new(5, 6, 7)).radius, 12);
+}

@@ -37,8 +37,8 @@ pub use fine::{
     BLOCK_UNITS, Collapse, FINE_CELLS, FINE_SIZE, FineStore, SUB_BRICK_BYTES, collapsed,
 };
 pub use matter::{
-    BlockView, DORMANT_CHECKS_PER_TICK, FineStepStats, MAX_FINE_AWAKE, MatterError, MatterMemory, MatterStepStats,
-    MatterStore,
+    BlockView, DORMANT_CHECKS_PER_TICK, FINE_RADII, FineGovernor, FineStepStats, MAX_FINE_AWAKE, MatterError,
+    MatterMemory, MatterStepStats, MatterStore, RECOVER_TICKS,
 };
 pub use matter_jobs::{FineJob, FineJobs, FineJobStats, FineRegion};
 pub use store::{BrickStore, NO_SLOT, PoolFull};

@@ -4,7 +4,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use engine_core::material::{MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::hash::hash_u32;
 use engine_core::reaction::{ReactionTable, SimRules};
-use engine_sim::{AMBIENT_DECIKELVIN, BRICKS_PER_CHUNK, BrickStore, Cell, VOLUME_FULL, step};
+use engine_core::Budget;
+use engine_sim::{AMBIENT_DECIKELVIN, BRICKS_PER_CHUNK, BrickStore, Cell, FineRegion, MatterStore, VOLUME_FULL, step};
 use glam::IVec3;
 use std::time::Duration;
 
@@ -126,10 +127,42 @@ fn ca(c: &mut Criterion) {
     });
 }
 
+/// The fine pass ceiling: 2000 fine water blocks awake inside a stone ring, one tick. Nothing
+/// moves, so this is the cost of visiting every sub-brick and evaluating its 35 blocks; the spec's
+/// budget for the pass is 3 ms on H1.
+fn fine(c: &mut Criterion) {
+    let t = SimRules::new(table(), ReactionTable::default());
+    c.bench_function("fine_step_2000_sub_bricks_idle", |b| {
+        let mut m = MatterStore::new(1024, 4096);
+        for z in -1..41 {
+            for x in -1..51 {
+                m.replace_block(IVec3::new(x, 0, z), Cell::filled(1)).expect("pool holds the floor");
+                if x == -1 || x == 50 || z == -1 || z == 40 {
+                    m.replace_block(IVec3::new(x, 1, z), Cell::filled(1)).expect("pool holds the ring");
+                }
+            }
+        }
+        let blocks: Vec<IVec3> = (0..2000).map(|i| IVec3::new(i % 50, 1, i / 50)).collect();
+        for &p in &blocks {
+            m.replace_block(p, Cell { volume: 32, ..Cell::filled(3) }).expect("pool holds the layer");
+            m.promote(p, 0).expect("fine pool holds the layer");
+        }
+        let region = FineRegion { center: IVec3::new(25, 1, 20), radius: 64 };
+        let mut tick = 0;
+        b.iter(|| {
+            for &p in &blocks {
+                m.wake_fine(p);
+            }
+            tick += 1;
+            m.step(&t, 1, tick, region, Budget::UNBOUNDED)
+        })
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10).warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(2));
-    targets = bricks, ca
+    targets = bricks, ca, fine
 }
 criterion_main!(benches);
