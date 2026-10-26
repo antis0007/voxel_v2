@@ -51,6 +51,8 @@ pub struct MatterStore {
     blocks: BrickStore,
     fine: FineStore,
     masks: FastMap<IVec3, [u64; 8]>,
+    /// Fine blocks the next tick steps; promotion and a changed or pending block add to it.
+    awake: Vec<IVec3>,
 }
 
 impl MatterStore {
@@ -59,6 +61,19 @@ impl MatterStore {
             blocks: BrickStore::new(block_bricks),
             fine: FineStore::new(fine_blocks),
             masks: FastMap::default(),
+            awake: Vec::new(),
+        }
+    }
+
+    pub fn fine_free_slots(&self) -> usize {
+        self.fine.free_slots()
+    }
+
+    /// Fine cell `index` (`x + 4(z + 4y)`) of a block; a uniform block answers its one cell.
+    fn fine_cell_at(&self, block: IVec3, index: usize) -> Cell {
+        match self.block(block) {
+            BlockView::Uniform(cell) => cell,
+            BlockView::Fine(cells) => cells[index],
         }
     }
 
@@ -101,11 +116,7 @@ impl MatterStore {
 
     /// Uniform neighbours behave as 64 identical cells without promotion.
     pub fn fine_cell(&self, block: IVec3, local: IVec3) -> Result<Cell, MatterError> {
-        let i = Self::fine_index(local)?;
-        Ok(match self.block(block) {
-            BlockView::Uniform(cell) => cell,
-            BlockView::Fine(cells) => cells[i],
-        })
+        Ok(self.fine_cell_at(block, Self::fine_index(local)?))
     }
 
     /// Pool exhaustion leaves both representations and the mask unchanged.
@@ -117,6 +128,7 @@ impl MatterStore {
         self.fine.promote(block, uniform, tick)?;
         let (brick, word, bit) = Self::address(block);
         self.masks.entry(brick).or_insert([0; 8])[word] |= bit;
+        self.awake.push(block);
         Ok(())
     }
 
