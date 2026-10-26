@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3, Vec4};
+use glam::{DMat4, DVec2, DVec3, Mat4, Vec3, Vec4};
 
 use crate::mesh::Vertex3;
 use crate::render::{ChunkCache, render_distance_settings};
@@ -6,6 +6,10 @@ use crate::world::CHUNK_SIZE;
 #[cfg(test)]
 #[path = "shadow_contract.rs"]
 mod contract;
+#[cfg(test)]
+#[path = "shadow_frame_contract.rs"]
+mod frame_contract;
+use super::origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform, RenderOrigin};
 use super::{coverage::ResidentCoverage, horizon::GpuMesh};
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub fn enabled() -> bool {
@@ -53,9 +57,49 @@ struct ShadowGenUniform {
     time: f32,
     wind: [f32; 2],
     resident_coverage: ResidentCoverage,
+    /// Voxel origin of `light_view_proj`; ownership rebuilds absolute positions.
+    render_origin: [i32; 4],
 }
-const _: [(); 10400] = [(); std::mem::size_of::<ShadowGenUniform>()];
+const _: [(); 10416] = [(); std::mem::size_of::<ShadowGenUniform>()];
 const _: [(); 80] = [(); std::mem::offset_of!(ShadowGenUniform, resident_coverage)];
+const _: [(); 10400] = [(); std::mem::offset_of!(ShadowGenUniform, render_origin)];
+
+/// Camera inputs the cascades are fitted around.
+#[derive(Clone, Copy, Debug)]
+pub struct CascadeView {
+    /// Inverse view projection with the eye at zero.
+    pub inv_view_proj: Mat4,
+    /// Precise eye position, world metres.
+    pub eye_m: DVec3,
+    /// Render origin the cascade matrices are expressed in.
+    pub origin: RenderOrigin,
+}
+
+impl CascadeView {
+    pub const IDENTITY: CascadeView = CascadeView {
+        inv_view_proj: Mat4::IDENTITY,
+        eye_m: DVec3::ZERO,
+        origin: RenderOrigin { voxel: glam::IVec3::ZERO },
+    };
+}
+
+/// One cascade's slice of the view frustum.
+struct FrustumSlice {
+    /// Origin-frame corners, metres.
+    corners: [Vec3; 8],
+    /// Absolute centre, world metres.
+    center_m: DVec3,
+    radius: f32,
+}
+
+/// One cascade's light projection over origin-frame metres.
+struct CascadeFit {
+    light_view_proj: DMat4,
+    /// World metres per shadow texel.
+    texel_m: f64,
+    near: f64,
+    far: f64,
+}
 
 pub struct ShadowRenderer {
     pub uniform_buffer: wgpu::Buffer,
@@ -79,14 +123,20 @@ pub struct ShadowRenderer {
     force_refresh: bool,
     active_light_dirs: [Vec3; CASCADE_COUNT],
     desired_light_dirs: [Vec3; CASCADE_COUNT],
+    /// Render origin of each layer's stored matrix.
+    active_origins: [Option<RenderOrigin>; CASCADE_COUNT],
+    desired_origin: RenderOrigin,
 
-    cascade_centers: [Vec3; CASCADE_COUNT],
+    /// Absolute world metres.
+    cascade_centers: [DVec3; CASCADE_COUNT],
     cascade_radii: [f32; CASCADE_COUNT],
     pub draw_lists: [Vec<glam::IVec3>; CASCADE_COUNT],
     wind_time: [f32; 3],
     horizon_generation: u64,
     resident_coverage: ResidentCoverage,
     parent_draw_lists: [Vec<(usize, std::ops::Range<u32>)>; CASCADE_COUNT],
+    /// Draw-offset slot of each `draw_lists` entry, index for index.
+    draw_slots: [Vec<u32>; CASCADE_COUNT],
     /// One indirect buffer per cascade: writes to a shared one would all land
     /// before submit and every cascade would read the last list.
     indirect: [super::streaming::indirect_draws::IndirectDraws; CASCADE_COUNT],
@@ -112,6 +162,100 @@ fn covers_receivers(cascade: &CascadeData, corners: &[Vec3; 8]) -> bool {
             && q.z > 0.0
             && q.z < q.w
     })
+}
+
+/// Receiver split distances, metres: four near layers and the far layer.
+fn cascade_splits(scale: f32) -> [f32; CASCADE_COUNT + 1] {
+    let lambda = 0.65;
+    let n_world = (0.1 * scale).max(0.1);
+    let target_f = (render_distance_settings().view_distance_chunks as f32 * CHUNK_SIZE as f32).max(128.0);
+    let f_world = target_f.clamp(192.0, 512.0) * scale;
+
+    let mut splits = [0.0; CASCADE_COUNT + 1];
+    splits[0] = n_world;
+    for i in 1..=NEAR_CASCADE_COUNT {
+        let p = i as f32 / NEAR_CASCADE_COUNT as f32;
+        let log = n_world * (f_world / n_world).powf(p);
+        let uni = n_world + (f_world - n_world) * p;
+        splits[i] = lambda * log + (1.0 - lambda) * uni;
+    }
+    // Keep all four existing receiver intervals and their resolution.
+    // One additional layer supplies broad terrain/canopy occlusion; the
+    // receiver fades its final 22% smoothly to avoid a hard range edge.
+    splits[CASCADE_COUNT] = FAR_SHADOW_DISTANCE;
+    splits
+}
+
+/// Near-to-far length of the view projection, metres.
+fn projection_depth(inv_view_proj: Mat4) -> f32 {
+    // The visual frustum extends to the horizon, while shadow coverage stays
+    // local. Normalize against the actual projection depth, not the shadow limit.
+    unproject_clip(inv_view_proj, Vec3::new(0.0, 0.0, 1.0))
+        .distance(unproject_clip(inv_view_proj, Vec3::ZERO))
+        .max(1e-6)
+}
+
+/// Frustum slice between two depth ratios, measured from the eye.
+fn frustum_slice(view: &CascadeView, ratio_near: f32, ratio_far: f32, origin_m: DVec3) -> FrustumSlice {
+    let mut corners = [Vec3::ZERO; 8];
+    for (idx, &x) in [-1.0, 1.0].iter().enumerate() {
+        for (jdx, &y) in [-1.0, 1.0].iter().enumerate() {
+            let near_pt = unproject_clip(view.inv_view_proj, Vec3::new(x, y, 0.0));
+            let far_pt = unproject_clip(view.inv_view_proj, Vec3::new(x, y, 1.0));
+            let ray = far_pt - near_pt;
+            let base_idx = (idx * 2 + jdx) * 2;
+            corners[base_idx] = near_pt + ray * ratio_near;
+            corners[base_idx + 1] = near_pt + ray * ratio_far;
+        }
+    }
+    let center = corners.iter().copied().sum::<Vec3>() / 8.0;
+    let radius = corners.iter().fold(0.0f32, |r, c| r.max(c.distance(center)));
+    // Eye-relative corners are small; move them to the origin frame in f64.
+    let eye_rel = view.eye_m - origin_m;
+    FrustumSlice {
+        corners: corners.map(|c| (eye_rel + c.as_dvec3()).as_vec3()),
+        center_m: view.eye_m + center.as_dvec3(),
+        radius,
+    }
+}
+
+/// Light-space texel phase of absolute world zero.
+///
+/// Snapping the ortho window to it keeps every cascade's texel grid fixed to
+/// the world when the render origin moves.
+pub fn world_locked_texel_offset(view_rel: DMat4, origin_m: DVec3, texel_size: f64) -> DVec2 {
+    let zero = view_rel.transform_point3(-origin_m);
+    let phase = |v: f64| v - (v / texel_size).round() * texel_size;
+    DVec2::new(phase(zero.x), phase(zero.y))
+}
+
+/// Fits the light projection around a sphere, in origin-frame metres.
+fn fit_cascade(center_m: DVec3, radius: f64, light_dir: DVec3, up: DVec3, origin_m: DVec3, scale: f64) -> CascadeFit {
+    // A large Z-pullback keeps tall objects and far terrain that cast long
+    // shadows at sunrise and sunset inside the light's depth range.
+    let z_pullback = 8000.0 * scale;
+    // Subtract the origin before anything rounds: far from spawn the
+    // absolute centre has no f32 precision left.
+    let light_eye = center_m - origin_m + light_dir * radius;
+    // Avoid subtracting two large world positions to recover the light
+    // direction: that rotates the basis slightly during distant travel.
+    let view = DMat4::look_to_rh(light_eye, -light_dir, up);
+    // A rotation-invariant sphere, with quantized extent, keeps the
+    // shadow texel grid from breathing with floating-point camera noise.
+    let extent = ((radius + 7.0 * scale) / scale).ceil() * scale;
+    let texel_m = (extent * 2.0) / f64::from(SHADOW_MAP_SIZE);
+    let offset = world_locked_texel_offset(view, origin_m, texel_m);
+    let near = -z_pullback;
+    let far = radius * 2.0 + z_pullback;
+    let proj = DMat4::orthographic_rh(
+        -extent + offset.x,
+        extent + offset.x,
+        -extent + offset.y,
+        extent + offset.y,
+        near,
+        far,
+    );
+    CascadeFit { light_view_proj: proj * view, texel_m, near, far }
 }
 
 impl ShadowRenderer {
@@ -183,15 +327,18 @@ impl ShadowRenderer {
                 module: shadow_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex3>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 52, shader_location: 4 },
-                    ],
-                }],
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex3>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 52, shader_location: 4 },
+                        ],
+                    },
+                    DrawTransform::LAYOUT,
+                ],
             },
             fragment: Some(wgpu::FragmentState {
                 module: shadow_shader,
@@ -266,13 +413,16 @@ impl ShadowRenderer {
             force_refresh: true,
             active_light_dirs: [Vec3::ZERO; CASCADE_COUNT],
             desired_light_dirs: [Vec3::ZERO; CASCADE_COUNT],
-            cascade_centers: [Vec3::ZERO; CASCADE_COUNT],
+            active_origins: [None; CASCADE_COUNT],
+            desired_origin: CascadeView::IDENTITY.origin,
+            cascade_centers: [DVec3::ZERO; CASCADE_COUNT],
             cascade_radii: [0.0; CASCADE_COUNT],
             draw_lists: std::array::from_fn(|_| Vec::new()),
             wind_time: [0.0; 3],
             horizon_generation: u64::MAX,
             resident_coverage: ResidentCoverage::default(),
             parent_draw_lists: std::array::from_fn(|_| Vec::new()),
+            draw_slots: std::array::from_fn(|_| Vec::new()),
             indirect: std::array::from_fn(|_| Default::default()),
             multidraw: false,
         }
@@ -281,7 +431,7 @@ impl ShadowRenderer {
     pub fn update(
         &mut self,
         light_dir: Vec3,
-        inv_view_proj: Mat4,
+        view: CascadeView,
         camera_near: f32,
         world_scale: f32,
     ) {
@@ -291,25 +441,8 @@ impl ShadowRenderer {
             Vec3::new(0.3, 1.0, 0.2).normalize()
         };
         let scale = world_scale.max(0.25);
-        let render_settings = render_distance_settings();
-
-        let lambda = 0.65;
-        let n_world = (0.1 * scale).max(0.1);
-        let target_f = (render_settings.view_distance_chunks as f32 * CHUNK_SIZE as f32).max(128.0);
-        let f_world = target_f.clamp(192.0, 512.0) * scale;
-
-        let mut splits = [0.0; CASCADE_COUNT + 1];
-        splits[0] = n_world;
-        for i in 1..=NEAR_CASCADE_COUNT {
-            let p = i as f32 / NEAR_CASCADE_COUNT as f32;
-            let log = n_world * (f_world / n_world).powf(p);
-            let uni = n_world + (f_world - n_world) * p;
-            splits[i] = lambda * log + (1.0 - lambda) * uni;
-        }
-        // Keep all four existing receiver intervals and their resolution.
-        // One additional layer supplies broad terrain/canopy occlusion; the
-        // receiver fades its final 22% smoothly to avoid a hard range edge.
-        splits[CASCADE_COUNT] = FAR_SHADOW_DISTANCE;
+        let splits = cascade_splits(scale);
+        let origin_m = view.origin.voxel.as_dvec3() * f64::from(scale);
 
         let up = if safe_dir.y.abs() > 0.96 {
             Vec3::X
@@ -325,50 +458,28 @@ impl ShadowRenderer {
             far_plane: 0.0,
         }; CASCADE_COUNT];
         self.desired_light_dirs = [safe_dir; CASCADE_COUNT];
+        self.desired_origin = view.origin;
 
-        // The visual frustum extends to the horizon, while shadow coverage stays
-        // local. Normalize against the actual projection depth, not the shadow limit.
-        let projection_depth = unproject_clip(inv_view_proj, Vec3::new(0.0, 0.0, 1.0))
-            .distance(unproject_clip(inv_view_proj, Vec3::ZERO))
-            .max(1e-6);
+        let projection_depth = projection_depth(view.inv_view_proj);
         for i in 0..CASCADE_COUNT {
             let ratio_near = (splits[i] - camera_near) / projection_depth;
             let ratio_far = (splits[i + 1] - camera_near) / projection_depth;
-
-            let mut corners = [Vec3::ZERO; 8];
-            for (idx, &x) in [-1.0, 1.0].iter().enumerate() {
-                for (jdx, &y) in [-1.0, 1.0].iter().enumerate() {
-                    let near_pt = unproject_clip(inv_view_proj, Vec3::new(x, y, 0.0));
-                    let far_pt = unproject_clip(inv_view_proj, Vec3::new(x, y, 1.0));
-                    let ray = far_pt - near_pt;
-                    let base_idx = (idx * 2 + jdx) * 2;
-                    corners[base_idx] = near_pt + ray * ratio_near;
-                    corners[base_idx + 1] = near_pt + ray * ratio_far;
-                }
-            }
-
-            let mut center = Vec3::ZERO;
-            for c in &corners {
-                center += *c;
-            }
-            center /= 8.0;
-
-            let mut radius = 0.0f32;
-            for c in &corners {
-                radius = radius.max(c.distance(center));
-            }
+            let FrustumSlice { corners, center_m, radius } =
+                frustum_slice(&view, ratio_near, ratio_far, origin_m);
 
             // Discontinuous camera jumps must not reuse shadow projections.
-            if i == 0 && center.distance(self.cascade_centers[i]) > radius.max(1.0) * 0.25 {
+            if i == 0 && center_m.distance(self.cascade_centers[i]) > f64::from(radius.max(1.0) * 0.25) {
                 self.force_refresh = true;
             }
-            self.cascade_centers[i] = center;
+            self.cascade_centers[i] = center_m;
             self.cascade_radii[i] = radius;
 
             // A camera pan does not change an existing world-space shadow.
             // Reuse its actual texture/matrix pair while every new receiver
             // still fits, rather than rerasterizing all four maps each frame.
+            // A matrix from another render origin is in another frame.
             if self.initialized
+                && self.active_origins[i] == Some(view.origin)
                 && self.active_uniform.world_scale == scale
                 && (self.active_uniform.cascades[i].far_plane - splits[i + 1]).abs() < 1e-4
                 && safe_dir.distance_squared(self.active_light_dirs[i]) <= 1e-8
@@ -381,42 +492,23 @@ impl ShadowRenderer {
             self.pending_cascades |= 1 << i;
             self.urgent_cascades |= 1 << i;
 
-            // Use a massive Z-pullback to ensure tall objects and far-away terrain
-            // casting long shadows at sunrise/sunset are never incorrectly clipped.
-            let z_pullback = 8000.0 * scale;
-            let light_eye = center + safe_dir * radius;
-            // Avoid subtracting two large world positions to recover the light
-            // direction: that rotates the basis slightly during distant travel.
-            let view = Mat4::look_to_rh(light_eye, -safe_dir, up);
-
-            // A rotation-invariant sphere, with quantized extent, keeps the
-            // shadow texel grid from breathing with floating-point camera noise.
-            let extent = ((radius + 7.0 * scale) / scale).ceil() * scale;
-            let texel_size = (extent * 2.0) / SHADOW_MAP_SIZE as f32;
-
-            let origin_ls = view.transform_point3(Vec3::ZERO);
-            let offset_x = origin_ls.x - (origin_ls.x / texel_size).round() * texel_size;
-            let offset_y = origin_ls.y - (origin_ls.y / texel_size).round() * texel_size;
-
-            let near_plane = -z_pullback;
-            let far_plane = radius * 2.0 + z_pullback;
-
-            let proj = Mat4::orthographic_rh(
-                -extent + offset_x,
-                extent + offset_x,
-                -extent + offset_y,
-                extent + offset_y,
-                near_plane,
-                far_plane,
+            let fit = fit_cascade(
+                center_m,
+                f64::from(radius),
+                safe_dir.as_dvec3(),
+                up.as_dvec3(),
+                origin_m,
+                f64::from(scale),
             );
-
+            let texel_size = fit.texel_m as f32;
+            let depth_range = (fit.far - fit.near) as f32;
             cascades[i] = CascadeData {
-                light_view_proj: (proj * view).to_cols_array_2d(),
+                light_view_proj: fit.light_view_proj.as_mat4().to_cols_array_2d(),
                 texel_size: 1.0 / SHADOW_MAP_SIZE as f32,
                 // Convert a small physical receiver bias to normalized depth.
                 // Fixed depth biases over this 16km range detached shadows by metres.
-                base_bias: (0.025 * scale + texel_size * 0.35) / (far_plane - near_plane),
-                slope_bias: (0.06 * scale + texel_size * 1.5) / (far_plane - near_plane),
+                base_bias: (0.025 * scale + texel_size * 0.35) / depth_range,
+                slope_bias: (0.06 * scale + texel_size * 1.5) / depth_range,
                 far_plane: splits[i + 1],
             };
         }
@@ -517,12 +609,14 @@ impl ShadowRenderer {
             }
             self.active_uniform.cascades[i] = self.desired_uniform.cascades[i];
             self.active_light_dirs[i] = self.desired_light_dirs[i];
+            self.active_origins[i] = Some(self.desired_origin);
             let gen_uni = ShadowGenUniform {
                 light_view_proj: self.active_uniform.cascades[i].light_view_proj,
                 world_scale: self.active_uniform.world_scale,
                 time: if i < 2 { self.wind_time[0] } else { -1.0 },
                 wind: [self.wind_time[1], self.wind_time[2]],
                 resident_coverage: self.resident_coverage,
+                render_origin: self.desired_origin.voxel.extend(0).to_array(),
             };
             queue.write_buffer(&self.gen_buffers[i], 0, bytemuck::bytes_of(&gen_uni));
         }
@@ -543,18 +637,50 @@ impl ShadowRenderer {
     pub fn renders_cascade(&self, i: usize) -> bool {
         self.frame_cascades & (1 << i) != 0
     }
-    /// Writes this frame's cascade lists as indirect arguments when multi-draw
-    /// is active. Call after `build_cascade_draw_lists`, before `render`.
-    pub fn prepare_indirect(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cache: &ChunkCache) {
+    /// Takes draw-offset slots for this frame's cascade lists.
+    ///
+    /// Also writes indirect arguments when multi-draw is active. Call after
+    /// `build_cascade_draw_lists` and before `offsets` is uploaded.
+    pub fn prepare_draws(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cache: &ChunkCache,
+        offsets: &mut DrawOffsets,
+        transform: impl Fn(glam::IVec3) -> DrawTransform,
+    ) {
         self.multidraw = super::streaming::indirect_draws::active();
-        if !self.multidraw {
-            return;
-        }
         for i in 0..CASCADE_COUNT {
-            if self.renders_cascade(i) {
-                self.indirect[i].prepare(device, queue, cache, self.draw_lists[i].iter().copied());
+            if !self.renders_cascade(i) {
+                continue;
+            }
+            self.draw_slots[i].clear();
+            let mut slot_of = |c| offsets.slot(c, || transform(c));
+            self.draw_slots[i].extend(self.draw_lists[i].iter().map(|&c| slot_of(c)));
+            if self.multidraw {
+                let coords = self.draw_lists[i].iter().copied();
+                self.indirect[i].prepare(device, queue, cache, coords, slot_of);
             }
         }
+    }
+
+    /// Cascade 0's pipeline and bind group, its uniform set to `light_view_proj`.
+    #[cfg(test)]
+    pub(in crate::render) fn test_cascade(
+        &self,
+        queue: &wgpu::Queue,
+        light_view_proj: Mat4,
+    ) -> (&wgpu::RenderPipeline, &wgpu::BindGroup) {
+        let uniform = ShadowGenUniform {
+            light_view_proj: light_view_proj.to_cols_array_2d(),
+            world_scale: 1.0,
+            time: 0.0,
+            wind: [0.0; 2],
+            resident_coverage: ResidentCoverage::default(),
+            render_origin: [0; 4],
+        };
+        queue.write_buffer(&self.gen_buffers[0], 0, bytemuck::bytes_of(&uniform));
+        (&self.pipeline, &self.gen_bind_groups[0])
     }
 
     pub fn build_cascade_draw_lists(&mut self, cache: &ChunkCache, horizon: Option<&GpuMesh>) {
@@ -567,6 +693,14 @@ impl ShadowRenderer {
             self.parent_draw_lists[i].clear();
             let matrix = Mat4::from_cols_array_2d(&self.active_uniform.cascades[i].light_view_proj);
             let planes = crate::render::extract_planes(matrix);
+            // The matrix maps origin-frame metres; offset the chunk in integers first.
+            let origin = self.active_origins[i].unwrap_or(self.desired_origin);
+            let scale = self.active_uniform.world_scale;
+            let origin_m = origin.voxel.as_vec3() * scale;
+            let chunk_center = |coord| {
+                let corner = Vec4::from_array(origin.chunk_offset(coord)).truncate();
+                (corner + Vec3::splat(CHUNK_SIZE as f32 * 0.5)) * scale
+            };
             for (&coord, mesh) in &cache.gpu_meshes {
                 if !cache.published_coords.contains(&coord) {continue;}
                 if self.resident_coverage.header[3] != 0
@@ -577,10 +711,10 @@ impl ShadowRenderer {
                 if mesh.index_count == 0 {
                     continue;
                 }
-                let (center, radius) = crate::render::chunk_bounds_sphere(coord);
-                let radius = radius + 0.04 / self.active_uniform.world_scale.max(0.0001);
-                let center = center * self.active_uniform.world_scale;
-                let radius = radius * self.active_uniform.world_scale;
+                let (_, radius) = crate::render::chunk_bounds_sphere(coord);
+                let radius = radius + 0.04 / scale.max(0.0001);
+                let center = chunk_center(coord);
+                let radius = radius * scale;
                 if !planes
                     .iter()
                     .any(|p| p.truncate().dot(center) + p.w < -radius)
@@ -591,11 +725,7 @@ impl ShadowRenderer {
             // Depth is LessEqual in this pass. Fill the light's nearer surfaces
             // first so buried cave/fluid geometry can fail early depth testing.
             // Hash-map order otherwise changes after resident mesh updates.
-            let scale = self.active_uniform.world_scale;
-            let depth = |coord| {
-                let (center, _) = crate::render::chunk_bounds_sphere(coord);
-                (matrix * (center * scale).extend(1.0)).z
-            };
+            let depth = |coord| (matrix * chunk_center(coord).extend(1.0)).z;
             self.draw_lists[i].sort_unstable_by(|a, b| depth(*a).total_cmp(&depth(*b))
                 .then_with(|| (a.x, a.y, a.z).cmp(&(b.x, b.y, b.z))));
             if let Some(horizon) = horizon {
@@ -606,7 +736,7 @@ impl ShadowRenderer {
                         }
                     } else {
                         for batch in &page.batches {
-                            if batch.selected(horizon.collared) && (!horizon.cull || batch.visible(Vec3::ZERO, &planes)) {
+                            if batch.selected(horizon.collared) && (!horizon.cull || batch.visible(origin_m, &planes)) {
                                 self.parent_draw_lists[i].push((page_index, batch.indices.clone()));
                             }
                         }
@@ -629,6 +759,7 @@ impl ShadowRenderer {
         horizon: Option<&'a GpuMesh>,
         timestamp_query_set: Option<&'a wgpu::QuerySet>,
         timestamp_queries: &[Option<(u32, u32)>; CASCADE_COUNT],
+        draw_offsets: &wgpu::Buffer,
     ) {
         for i in 0..CASCADE_COUNT {
             if !self.renders_cascade(i) {
@@ -656,18 +787,20 @@ impl ShadowRenderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.gen_bind_groups[i], &[]);
+            pass.set_vertex_buffer(1, draw_offsets.slice(..));
             let mut bound_page = None;
             if self.multidraw {
                 self.indirect[i].draw(&mut pass, cache);
             }
-            for coord in self.draw_lists[i].iter().filter(|_| !self.multidraw) {
+            let direct = self.draw_lists[i].iter().zip(&self.draw_slots[i]).filter(|_| !self.multidraw);
+            for (coord, &slot) in direct {
                 if let Some(slice) = cache.draw_slice(*coord) {
                     if bound_page != Some(slice.page) {
                         pass.set_vertex_buffer(0, slice.vertices.slice(..));
                         pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
                         bound_page = Some(slice.page);
                     }
-                    pass.draw_indexed(slice.index_range, slice.base_vertex, 0..1);
+                    pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
                 }
             }
             if let Some(horizon) = horizon {
@@ -675,9 +808,48 @@ impl ShadowRenderer {
                     let page = &horizon.pages[*page_index];
                     pass.set_vertex_buffer(0, page.vertices.slice(..));
                     pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(indices.clone(), 0, 0..1);
+                    pass.draw_indexed(indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{DVec2, DVec3, IVec3};
+
+    /// Texel coordinates of `world_point` (voxels) in cascade 0.
+    fn cascade_texel_of(origin: RenderOrigin, eye: DVec3, world_point: DVec3, scale: f64) -> DVec2 {
+        let projection = Mat4::perspective_rh(1.2, 16.0 / 9.0, 0.05, 4096.0);
+        let forward = Vec3::new(1.0, -0.3, 0.2).normalize();
+        let view = CascadeView {
+            inv_view_proj: (projection * Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y)).inverse(),
+            eye_m: eye * scale,
+            origin,
+        };
+        let origin_m = origin.voxel.as_dvec3() * scale;
+        let splits = cascade_splits(scale as f32);
+        let depth = projection_depth(view.inv_view_proj);
+        let near = 0.05 * scale as f32;
+        let slice = frustum_slice(&view, (splits[0] - near) / depth, (splits[1] - near) / depth, origin_m);
+        let dir = DVec3::new(0.4, 0.6, 0.3).normalize();
+        let fit = fit_cascade(slice.center_m, f64::from(slice.radius), dir, DVec3::Y, origin_m, scale);
+        let ndc = fit.light_view_proj.project_point3(world_point * scale - origin_m);
+        (ndc.truncate() * 0.5 + 0.5) * f64::from(SHADOW_MAP_SIZE)
+    }
+
+    #[test]
+    fn cascade_texel_grid_is_world_locked_across_origin_moves() {
+        // Same absolute camera and sun; origins one grid cell apart.
+        let scale = 1.0;
+        let eye = DVec3::new(900_040.0, 120.0, -77.0);
+        let a = RenderOrigin { voxel: IVec3::new(897_024, 0, -4096) };
+        let b = RenderOrigin { voxel: IVec3::new(901_120, 0, -4096) };
+        let world_point = DVec3::new(900_050.5, 100.0, -70.25);
+        let ta = cascade_texel_of(a, eye, world_point, scale);
+        let tb = cascade_texel_of(b, eye, world_point, scale);
+        assert!((ta - tb).abs().max_element() < 1e-3, "{ta} vs {tb}");
     }
 }

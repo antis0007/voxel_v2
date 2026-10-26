@@ -33,8 +33,10 @@ const _: [(); 10320] = [(); std::mem::size_of::<ResidentCoverage>()];
 const _: [(); 16] = [(); std::mem::offset_of!(ResidentCoverage, words)];
 const _: [(); 2112] = [(); std::mem::offset_of!(ResidentCoverage, sparse_header)];
 const _: [(); 2128] = [(); std::mem::offset_of!(ResidentCoverage, sparse_keys)];
-const _: [(); 10640] = [(); std::mem::size_of::<super::CameraUniform>()];
+const _: [(); 10672] = [(); std::mem::size_of::<super::CameraUniform>()];
 const _: [(); 320] = [(); std::mem::offset_of!(super::CameraUniform, resident_coverage)];
+const _: [(); 10640] = [(); std::mem::offset_of!(super::CameraUniform, render_origin)];
+const _: [(); 10656] = [(); std::mem::offset_of!(super::CameraUniform, eye_from_origin)];
 
 impl Default for ResidentCoverage {
     fn default() -> Self {

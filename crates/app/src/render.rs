@@ -10,6 +10,7 @@ pub(crate) fn flush_review_captures() {
     }
 }
 mod horizon;
+mod origin;
 mod streaming;
 pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, build_draw_list};
 pub use streaming::{
@@ -41,7 +42,8 @@ pub use indirect::{
 pub mod shadow;
 
 use anyhow::{Context, Result};
-use glam::{Mat4, Vec3, Vec4};
+use glam::{IVec3, Mat4, Vec3, Vec4};
+use origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform, RenderOrigin};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
@@ -826,6 +828,10 @@ struct CameraUniform {
     /// value means "no override"; zero means no resident mesh is published.
     coverage: [f32; 4],
     resident_coverage: coverage::ResidentCoverage,
+    /// xyz: `RenderOrigin` in voxels, the frame chunk vertices are drawn in.
+    render_origin: [i32; 4],
+    /// xyz: eye minus render origin, metres, less the view residual.
+    eye_from_origin: [f32; 4],
 }
 
 #[repr(C)]
@@ -1208,6 +1214,10 @@ pub struct Gpu {
     shadow_renderer: shadow::ShadowRenderer,
     /// Indirect arguments for the main terrain pass (multi-draw path).
     chunk_indirect: streaming::indirect_draws::IndirectDraws,
+    /// Per-chunk draw transforms for the main pass and shadow cascades.
+    draw_offsets: DrawOffsets,
+    /// Chunk vertex frame; `None` before the first camera upload.
+    render_origin: Option<RenderOrigin>,
     horizon_detail: horizon::detail::Gpu,
     world_surface_bind_group: wgpu::BindGroup,
     cloud_texture_layout: wgpu::BindGroupLayout,
@@ -1259,7 +1269,7 @@ pub struct Gpu {
     current_debug_view: RenderDebugView,
     last_camera_pos: Vec3,
     last_camera_residual: Vec3,
-    last_inv_view_proj: Mat4,
+    last_cascade_view: shadow::CascadeView,
     last_rotation_view_proj: Mat4,
     last_camera_forward: Vec3,
     last_world_scale: f32,
@@ -1684,13 +1694,14 @@ impl GpuBootstrap {
             Ordering::Relaxed,
         );
         streaming::configure_gpu_residency(&adapter);
-        streaming::indirect_draws::set_supported(&adapter);
         let adapter_summary = format!(
             "{} / {:?} / {:?}",
             adapter_info.name, adapter_info.backend, adapter_info.device_type
         );
         let requested_features = adapter.features()
-            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE);
+            & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::FLOAT32_FILTERABLE
+                | wgpu::Features::INDIRECT_FIRST_INSTANCE);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -1702,6 +1713,7 @@ impl GpuBootstrap {
                 trace: wgpu::Trace::Off,
             })
             .await?;
+        streaming::indirect_draws::set_supported(&adapter, device.features());
 
         let device_lost = install_device_loss_signal(&device);
         let caps = surface.get_capabilities(&adapter);
@@ -2030,6 +2042,8 @@ impl GpuPendingInit {
                         scene_seed: [0; 4],
                         coverage: [-1.0, 0.0, 0.0, 0.0],
                         resident_coverage: coverage::ResidentCoverage::default(),
+                        render_origin: [0; 4],
+                        eye_from_origin: [0.0; 4],
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
@@ -2761,17 +2775,20 @@ impl GpuPendingInit {
                             module: world_shader,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[wgpu::VertexBufferLayout {
-                                array_stride: std::mem::size_of::<Vertex3>() as u64,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                                attributes: &wgpu::vertex_attr_array![
-                                    0 => Float32x3,
-                                    1 => Float32x3,
-                                    2 => Float32x3,
-                                    3 => Float32x4,
-                                    4 => Float32
-                                ],
-                            }],
+                            buffers: &[
+                                wgpu::VertexBufferLayout {
+                                    array_stride: std::mem::size_of::<Vertex3>() as u64,
+                                    step_mode: wgpu::VertexStepMode::Vertex,
+                                    attributes: &wgpu::vertex_attr_array![
+                                        0 => Float32x3,
+                                        1 => Float32x3,
+                                        2 => Float32x3,
+                                        3 => Float32x4,
+                                        4 => Float32
+                                    ],
+                                },
+                                DrawTransform::LAYOUT,
+                            ],
                         },
                         fragment: Some(wgpu::FragmentState {
                             module: world_shader,
@@ -3054,6 +3071,8 @@ impl GpuPendingInit {
 
                     shadow_renderer: self.shadow_renderer.take().unwrap(),
                     chunk_indirect: Default::default(),
+                    draw_offsets: Default::default(),
+                    render_origin: None,
                     horizon_detail: self.horizon_detail.take().unwrap(),
                     world_surface_bind_group: self.world_surface_bind_group.take().unwrap(),
 
@@ -3106,7 +3125,7 @@ impl GpuPendingInit {
                     current_debug_view: RenderDebugView::None,
                     last_camera_pos: Vec3::ZERO,
                     last_camera_residual: Vec3::ZERO,
-                    last_inv_view_proj: Mat4::IDENTITY,
+                    last_cascade_view: shadow::CascadeView::IDENTITY,
                     last_rotation_view_proj: Mat4::IDENTITY,
                     last_camera_forward: Vec3::NEG_Z,
                     last_world_scale: 1.0,
@@ -3880,6 +3899,10 @@ impl Gpu {
         });
         let eye = precise_eye.as_vec3();
         let residual = (precise_eye - eye.as_dvec3()).as_vec3();
+        let eye_voxels = precise_eye / f64::from(world_scale);
+        let render_origin = RenderOrigin::follow(self.render_origin, eye_voxels, origin::origin_bias_voxels());
+        self.render_origin = Some(render_origin);
+        let eye_from_origin = render_origin.eye_uniform(precise_eye, f64::from(world_scale), residual);
         let cur_forward = forward.normalize();
         // Callers supply a conventional 0 = near, 1 = far projection. The scene is
         // drawn reverse-Z into a 32-bit float depth buffer: 24-bit forward-Z gave
@@ -3889,6 +3912,13 @@ impl Gpu {
             * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)
             * Mat4::from_translation(-residual);
         let standard_inv_view_proj = Mat4::from_translation(eye) * standard_view_proj.inverse();
+        // Cascades fit around the precise eye; f32 absolute corners lose
+        // centimetres far from spawn.
+        let cascade_view = shadow::CascadeView {
+            inv_view_proj: (projection * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)).inverse(),
+            eye_m: precise_eye,
+            origin: render_origin,
+        };
         let projection = REVERSE_Z * projection;
         let rotation_view_proj = REVERSE_Z * standard_view_proj;
         // REVERSE_Z is its own inverse, so the reversed inverse needs no second inversion.
@@ -3973,6 +4003,8 @@ impl Gpu {
                     self.last_camera_pos.z,
                     self.horizon.visibility(),
                 ],
+                render_origin: render_origin.voxel.extend(0).to_array(),
+                eye_from_origin: eye_from_origin.extend(0.0).to_array(),
             }),
         );
 
@@ -3986,14 +4018,14 @@ impl Gpu {
 
         self.last_camera_pos = eye;
         self.last_camera_residual = residual;
-        self.last_inv_view_proj = standard_inv_view_proj;
+        self.last_cascade_view = cascade_view;
         self.last_rotation_view_proj = rotation_view_proj;
         self.last_camera_forward = cur_forward;
         self.last_world_scale = world_scale;
 
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
-            standard_inv_view_proj,
+            cascade_view,
             0.05 * world_scale,
             world_scale,
         );
@@ -4077,7 +4109,7 @@ impl Gpu {
 
         self.shadow_renderer.update(
             self.current_lighting.sun_dir,
-            self.last_inv_view_proj,
+            self.last_cascade_view,
             0.05 * self.last_world_scale,
             self.last_world_scale,
         );
@@ -4451,9 +4483,40 @@ impl Gpu {
                 .shadow_renderer
                 .apply_update_if_needed(&self.queue, chunk_cache.shadow_caster_revision);
 
+        // The main pass and every shadow cascade draw in the render-origin frame.
+        let origin = self.render_origin.unwrap_or(RenderOrigin { voxel: IVec3::ZERO });
+        let chunk_transform = |c: IVec3| DrawTransform { offset: origin.chunk_offset(c), ..DrawTransform::IDENTITY };
+        self.draw_offsets.begin_frame(DrawTransform { offset: origin.absolute_offset(), ..DrawTransform::IDENTITY });
         if redraw_shadow_map {
             self.shadow_renderer.build_cascade_draw_lists(chunk_cache, self.horizon.mesh.as_ref());
-            self.shadow_renderer.prepare_indirect(&self.device, &self.queue, chunk_cache);
+            self.shadow_renderer.prepare_draws(
+                &self.device,
+                &self.queue,
+                chunk_cache,
+                &mut self.draw_offsets,
+                chunk_transform,
+            );
+        }
+        // Main-pass slots and indirect arguments are taken before the upload; the
+        // offset table must be complete before any pass binds it. This work and
+        // the upload count toward terrain encode time, not shadow time.
+        let main_prepare_start = Instant::now();
+        let multidraw = !paused && streaming::indirect_draws::active();
+        for key in draw_list.iter() {
+            self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
+        }
+        let multidraw_counts = if multidraw {
+            let offsets = &mut self.draw_offsets;
+            let coords = draw_list.iter().map(|k| k.coord);
+            self.chunk_indirect.prepare(&self.device, &self.queue, chunk_cache, coords, |c| {
+                offsets.slot(c, || chunk_transform(c))
+            })
+        } else {
+            (0, 0)
+        };
+        self.draw_offsets.upload(&self.device, &self.queue);
+        let main_prepare_ms = main_prepare_start.elapsed().as_secs_f32() * 1000.0;
+        if redraw_shadow_map && let Some(draw_offsets) = self.draw_offsets.buffer() {
             let mut shadow_timestamp_queries = [None; shadow::CASCADE_COUNT];
             if gpu_query_set.is_some() {
                 for pass_index in 0..GPU_TIMESTAMP_SHADOW_PASS_COUNT {
@@ -4473,6 +4536,7 @@ impl Gpu {
                 self.horizon.mesh.as_ref(),
                 gpu_query_set.as_ref(),
                 &shadow_timestamp_queries,
+                draw_offsets,
             );
         }
         frame_stats.shadow_redraw = redraw_shadow_map;
@@ -4481,17 +4545,10 @@ impl Gpu {
         } else {
             0
         };
-        frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0;
+        frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0 - main_prepare_ms;
 
         let terrain_start = Instant::now();
         self.atmosphere.record_sky_probe(&mut encoder, &self.camera_bind_group, &self.lighting_bind_group);
-        // Indirect arguments are written before the pass (writes land before submit).
-        let multidraw = !paused && streaming::indirect_draws::active();
-        let multidraw_counts = if multidraw {
-            self.chunk_indirect.prepare(&self.device, &self.queue, chunk_cache, draw_list.iter().map(|k| k.coord))
-        } else {
-            (0, 0)
-        };
         let scene_view = &self.postprocess.scene;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -4550,6 +4607,9 @@ impl Gpu {
                 pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
+                if let Some(draw_offsets) = self.draw_offsets.buffer() {
+                    pass.set_vertex_buffer(1, draw_offsets.slice(..));
+                }
                 // Front-to-back order stays; buffers rebind only on a page change.
                 let mut bound_page = None;
                 if multidraw {
@@ -4565,7 +4625,9 @@ impl Gpu {
                             bound_page = Some(slice.page);
                         }
                         terrain_indices += slice.index_range.len();
-                        pass.draw_indexed(slice.index_range, slice.base_vertex, 0..1);
+                        // Slots were taken above; this lookup never adds one.
+                        let slot = self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
+                        pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
                         terrain_draw_calls += 1;
                     }
                 }
@@ -4580,12 +4642,12 @@ impl Gpu {
                                 if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) {
                                     continue;
                                 }
-                                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                                pass.draw_indexed(batch.indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                                 terrain_draw_calls += 1;
                                 terrain_indices += batch.indices.len();
                             }
                         } else {
-                            pass.draw_indexed(0..page.count, 0, 0..1);
+                            pass.draw_indexed(0..page.count, 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                             terrain_draw_calls += 1;
                             terrain_indices += page.count as usize;
                         }
@@ -4595,13 +4657,13 @@ impl Gpu {
                 if self.scene_vertices > 0
                     && let Some(stream) = &self.scene_stream {
                         pass.set_vertex_buffer(0, stream.slice::<Vertex3>(self.scene_vertices));
-                        pass.draw(0..self.scene_vertices as u32, 0..1);
+                        pass.draw(0..self.scene_vertices as u32, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                         frame_stats.terrain_draw_calls += 1;
                     }
                 frame_stats.terrain_indices = terrain_indices;
             }
         }
-        frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0;
+        frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0 + main_prepare_ms;
         if !paused && indirect_lighting_enabled() {
             let timestamps = allocate_pass_timestamp_writes(
                 gpu_query_set.as_ref(),

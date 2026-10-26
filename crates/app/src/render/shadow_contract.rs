@@ -42,6 +42,12 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
         0,
         bytemuck::cast_slice(&[0u32, 1, 2, 0, 2, 3]),
     );
+    let draw_offsets = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("contract draw offset"),
+        size: std::mem::size_of::<DrawTransform>() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("contract depth"),
         size: wgpu::Extent3d {
@@ -76,31 +82,40 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
         ..Default::default()
     };
     assert!(sparse_owned.set_column(0, 0));
-    for (name, ao, kind, coverage, suppressed) in [
-        ("parent-unowned", -1.0, 3.0, empty, false),
-        ("parent-owned", -1.0, 3.0, owned, true),
-        ("scene-owned", 1.0, 3.0, owned, false),
-        ("parent-adjacent-owner", -1.0, 3.0, adjacent, false),
-        ("parent-outside-dense-window", -1.0, 3.0, sparse_owned, true),
-        ("resident-water-not-opaque-caster", 1.0, 8.0, empty, true),
-        ("far-water-not-opaque-caster", -1.0, 8.0, empty, true),
-        ("packed-water-not-opaque-caster", 1.0, 72.0, empty, true),
-        ("foliage-remains-caster", 1.0, 6.0, empty, false),
+    // Far from spawn: the parent quad stays absolute, the matrix is origin-relative.
+    let far = RenderOrigin { voxel: glam::IVec3::new(897_024, 0, -4096) };
+    let spawn = RenderOrigin { voxel: glam::IVec3::ZERO };
+    for (name, ao, kind, coverage, suppressed, origin) in [
+        ("parent-unowned", -1.0, 3.0, empty, false, spawn),
+        ("parent-owned", -1.0, 3.0, owned, true, spawn),
+        ("scene-owned", 1.0, 3.0, owned, false, spawn),
+        ("parent-adjacent-owner", -1.0, 3.0, adjacent, false, spawn),
+        ("parent-outside-dense-window", -1.0, 3.0, sparse_owned, true, spawn),
+        ("resident-water-not-opaque-caster", 1.0, 8.0, empty, true, spawn),
+        ("far-water-not-opaque-caster", -1.0, 8.0, empty, true, spawn),
+        ("packed-water-not-opaque-caster", 1.0, 72.0, empty, true, spawn),
+        ("foliage-remains-caster", 1.0, 6.0, empty, false, spawn),
+        ("parent-unowned-far-origin", -1.0, 3.0, empty, false, far),
+        ("parent-owned-far-origin", -1.0, 3.0, owned, true, far),
     ] {
         for vertex in &mut vertices {
             vertex.ao_strength = ao;
             vertex.surface[2] = kind;
         }
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        let offset = DrawTransform { offset: origin.absolute_offset(), ..DrawTransform::IDENTITY };
+        queue.write_buffer(&draw_offsets, 0, bytemuck::bytes_of(&offset));
+        let origin_relative = matrix * Mat4::from_translation(origin.voxel.as_vec3());
         queue.write_buffer(
             &renderer.gen_buffers[0],
             0,
             bytemuck::bytes_of(&ShadowGenUniform {
-                light_view_proj: matrix.to_cols_array_2d(),
+                light_view_proj: origin_relative.to_cols_array_2d(),
                 world_scale: 1.0,
                 time: 0.0,
                 wind: [0.0; 2],
                 resident_coverage: coverage,
+                render_origin: origin.voxel.extend(0).to_array(),
             }),
         );
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -122,6 +137,7 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
             pass.set_pipeline(&renderer.pipeline);
             pass.set_bind_group(0, &renderer.gen_bind_groups[0], &[]);
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            pass.set_vertex_buffer(1, draw_offsets.slice(..));
             pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..6, 0, 0..1);
         }
@@ -348,6 +364,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     time: 0.0,
                     wind: [0.0; 2],
                     resident_coverage: map,
+                    render_origin: [0; 4],
                 }),
             );
             queue.write_buffer(&point_buffer, 0, bytemuck::cast_slice(&points));
