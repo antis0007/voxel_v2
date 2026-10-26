@@ -5,8 +5,10 @@
 //!   metres on a side.
 //! - **chunk** (`IVec3`): `CHUNK_SIZE`-cell cubes; `chunk_coord_from_world_block`
 //!   maps voxel to chunk with floor division so negative axes stay contiguous.
+//! - **face cell** (`FaceCell`): cube-sphere column `(u, height, v)` on one of six faces.
 //! - **metres** (`Vec3`): player, camera and physics positions; voxel = metres / scale.
 pub mod coords;
+pub mod cube_sphere;
 pub mod environment;
 pub mod fast_hash;
 pub mod hash;
