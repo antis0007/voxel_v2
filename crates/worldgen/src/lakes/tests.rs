@@ -54,7 +54,7 @@ fn lake_water_never_stands_above_dry_ground() {
         let (cx, cz) = (l.centre.x as i32, l.centre.y as i32);
         for z in (cz - r..=cz + r).step_by(2) {
             for x in (cx - r..=cx + r).step_by(2) {
-                let (top, Some(s)) = column(&c, x, z) else { continue };
+                let (_, Some(s)) = column(&c, x, z) else { continue };
                 if (s - l.level).abs() > 0.01 {
                     continue;
                 }
@@ -66,7 +66,6 @@ fn lake_water_never_stands_above_dry_ground() {
                         worst = worst.max(s - n_top);
                     }
                 }
-                let _ = top;
             }
         }
     }
@@ -103,8 +102,13 @@ fn lake_plan_ignores_voxel_size_and_negative_coordinates() {
 
 #[test]
 fn historical_generators_have_no_lakes() {
+    // Generator 52 terrain must stay byte-identical, so no lake may appear in it.
     let c = WorldSampleConfig { generator_version: LAKES_GENERATOR - 1, ..cfg(173, VoxelScalePreset::OneMeter) };
-    assert!(lakes_near(&c, 2).is_empty() || (-600..600).step_by(30).all(|x| sample(&c, x as f32, 400.0).kind.is_none()));
+    for z in (-900..900).step_by(37) {
+        for x in (-900..900).step_by(37) {
+            assert!(sample(&c, x as f32, z as f32).kind.is_none(), "lake at {x},{z} in a historical world");
+        }
+    }
 }
 
 /// Nearest lake of each kind for review captures.
