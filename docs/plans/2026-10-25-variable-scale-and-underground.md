@@ -49,25 +49,28 @@ Expected fine ratio in play is 2-8% of resident blocks, steady state under 1%.
 - Regression tests for the click path and for breaking placed and natural
   blocks (`creative::tests::queued_break_reaches_the_world_and_frees_the_queue`,
   `headless::tests::placed_and_natural_blocks_break_and_read_back`).
+- The coordinated tick (2026-10-26): `MatterStore::step` runs the block kernel
+  with fine-owned blocks skipped, then the fine Margolus pass inside `R_fine`
+  with the 2000-block awake cap, the budget cut, dormant demotion after the
+  60-tick hysteresis and `FineGovernor` (ADR 0023, "Coordinated tick"). Bench
+  `fine_step_2000_sub_bricks_idle`: 7.0 ms on the desktop, about 3.5 µs per
+  awake sub-brick, so the 3 ms H1 budget means a few hundred awake sub-bricks
+  there.
 
 ### Next, in order
 
-1. **Adopt the coordinated owner.** Masks and read/write boundaries exist in
-   `MatterStore`; the app must adopt them before fine state can affect play.
-2. **Block-scale CA stays authoritative for uniform material.** Fine cells only
-   run where a mask bit is set and only inside `R_fine` (24 m default).
-   Neighbours without a slot are read as 64 identical cells, never allocated.
-3. **Scheduler integration.** Submit disturbance and maintenance jobs to
-   `FineJobs`, connect the load governor, and retain queue-full requests for
-   retry. Mixed cells stay fine; averaged collapse requires material/energy
-   accounting first.
-4. **Play semantics.** A pick chips fine cells from the face and removes the
+1. **Wire the tick.** `World` and the headless CPU region adopt `MatterStore`
+   and call `MatterStore::step` with the governor's region and the window's
+   fine budget. Disturbance jobs still go through `FineJobs`; demotion of
+   settled fine blocks is the tick's own. Queue-full requests are retained for
+   retry. The H1 budget test follows the first H1 measurement.
+2. **Play semantics.** A pick chips fine cells from the face and removes the
    block on the last hit. Explosions and acid leave fine geometry. Placement
    fills to the block grid. Slabs and stairs are fine masks with a template id;
    the template mesh is used until the mask deviates from it.
-5. **Bodies.** Capsule sweeps test the block grid plus fine masks inside
+3. **Bodies.** Capsule sweeps test the block grid plus fine masks inside
    `R_fine` only.
-6. **Save.** `SAVE_VERSION` bump for the pool; migration writes no masks for
+4. **Save.** `SAVE_VERSION` bump for the pool; migration writes no masks for
    worlds that had none.
 
 ### Budgets (H1)
@@ -176,13 +179,16 @@ player's vertical column in the page cache.
 | `underground_awake_count` | scenario: big cavern under 800 awake bricks at rest |
 | Capture board | one capture per band: lighting, atmosphere, one reaction |
 
-Only the two break-path tests exist today. The rest name work that does not.
+The two break-path tests and the `engine_sim` tick tests in
+`crates/sim/src/matter/step_tests.rs` (spill, stall, freeze, cap, budget cut,
+demotion, governor, replay) exist today. The rest name work that does not.
 
 ## Order of work
 
-1. Fine mask on bricks and the block/fine read boundary (no gameplay change).
+1. Fine mask on bricks and the block/fine read boundary: done (ADR 0023).
 2. Block-scale CA authority plus the fine pass behind `R_fine`, with the fine
-   budget and the governor.
+   budget and the governor: done in `engine_sim` on 2026-10-26; wiring into
+   play is open.
 3. Mining, placement and blasts across both scales, with the tool regression
    tests extended to partial blocks.
 4. World floor and band depth, then the cave skeleton per band.

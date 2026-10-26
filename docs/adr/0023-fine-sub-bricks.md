@@ -52,9 +52,12 @@ Three resolutions coexist; a block is uniform until something makes it uneven.
 
 - Landed: `crates/sim/src/fine.rs` (pool, promote, `set`, both demotions,
   `collapsed`) and `crates/sim/src/fine_tests.rs`.
-- Deferred: the fine CA kernel, promotion scheduling in `World`, fine masks on
+- Landed 2026-10-26: the coordinated tick below (`matter/step.rs`,
+  `matter/fine_kernel.rs`, `matter/governor.rs`, `kernel::step_skipping`).
+- Deferred: wiring into `World` and the headless CPU region, fine masks on
   `ChunkData`, template meshes for slabs and stairs, mob capsule sweeps against
-  fine cells, and save format (`SAVE_VERSION` bump) for the pool.
+  fine cells, save format (`SAVE_VERSION` bump) for the pool, a fine-scale heat
+  rate, and the H1 budget test.
 - The legacy `World` path does not read `engine_sim` yet (`docs/PLAN.md` Phase
   A3+), so nothing in play changes with this ADR.
 
@@ -104,6 +107,54 @@ it to 16 or 12). Demotions can reclaim uniform matter anywhere after 60 quiet
 ticks; radius reduction never collapses mixed cells. Player edits use the direct
 storage API, not this queue. Fine CA, automatic load-governor integration and
 gameplay adoption are still deferred. Library compilation checked; no tests run.
+
+## Coordinated tick (2026-10-26)
+
+`MatterStore::step(rules, seed, tick, region, fine_budget)` runs the block
+kernel first, then the fine pass; both apply `block_rule`, so one rule table
+governs both scales.
+
+- The block kernel skips every 2×2×2 block whose eight cells include a fine
+  block (`kernel::step_skipping`; `step` is the same call with a constant
+  false, so GPU parity and the scenario hashes are untouched). The predicate
+  costs one set lookup per anchor (bricks holding fine blocks plus their 26
+  neighbours) and eight mask bits only near those bricks.
+- The fine pass visits awake fine blocks with the same two Margolus phases in
+  fine coordinates: the even phase tiles a 4³ block with eight blocks, the odd
+  phase's 27 start one cell early and reach one cell into each neighbour. A
+  uniform neighbour reads as 64 identical cells and is promoted only when one
+  of its cells changes; pool slots for every such neighbour are counted before
+  any write, so a full fine pool stalls the whole block and keeps it awake.
+  Fine dice are salted (`FINE_SEED_SALT`) so a fine block and the 1 m block at
+  the same anchor roll differently.
+- Boundary: a uniform block beside fine matter is stepped by both passes in one
+  tick, by the block kernel in the phase where its block holds no fine cell and
+  by the fine pass through the straddling odd-phase blocks. Each transfer
+  conserves volume and the fine pass reads the block kernel's result, so nothing
+  is counted twice; the block sees two interactions per tick instead of one. A
+  fine block outside `R_fine` freezes, and so does the block-kernel block that
+  contains it.
+- Sleep follows the brick rule: a fine block stays awake while any block it lies
+  in changed or is pending, and only a heat tick may put it to sleep. Sleepers
+  join a dormant queue; up to 256 per tick are tested, uniform ones demote after
+  the 60-tick hysteresis (`FineJobs::HYSTERESIS`), heterogeneous ones leave the
+  queue until they next sleep. There is no averaged collapse.
+- Limits: at most `MAX_FINE_AWAKE` (2000) fine blocks step per tick and the
+  rest wait awake; the wall-clock `Budget` is checked every 32 anchors and a
+  cut keeps everything the pass was stepping awake. `Budget::UNBOUNDED` never
+  cuts. `FineGovernor` narrows `R_fine` 24 → 16 → 12 m on a cut or an
+  overflowed cap and widens one level after 120 quiet ticks.
+- Cost: `fine_step_2000_sub_bricks_idle` measures 7.0 ms on the desktop (2000
+  settled fine water blocks, 35 blocks each, nothing moving), about 3.5 µs per
+  sub-brick: the kernel's own per-block cost times 35. The brief's 3 ms on H1
+  therefore means a few hundred awake sub-bricks on H1, which the governor
+  holds by radius; the H1 budget test waits on an H1 measurement.
+- Heat at fine scale runs the block rule unchanged: the same energy per edge
+  across four times as many edges per metre, so heat diffuses sixteen times
+  faster through fine matter than through uniform blocks. A fine-scale
+  `HEAT_RATE` divisor waits for thermal ledgers.
+- `MatterStore::state_hash` folds every fine block's cells into the brick hash
+  so a replay can be pinned.
 
 ## Rejected alternatives
 
