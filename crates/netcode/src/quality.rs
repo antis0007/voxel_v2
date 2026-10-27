@@ -82,6 +82,21 @@ pub struct LinkQuality {
     down: VecDeque<(u64, u32)>,
 }
 
+/// RFC 6298 smoothing of one round-trip sample.
+fn smooth(srtt_us: &mut Option<f64>, rttvar_us: &mut f64, sample_us: u64) {
+    let sample = sample_us as f64;
+    match *srtt_us {
+        None => {
+            *srtt_us = Some(sample);
+            *rttvar_us = sample / 2.0;
+        }
+        Some(srtt) => {
+            *rttvar_us = 0.75 * *rttvar_us + 0.25 * (srtt - sample).abs();
+            *srtt_us = Some(0.875 * srtt + 0.125 * sample);
+        }
+    }
+}
+
 fn rate(log: &mut VecDeque<(u64, u32)>, now_us: u64) -> u32 {
     while log.front().is_some_and(|&(t, _)| now_us.saturating_sub(t) >= RATE_US) {
         log.pop_front();
@@ -111,17 +126,7 @@ impl LinkQuality {
             sent.acked = true;
             // Only the newest gives a clean sample; older ones waited for a later datagram.
             if back == 0 {
-                let sample = now_us.saturating_sub(sent.at_us) as f64;
-                match self.srtt_us {
-                    None => {
-                        self.srtt_us = Some(sample);
-                        self.rttvar_us = sample / 2.0;
-                    }
-                    Some(srtt) => {
-                        self.rttvar_us = 0.75 * self.rttvar_us + 0.25 * (srtt - sample).abs();
-                        self.srtt_us = Some(0.875 * srtt + 0.125 * sample);
-                    }
-                }
+                smooth(&mut self.srtt_us, &mut self.rttvar_us, now_us.saturating_sub(sent.at_us));
             }
         }
         self.resolve(now_us);
@@ -161,6 +166,87 @@ impl LinkQuality {
             loss_per_mille: (self.lost * 1_000 / resolved) as u16,
             up_bytes_per_s: rate(&mut self.up, now_us),
             down_bytes_per_s: rate(&mut self.down, now_us),
+        }
+    }
+}
+
+/// Echo not returned after this long counts as a stall.
+pub const STALL_US: u64 = 2_000_000;
+const PROBES: usize = 64;
+
+/// Ping echo for stream transports such as the TCP lobby relay, which have no
+/// datagram acks. The host sends `probe` ids; the guest returns each unchanged.
+/// A stream never drops a probe, so one still missing after `STALL_US` is a
+/// stall, the stream's form of loss. Ids are hashed from a seed, so a guest cannot
+/// echo a probe before receiving it to show a lower ping.
+pub struct EchoProbe {
+    seed: u32,
+    counter: u32,
+    srtt_us: Option<f64>,
+    rttvar_us: f64,
+    outstanding: VecDeque<(u32, u64)>,
+    outcomes: VecDeque<bool>,
+    stalled: usize,
+}
+
+impl EchoProbe {
+    pub fn new(seed: u32) -> Self {
+        Self {
+            seed,
+            counter: 0,
+            srtt_us: None,
+            rttvar_us: 0.0,
+            outstanding: VecDeque::new(),
+            outcomes: VecDeque::new(),
+            stalled: 0,
+        }
+    }
+
+    fn record(&mut self, stalled: bool) {
+        self.outcomes.push_back(stalled);
+        self.stalled += usize::from(stalled);
+        if self.outcomes.len() > PROBES && self.outcomes.pop_front() == Some(true) {
+            self.stalled -= 1;
+        }
+    }
+
+    fn resolve(&mut self, now_us: u64) {
+        while self.outstanding.front().is_some_and(|&(_, at)| now_us.saturating_sub(at) > STALL_US) {
+            self.outstanding.pop_front();
+            self.record(true);
+        }
+    }
+
+    /// Starts a probe; the caller sends the returned id.
+    pub fn probe(&mut self, now_us: u64) -> u32 {
+        self.resolve(now_us);
+        self.counter = self.counter.wrapping_add(1);
+        let id = engine_core::hash::hash_u32(self.seed ^ self.counter.wrapping_mul(0x9e37_79b9));
+        self.outstanding.push_back((id, now_us));
+        if self.outstanding.len() > PROBES {
+            self.outstanding.pop_front();
+            self.record(true);
+        }
+        id
+    }
+
+    /// An echo arrived; false for an id not outstanding (late, repeated or forged).
+    pub fn echo(&mut self, id: u32, now_us: u64) -> bool {
+        let Some(i) = self.outstanding.iter().position(|&(p, _)| p == id) else { return false };
+        let Some((_, at)) = self.outstanding.remove(i) else { return false };
+        smooth(&mut self.srtt_us, &mut self.rttvar_us, now_us.saturating_sub(at));
+        self.record(false);
+        true
+    }
+
+    /// Round trip, jitter and stalls; throughput is not measured here.
+    pub fn quality(&mut self, now_us: u64) -> Quality {
+        self.resolve(now_us);
+        Quality {
+            rtt_ms: self.srtt_us.unwrap_or(0.0) as f32 / 1_000.0,
+            jitter_ms: self.rttvar_us as f32 / 1_000.0,
+            loss_per_mille: (self.stalled * 1_000 / self.outcomes.len().max(1)) as u16,
+            ..Default::default()
         }
     }
 }

@@ -85,3 +85,35 @@ fn bars_fall_with_delay_jitter_and_loss() {
     assert!(at(30.0, 2.0, 0) > at(30.0, 2.0, 50));
     assert!(at(80.0, 5.0, 0) > at(500.0, 5.0, 0));
 }
+
+#[test]
+fn echo_probes_read_a_stream_round_trip_and_its_stalls() {
+    let mut p = EchoProbe::new(11);
+    // One probe a second over a 40 ms stream; the sixth echo is held for 3 s.
+    let mut held = None;
+    for s in 0..10u64 {
+        let now = s * 1_000_000;
+        let id = p.probe(now);
+        if s == 5 {
+            held = Some(id);
+        } else {
+            assert!(p.echo(id, now + 40_000 + s * 1_000));
+        }
+    }
+    let q = p.quality(10_000_000);
+    assert!((q.rtt_ms - 45.0).abs() < 6.0, "{q:?}");
+    assert_eq!(q.loss_per_mille, 100);
+    // The stalled probe's late echo no longer counts.
+    assert!(!p.echo(held.unwrap(), 10_000_000));
+}
+
+#[test]
+fn echo_ids_cannot_be_guessed_or_replayed() {
+    let mut p = EchoProbe::new(3);
+    let first = p.probe(0);
+    let second = p.probe(1_000);
+    assert_ne!(second, first.wrapping_add(1));
+    assert!(!p.echo(second.wrapping_add(1), 2_000));
+    assert!(p.echo(first, 30_000));
+    assert!(!p.echo(first, 31_000));
+}
