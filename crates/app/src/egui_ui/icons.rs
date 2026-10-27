@@ -833,9 +833,9 @@ pub(super) fn paint_with_effect(p: &egui::Painter, r: Rect, icon: Icon, effect: 
     paint_styled(p, r, icon, None, Some(effect));
 }
 
-fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, override_fx: Option<super::magic_fx::Effect>) {
-    let (rows, base) = art(icon);
-    let color = accent.unwrap_or(base);
+/// Paints native-pixel glyph rows centred in `r` on whole pixels with the
+/// shared top-left key light. Returns the drawn rectangle.
+pub(super) fn paint_rows(p: &egui::Painter, r: Rect, rows: &[&str], color: C) -> Rect {
     let width = rows.iter().map(|row| row.len()).max().unwrap_or(1) as f32;
     let extent = width.max(rows.len() as f32);
     let unit = (r.width().min(r.height()) / extent).floor().max(1.0);
@@ -891,6 +891,13 @@ fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, overr
         }
     }
     p.add(egui::Shape::mesh(mesh));
+    Rect::from_min_size(origin, vec2(width, rows.len() as f32) * unit)
+}
+
+fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, override_fx: Option<super::magic_fx::Effect>) {
+    let (rows, base) = art(icon);
+    let color = accent.unwrap_or(base);
+    let drawn = paint_rows(p, r, rows, color);
     let effect = override_fx.or(match icon {
         Icon::Spell(26 | 46) => Some(super::magic_fx::Effect::Unstable),
         Icon::Spell(67 | 68) => Some(super::magic_fx::Effect::Cursed),
@@ -899,7 +906,7 @@ fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, overr
     });
     if let Some(effect) = effect {
         let source=matches!(icon,Icon::Spell(_) | Icon::Wand(_) | Icon::Sword(3 | 4) | Icon::Armor(_,3)).then_some(color);
-        super::magic_fx::paint(p, Rect::from_min_size(origin, vec2(width, rows.len() as f32) * unit), rows, effect, source);
+        super::magic_fx::paint(p, drawn, rows, effect, source);
     }
 }
 pub fn frame(p: &egui::Painter, r: Rect, selected: bool) {

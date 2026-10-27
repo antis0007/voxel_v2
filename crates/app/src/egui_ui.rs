@@ -1,5 +1,6 @@
 use egui::{Align2, Color32, RichText};
 mod adventure;
+mod chip_art;
 mod chip_canvas;
 mod chip_editor;
 mod chip_fab;

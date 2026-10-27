@@ -70,6 +70,18 @@ impl Library {
         Ok(id)
     }
 
+    /// A probed lot's dies at their wafer positions (in wafer radii) and the
+    /// die side; `None` before probe.
+    pub fn wafer_map(&self, registry: &Registry, lot: u32) -> Option<(f32, Vec<((f32, f32), crate::lot::Die)>)> {
+        let lot = self.lots.iter().find(|l| l.id == lot)?;
+        let rev = self.revision(lot.revision)?;
+        let (lab, process) = (registry.lab(&lot.lab)?, registry.process(&rev.design.process)?);
+        let area = die_mm2(registry, &rev.design);
+        let dies = lot.dies(lab, process, area)?;
+        let (side, sites) = crate::lot::wafer_sites(process.wafer_mm, area, dies.len() as u16);
+        Some((side, sites.into_iter().zip(dies).collect()))
+    }
+
     pub fn lots_active(&self) -> bool {
         self.lots.iter().any(|l| l.records.last().is_none_or(|r| r.kind != crate::fab::StepKind::Package))
     }

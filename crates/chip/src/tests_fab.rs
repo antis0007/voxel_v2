@@ -148,3 +148,36 @@ fn library_text_from_before_fabrication_still_decodes() {
     assert_eq!(back.stock[0].grade, Grade::A);
     assert!(back.revision(rev).unwrap().model.recovers, "old revisions restart after a brownout");
 }
+
+#[test]
+fn a_probed_lot_maps_every_die_inside_the_wafer() {
+    let r = Registry::builtin();
+    for design in [sentinel(&r), twin_watch(&r)] {
+        probed_map_fits(&r, design);
+    }
+}
+
+fn probed_map_fits(r: &Registry, design: crate::design::Design) {
+    let mut lib = Library::default();
+    let project = lib.add_project("M", design);
+    let rev = lib.release(r, project, 0).unwrap();
+    let lot = lib.start_lot(r, rev, "bench", 0).unwrap();
+    assert!(lib.wafer_map(r, lot).is_none(), "nothing to map before probe");
+    finish(&mut lib, r);
+    let (side, map) = lib.wafer_map(r, lot).expect("probed");
+    let o = lib.lots.iter().find(|l| l.id == lot).and_then(|l| l.outcome).unwrap();
+    assert_eq!(map.len(), usize::from(o.dies));
+    let count = |d: crate::lot::Die| map.iter().filter(|(_, x)| *x == d).count();
+    for (g, n) in [Grade::A, Grade::B, Grade::C].into_iter().zip(o.bins) {
+        assert_eq!(count(crate::lot::Die::Bin(g)), usize::from(n));
+    }
+    assert_eq!(count(crate::lot::Die::Slow), usize::from(o.slow));
+    for &((x, y), _) in &map {
+        let corner = (x.abs() + side / 2.0).hypot(y.abs() + side / 2.0);
+        assert!(corner <= 1.0, "die at {x},{y} crosses the wafer edge");
+    }
+    let mut seen: Vec<_> = map.iter().map(|((x, y), _)| ((x / side).floor() as i32, (y / side).floor() as i32)).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), map.len(), "one die per site");
+}

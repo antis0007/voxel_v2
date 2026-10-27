@@ -31,6 +31,36 @@ pub fn dies_per_wafer(wafer_mm: f32, die_mm2: f32) -> u16 {
     (std::f64::consts::PI * r * r * 0.8 / f64::from(die_mm2.max(0.01))).floor().min(f64::from(u16::MAX)) as u16
 }
 
+/// Die centres for a wafer map, in wafer radii: the `n` grid cells nearest
+/// the centre, then by row and column. Also returns the die side in radii.
+/// `dies_per_wafer` counts by area, so the rim cells can reach past the
+/// edge; the whole map then shrinks until every die corner is inside.
+pub fn wafer_sites(wafer_mm: f32, die_mm2: f32, n: u16) -> (f32, Vec<(f32, f32)>) {
+    let r = (wafer_mm / 2.0).max(0.01);
+    let side = die_mm2.max(0.01).sqrt() / r;
+    let k = (1.0 / side).ceil() as i32 + 1;
+    let mut cells: Vec<(f32, i32, i32)> = Vec::new();
+    for j in -k..k {
+        for i in -k..k {
+            let (x, y) = ((i as f32 + 0.5) * side, (j as f32 + 0.5) * side);
+            cells.push((x * x + y * y, j, i));
+        }
+    }
+    cells.sort_by(|a, b| a.0.total_cmp(&b.0).then((a.1, a.2).cmp(&(b.1, b.2))));
+    let sites: Vec<(f32, f32)> = cells.into_iter().take(usize::from(n)).map(|(_, j, i)| ((i as f32 + 0.5) * side, (j as f32 + 0.5) * side)).collect();
+    let reach = sites.iter().map(|(x, y)| (x.abs() + side / 2.0).hypot(y.abs() + side / 2.0)).fold(1.0f32, f32::max);
+    (side / reach, sites.into_iter().map(|(x, y)| (x / reach, y / reach)).collect())
+}
+
+/// One die on a probed wafer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Die {
+    Dead,
+    /// Works, below the C rating.
+    Slow,
+    Bin(Grade),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub step: u16,
@@ -159,6 +189,20 @@ impl WaferLot {
             }
         }
         packaged
+    }
+
+    /// Every die's probe result in die order, once the lot has been probed.
+    pub fn dies(&self, lab: &Lab, process: &Process, die_mm2: f32) -> Option<Vec<Die>> {
+        let o = self.outcome?;
+        let y = self.yield_(lab, die_mm2);
+        let dies = (0..dies_per_wafer(process.wafer_mm, die_mm2))
+            .map(|i| match self.die(lab, i, y) {
+                None => Die::Dead,
+                Some(None) => Die::Slow,
+                Some(Some(g)) => Die::Bin(g),
+            })
+            .collect::<Vec<_>>();
+        (dies.len() == usize::from(o.dies)).then_some(dies)
     }
 
     fn die(&self, lab: &Lab, i: u16, yield_: f64) -> Option<Option<Grade>> {

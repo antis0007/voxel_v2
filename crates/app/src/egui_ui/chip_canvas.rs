@@ -104,17 +104,37 @@ pub(super) fn canvas(ui: &mut egui::Ui, ed: &mut Editor, max_height: f32) {
         let selected = ed.selected == Some(part.id);
         let edge = if selected { Stroke::new(2.0, icons::PAPER) } else { Stroke::new(1.0, Color32::from_rgb(120, 110, 90)) };
         painter.rect_stroke(rect, 2, edge, StrokeKind::Inside);
-        painter.text(rect.center(), Align2::CENTER_CENTER, short(spec.role), FontId::proportional((cell * 0.42).max(9.0)), icons::PAPER);
+        let font = FontId::proportional((cell * 0.42).max(9.0));
+        if pw >= 2 && ph >= 2 && rect.height() >= 34.0 {
+            // Glyph in the upper part, name under it, clear of the port contacts.
+            let art = Rect::from_center_size(rect.center() - vec2(0.0, rect.height() * 0.12), vec2(rect.width(), rect.height()) * 0.42);
+            super::chip_art::module(&painter, art, spec.role);
+            painter.text(pos2(rect.center().x, art.bottom() + 2.0), Align2::CENTER_TOP, short(spec.role), font, icons::PAPER);
+        } else {
+            painter.text(rect.center(), Align2::CENTER_CENTER, short(spec.role), font, icons::PAPER);
+        }
     }
-    for net in &ed.design.nets {
-        let picked = ed.net == Some(net.id);
-        for pair in net.paths.iter().flat_map(|p| p.windows(2)) {
-            let (a, b) = (pair[0], pair[1]);
-            if a.layer != b.layer || ed.hidden[usize::from(a.layer).min(2)] {
-                continue;
+    // Traces layer by layer: a dark edge, then the metal with round joints,
+    // so an upper layer crossing a lower one reads as a separate wire.
+    for (layer, edge) in (0..4u8).flat_map(|l| [(l, true), (l, false)]) {
+        for net in &ed.design.nets {
+            let picked = ed.net == Some(net.id);
+            let width = cell * if picked { 0.22 } else { 0.14 } + if edge { 2.5 } else { 0.0 };
+            for pair in net.paths.iter().flat_map(|p| p.windows(2)) {
+                let (a, b) = (pair[0], pair[1]);
+                if a.layer != layer || b.layer != layer || ed.hidden[usize::from(layer).min(2)] {
+                    continue;
+                }
+                let colour = match (edge, picked) {
+                    (true, _) => Color32::from_rgb(8, 10, 10),
+                    (false, true) => Color32::WHITE,
+                    (false, false) => LAYER[usize::from(a.layer).min(2)],
+                };
+                painter.line_segment([centre(a), centre(b)], Stroke::new(width, colour));
+                for s in [a, b] {
+                    painter.circle_filled(centre(s), width * 0.5, colour);
+                }
             }
-            let colour = if picked { Color32::WHITE } else { LAYER[usize::from(a.layer).min(2)] };
-            painter.line_segment([centre(a), centre(b)], Stroke::new(cell * if picked { 0.22 } else { 0.14 }, colour));
         }
     }
     for part in &ed.design.parts {

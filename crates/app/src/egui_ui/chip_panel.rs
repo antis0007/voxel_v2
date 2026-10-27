@@ -1,9 +1,9 @@
 //! Controller socket on a machine panel: the installed part's live state,
 //! its sensor channels against the thresholds, and stocked parts that fit.
-use super::{UiAction, chip_editor, icons};
+use super::{UiAction, chip_art, chip_editor, icons};
 use crate::world::factory::View;
 use crate::world::factory::chips::{Action, fits};
-use egui::{Color32, RichText};
+use egui::{Color32, Rect, RichText};
 use engine_chip::firmware::{OPEN, Sensor, Task};
 use engine_chip::runtime::Phase;
 use glam::IVec3;
@@ -67,6 +67,10 @@ fn socket(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut UiAction) {
             let Some(rev) = library.revision(revision) else { continue };
             let name = library.project(rev.project).map_or("?", |p| p.name.as_str());
             ui.horizontal(|ui| {
+                let (art, _) = ui.allocate_exact_size(egui::vec2(28.0, 22.0), egui::Sense::hover());
+                chip_art::package(ui.painter(), art, chip_art::task_colour(rev.model.task));
+                let (bin, _) = ui.allocate_exact_size(egui::vec2(6.0, 22.0), egui::Sense::hover());
+                ui.painter().rect_filled(Rect::from_center_size(bin.center(), egui::vec2(4.0, 10.0)), 1, chip_art::grade_colour(grade));
                 let label = format!("{name} {} · Bin {grade:?} ×{count}", rev.letter());
                 let r = ui.button(label).on_hover_ui(|ui| {
                     let m = rev.model;
@@ -93,7 +97,12 @@ fn socket(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut UiAction) {
         (Phase::Running, true) => ("On", icons::TEAL),
         (Phase::Running, false) => ("Off", icons::GOLD),
     };
+    let task = d.model.map_or(Task::FillBand, |m| m.task);
     ui.horizontal(|ui| {
+        let (art, _) = ui.allocate_exact_size(egui::vec2(42.0, 32.0), egui::Sense::hover());
+        // A running part's lamp blinks once a second; other states hold steady.
+        let lit = d.state.phase != Phase::Running || ui.ctx().input(|i| i.time).fract() < 0.5;
+        chip_art::package_lamp(ui.painter(), art, chip_art::task_colour(task), if lit { colour } else { colour.gamma_multiply(0.35) });
         ui.label(RichText::new(format!("{name} {letter} #{}", d.package.serial)).color(icons::PAPER));
         ui.label(RichText::new(state).color(colour));
         if d.state.phase == Phase::Hung && ui.small_button("Reset").clicked() {
@@ -103,7 +112,6 @@ fn socket(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut UiAction) {
             *action = UiAction::Chip(Action::Remove(pos));
         }
     });
-    let task = d.model.map_or(Task::FillBand, |m| m.task);
     let sensor = task.sensor();
     if d.sensors.is_empty() {
         ui.label(RichText::new(format!("No {}", channel_name(sensor))).color(icons::GOLD));

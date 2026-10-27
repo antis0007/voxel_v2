@@ -280,7 +280,11 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
         });
     });
     if let Some(controller) = &probe.controller {
-        ui.label(RichText::new(controller).size(SMALL).color(MANA));
+        ui.horizontal(|ui| {
+            let (art, _) = ui.allocate_exact_size(vec2(15.0, 12.0), Sense::hover());
+            super::chip_art::package(ui.painter(), art, MANA);
+            ui.label(RichText::new(controller).size(SMALL).color(MANA));
+        });
     }
     if !ui.input(|i| i.modifiers.shift) {
         if let Some(process) = n.process() {

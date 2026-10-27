@@ -126,12 +126,17 @@ pub fn review_fixture(world: &mut crate::world::World, pump: IVec3, tank: IVec3,
     if let Some(n) = f.nodes.get_mut(&tank) {
         n.water = WATER_CAPACITY / 5;
     }
-    // A Twin Watch lot in the clean hood, 100 s into the route.
+    // Twin Watch lots: one finished on the open bench (its wafer map is
+    // binned), then one in the clean hood 100 s into the route.
     let lib = Arc::make_mut(&mut f.chips.library);
-    if lib.start_lot(registry(), 2, "clean", 0).is_ok() {
-        lib.advance_lots(registry(), 120 * 100);
-        f.chips.now = 120 * 100;
+    let done = 120 * 600;
+    if lib.start_lot(registry(), 2, "bench", 0).is_ok() {
+        lib.advance_lots(registry(), done);
     }
+    if lib.start_lot(registry(), 2, "clean", done).is_ok() {
+        lib.advance_lots(registry(), done + 120 * 100);
+    }
+    f.chips.now = done + 120 * 100;
     let _ = f.chips.install(&f.nodes, pump, 2);
     if let Some(n) = f.nodes.get_mut(&pile) {
         n.energy = n.energy.max(64);

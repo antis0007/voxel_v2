@@ -2,7 +2,7 @@
 //! step by step, and read a cross-section of the die along one site row,
 //! intended (the full route) against what the lot has built so far.
 use super::chip_editor::Editor;
-use super::{UiAction, icons};
+use super::{UiAction, chip_art, icons};
 use crate::world::factory::chips::{Action, registry, resources};
 use crate::world::expedition::NAMES;
 use egui::{Color32, Rect, RichText, Stroke, pos2, vec2};
@@ -53,15 +53,68 @@ pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, ben
             (_, Some(s)) => format!("{}/{} · {}", lot.step, steps.len(), step_name(*s)),
             (None, None) => String::new(),
         };
-        let r = ui.selectable_label(ed.lot == Some(lot.id), format!("Lot {} · Rev {} · {lab}", lot.id, rev.letter()));
-        if r.clicked() {
-            ed.lot = if ed.lot == Some(lot.id) { None } else { Some(lot.id) };
-        }
-        let done = lot.step as f32 / steps.len().max(1) as f32;
-        let step_left = lot.busy_until.saturating_sub(now) as f32 / 120.0;
-        icons::gauge(ui, done, icons::TEAL, &format!("{:.0}% · Next {:.0} s", done * 100.0, step_left));
-        ui.small(line);
+        ui.horizontal(|ui| {
+            let (thumb, _) = ui.allocate_exact_size(vec2(44.0, 44.0), egui::Sense::hover());
+            if let Some((side, dies)) = wafer_dies(library, lot.id) {
+                chip_art::wafer(ui.painter(), thumb, side, dies.into_iter());
+            }
+            ui.vertical(|ui| {
+                let r = ui.selectable_label(ed.lot == Some(lot.id), format!("Lot {} · Rev {} · {lab}", lot.id, rev.letter()));
+                if r.clicked() {
+                    ed.lot = if ed.lot == Some(lot.id) { None } else { Some(lot.id) };
+                }
+                let done = lot.step as f32 / steps.len().max(1) as f32;
+                let step_left = lot.busy_until.saturating_sub(now) as f32 / 120.0;
+                icons::gauge(ui, done, icons::TEAL, &format!("{:.0}% · Next {:.0} s", done * 100.0, step_left));
+                ui.small(line);
+            });
+        });
     }
+}
+
+/// Dies of a lot at their wafer sites: probe results once probed, the bare
+/// site grid before.
+fn wafer_dies(library: &Library, lot: u32) -> Option<(f32, Vec<((f32, f32), Color32)>)> {
+    if let Some((side, map)) = library.wafer_map(registry(), lot) {
+        return Some((side, map.into_iter().map(|(at, d)| (at, chip_art::die_colour(d))).collect()));
+    }
+    let l = library.lots.iter().find(|l| l.id == lot)?;
+    let rev = library.revision(l.revision)?;
+    let process = registry().process(&rev.design.process)?;
+    let area = engine_chip::foundry::die_mm2(registry(), &rev.design);
+    let n = engine_chip::lot::dies_per_wafer(process.wafer_mm, area);
+    let (side, sites) = engine_chip::lot::wafer_sites(process.wafer_mm, area, n);
+    Some((side, chip_art::unprobed(&sites).collect()))
+}
+
+fn wafer_panel(ui: &mut egui::Ui, library: &Library, lot: &WaferLot) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(150.0, 150.0), egui::Sense::hover());
+        if let Some((side, dies)) = wafer_dies(library, lot.id) {
+            chip_art::wafer(ui.painter(), rect, side, dies.into_iter());
+        }
+        ui.vertical(|ui| {
+            let Some(o) = lot.outcome else {
+                ui.small(RichText::new("Unprobed").color(icons::GOLD));
+                return;
+            };
+            ui.label(RichText::new(format!("{} Dies · {} Good · {:.0}%", o.dies, o.good, 100.0 * f32::from(o.good) / f32::from(o.dies.max(1)))).color(icons::PAPER));
+            let dead = o.dies.saturating_sub(o.good + o.slow);
+            for (c, name, n) in [
+                (chip_art::BIN_A, "Bin A", o.bins[0]),
+                (chip_art::BIN_B, "Bin B", o.bins[1]),
+                (chip_art::BIN_C, "Bin C", o.bins[2]),
+                (chip_art::SLOW, "Slow", o.slow),
+                (chip_art::DEAD, "Dead", dead),
+            ] {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().rect_filled(r, 0, c);
+                    ui.small(format!("{name} {n}"));
+                });
+            }
+        });
+    });
 }
 
 fn step_name(s: Step) -> String {
@@ -211,6 +264,7 @@ pub(super) fn lot_window(ctx: &egui::Context, ed: &mut Editor, library: &Library
         let mut row = ed.section_row.min(rev.design.height.saturating_sub(1));
         ui.add(egui::Slider::new(&mut row, 0..=rev.design.height.saturating_sub(1)).text("Row"));
         ed.section_row = row;
+        wafer_panel(ui, library, &lot);
         draw(ui, &rev.design, &build(&steps, steps.len()), row, "Intended");
         draw(ui, &rev.design, &build(&steps, usize::from(lot.step)), row, &current(&lot, &steps));
         legend(ui);

@@ -62,7 +62,13 @@ pub(super) fn palette(ui: &mut egui::Ui, ed: &mut Editor) {
     ui.label(RichText::new("Modules").color(icons::GOLD));
     for m in &registry().modules {
         let on = ed.tool == Tool::Place(m.id.clone());
-        let r = ui.selectable_label(on, format!("{} {}×{}", chip_canvas::short(m.role), m.size.0, m.size.1));
+        let r = ui
+            .horizontal(|ui| {
+                let (glyph, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                super::chip_art::module(ui.painter(), glyph, m.role);
+                ui.selectable_label(on, format!("{} {}×{}", chip_canvas::short(m.role), m.size.0, m.size.1))
+            })
+            .inner;
         if r.clicked() {
             ed.tool = Tool::Place(m.id.clone());
         }
