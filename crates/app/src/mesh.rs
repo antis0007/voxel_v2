@@ -1,4 +1,6 @@
 mod boundary;
+mod connectivity;
+pub use connectivity::ChunkConnectivity;
 mod memory;
 pub mod models;
 pub use memory::{MeshPlan, PLANNING_BYTES, encode_water};

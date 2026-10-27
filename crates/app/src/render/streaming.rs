@@ -21,6 +21,7 @@ use pending_gpu::{PendingGpuLedger, PendingGpuUpload, PendingGpuLease};
 mod terrain;
 mod local_sources;
 mod visibility;
+pub mod occlusion;
 mod view_missing;
 mod edit_proxies;
 mod quality_proxies;
@@ -82,13 +83,15 @@ pub struct ChunkGpuMesh {
     pub lod: u8,
     lod_invariant: bool,
     bytes: usize,
+    /// Face links of the source blocks for cave culling; `None` reads as open.
+    connectivity: Option<crate::mesh::ChunkConnectivity>,
 }
 
 #[cfg(test)]
 impl ChunkGpuMesh {
     /// Membership-only fixture: counts and bytes without GPU storage.
     pub(super) fn test_mesh(index_count: u32, lod: u8, lod_invariant: bool, bytes: usize) -> Self {
-        Self { boundary_profile: None, alloc: None, index_count, lod, lod_invariant, bytes }
+        Self { boundary_profile: None, alloc: None, index_count, lod, lod_invariant, bytes, connectivity: None }
     }
 }
 
@@ -989,6 +992,7 @@ pub struct CpuChunkMesh {
     pub mesh: ChunkMesh,
     shadow_casters: shadow_casters::Prepared,
     boundary_profile: collar::Prepared,
+    connectivity: Option<crate::mesh::ChunkConnectivity>,
     // Rust drops fields in declaration order: release the byte reservation
     // only after the mesh vectors have actually been freed.
     _lease: Option<MeshLease>,
@@ -1076,6 +1080,7 @@ fn spawn_mesh_workers(
                                 mesh,
                                 shadow_casters,
                                 boundary_profile,
+                                connectivity: None,
                                 failed: false,
                                 lod_invariant,
                                 _lease: Some(lease),
@@ -1094,6 +1099,7 @@ fn spawn_mesh_workers(
                         };
                         let lod_invariant = plan.lod_invariant();
                         drop(plan);
+                        let connectivity = crate::mesh::ChunkConnectivity::compute(&job.chunk, &job.cancelled);
                         drop(job.chunk);
                         if job.cancelled.load(Ordering::Relaxed) {
                             return None;
@@ -1122,6 +1128,7 @@ fn spawn_mesh_workers(
                             mesh,
                             shadow_casters,
                             boundary_profile,
+                            connectivity,
                             failed: false,
                             lod_invariant,
                             _lease: Some(lease),
@@ -1137,6 +1144,7 @@ fn spawn_mesh_workers(
                             mesh: ChunkMesh::empty(),
                             shadow_casters: shadow_casters::Prepared::default(),
                             boundary_profile: collar::Prepared::default(),
+                            connectivity: None,
                             failed: true,
                             lod_invariant: true,
                             _lease: None,
@@ -1793,6 +1801,7 @@ impl ChunkStreamer {
                     mesh: ChunkMesh::empty(),
                     shadow_casters: shadow_casters::Prepared::default(),
                             boundary_profile: collar::Prepared::Empty,
+                    connectivity: Some(crate::mesh::ChunkConnectivity::uniform(block)),
                     _lease: None,
                 });
                 terrain_generated += 1;

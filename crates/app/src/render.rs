@@ -18,6 +18,7 @@ pub use streaming::{
     set_mesh_budget_mib, set_world_residency_budgets_mib, world_residency_budgets_mib,
 };
 pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
+pub(crate) use streaming::occlusion;
 pub use streaming::indirect_draws::set_enabled as set_multidraw_enabled;
 
 mod atmosphere;

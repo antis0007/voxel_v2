@@ -2879,6 +2879,7 @@ impl EguiUi {
                                     "XYZ  {:.1}  {:.1}  {:.1}",
                                     player.pos.x, player.pos.y, player.pos.z
                                 ));
+                                ui.monospace(format!("Cave-culled  {} chunks", crate::render::occlusion::last_culled()));
                                 ui.small(format!(
                                     "{time_label}  |  {}  |  F3 to hide",
                                     physics_state.voxel_scale.label()

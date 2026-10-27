@@ -405,6 +405,7 @@ pub fn extract_planes(view_proj: Mat4) -> [Vec4; 6] {
 
 pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
     let planes = extract_planes(view_proj);
+    let mut occlusion = super::occlusion::Occlusion::new(cache, view_proj, &planes);
     let mut out = Vec::new();
 
     let distance = render_distance_settings().view_distance_chunks;
@@ -435,7 +436,7 @@ pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
         let outside = planes[..5]
             .iter()
             .any(|plane| plane.truncate().dot(center) + plane.w < -radius);
-        if outside {
+        if outside || occlusion.hides(coord, mesh.lod) {
             continue;
         }
 
@@ -444,6 +445,7 @@ pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
             lod: mesh.lod,
         });
     }
+    occlusion.publish();
 
     // For a perspective camera clip W is forward depth. Submit nearer opaque
     // chunks first, rather than LOD/radial order used by the work scheduler.

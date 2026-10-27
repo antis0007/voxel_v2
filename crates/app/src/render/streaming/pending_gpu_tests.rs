@@ -18,7 +18,7 @@ fn cpu(streamer:&ChunkStreamer,lod:u8,revision:u64,job_id:u64,vertex_count:usize
     let bytes=mesh.vertices.capacity()*std::mem::size_of::<Vertex3>()+mesh.indices.capacity()*4;
     let lease=streamer.mesh_budget.acquire(bytes,&AtomicBool::new(false)).unwrap();
     CpuChunkMesh{failed:false,lod_invariant:false,key:ChunkKey{coord:IVec3::ZERO,lod},revision,
-        job_id,world_epoch:streamer.upload_epoch,cache_epoch:0,mesh,shadow_casters:Default::default(),boundary_profile:Default::default(),_lease:Some(lease)}
+        job_id,world_epoch:streamer.upload_epoch,cache_epoch:0,mesh,shadow_casters:Default::default(),boundary_profile:Default::default(),connectivity:None,_lease:Some(lease)}
 }
 fn uploaded(device:&wgpu::Device,queue:&wgpu::Queue,cache:&mut ChunkCache,c:&CpuChunkMesh)->ChunkGpuMesh {
     let alloc=cache.arena.alloc_mesh(device,&c.mesh).unwrap();

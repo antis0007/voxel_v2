@@ -177,6 +177,7 @@ impl ChunkStreamer {
                 coord:key.coord, lod:key.lod, world_epoch:cpu.world_epoch,
                 cache_epoch:cpu.cache_epoch, job_id:cpu.job_id, revision:cpu.revision,
             }, std::mem::take(&mut cpu.boundary_profile));
+            gpu.connectivity=cpu.connectivity;
             // Main-thread atomic accounting transfer: no intervening GPU
             // allocation or publication occurs before installation below.
             drop(pending.reservation.take());

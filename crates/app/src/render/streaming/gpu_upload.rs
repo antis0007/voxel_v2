@@ -115,6 +115,7 @@ pub(super) fn start(
             lod_invariant,
             bytes: std::mem::size_of_val(mesh.vertices.as_slice())
                 + std::mem::size_of_val(mesh.indices.as_slice()),
+            connectivity: None,
         })
     })();
     // Pop immediately, on the creating thread. Only polling the returned
