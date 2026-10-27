@@ -32,6 +32,25 @@ records new baselines, which are committed with the reason. A new bench is a
 `[[bench]]` entry with `harness = false` in its crate's `Cargo.toml` plus a
 `just bench-save`. Example: `crates/worldgen/benches/terrain.rs`.
 
+## Frame-time scenes
+
+`scripts/frame_bench.py` drives the windowed game through fixed `--benchmark*` command
+lines (seed 74, generator 53, 1600x900, clear weather, 6 s warmup, 15 s timed): Hills static,
+orbit and clouds-off, Superflat, and quarter-metre Hills. Benchmark mode ignores saved
+preferences and holds the auto-quality governor. `just frame-bench [scene]` prints one pass
+against `crates/app/benches/frame_baselines.json`; `just frame-bench-check` runs 3 interleaved
+passes and fails when the best pass's p95 or p99 is more than 5 % over the baseline or the
+per-frame median draw calls (terrain plus shadow, from `frames.csv`) are more than 10 % over;
+`just frame-bench-save` records the best pass with the adapter, commit, tree state and exe hash.
+Each pass first waits up to 15 minutes for `rustc`/`cargo`/linker processes and other game
+instances to exit, since a peer's build or capture halves the frame rate; a pass that still
+overlapped one is marked contended. When every pass is contended, a frame-time excess is
+reported UNVERIFIED (exit 3), not failed; draw-call excess always fails. On this shared
+machine frame times varied up to 3x between passes while per-frame median draws repeated
+within 3 % on static Hills (11 % on orbit, 21 % on superflat); see `docs/perf/audit-08e11ae3.md`. It needs a GPU, so it is not part of `just verify`; run it
+for render changes. A baseline from another adapter is refused, not compared.
+Script tests: `python -I scripts/test_frame_bench.py`.
+
 ## Clone completeness
 
 A clean clone holds only committed files. `just deps [rev]` (part of `just verify`, default

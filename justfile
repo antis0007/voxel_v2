@@ -78,6 +78,22 @@ loc:
 seam-route:
     {{filter}} cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet seam_route
 
+# Frame-time scenes on the windowed game (GPU and desktop needed): one pass per scene,
+# printed against crates/app/benches/frame_baselines.json.
+frame-bench scene="":
+    cargo build -q --profile release-fast -p minecraft_style_voxel_prototype
+    python -I scripts/frame_bench.py run {{scene}}
+
+# Frame-time gate for render changes: 3 interleaved passes, best p95/p99 over +5 % or median draws over +10 % fails.
+frame-bench-check scene="":
+    cargo build -q --profile release-fast -p minecraft_style_voxel_prototype
+    python -I scripts/frame_bench.py check {{scene}}
+
+# Record frame-time baselines (3 interleaved passes). Commit them with the reason.
+frame-bench-save scene="":
+    cargo build -q --profile release-fast -p minecraft_style_voxel_prototype
+    python -I scripts/frame_bench.py save {{scene}}
+
 # Files a clean clone of `rev` would lack: `mod`, include_bytes!/include_str!, Cargo path
 # dependencies and crates/* members that point outside the commit. Exit 1 on any.
 deps rev="HEAD":
