@@ -8,6 +8,7 @@ pub use crate::material::BlockId;
 pub mod activity;
 pub mod adventure;
 mod collision;
+pub mod bed;
 pub mod expedition;
 pub mod workshop;
 pub mod environment;
