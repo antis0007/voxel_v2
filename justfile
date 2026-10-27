@@ -78,8 +78,17 @@ loc:
 seam-route:
     {{filter}} cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet seam_route
 
-# The single pre-commit gate: check, clippy, tests, the perf gate, then the LOC report.
-verify: check clippy test bench-check loc
+# Files a clean clone of `rev` would lack: `mod`, include_bytes!/include_str!, Cargo path
+# dependencies and crates/* members that point outside the commit. Exit 1 on any.
+deps rev="HEAD":
+    python -I scripts/tracked_deps.py --rev {{rev}}
+
+# Untracked files grouped into the commit sets their tracked referrers need, as markdown.
+deps-inventory:
+    python -I scripts/tracked_deps.py inventory
+
+# The single pre-commit gate: check, clippy, tests, the perf gate, clone completeness, then the LOC report.
+verify: check clippy test bench-check deps loc
 
 # Run the checks the current task diff requires and record evidence (docs/TESTING.md).
 gate:

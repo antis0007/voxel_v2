@@ -1,6 +1,6 @@
 # Testing
 
-One command gates everything: `just verify` (check, clippy, tests, the perf gate, LOC report).
+One command gates everything: `just verify` (check, clippy, tests, the perf gate, clone completeness, LOC report).
 
 The task gate (`scripts/workflow.py`, run from the Stop hook) derives its required checks from the
 diff via `.claude/verify/policy.json`. It runs the perf gate (`scripts/bench.py check`) on Rust and
@@ -31,6 +31,16 @@ median of 3 runs and fails above +8% or on a bench with no baseline; `just bench
 records new baselines, which are committed with the reason. A new bench is a
 `[[bench]]` entry with `harness = false` in its crate's `Cargo.toml` plus a
 `just bench-save`. Example: `crates/worldgen/benches/terrain.rs`.
+
+## Clone completeness
+
+A clean clone holds only committed files. `just deps [rev]` (part of `just verify`, default
+`HEAD`) reads the commit's tree and fails when a `mod`, `include_bytes!`/`include_str!`,
+Cargo `path =` dependency or `crates/*` workspace member names a file outside it.
+`just deps-inventory` groups the working tree's untracked files into commit sets: each set
+lands in one commit with its tracked referrers, or that commit does not build. Sets follow
+`mod`, `include_*!` and `crate::` paths only; build each set before committing it.
+Script tests: `python -I scripts/test_tracked_deps.py`.
 
 ## Seam route
 
