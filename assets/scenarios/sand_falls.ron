@@ -4,6 +4,8 @@ Scenario(
     world: Superflat,
     scale: OneMeter,
     seed: 1,
+    // Pinned: the hash covers terrain, and each generator bump would move it.
+    generator_version: Some(52),
     steps: [
         Advance(ticks: 30),
         Place(offset: (2, 4, 0), block: "Sand"),

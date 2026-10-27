@@ -4,6 +4,8 @@ Scenario(
     world: Hills,
     scale: OneMeter,
     seed: 7,
+    // Pinned: the hash covers terrain, and each generator bump would move it.
+    generator_version: Some(52),
     steps: [
         Advance(ticks: 120),
         Expect(Finite),
