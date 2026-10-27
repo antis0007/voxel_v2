@@ -1,4 +1,4 @@
-//! Key and mouse binding names for the bindings file and the controls screen.
+//! Key, mouse and pad binding names for the bindings file and the controls screen.
 
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -7,6 +7,38 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 pub enum Binding {
     Key(KeyCode),
     Mouse(MouseButton),
+    Pad(PadButton),
+}
+
+macro_rules! pad_buttons {
+    ($($button:ident => $label:literal),* $(,)?) => {
+        /// Gamepad inputs in standard (Xbox) layout; the left stick's directions count as buttons.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum PadButton { $($button),* }
+        impl PadButton {
+            pub const ALL: &[PadButton] = &[$(PadButton::$button),*];
+            fn label(self) -> &'static str {
+                match self { $(PadButton::$button => $label),* }
+            }
+        }
+    };
+}
+
+pad_buttons!(
+    South => "Pad A", East => "Pad B", West => "Pad X", North => "Pad Y",
+    LeftBumper => "Pad LB", RightBumper => "Pad RB", LeftTrigger => "Pad LT", RightTrigger => "Pad RT",
+    Select => "Pad View", Start => "Pad Menu", LeftStick => "Pad LS", RightStick => "Pad RS",
+    DPadUp => "Pad Up", DPadDown => "Pad Down", DPadLeft => "Pad Left", DPadRight => "Pad Right",
+    LeftStickUp => "Pad LS Up", LeftStickDown => "Pad LS Down",
+    LeftStickLeft => "Pad LS Left", LeftStickRight => "Pad LS Right",
+);
+
+const _: () = assert!(PadButton::ALL.len() <= 32, "pad state keeps one bit per button");
+
+impl PadButton {
+    pub fn bit(self) -> u32 {
+        1 << self as u32
+    }
 }
 
 macro_rules! keys {
@@ -41,10 +73,18 @@ impl Binding {
             Self::Mouse(MouseButton::Back) => "MouseBack".to_owned(),
             Self::Mouse(MouseButton::Forward) => "MouseForward".to_owned(),
             Self::Mouse(MouseButton::Other(n)) => format!("Mouse{n}"),
+            Self::Pad(button) => format!("Pad{button:?}"),
         }
     }
 
+    pub fn is_pad(self) -> bool {
+        matches!(self, Self::Pad(_))
+    }
+
     pub fn parse(name: &str) -> Option<Self> {
+        if let Some(rest) = name.strip_prefix("Pad") {
+            return PadButton::ALL.iter().copied().find(|b| format!("{b:?}") == rest).map(Self::Pad);
+        }
         let mouse = match name {
             "MouseLeft" => Some(MouseButton::Left),
             "MouseRight" => Some(MouseButton::Right),
@@ -68,6 +108,7 @@ impl Binding {
             Self::Mouse(MouseButton::Back) => return "Mouse 4".to_owned(),
             Self::Mouse(MouseButton::Forward) => return "Mouse 5".to_owned(),
             Self::Mouse(MouseButton::Other(n)) => return format!("Mouse {n}"),
+            Self::Pad(button) => return button.label().to_owned(),
         };
         let fixed = match code {
             KeyCode::ShiftLeft => "Left Shift",

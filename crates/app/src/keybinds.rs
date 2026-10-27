@@ -7,14 +7,17 @@ mod names;
 #[cfg(test)]
 mod tests;
 
-pub use names::Binding;
+pub use names::{Binding, PadButton};
 
 use anyhow::{Context, Result, ensure};
 use std::{
     fs,
     io::Read,
     path::PathBuf,
-    sync::{LazyLock, Mutex, PoisonError, RwLock},
+    sync::{
+        LazyLock, Mutex, PoisonError, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -42,7 +45,7 @@ actions!(
     Interact, NextSpell, Lamp, ToolHand, ToolBrush, ToolBuilders, ToolDestructor,
     ToolArea, ToolExplosive, RangeDown, RangeUp, Inventory, CreativePanel, WandAtelier,
     QuickSelect, Map, Waypoint, Minimap, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
-    Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9,
+    Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9, HotbarPrev, HotbarNext,
 );
 
 /// Actions `Input` tracks per frame; only these accept mouse buttons.
@@ -112,6 +115,8 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
 static ACTIVE: LazyLock<RwLock<Bindings>> = LazyLock::new(|| RwLock::new(Bindings::defaults()));
 static CAPTURE: Mutex<Option<(Action, usize, Instant)>> = Mutex::new(None);
 static STATUS: Mutex<Option<String>> = Mutex::new(None);
+/// Whether the last gameplay press came from a pad, so hints name pad buttons.
+static PAD_LAST: AtomicBool = AtomicBool::new(false);
 
 /// Every action's bindings, indexed by action.
 #[derive(Clone, PartialEq, Debug)]
@@ -140,8 +145,12 @@ impl Bindings {
     }
 
     /// Binds `slot`; returns the action that lost `binding`, if another held it.
+    /// The pad's Menu button is fixed to the pause menu, like Escape.
     pub fn assign(&mut self, action: Action, slot: usize, binding: Option<Binding>) -> Option<Action> {
-        if slot >= SLOTS || binding.is_some_and(|b| matches!(b, Binding::Mouse(_)) && !action.mouse_bindable()) {
+        let refused = |b: Binding| {
+            (matches!(b, Binding::Mouse(_)) && !action.mouse_bindable()) || b == Binding::Pad(PadButton::Start)
+        };
+        if slot >= SLOTS || binding.is_some_and(refused) {
             return None;
         }
         let displaced = binding.and_then(|b| self.lookup(b)).filter(|(a, s)| (*a, *s) != (action, slot));
@@ -192,9 +201,18 @@ pub fn action_for_key(code: winit::keyboard::KeyCode) -> Option<Action> {
     lookup(Binding::Key(code)).map(|(action, _)| action)
 }
 
-/// First bound input of `action`, for HUD hints.
+/// First bound input of `action`, for HUD hints, preferring the device used last.
 pub fn hint(action: Action) -> String {
-    current().slots(action).iter().flatten().next().map_or_else(|| "Unbound".to_owned(), |b| b.label())
+    preferred(current().slots(action), PAD_LAST.load(Ordering::Relaxed)).map_or_else(|| "Unbound".to_owned(), |b| b.label())
+}
+
+fn preferred(slots: [Option<Binding>; SLOTS], pad: bool) -> Option<Binding> {
+    let mut bound = slots.into_iter().flatten();
+    bound.clone().find(|b| b.is_pad() == pad).or_else(|| bound.next())
+}
+
+pub fn note_input(binding: Binding) {
+    PAD_LAST.store(binding.is_pad(), Ordering::Relaxed);
 }
 
 /// Current label for a key named by its default label, so fixed hint strings follow rebinding.
@@ -245,10 +263,10 @@ pub fn cancel_capture() {
 }
 
 /// Offers a pressed input to a pending rebind. Returns whether it was consumed.
-/// Escape cancels; a mouse button offered to a key-only action keeps listening.
+/// Escape or the pad's Menu cancels; a mouse button offered to a key-only action keeps listening.
 pub fn offer(binding: Binding) -> bool {
     let Some((action, slot)) = capturing() else { return false };
-    if binding == Binding::Key(winit::keyboard::KeyCode::Escape) {
+    if matches!(binding, Binding::Key(winit::keyboard::KeyCode::Escape) | Binding::Pad(PadButton::Start)) {
         cancel_capture();
         return true;
     }

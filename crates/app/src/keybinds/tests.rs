@@ -108,3 +108,42 @@ fn default_labels_resolve_to_their_action() {
         assert!(action.is_some(), "{label}");
     }
 }
+
+#[test]
+fn pad_names_round_trip_and_defaults_reach_the_pad() {
+    for &button in PadButton::ALL {
+        let binding = Binding::Pad(button);
+        assert_eq!(Binding::parse(&binding.name()), Some(binding), "{button:?}");
+        assert!(binding.label().starts_with("Pad "), "{button:?}");
+    }
+    assert_eq!(Binding::parse("PadSouth"), Some(Binding::Pad(PadButton::South)));
+    assert_eq!(Binding::parse("PadNoSuchButton"), None);
+    let b = Bindings::defaults();
+    let pad = |button| b.lookup(Binding::Pad(button));
+    assert_eq!(pad(PadButton::LeftStickUp), Some((Action::Forward, 1)));
+    assert_eq!(pad(PadButton::South), Some((Action::Jump, 1)));
+    assert_eq!(pad(PadButton::RightTrigger), Some((Action::Break, 1)));
+    assert_eq!(pad(PadButton::DPadRight), Some((Action::HotbarNext, 0)));
+    assert_eq!(pad(PadButton::Start), None);
+}
+
+#[test]
+fn pad_buttons_bind_any_action_except_menu() {
+    let mut b = Bindings::defaults();
+    assert_eq!(b.assign(Action::Inventory, 1, Some(Binding::Pad(PadButton::North))), Some(Action::QuickSelect));
+    assert_eq!(b.lookup(Binding::Pad(PadButton::North)), Some((Action::Inventory, 1)));
+    let before = b.clone();
+    assert_eq!(b.assign(Action::Jump, 0, Some(Binding::Pad(PadButton::Start))), None);
+    assert_eq!(b, before);
+    let text = b.to_user().expect("serialises");
+    assert_eq!(Bindings::from_user(&text).expect("parses"), b);
+}
+
+#[test]
+fn hints_prefer_the_device_used_last() {
+    let jump = Bindings::defaults().slots(Action::Jump);
+    assert_eq!(preferred(jump, false), Some(Binding::Key(KeyCode::Space)));
+    assert_eq!(preferred(jump, true), Some(Binding::Pad(PadButton::South)));
+    let keys_only = Bindings::defaults().slots(Action::Sneak);
+    assert_eq!(preferred(keys_only, true), Some(Binding::Key(KeyCode::ShiftLeft)));
+}

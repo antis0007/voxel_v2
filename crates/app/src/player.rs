@@ -87,7 +87,14 @@ impl Input {
         self.binding(Binding::Mouse(button), pressed);
     }
 
+    pub fn pad(&mut self, button: keybinds::PadButton, pressed: bool) {
+        self.binding(Binding::Pad(button), pressed);
+    }
+
     fn binding(&mut self, binding: Binding, pressed: bool) {
+        if pressed {
+            keybinds::note_input(binding);
+        }
         if let Some((action, slot)) = keybinds::lookup(binding) {
             self.apply(action, slot, pressed);
         }

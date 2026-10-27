@@ -18,6 +18,7 @@ use engine_audio as audio;
 mod crash_log;
 mod comfort;
 mod creative;
+mod gamepad;
 mod keybinds;
 use keybinds::Action as BindAction;
 mod screenshot;
@@ -1644,6 +1645,8 @@ fn main() -> Result<()> {
         horizon_route_started_at: None,
     });
 
+    let mut pads = gamepad::Gamepads::open();
+
     #[allow(deprecated)]
     event_loop.run(move |event, elwt| {
         let loading = !matches!(
@@ -1736,6 +1739,201 @@ fn main() -> Result<()> {
                     .map(|ui| ui.on_window_event(window, &event))
                     .unwrap_or(false);
 
+                // Keyboard and pad presses share this dispatch for discrete actions.
+                macro_rules! bound_action {
+                    ($action:expr, $fresh_press:expr, $escape:expr, $tab:expr) => { 'bound: {
+                        let (action, fresh_press, escape, tab): (Option<BindAction>, bool, bool, bool) =
+                            ($action, $fresh_press, $escape, $tab);
+                        if fresh_press && action == Some(BindAction::Fullscreen) {
+                            let fullscreen = if window.fullscreen().is_some() { None } else {
+                                Some(winit::window::Fullscreen::Borderless(None))
+                            };
+                            window.set_fullscreen(fullscreen);
+                            break 'bound;
+                        }
+                        if fresh_press && action == Some(BindAction::Debug) {
+                            if let Some(ui) = egui_ui.as_mut() { ui.toggle_debug(); }
+                            break 'bound;
+                        }
+                        if fresh_press && action == Some(BindAction::ToggleHud) {
+                            if let Some(ui) = egui_ui.as_mut() { ui.show_hud = !ui.show_hud; }
+                            break 'bound;
+                        }
+                        if fresh_press && action == Some(BindAction::Screenshot) {
+                            pending_screenshot = Some(screenshot::next_path());
+                            break 'bound;
+                        }
+                        if matches!(mode, AppMode::Paused)
+                            && !escape { break 'bound; }
+                        if matches!(mode,AppMode::WorldSelect) {break 'bound;}
+
+                        match action {
+                            _ if escape && fresh_press => {
+                                player.jump_tap_timer = 0.0;
+                                player.jump_was_down = false;
+                                if matches!(mode, AppMode::Playing) && creative.any_ui_open() {
+                                    if let Some(w) = world.as_mut() {
+                                        w.inventory.return_transient_to_pack();
+                                        w.sync_from_inventory();
+                                    }
+                                    creative.close_panels();
+                                    input.clear();
+                                    sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
+                                    break 'bound;
+                                }
+                                reset_gameplay_input(
+                                    &mut input,
+                                    &mut place_was_down,
+                                    &mut break_was_down,
+                                    &mut place_repeat_timer,
+                                    &mut break_repeat_timer,
+                                    &mut pending_tool_action,
+                                );
+                                mode = match mode {
+                                    AppMode::Playing => {
+                                        release_mouse(window, &mut grabbed);
+                                        AppMode::Paused
+                                    }
+                                    AppMode::Paused => {
+                                        capture_mouse(window, &mut grabbed, false, focused);
+                                        last = Instant::now();
+                                        AppMode::Playing
+                                    }
+                                    AppMode::WorldSelect => AppMode::WorldSelect,
+                                };
+                            }
+                            Some(BindAction::CreativePanel) if fresh_press => {
+                                let open = !creative.show_panel; creative.close_panels(); creative.show_panel = open; input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(
+                                    window,
+                                    &mut grabbed,
+                                    focused,
+                                    &mode,
+                                    &creative,
+                                );
+                            }
+                            Some(BindAction::Interact) if fresh_press && grabbed && !creative.any_ui_open() => {
+                                input.interact = true;
+                            }
+                            Some(BindAction::Lamp) if fresh_press && grabbed && !creative.any_ui_open() => {
+                                if let Some(w) = world.as_mut() {
+                                    w.expedition.toggle_lamp();
+                                }
+                            }
+                            Some(BindAction::NextSpell) if fresh_press && grabbed && !creative.any_ui_open() => { input.cycle_spell=true; }
+                            Some(BindAction::Inventory)
+                                if fresh_press && (!tab || !creative.show_palette) => {
+                                let open = !creative.show_palette;
+                                if !open
+                                    && let Some(w) = world.as_mut() {
+                                        w.inventory.return_transient_to_pack();
+                                        w.sync_from_inventory();
+                                    }
+                                creative.close_panels(); creative.show_palette = open; input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(
+                                    window,
+                                    &mut grabbed,
+                                    focused,
+                                    &mode,
+                                    &creative,
+                                );
+                            }
+                            Some(BindAction::WandAtelier) if fresh_press && !creative.show_palette => {
+                                let open = !creative.show_wand_atelier; creative.close_panels(); creative.show_wand_atelier = open; input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(
+                                    window,
+                                    &mut grabbed,
+                                    focused,
+                                    &mode,
+                                    &creative,
+                                );
+                            }
+                            Some(BindAction::QuickSelect) if fresh_press && !creative.show_palette => {
+                                let open = !creative.show_quick_select; creative.close_panels(); creative.show_quick_select = open; input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(
+                                    window,
+                                    &mut grabbed,
+                                    focused,
+                                    &mode,
+                                    &creative,
+                                );
+                            }
+                            Some(BindAction::Map) if fresh_press && !creative.show_palette => {
+                                egui_ui::map::toggle_panel(&mut creative); input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
+                            }
+                            Some(BindAction::Waypoint) if fresh_press && grabbed && !creative.any_ui_open() => {
+                                if let Some(index) = egui_ui::map::add_waypoint_at_player()
+                                    && let Some(ui) = egui_ui.as_mut() {
+                                        ui.quality_notice = Some((format!("Waypoint {}", index + 1), 2.0));
+                                    }
+                            }
+                            Some(BindAction::Minimap) if fresh_press => egui_ui::map::toggle_minimap(),
+                            Some(BindAction::RangeDown | BindAction::RangeUp)
+                                if fresh_press && grabbed && !creative.any_ui_open() => {
+                                creative.adjust_range(if action == Some(BindAction::RangeUp) { 1 } else { -1 });
+                            }
+                            Some(BindAction::ToolHand) if fresh_press && !creative.any_ui_open() => {
+                                creative.tool = creative::ToolKind::Hand;
+                            }
+                            Some(BindAction::ToolBrush) if fresh_press && !creative.any_ui_open() => {
+                                creative.tool = creative::ToolKind::Brush;
+                            }
+                            Some(BindAction::ToolBuilders) if fresh_press && !creative.any_ui_open() => {
+                                creative.tool = creative::ToolKind::BuildersWand;
+                            }
+                            Some(BindAction::ToolDestructor) if fresh_press && !creative.any_ui_open() => {
+                                creative.tool = creative::ToolKind::DestructorWand;
+                            }
+                            Some(BindAction::ToolArea) if fresh_press && !creative.any_ui_open() => {
+                                creative.tool = creative::ToolKind::AreaTool;
+                            }
+                            Some(BindAction::ToolExplosive) if fresh_press && !creative.any_ui_open() => {
+                                creative.tool = creative::ToolKind::ExplosiveWand;
+                            }
+                            Some(BindAction::HotbarPrev | BindAction::HotbarNext)
+                                if fresh_press && grabbed && !creative.any_ui_open() => {
+                                let dir = if action == Some(BindAction::HotbarNext) { 1 } else { -1 };
+                                player.selected_block = creative.cycle_hotbar_slot(dir);
+                            }
+                            Some(bound) if fresh_press => {
+                                if let Some(slot) = bound.hotbar_slot() {
+                                    player.selected_block = creative.select_slot(slot);
+                                    if creative.show_palette { creative.tool = creative::ToolKind::Hand; }
+                                }
+                            }
+                            _ => {}
+                        }
+                    } };
+                }
+
+                if matches!(event, WindowEvent::RedrawRequested) && matches!(startup, StartupState::Ready { .. }) {
+                    let text_editing = egui_ui.as_ref().is_some_and(|ui| ui.ctx.wants_keyboard_input());
+                    for (button, pressed) in pads.poll(focused) {
+                        let binding = keybinds::Binding::Pad(button);
+                        if pressed && keybinds::offer(binding) {
+                            continue;
+                        }
+                        if !pressed || (matches!(mode, AppMode::Playing) && grabbed && !creative.any_ui_open()) {
+                            input.pad(button, pressed);
+                        }
+                        if pressed && !text_editing {
+                            // Menu is fixed like Escape; B also backs out of open panels.
+                            let escape = button == keybinds::PadButton::Start
+                                || (button == keybinds::PadButton::East && creative.any_ui_open());
+                            bound_action!(keybinds::lookup(binding).map(|(a, _)| a), true, escape, false);
+                        }
+                    }
+                    if grabbed && focused && matches!(mode, AppMode::Playing) {
+                        let sensitivity = egui_ui.as_ref().map_or(0.0025, |ui| ui.mouse_sensitivity)
+                            * view_zoom.sensitivity_scale();
+                        let look = pads.look(sensitivity);
+                        let y_sign = if egui_ui.as_ref().is_some_and(|ui| ui.invert_mouse) { -1.0 } else { 1.0 };
+                        player.yaw += look.x;
+                        player.pitch = (player.pitch + look.y * y_sign).clamp(-1.54, 1.54);
+                    }
+                }
+
                 match event {
                     WindowEvent::CloseRequested => {
                         if !benchmark_config.enabled {
@@ -1811,163 +2009,10 @@ fn main() -> Result<()> {
                         if text_editing && !matches!(key.physical_key, PhysicalKey::Code(KeyCode::Escape)) {
                             return;
                         }
-                        if fresh_press && action == Some(BindAction::Fullscreen) {
-                            let fullscreen = if window.fullscreen().is_some() { None } else {
-                                Some(winit::window::Fullscreen::Borderless(None))
-                            };
-                            window.set_fullscreen(fullscreen);
-                            return;
-                        }
-                        if fresh_press && action == Some(BindAction::Debug) {
-                            if let Some(ui) = egui_ui.as_mut() { ui.toggle_debug(); }
-                            return;
-                        }
-                        if fresh_press && action == Some(BindAction::ToggleHud) {
-                            if let Some(ui) = egui_ui.as_mut() { ui.show_hud = !ui.show_hud; }
-                            return;
-                        }
-                        if fresh_press && action == Some(BindAction::Screenshot) {
-                            pending_screenshot = Some(screenshot::next_path());
-                            return;
-                        }
-                        if matches!(mode, AppMode::Paused)
-                            && key.physical_key != PhysicalKey::Code(KeyCode::Escape) { return; }
-                        if matches!(mode,AppMode::WorldSelect) {return;}
-
                         // Escape is fixed: it is never offered as a binding.
                         let escape = key.physical_key == PhysicalKey::Code(KeyCode::Escape);
-                        match action {
-                            _ if escape && fresh_press => {
-                                player.jump_tap_timer = 0.0;
-                                player.jump_was_down = false;
-                                if matches!(mode, AppMode::Playing) && creative.any_ui_open() {
-                                    if let Some(w) = world.as_mut() {
-                                        w.inventory.return_transient_to_pack();
-                                        w.sync_from_inventory();
-                                    }
-                                    creative.close_panels();
-                                    input.clear();
-                                    sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
-                                    return;
-                                }
-                                reset_gameplay_input(
-                                    &mut input,
-                                    &mut place_was_down,
-                                    &mut break_was_down,
-                                    &mut place_repeat_timer,
-                                    &mut break_repeat_timer,
-                                    &mut pending_tool_action,
-                                );
-                                mode = match mode {
-                                    AppMode::Playing => {
-                                        release_mouse(window, &mut grabbed);
-                                        AppMode::Paused
-                                    }
-                                    AppMode::Paused => {
-                                        capture_mouse(window, &mut grabbed, false, focused);
-                                        last = Instant::now();
-                                        AppMode::Playing
-                                    }
-                                    AppMode::WorldSelect => AppMode::WorldSelect,
-                                };
-                            }
-                            Some(BindAction::CreativePanel) if fresh_press => {
-                                let open = !creative.show_panel; creative.close_panels(); creative.show_panel = open; input.clear(); player.jump_tap_timer = 0.0;
-                                sync_creative_ui_cursor(
-                                    window,
-                                    &mut grabbed,
-                                    focused,
-                                    &mode,
-                                    &creative,
-                                );
-                            }
-                            Some(BindAction::Interact) if fresh_press && grabbed && !creative.any_ui_open() => {
-                                input.interact = true;
-                            }
-                            Some(BindAction::Lamp) if fresh_press && grabbed && !creative.any_ui_open() => {
-                                if let Some(w) = world.as_mut() {
-                                    w.expedition.toggle_lamp();
-                                }
-                            }
-                            Some(BindAction::NextSpell) if fresh_press && grabbed && !creative.any_ui_open() => { input.cycle_spell=true; }
-                            Some(BindAction::Inventory)
-                                if fresh_press && (key.physical_key != PhysicalKey::Code(KeyCode::Tab) || !creative.show_palette) => {
-                                let open = !creative.show_palette;
-                                if !open
-                                    && let Some(w) = world.as_mut() {
-                                        w.inventory.return_transient_to_pack();
-                                        w.sync_from_inventory();
-                                    }
-                                creative.close_panels(); creative.show_palette = open; input.clear(); player.jump_tap_timer = 0.0;
-                                sync_creative_ui_cursor(
-                                    window,
-                                    &mut grabbed,
-                                    focused,
-                                    &mode,
-                                    &creative,
-                                );
-                            }
-                            Some(BindAction::WandAtelier) if fresh_press && !creative.show_palette => {
-                                let open = !creative.show_wand_atelier; creative.close_panels(); creative.show_wand_atelier = open; input.clear(); player.jump_tap_timer = 0.0;
-                                sync_creative_ui_cursor(
-                                    window,
-                                    &mut grabbed,
-                                    focused,
-                                    &mode,
-                                    &creative,
-                                );
-                            }
-                            Some(BindAction::QuickSelect) if fresh_press && !creative.show_palette => {
-                                let open = !creative.show_quick_select; creative.close_panels(); creative.show_quick_select = open; input.clear(); player.jump_tap_timer = 0.0;
-                                sync_creative_ui_cursor(
-                                    window,
-                                    &mut grabbed,
-                                    focused,
-                                    &mode,
-                                    &creative,
-                                );
-                            }
-                            Some(BindAction::Map) if fresh_press && !creative.show_palette => {
-                                egui_ui::map::toggle_panel(&mut creative); input.clear(); player.jump_tap_timer = 0.0;
-                                sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
-                            }
-                            Some(BindAction::Waypoint) if fresh_press && grabbed && !creative.any_ui_open() => {
-                                if let Some(index) = egui_ui::map::add_waypoint_at_player()
-                                    && let Some(ui) = egui_ui.as_mut() {
-                                        ui.quality_notice = Some((format!("Waypoint {}", index + 1), 2.0));
-                                    }
-                            }
-                            Some(BindAction::Minimap) if fresh_press => egui_ui::map::toggle_minimap(),
-                            Some(BindAction::RangeDown | BindAction::RangeUp)
-                                if fresh_press && grabbed && !creative.any_ui_open() => {
-                                creative.adjust_range(if action == Some(BindAction::RangeUp) { 1 } else { -1 });
-                            }
-                            Some(BindAction::ToolHand) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::Hand;
-                            }
-                            Some(BindAction::ToolBrush) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::Brush;
-                            }
-                            Some(BindAction::ToolBuilders) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::BuildersWand;
-                            }
-                            Some(BindAction::ToolDestructor) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::DestructorWand;
-                            }
-                            Some(BindAction::ToolArea) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::AreaTool;
-                            }
-                            Some(BindAction::ToolExplosive) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::ExplosiveWand;
-                            }
-                            Some(bound) if fresh_press => {
-                                if let Some(slot) = bound.hotbar_slot() {
-                                    player.selected_block = creative.select_slot(slot);
-                                    if creative.show_palette { creative.tool = creative::ToolKind::Hand; }
-                                }
-                            }
-                            _ => {}
-                        }
+                        let tab = key.physical_key == PhysicalKey::Code(KeyCode::Tab);
+                        bound_action!(action, fresh_press, escape, tab);
                     }
 
                     WindowEvent::MouseInput { state, button, .. } => {
