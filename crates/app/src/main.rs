@@ -3817,6 +3817,7 @@ fn main() -> Result<()> {
                                 // Drain after all producers, including tools. A tool blast used
                                 // to enqueue after the drain and lose its sound on the next tick.
                                 for sound in std::mem::take(&mut world.adventure.sounds) {
+                                    egui_ui::subtitles::note(&sound,player.eye(world.voxel_scale)*world.voxel_scale.meters(),player.forward_dir());
                                     combat_audio.play(sound,player.eye(world.voxel_scale)*world.voxel_scale.meters(),player.forward_dir());
                                 }
                                 if let Some(review)=sandbox_review.as_mut(){

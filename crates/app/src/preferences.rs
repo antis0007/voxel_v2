@@ -26,6 +26,8 @@ const RENDER_SCALE_SHIFT: u32 = 10;
 /// removed, so files written before the setting decode as 100%.
 const CAMERA_MOTION_CUT_SHIFT: u32 = 18;
 const FOV_EFFECTS_CUT_SHIFT: u32 = 25;
+/// Bit 1 of the indirect-lighting word, which older files wrote as 0 or 1.
+const SUBTITLES_BIT: u32 = 1;
 fn path() -> PathBuf {
     storage::save_directory().join("preferences.vxp")
 }
@@ -91,6 +93,7 @@ pub struct Preferences {
     pub camera_motion: u32,
     /// Sprint and dash FOV kick and zoom easing, 0 to 100 percent.
     pub fov_effects: u32,
+    pub subtitles: bool,
     pub magic: crate::egui_ui::magic_style::Settings,
     pub typography: crate::egui_ui::typography::Settings,
 }
@@ -131,6 +134,7 @@ impl Default for Preferences {
             hotbar_scale: 1.0,
             camera_motion: 100,
             fov_effects: 100,
+            subtitles: false,
             magic: Default::default(),
             typography: Default::default(),
         }
@@ -166,6 +170,7 @@ impl Preferences {
         render::set_scene_scale_percent(self.render_scale);
         crate::comfort::set_camera_motion_percent(self.camera_motion);
         crate::comfort::set_fov_effects_percent(self.fov_effects);
+        crate::egui_ui::subtitles::set_enabled(self.subtitles);
         // The old stock setting kept full blocks for three chunks and then
         // threw the rest away at 256 m. Promote that exact preset once.
         let (view, lod, levels) = if self.view == 16 && self.lod == 3 && self.levels == 3 {
@@ -248,6 +253,7 @@ impl Preferences {
             hotbar_scale: ui.hotbar_scale.clamp(0.7, 1.6),
             camera_motion: crate::comfort::camera_motion_percent(),
             fov_effects: crate::comfort::fov_effects_percent(),
+            subtitles: crate::egui_ui::subtitles::enabled(),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
             typography: crate::egui_ui::typography::get(&ui.ctx),
         }
@@ -282,7 +288,7 @@ impl Preferences {
                 | self.render_scale.clamp(render::MIN_SCENE_SCALE_PERCENT, 100) << RENDER_SCALE_SHIFT
                 | (100 - self.camera_motion.min(100)) << CAMERA_MOTION_CUT_SHIFT
                 | (100 - self.fov_effects.min(100)) << FOV_EFFECTS_CUT_SHIFT,
-            self.indirect_lighting as u32,
+            u32::from(self.indirect_lighting) | u32::from(self.subtitles) << SUBTITLES_BIT,
             self.ui_scale.to_bits(),
             self.hotbar_scale.to_bits(),
         ];
@@ -375,7 +381,8 @@ impl Preferences {
                 .map(|n| n >> RENDER_SCALE_SHIFT & 0xff)
                 .filter(|p| *p != 0)
                 .map_or(100, |p| p.clamp(render::MIN_SCENE_SCALE_PERCENT, 100)),
-            indirect_lighting: w.get(23).is_none_or(|v| *v != 0),
+            indirect_lighting: w.get(23).is_none_or(|v| *v & 1 != 0),
+            subtitles: w.get(23).is_some_and(|v| *v >> SUBTITLES_BIT & 1 != 0),
             camera_motion: 100 - w.get(22).map_or(0, |n| n >> CAMERA_MOTION_CUT_SHIFT & 0x7f).min(100),
             fov_effects: 100 - w.get(22).map_or(0, |n| n >> FOV_EFFECTS_CUT_SHIFT & 0x7f).min(100),
             ui_scale: w
@@ -668,6 +675,12 @@ mod tests {
         assert_eq!((decoded.camera_motion, decoded.fov_effects), (0, 35));
         assert_eq!(decoded.render_scale, 60);
         assert!(!decoded.clouds);
+        let mut captions = Preferences::default();
+        captions.subtitles = true;
+        captions.indirect_lighting = false;
+        let captioned = Preferences::decode(&captions.bytes()).expect("decode");
+        assert!(captioned.subtitles && !captioned.indirect_lighting);
+        assert!(!Preferences::decode(&Preferences::default().bytes()).expect("decode").subtitles);
         // A file from before the setting has zero in the high bits of word 22.
         let mut bytes = Preferences::default().bytes();
         let word = 8 + 22 * 4;

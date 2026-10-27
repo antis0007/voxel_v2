@@ -30,6 +30,7 @@ pub(crate) mod magic_style;
 pub(crate) mod pixel_art;
 mod presentation;
 mod sigils;
+pub mod subtitles;
 mod production;
 mod recipe_book;
 mod relics;
@@ -2653,6 +2654,7 @@ impl EguiUi {
             if notice_expired {
                 self.quality_notice = None;
             }
+            subtitles::draw(&self.ctx, frame_dt);
             // Below the F3 readout when it is open, else flush with the corner.
             let minimap_top = if self.show_debug_performance_panel { 104.0 } else { 12.0 };
             map::pump(

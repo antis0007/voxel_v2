@@ -12,6 +12,10 @@ pub(super) fn comfort(ui: &mut egui::Ui) {
     if ui.add(egui::Slider::new(&mut fov, 0..=100).suffix("%").text("FOV Effects")).changed() {
         crate::comfort::set_fov_effects_percent(fov);
     }
+    let mut subtitles = super::subtitles::enabled();
+    if ui.checkbox(&mut subtitles, "Subtitles").changed() {
+        super::subtitles::set_enabled(subtitles);
+    }
 }
 
 fn matches(action: Action, bindings: &Bindings, needle: &str) -> bool {
