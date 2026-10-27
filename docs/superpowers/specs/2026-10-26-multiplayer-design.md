@@ -1,6 +1,6 @@
 # Multiplayer: modded-server parity, then past it
 
-Date: 2026-10-26. Status: proposed, waiting on owner answers in "Open owner decisions".
+Date: 2026-10-26. Status: accepted 2026-10-27 except the VPS UDP port (owner decision 5).
 
 ## Intent
 
@@ -295,13 +295,13 @@ first, then the split that every later step builds on.
 | # | Scope | Done when |
 |---|---|---|
 | M0 | `Transport` trait, loopback, `NetSim`, byte counters, in-process scenario runner, bandwidth bench | the current build's numbers are recorded as the baseline |
-| M1 | server/client split, in-game host via loopback, `world.players`, multi-anchor simulation, chunk tickets | host and guest share one code path; a far guest sees live water |
+| M1 | server/client split, in-game host via loopback, `world.players`, multi-anchor simulation, chunk tickets, CI build without the renderer feature | host and guest share one code path; a far guest sees live water |
 | M2 | channels and scheduler, entity interest, priority, delta baselines, quantisation, interpolation buffer; retire the 10 Hz gameplay image except at join | walking budget met at 2% loss, 100 ms RTT |
 | M3 | local movement prediction and reconciliation, predicted edits, predicted inventory clicks | zero-frame local response; pose error bound holds in the netsim scenario |
 | M4 | chunk streaming order, pristine hashes, client chunk cache, Tier A cell deltas | rejoin sends only changed chunks; dam-break bench within budget |
-| M5 | container sessions, machine components, item routes, enemies and spells with lag compensation, death and respawn, sleep rule, per-player save data, save bump, open to LAN | a survival session with shared factory and combat plays end to end |
+| M5 | container sessions, machine components, item routes, enemies and spells with lag compensation, grave markers and respawn, claims, sleep vote, per-player save data, save bump, open to LAN | a survival session with shared factory and combat plays end to end |
 | M6 | content manifest, identity keys, chat, commands, permissions, `server.ron` | whitelist and ops work by key; rebuilt exes with equal content connect |
-| M7 | UDP relay, GNS hole punching, transport fallback order | WAN session at 2% loss shows no stalls in the bench |
+| M7 | UDP relay (needs decision 5), GNS hole punching, transport fallback order; Steam Networking Sockets before a Steam launch | WAN session at 2% loss shows no stalls in the bench |
 | M8 | Tier B deterministic cellular mirrors | dam-break bandwidth drops by at least 10x against Tier A with zero unresolved mismatches |
 
 ## Left to the builder
@@ -335,20 +335,40 @@ first, then the split that every later step builds on.
 - **Untracked net code.** This plan adopts `crates/net`, `crates/lobby` and
   `multiplayer*` only after their author commits them, then builds in a worktree.
 
-## Open owner decisions
+## Owner decisions (answered 2026-10-27)
 
-Each changes what gets built. Answers go here.
+1. **Progression.** Discovery is per player: tech unlocks, the found-spell log
+   and the chip library go in `players/`. One-time loot is instanced per player,
+   as the world plan specifies. Habitat and orbital bookings are shared world
+   state. Claims are built in, with per-claim permissions, and are the source of
+   ADR 0026's `Protected` outcome. A "team progress" world option (shared unlocks)
+   is not built now, but discovery data is keyed so that option is a world flag
+   that selects a shared key instead of a per-player one, not a refactor.
+2. **Dedicated server.** Headless mode of the Windows exe is enough for early
+   access. A renderer-free Linux build is required by 1.0. It comes from a cargo
+   feature on the same binary (`--no-default-features` drops wgpu, egui, winit and
+   audio), not a crate split. The M1 server path must not reach the renderer, and
+   a CI build without the feature enforces that from M1 on.
+3. **Steam.** Transport stays behind the `Transport` trait. Own identity keys and
+   own UDP relay come first, because CI needs a path with no Steam client. Steam
+   Networking Sockets is added as a second transport before any Steam launch.
+   Own keys are the canonical account; a Steam ID is a linked login, so itch and
+   direct builds are not second-class.
+4. **Death, PvP and sleep.** On death the inventory stays in a grave marker at the
+   death position: no scatter, no experience loss. Keep-inventory and permadeath
+   are world options. PvP is off by default and a server setting; claims override
+   it inside claimed chunks. Nothing bad happens for not sleeping. A night skip
+   needs a majority of online players through a vote prompt; one player in bed is
+   a request, not a lock.
+5. **VPS UDP port.** Open. If granted, the game relay gets its own system user,
+   process and port range, with firewall rate limits from the first deploy.
+6. **Roadmap.** Steps M0-M4 are NET-FOUNDATION-01 and start once Milestone 0 places
+   the multiplayer crates and decides authority. M0 and M1 are tests and
+   infrastructure, which the intake freeze does not block; M2-M4 are the feature
+   half. M5-M7 are the Phase 3 operations layer. M8 waits on SIM-01's deterministic
+   migration. Multiplayer stays out of release claims until M1-M4 have tests on
+   `main`.
 
-1. Shared versus per-player progression: tech unlocks, found-spell log, chip
-   library, one-time loot (reliquaries, undercrown rewards, chests), habitat and
-   orbital bookings, and whether builds can be claimed (source of `Protected`).
-2. Dedicated server platform: Windows app binary with `--multiplayer-headless`
-   (no extraction), or a renderer-free Linux build (adds a crate split before M1).
-   Which machine the 4 ms tick target refers to.
-3. Steam release with Steamworks identity and Steam Datagram Relay, or own
-   identity keys and own UDP relay (decides M6 and M7).
-4. Death, PvP and sleep: drop inventory on death or keep it; PvP on, off or a
-   server setting; sleep skips the night when all players or a share sleep.
-5. A new UDP port on the shared relay VPS for M7.
-6. Where multiplayer sits against `docs/MASTER_PLAN.md` and decision 0022's intake
-   freeze, which decides when it can claim a `SAVE_VERSION` bump.
+The four builder calls above were accepted, with one condition: the 10 Hz
+full-state broadcast is the first thing replaced (M2), and chunk work in M4 must
+not build on it.
