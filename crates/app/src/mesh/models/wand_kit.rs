@@ -50,9 +50,17 @@ fn build(family: &Family, sprite: Sprite, pixel: f32) -> Built {
     }
     let (mut vertices, mut keys) = (Vec::new(), Vec::new());
     let half_w = sprite.width as f32 * 0.5;
-    let corner = |x: f32, y: f32, z: f32| Vec3::new((x - half_w) * pixel, (sprite.grip_row - y) * pixel, z * pixel);
+    let girth = review_girth();
+    let widen = widening(&sprite, girth);
+    let corner = |x: f32, y: f32, z: f32| {
+        let (x, f) = widen(x, y);
+        Vec3::new((x - half_w) * pixel, (sprite.grip_row - y) * pixel, z * f * pixel)
+    };
     let mut quad = |p: [Vec3; 4], n: Vec3, key: u8| {
         let order = if (p[1] - p[0]).cross(p[2] - p[0]).dot(n) > 0.0 { [0, 1, 2, 0, 2, 3] } else { [0, 2, 1, 0, 3, 2] };
+        // Widening tilts faces along the taper; the default keeps the exact axis normal.
+        let g = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+        let n = if girth == 1.0 || g == Vec3::ZERO { n } else if g.dot(n) < 0.0 { -g } else { g };
         for i in order {
             vertices.push(Vertex3 { pos: p[i].to_array(), color: [1.0; 3], normal: n.to_array(), surface: [0.48, 0.42, BODY_KIND, 0.2], ao_strength: 1.0 });
             keys.push(key & 127);
@@ -94,6 +102,40 @@ fn build(family: &Family, sprite: Sprite, pixel: f32) -> Built {
         }
     }
     Built { vertices, keys, sprite, pixel, fixed, emitter }
+}
+
+/// Review-only shaft width factor at the tip, `VOXEL_REVIEW_WAND_GIRTH`, 1.0-3.0.
+fn review_girth() -> f32 {
+    static GIRTH: LazyLock<f32> = LazyLock::new(|| {
+        std::env::var("VOXEL_REVIEW_WAND_GIRTH").ok().and_then(|s| s.parse::<f32>().ok()).filter(|g| (1.0..=3.0).contains(g)).unwrap_or(1.0)
+    });
+    *GIRTH
+}
+
+/// Maps a texel corner to its widened x and the z factor at that height.
+/// Width grows from 1 at the top grip row to `girth` at the tip, about a shaft
+/// centreline interpolated between rows, so the map is continuous and faces stay closed.
+fn widening(sprite: &Sprite, girth: f32) -> impl Fn(f32, f32) -> (f32, f32) + use<> {
+    let mut centres = Vec::with_capacity(sprite.height);
+    let mut last = sprite.width as f32 * 0.5;
+    for y in 0..sprite.height as i32 {
+        let xs: Vec<i32> = (0..sprite.width as i32).filter(|&x| sprite.at(x, y) != 0).collect();
+        if !xs.is_empty() { last = xs.iter().sum::<i32>() as f32 / xs.len() as f32 + 0.5; }
+        centres.push(last);
+    }
+    let grip_top = (0..sprite.height as i32)
+        .find(|&y| (0..sprite.width as i32).any(|x| GRIP_KEYS.contains(&sprite.at(x, y))))
+        .map_or(sprite.grip_row, |y| y as f32)
+        .max(1.0);
+    move |x, y| {
+        if girth == 1.0 || centres.is_empty() { return (x, 1.0); }
+        let r = (y - 0.5).clamp(0.0, (centres.len() - 1) as f32);
+        let r0 = r as usize;
+        let c = centres[r0] + (centres[(r0 + 1).min(centres.len() - 1)] - centres[r0]) * r.fract();
+        let u = (1.0 - y / grip_top).clamp(0.0, 1.0);
+        let f = 1.0 + (girth - 1.0) * u * u * (3.0 - 2.0 * u);
+        (c + (x - c) * f, f)
+    }
 }
 
 fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -203,6 +245,18 @@ mod tests {
 
     fn all_styles() -> impl Iterator<Item = WandStyle> {
         (0..6u8).map(|head| WandStyle { head, ..WandStyle::default() })
+    }
+
+    #[test]
+    fn review_girth_keeps_the_grip_and_widens_only_the_shaft() {
+        for family in &TABLE.families {
+            let Ok(sprite) = family.sprite(TABLE.width, table::pixel_m()) else { continue };
+            let grip_y = sprite.grip_row + 0.5;
+            assert_eq!(widening(&sprite, 1.0)(3.25, 0.0), (3.25, 1.0));
+            let wide = widening(&sprite, 1.5);
+            assert_eq!(wide(5.0, grip_y).1, 1.0, "{}", family.id);
+            assert!((wide(5.0, 0.0).1 - 1.5).abs() < 1e-6, "{}", family.id);
+        }
     }
 
     #[test]
