@@ -154,3 +154,26 @@ fn cells_map_to_bricks_by_floor_division() {
     }
     assert_eq!(brick_of(IVec3::new(-1, -8, -9)), IVec3::new(-1, -1, -2));
 }
+
+#[test]
+fn overflowing_coordinates_and_gaps_are_refused_not_panics() {
+    let flush = |home: i64, rel: i64, gaps: &[u64]| {
+        let mut b = Vec::new();
+        (0..3).for_each(|_| put_i64(&mut b, home));
+        put_u64(&mut b, 1);
+        (0..3).for_each(|_| put_i64(&mut b, rel));
+        put_u64(&mut b, gaps.len() as u64);
+        for &g in gaps {
+            put_u64(&mut b, g);
+            put_u64(&mut b, 1);
+        }
+        read_flush(&b)
+    };
+    let max = i64::from(i32::MAX);
+    assert!(flush(max, 0, &[0]).is_err());
+    assert!(flush(max / 8 - 1, max, &[0]).is_err());
+    assert!(flush(i64::from(i32::MIN), -1, &[0]).is_err());
+    assert!(flush(0, 0, &[5, u64::MAX]).is_err());
+    let edge = max / 8 - 1;
+    assert_eq!(flush(edge, 0, &[511]).unwrap()[0].0, IVec3::splat(i32::MAX - 8));
+}

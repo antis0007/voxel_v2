@@ -144,11 +144,15 @@ impl CellStream {
 /// Client side: decodes one flush into absolute cells.
 pub fn read_flush(bytes: &[u8]) -> Result<Vec<(IVec3, u32)>, WireError> {
     let mut r = Reader::new(bytes);
-    let home = IVec3::new(r.i32()?, r.i32()?, r.i32()?);
+    // Brick coordinates stay where `brick * BRICK + 7` fits in i32.
+    const LIMIT: i32 = i32::MAX / BRICK - 1;
+    let fits = |c: Option<i32>| c.filter(|c| (-LIMIT..=LIMIT).contains(c)).ok_or(WireError("brick coordinate"));
+    let home = IVec3::new(fits(Some(r.i32()?))?, fits(Some(r.i32()?))?, fits(Some(r.i32()?))?);
     let bricks = r.u64()?;
     let mut out = Vec::new();
     for _ in 0..bricks {
-        let brick = home + IVec3::new(r.i32()?, r.i32()?, r.i32()?);
+        let (x, y, z) = (r.i32()?, r.i32()?, r.i32()?);
+        let brick = IVec3::new(fits(home.x.checked_add(x))?, fits(home.y.checked_add(y))?, fits(home.z.checked_add(z))?);
         let count = r.u64()?;
         if count > BRICK_CELLS as u64 {
             return Err(WireError("brick cell count"));
@@ -159,7 +163,7 @@ pub fn read_flush(bytes: &[u8]) -> Result<Vec<(IVec3, u32)>, WireError> {
             if n > 0 && gap == 0 {
                 return Err(WireError("repeated cell"));
             }
-            index += gap;
+            index = index.checked_add(gap).ok_or(WireError("cell index"))?;
             let index = u16::try_from(index).ok().filter(|&i| usize::from(i) < BRICK_CELLS).ok_or(WireError("cell index"))?;
             out.push((cell_at(brick, index), r.u32()?));
         }
