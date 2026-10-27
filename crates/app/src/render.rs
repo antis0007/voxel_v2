@@ -36,6 +36,7 @@ mod directional_facet_diffuse_contract;
 mod axis_unroll_contract;
 mod indirect;
 mod postprocess;
+mod viewmodel_texture;
 pub use indirect::{
     enabled as indirect_lighting_enabled, set_enabled as set_indirect_lighting_enabled,
 };
@@ -2086,6 +2087,15 @@ impl GpuPendingInit {
                                 min_binding_size: None,
                             },
                             count: None,
+                        }, wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
                         }],
                     });
 
@@ -2104,12 +2114,16 @@ impl GpuPendingInit {
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     });
 
+                let kit_atlas = viewmodel_texture::atlas(device, &bootstrap.queue);
                 let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("lighting bind group"),
                     layout: &lighting_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: lighting_buffer.as_entire_binding(),
+                    }, wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&kit_atlas),
                     }],
                 });
 

@@ -51,6 +51,7 @@ pub fn gameplay(
             actions.cycle,
             actions.melee,
         );
+    crate::player::viewmodel::tick(player, world, input, STEP_SECONDS);
     input.cast_pressed = false;
     input.cycle_spell = false;
     input.place_pressed = false;

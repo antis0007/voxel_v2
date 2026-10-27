@@ -1,6 +1,8 @@
 use glam::{DVec3, IVec3, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
+pub mod viewmodel;
+
 pub const CAST_SPELL_KEY: KeyCode = KeyCode::KeyR;
 pub const NEXT_SPELL_KEY: KeyCode = KeyCode::KeyT;
 
@@ -47,6 +49,7 @@ pub struct Input {
     pub ctrl_down: bool,
     pub pick_block: bool,
     pub interact: bool,
+    pub inspect_equipment: bool,
     pub cast_spell: bool,
     /// Retain a quick press/release until gameplay consumes the input frame.
     pub cast_pressed: bool,
@@ -88,6 +91,7 @@ impl Input {
                 self.cast_pressed |= pressed && !self.cast_spell;
                 self.cast_spell = pressed;
             }
+            KeyCode::KeyI => self.inspect_equipment = pressed,
             _ => {}
         }
     }
@@ -130,6 +134,7 @@ pub struct Player {
     pub water_exit: bool,
     jump_buffer: f32,
     coyote_time: f32,
+    pub viewmodel: viewmodel::State,
 }
 
 impl Player {
@@ -159,6 +164,7 @@ impl Player {
             water_exit: false,
             jump_buffer: 0.0,
             coyote_time: 0.0,
+            viewmodel: viewmodel::State::default(),
         }
     }
 

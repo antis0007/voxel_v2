@@ -16,7 +16,8 @@ engine_chip = { path = "../chip" }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 env_logger = "0.11"
-glam = "0.32.0"
+glam = { version = "0.32.0", features = ["serde"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
 pollster = "0.4.0"
 wgpu = "27.0.1"
 egui = "0.33.3"

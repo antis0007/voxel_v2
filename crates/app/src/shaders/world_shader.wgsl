@@ -14,6 +14,8 @@
 
 // World shading keeps terrain shadowing and the shared cloud-shadow product in one
 // combined group so the renderer stays within WGPU's four-bind-group limit.
+@group(1) @binding(1) var held_kit_atlas: texture_2d<f32>;
+
 struct VsIn {
     @location(0) pos         : vec3<f32>,
     @location(1) color       : vec3<f32>,
@@ -474,6 +476,17 @@ fn vs_main(in: VsIn) -> VsOut {
     // each other, but they now win the depth test against anything beyond a few
     // centimetres of the lens.
     if camera_relative {
+        // Fixed 72-degree vertical viewmodel projection, independent of sprint
+        // FOV. Keep aspect and world camera roll; depth remains monotonic.
+        let forward=terrain_safe_unit3(cam.camera_forward.xyz, vec3<f32>(0.0,0.0,-1.0));
+        let right=terrain_safe_unit3(cam.ray_right.xyz, vec3<f32>(1.0,0.0,0.0));
+        let up=terrain_safe_unit3(cam.ray_up.xyz, vec3<f32>(0.0,1.0,0.0));
+        let aspect=length(cam.ray_right.xyz)/max(length(cam.ray_up.xyz),0.001);
+        let depth=max(dot(vertex_relative,forward),0.03);
+        let focal=1.376382;
+        out.pos.x=dot(vertex_relative,right)*focal/aspect;
+        out.pos.y=dot(vertex_relative,up)*focal;
+        out.pos.w=depth;
         out.pos.z += (out.pos.w - out.pos.z) * 0.5;
     }
     // Decode BEFORE interpolation, so gradients and biome averages are linear.
@@ -2312,7 +2325,28 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Authored rigid bodies share the vertex-colour/UV path, with their own finish.
     let cut_crystal = kind == 56 || kind == 57 || kind == 58;
     let enemy_metal = kind == 59 || kind == 60;
-    let rigid_material = authored_model || cut_crystal || enemy_metal;
+    let authored_kit = is_viewmodel && (kind == 54 || kind == 55);
+    // UV.x >= 2 identifies the authored atlas without changing the vertex ABI.
+    // textureLoad preserves integer clusters and performs sRGB-to-linear decoding.
+    let pixel_kit = authored_kit && in.model_uv.x >= 2.0;
+    if pixel_kit {
+        let uv = in.model_uv - vec2<f32>(2.0, 0.0);
+        let dimensions = vec2<i32>(textureDimensions(held_kit_atlas));
+        let texel = clamp(vec2<i32>(floor(uv * vec2<f32>(dimensions))), vec2<i32>(0), dimensions - vec2<i32>(1));
+        let paint = textureLoad(held_kit_atlas, texel, 0).rgb;
+        if kind == 55 && in.surface.w > 0.5 {
+            // The mineral retains its authored colour at rest. Only its stored
+            // energy takes the installed spell's hue during a cast.
+            let energy = clamp((in.surface.w - 0.60) / 0.35, 0.0, 1.0);
+            let value = dot(paint, vec3<f32>(0.2126, 0.7152, 0.0722));
+            albedo = mix(paint, in.base_color * value * 1.8, energy);
+        } else {
+            albedo *= paint;
+        }
+    }
+    let kit_metal = authored_kit && kind == 55 && in.surface.w > 0.3 && in.surface.w < 0.5;
+    let kit_glass = authored_kit && kind == 55 && in.surface.w > 0.5;
+    let rigid_material = authored_model || cut_crystal || enemy_metal || authored_kit;
     // Orbital rigid parts: baked local UVs; w selects ceramic/alloy/radiator.
     let orbital_part = kind == 62 || kind == 63;
     let footprint = fp_m / scale;
@@ -2337,6 +2371,16 @@ fn fs_main(in: VsOut) -> WorldOutput {
         roughness = 0.96;
         reflectance = 0.0;
     }
+    // Authored surfaces carry their own finish; the sleeve remains dry cloth.
+    if authored_kit && kind == 55 {
+        roughness = select(0.86, 0.52, kit_metal);
+        roughness = select(roughness, 0.24, kit_glass);
+        reflectance = select(0.16, 0.38, kit_metal || kit_glass);
+    }
+    if authored_kit && kind == 54 {
+        roughness=select(0.88,0.96,in.surface.w > 0.1);
+        reflectance=0.16;
+    }
     if kind == 40 {
         // Glow particles use surface.y as a dissolve threshold, not as a
         // specular gain. Keep their shading emissive and non-metallic.
@@ -2351,6 +2395,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
             && terrain_has_resident_metadata(in.ao_strength));
     if kind == 8 && in.surface.w >= 8.0 && terrain_has_resident_metadata(in.ao_strength) {
         sky_access = in.water_optics.y;
+    }
+    if authored_kit && in.ao_strength >= 2.0 {
+        sky_access=clamp(in.ao_strength-2.0,0.006,1.0);
     }
 
     let geometric_normal = terrain_safe_unit3(in.normal, vec3<f32>(0.0, 1.0, 0.0));
@@ -2432,6 +2479,20 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // their finished colour in the vertex. Painting them with the turf
         // pipeline gave blades the soil/grass-side bank colour.
         detail_color = albedo;
+        if authored_kit && !pixel_kit {
+            // Brush marks follow the authored part, including bent finger joints.
+            // Low contrast keeps painted detail subordinate to the sculpted form.
+            let uv = (floor(in.model_uv / 0.008)+vec2<f32>(0.5))*0.008;
+            let fade = surface_detail_weight(model_fp * 6.0);
+            let brush = surface_noise(uv * vec2<f32>(135.0, 18.0)) - 0.5;
+            if kind == 55 && in.surface.w < 0.05 {
+                let grain = sin(uv.x * 710.0 + sin(uv.y * 36.0) * 1.7);
+                detail_color *= 1.0 + (brush * 0.10 + grain * 0.025) * fade;
+            } else if kind == 55 && in.surface.w < 0.15 {
+                let seam = 1.0 - smoothstep(0.05, 0.16, abs(fract(uv.y * 60.0 + uv.x * 10.0) - 0.5));
+                detail_color *= 1.0 - seam * 0.12 * fade;
+            }
+        }
         if kind == 57 || kind == 58 || enemy_metal {
             let cell = floor(in.model_uv * PIXEL_RES);
             let h = surface_hash(cell);
@@ -3053,7 +3114,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     var emissive = animated_emission;
     // Keep the authored body albedo. Only the moving ribbons emit, in the
     // selected spell's colour carried by the wand mesh, never a universal hue.
-    if kind == 55 || kind == 22 || kind == 51 {
+    if (kind == 55 && !authored_kit) || kind == 22 || kind == 51 {
         let magic_uv = enchantment_face_uv(pattern_position * scale, pattern_normal);
         if kind == 55 {
             let magic_bands = enchantment_bands(magic_uv, fp_m, light.torch_meta.y);
@@ -3072,6 +3133,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
             let ribbon = enchantment_primary(magic_uv, fp_m, light.torch_meta.y);
             emissive += vec3<f32>(0.14, 0.07, 0.25) * (ribbon * 0.28 + resonance * 0.10);
         }
+    }
+    if pixel_kit && kit_glass {
+        // The selected spell drives colour; release energy lights only the core.
+        // The authored pixel clusters stay fixed through the cast and camera motion.
+        let release_energy = clamp((in.surface.w - 0.60) / 0.35, 0.0, 1.0);
+        emissive += in.base_color * release_energy * (0.6 + albedo * 1.8);
+    } else if authored_kit && kind == 55 && in.surface.w > 0.7 {
+        emissive += albedo * 0.16;
     }
     if kind == 42 {
         // HDR so bloom carries the core; the edge stays a dim red so flame
@@ -3264,14 +3333,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
         // F0 suppresses diffuse above, so this response is not layered on a
         // full-strength diffuse reflector. Screen-space or probe GI stays external.
         lit += max(environment, vec3<f32>(0.0)) * environment_fresnel
-            * select(sky_access, 0.0, is_viewmodel) * cavity * mix(0.35, 1.0, metallic);
+            * select(sky_access, select(0.0, 0.20 * sky_access, authored_kit), is_viewmodel)
+            * cavity * mix(0.35, 1.0, metallic);
         lit += direct_specular;
     }
 
     // A small neutral first-person fill keeps the hand and sleeve readable in
     // deep caves without turning them into shiny world objects. It is applied
     // to every camera-relative part, including a metal tool head and its haft.
-    if is_viewmodel {
+    if is_viewmodel && !authored_kit {
         lit += albedo * vec3<f32>(0.075, 0.078, 0.082)
             * (0.55 + 0.45 * hemi);
     }

@@ -13,6 +13,11 @@ use glam::{IVec3, Quat, Vec3};
 
 mod wand;
 pub(crate) mod wand_kit;
+pub(crate) mod wand_sprite;
+mod wayfarer;
+mod wand_pose;
+#[cfg(test)]
+mod wand_checks;
 mod hart;
 mod orbital;
 pub use hart::HartPose;
@@ -1912,36 +1917,36 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
     // The held wand: styled from the player's atelier choices, idle in the hand
     // and drawn forward when a cast is under way. The tool takes the hand on a swing.
-    if world.adventure.wand > 0 && world.adventure.swing() <= 0.0 {
+    if (world.adventure.wand > 0 || player.viewmodel.equip > 0.01)
+        && world.adventure.swing() <= 0.0 {
         let adv = &world.adventure;
-        let spell = adv.loadout.slot(adv.loadout.cursor);
+        let spell = if adv.casting() { adv.last_cast } else { adv.loadout.slot(adv.loadout.cursor) };
+        let held_seed=if adv.wand>0 { adv.loadout.seed } else { player.viewmodel.seed };
         wand::draw(
             &mut mesh,
-            crate::world::adventure::wand_items::style(adv.loadout.seed, crate::wand_style::current()),
+            crate::world::adventure::wand_items::style(held_seed, crate::wand_style::current()),
             &wand::WandView {
                 eye,
                 forward,
                 right,
                 up,
-                yaw: player.yaw,
-                pitch: player.pitch,
                 time: adv.time,
+                boost: 0.0,
+                motion: player.viewmodel,
                 cast: if adv.casting() {
                     adv.cast_motion().clamp(0.0, 1.0)
                 } else {
                     0.0
                 },
                 spell: crate::world::adventure::spell_color(spell),
-                last_cast: adv.last_cast,
-                tier: adv.wand,
-                mana: (adv.mana / adv.max_mana().max(1.0)).clamp(0.0, 1.0),
-                deck: adv.deck_view(),
-                cursor: adv.loadout.cursor,
-                seed: adv.loadout.seed,
             },
         );
     }
     tag_camera_relative(&mut mesh.vertices[viewmodel_mark..]);
+    for vertex in &mut mesh.vertices[viewmodel_mark..] {
+        let kind=vertex.surface[2]-CAMERA_RELATIVE_FLAG;
+        if kind==54.0 || kind==55.0 { vertex.ao_strength=2.0+player.viewmodel.sky; }
+    }
     mesh.vertices
 }
 
@@ -1959,7 +1964,7 @@ pub fn wand_tip_light(
     let forward = player.forward_dir();
     let right = forward.cross(Vec3::Y).normalize_or_zero();
     let up = right.cross(forward).normalize_or_zero();
-    let spell = adv.loadout.slot(adv.loadout.cursor);
+    let spell = if adv.casting() { adv.last_cast } else { adv.loadout.slot(adv.loadout.cursor) };
     Some(wand::tip_light(
         crate::world::adventure::wand_items::style(adv.loadout.seed, crate::wand_style::current()),
         &wand::WandView {
@@ -1967,21 +1972,15 @@ pub fn wand_tip_light(
             forward,
             right,
             up,
-            yaw: player.yaw,
-            pitch: player.pitch,
             time: adv.time,
+            boost: 0.0,
+            motion: player.viewmodel,
             cast: if adv.casting() {
                 adv.cast_motion().clamp(0.0, 1.0)
             } else {
                 0.0
             },
             spell: crate::world::adventure::spell_color(spell),
-            last_cast: adv.last_cast,
-            tier: adv.wand,
-            mana: (adv.mana / adv.max_mana().max(1.0)).clamp(0.0, 1.0),
-            deck: Vec::new(),
-            cursor: 0,
-            seed: adv.loadout.seed,
         },
     ))
 }
