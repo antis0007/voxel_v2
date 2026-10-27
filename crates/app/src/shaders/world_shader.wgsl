@@ -3530,7 +3530,12 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let veil_toward_sun = saturate1(dot(safe_normalize2(view_dir.xz, sun_az), sun_az) * 0.5 + 0.5);
     let veil_sky = max(mix(antisolar_horizon, solar_horizon, veil_toward_sun), vec3<f32>(0.0));
     let veil = (1.0 - exp(-max(dist - 80.0, 0.0) / 2400.0)) * 0.78 * (1.0 - cave_amount);
-    lit = mix(lit, veil_sky, veil);
+    // Take the horizon's hue at the surface's own brightness, and only part of
+    // the horizon's brightness. A plain mix toward a low sun's horizon gave lit
+    // and shaded faces one value, so every far range read as the same beige.
+    let veil_luma = max(dot(veil_sky, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
+    let veil_hue = veil_sky * (max(dot(lit, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0) / veil_luma);
+    lit = mix(mix(lit, veil_hue, veil * 0.55), veil_sky, veil * 0.15);
     let total_fog_t = 1.0 - atmosphere_transmittance * cloud_transmittance * (1.0 - veil);
 
     if uw_active() {

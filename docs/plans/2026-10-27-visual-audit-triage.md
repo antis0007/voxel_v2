@@ -38,17 +38,34 @@ Evidence: `target/reviews/visual-audit-20261027/`.
 | 6 Shadows | No unexplained marks at this pose | `terrain-shadow`: cascades clean near; far ranges shade each other via the height-field march. |
 | 5, 7-13 Trees, sky, elevator, water, viewmodel, HUD, pixel identity, places | Art direction | Owner decisions. Known constraints: machine float-greeble look rejected, authored voxel assets on the fine sub-grid, wand art from `assets/wands.ron`, HUD text under `UI_RULES.md`. |
 
+## Veil split (item 3, landed)
+
+The veil now pulls hue toward the horizon at the surface's own brightness (weight
+`0.55 * veil`) and brightness toward the horizon at `0.15 * veil`; the distance curve
+is unchanged. Same base (304b9fe5), generator 53, pose above; regions are 1600x900
+pixel boxes defined in `veil_metrics.py` (next to the captures, with the
+`audit-views.ps1` runner) (cone = centre tan range, rock separation =
+brightness-normalised colour distance between the left grey range and the cone,
+forest = far forest band right of centre).
+
+| Variant | Golden cone luma | Golden rock separation | Noon far-forest saturation |
+|---|---|---|---|
+| veil off | 121 | 0.212 | 0.388 |
+| veil 0.78 (2d5532fa) | 192 | 0.052 | 0.319 |
+| hue 1.0, brightness 0.5 | 176 | 0.069 | 0.327 |
+| hue 0.55, brightness 0.25 | 154 | 0.103 | 0.353 |
+| hue 0.55, brightness 0.15 (landed) | 142 | 0.123 | 0.360 |
+
+Captures: `ab53-{golden,noon}-{veil-off,veil-on,split50,h55b25,h55b15}/none/`.
+The landed variant keeps about half of 2d5532fa's noon desaturation of far forest.
+The veil still feeds `total_fog_t` at full weight; reflection visibility is unchanged.
+Merging it into the M5 fog consolidation (`2026-10-26-axiom-brief-reality-check.md`,
+nine fog paths) remains open.
+
 ## Recommendations
 
-1. Veil (item 3): keep a distance cue but stop pulling sunward terrain toward one
-   saturated colour. Candidates, each to be A/B captured at noon and golden hour
-   from the pose above: target the AP sky colour instead of `solar_horizon`; scale
-   the weight down as the sun lowers toward the view azimuth; or fold the veil into
-   the M5 fog consolidation (`2026-10-26-axiom-brief-reality-check.md`, nine fog paths).
-   `world_shader.wgsl` currently has a peer's uncommitted edits; coordinate before
-   touching it.
-2. Mountains (item 2): grayscale `clay` acceptance first. Geometry work splits into a
+1. Mountains (item 2): grayscale `clay` acceptance first. Geometry work splits into a
    worldgen gate (ridge/valley structure) and backdrop resolution near peaks (lattice
    refinement already targets 6-24 km ranges, `render/horizon/refinement.rs`).
-3. Holes (item 1): rerun the nine views at the owner's screenshot pose; the
+2. Holes (item 1): fafbee28 seals coarse LOD seams against sky holes; rerun the nine views at the owner's screenshot pose; the
    `--benchmark-horizon-sweep` route covers LOD transitions.
