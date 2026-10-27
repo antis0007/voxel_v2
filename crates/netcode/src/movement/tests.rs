@@ -158,3 +158,11 @@ fn a_withheld_ack_cannot_make_one_correction_sweep_without_limit() {
     let after = v.accepted().y;
     assert!(after.is_finite() && after >= before - 16.0 - 1e-3, "{before} -> {after}");
 }
+
+#[test]
+fn repeated_float_corrections_pull_a_hover_down_at_gravity() {
+    let mut v = Validator::new(LIMITS, Vec3::new(0.0, 1_000.0, 0.0));
+    walk(&mut v, |_| Vec3::new(0.0, 1_000.0, 0.0), 3.0);
+    // Free fall after the hang: 0.5 * 20 * 2.4^2 = 57.6 voxels.
+    assert!(v.accepted().y < 1_000.0 - 50.0, "{}", v.accepted());
+}

@@ -168,7 +168,8 @@ impl Validator {
             }
             self.accepted = next;
         }
-        self.air.restart(self.accepted.y);
+        // The arc keeps its clock: restarting it would grant a fresh hang after every
+        // correction, a slow fall. Later corrections keep pulling along the curve.
     }
 
     /// Checks one reported step of `dt` seconds. `ack` is the newest correction
@@ -215,8 +216,10 @@ impl Validator {
         };
         if let Some(reason) = reason {
             self.last_reason = Some(reason);
-            if reason == Reason::Float {
-                // Correcting to the last mid-air pose would let a hover hold its height.
+            // Any refusal of an airborne body applies gravity to the accepted pose;
+            // otherwise a client refused for rising would keep its server body aloft.
+            let held = self.grounded(world, self.accepted) || self.touching(world, self.accepted);
+            if !self.flying_allowed && !held && (reason == Reason::Float || self.accepted.y > ceiling) {
                 self.drop_toward(world, ceiling.min(self.accepted.y) - air::SLACK);
             }
             return self.correct();

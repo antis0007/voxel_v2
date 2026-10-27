@@ -12,7 +12,7 @@ pub(super) const MAX_DROP: f32 = 16.0;
 pub(super) struct Air {
     /// Highest feet height in the current arc.
     peak: f32,
-    /// Seconds since the arc started: support, wall contact, impulse or correction.
+    /// Seconds since the arc started: support, wall contact or impulse.
     since: f32,
     /// Highest feet height since the body last stood on support.
     top: f32,
@@ -35,7 +35,7 @@ impl Air {
         self.peak - required_drop(self.since, gravity, terminal, hang) + SLACK
     }
 
-    /// Starts a new arc at `y`: wall contact, an upward impulse or a correction.
+    /// Starts a new arc at `y`: support, wall contact or an upward impulse.
     pub(super) fn restart(&mut self, y: f32) {
         self.peak = y;
         self.since = 0.0;
