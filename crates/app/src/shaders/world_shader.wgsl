@@ -2991,7 +2991,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Direct/ambient captures showed the clear-day fill reproducing almost
     // the whole scene by itself. Keep overcast and twilight illumination, but
     // let a visible sun establish the primary value structure.
-    let sky_fill_strength = mix(mix(0.14, 0.95, cloudiness * daylight), 0.66, twilight_fill);
+    // 0.14 left canopy shade and trunks near black against the reference
+    // paintings, whose shadows stay lifted and sky-blue on clear days.
+    let sky_fill_strength = mix(mix(0.24, 0.95, cloudiness * daylight), 0.66, twilight_fill);
     let clear_day = daylight * (1.0 - twilight_fill) * (1.0 - cloudiness);
 
     // A low sun still leaves a broad cool hemisphere above shaded ground.
@@ -3020,7 +3022,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // voxel ledges, and rock crevices have rich three-dimensional depth.
     let raw_ao = terrain_vertex_ao(in.ao_strength);
     let shaped_ao   = pow(raw_ao, 1.35);
-    let cavity      = mix(mix(0.32, 1.0, shaped_ao), 1.0, hemi * 0.08);
+    let cavity      = mix(mix(0.42, 1.0, shaped_ao), 1.0, hemi * 0.08);
     let ambient     = (
         light.ambient_exposure.rgb * mix(vec3<f32>(0.38), vec3<f32>(1.0), hemi * hemi)
             * mix(1.0, 0.55, clear_day)
@@ -3210,7 +3212,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
         1.0, kind == 33 || kind == 38 || (is_natural && in.terrain_weights.w > 0.5)), 0.0, is_backdrop);
     let sun_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(1.10, 1.025, 0.76), botanical)
         * mix(vec3<f32>(1.0), vec3<f32>(1.03, 1.0, 0.95), powder);
-    let fill_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(0.77, 0.91, 1.07), botanical)
+    // Blue-lifted green read as teal on sky-lit canopy sides and far proxies;
+    // the references keep shaded leaves a deep, slightly cool green.
+    let fill_albedo = albedo * mix(vec3<f32>(1.0), vec3<f32>(0.86, 0.99, 0.90), botanical)
         * mix(vec3<f32>(1.0), vec3<f32>(0.90, 0.89, 1.12), powder);
     var lit = albedo * (
         diffuse_energy * cave_fill + (torch_diffuse + torch_fill) * fire_exposure)
@@ -3450,7 +3454,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Sky in-scatter should not flood a roofed tunnel with daylight haze.
     atmosphere_scatter *= mix(1.0, 0.28, cave_amount);
     lit = lit * atmosphere_transmittance + atmosphere_scatter;
-    let total_fog_t = 1.0 - atmosphere_transmittance * cloud_transmittance;
+    // Earth-scale Rayleigh barely tints land inside the 6 km coverage, so far
+    // forest stayed saturated up to the streaming edge. Fade it toward the
+    // horizon sky along the view azimuth, as the reference backdrops do.
+    let veil_toward_sun = saturate1(dot(safe_normalize2(view_dir.xz, sun_az), sun_az) * 0.5 + 0.5);
+    let veil_sky = max(mix(antisolar_horizon, solar_horizon, veil_toward_sun), vec3<f32>(0.0));
+    let veil = (1.0 - exp(-max(dist - 80.0, 0.0) / 2400.0)) * 0.78 * (1.0 - cave_amount);
+    lit = mix(lit, veil_sky, veil);
+    let total_fog_t = 1.0 - atmosphere_transmittance * cloud_transmittance * (1.0 - veil);
 
     if uw_active() {
         if kind == 8 && world_pos.y > cam.camera_pos.y {

@@ -1347,7 +1347,7 @@
             kind: Opaque,
             occludes_light: true,
             color: (
-                base: (0.2, 0.34, 0.29),
+                base: (0.17, 0.32, 0.2),
                 base_tint: 1.0,
                 parity_tint: 0.0,
                 vertical_tint: 0.0,
