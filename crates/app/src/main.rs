@@ -3465,7 +3465,17 @@ fn main() -> Result<()> {
                                             } else if let Some((cell,_))=hit {
                                             if (cell.as_vec3()-eye).length()*world.voxel_scale.meters()<=6.0 {
                                                 let target = world.get(cell);
-                                                world::expedition::interact(world,cell,player.pos,&mut dirty_blocks,&mut dirty_chunks);
+                                                if target == BlockId::Bed {
+                                                    let feet = (cell.as_vec3() + Vec3::new(0.5, 0.0, 0.5)) * world.voxel_scale.meters();
+                                                    let message = match world::bed::sleep(&mut day_night, &mut world.adventure.respawn_point, feet) {
+                                                        Ok(true) => "Slept through the night. Morning came the next day.",
+                                                        Ok(false) => "Slept until dawn.",
+                                                        Err(_) => "Beds take sleepers after sunset.",
+                                                    };
+                                                    world.expedition.say(message);
+                                                } else {
+                                                    world::expedition::interact(world,cell,player.pos,&mut dirty_blocks,&mut dirty_chunks);
+                                                }
                                                 let inventory_page = if world::factory::Kind::from_block(target).is_some() {
                                                     Some(3u32)
                                                 } else if target == BlockId::Workbench { Some(0u32) } else { None };

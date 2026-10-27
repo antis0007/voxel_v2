@@ -25,6 +25,18 @@
             description: "2×2 plank bench. Place and press F to assemble machines and bores.",
         ),
         (
+            name: "Bed",
+            output: (
+                item: Block(Bed),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Planks), 3),
+                (Resource(4), 3),
+            ],
+            description: "Sleep through the night. Waking sets the respawn point here.",
+        ),
+        (
             name: "Torch (Coal)",
             output: (
                 item: Block(Torch),

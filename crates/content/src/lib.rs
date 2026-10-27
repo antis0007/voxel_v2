@@ -306,6 +306,7 @@ block_ids! {
     Bookcase,
     CarvedStone,
     GlazedTiles,
+    Bed,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -426,7 +427,7 @@ impl BlockId {
             Self::Water => 8,
             Self::Ice => 9,
             Self::Lava => 10,
-            Self::Planks => 11,
+            Self::Planks | Self::Bed => 11,
             Self::Bookcase => 45,
             Self::CarvedStone | Self::GlazedTiles => 12,
             Self::StoneBricks => 12,

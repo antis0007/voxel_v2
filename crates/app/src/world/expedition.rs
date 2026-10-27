@@ -657,6 +657,7 @@ pub fn hint(block: B, tier: u32) -> &'static str {
     match block {
         B::SalvageCrate | B::SurveyCache | B::CultivatorCache => "F  Open salvage cache",
         B::Workbench => "F  Use workbench   ·   E  Craft",
+        B::Bed => "F  Sleep until dawn",
         B::Smelter => "F  Smelt ore   ·   Requires coal",
         B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => "F  Harvest biomass",
         B::GlowCap => "F  Harvest lumen fibre",
