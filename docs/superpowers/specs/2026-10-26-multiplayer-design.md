@@ -65,7 +65,9 @@ from another session. They provide:
 - Guests join mid-session and are playable within 2 s of the nearest 3x3 chunk
   columns arriving.
 - Everything gameplay can change is server-authoritative: terrain, cellular cells,
-  factory, chips, inventory, enemies, spells, drops, calendar.
+  factory, chips, inventory, enemies, spells, drops, calendar. Two things are
+  owned by the client and validated by the server: its own body pose (section 4)
+  and which enemy its shot hit (section 5).
 - Local movement, block edits, casts and inventory clicks respond on the frame
   they happen (predicted), with server correction.
 - Remote players and enemies move smoothly at 30 Hz snapshots under 0-150 ms RTT,
@@ -113,9 +115,9 @@ delete the swap. `BTreeMap` keeps iteration order stable.
 - Server simulation stays at 120 Hz (`STEP_SECONDS`). Factory timers may run at
   a divisor, as now.
 - Snapshots go out at 30 Hz (server setting, 20-60).
-- Clients send inputs every 120 Hz step, batched into one packet per 30 Hz
-  window, each packet repeating the last 8 unacknowledged inputs so a lost packet
-  costs nothing.
+- Clients send their pose and action inputs (cast, place, mine, interact, slot)
+  every 120 Hz step, batched into one packet per 30 Hz window. Each packet repeats
+  the last 8 unacknowledged steps, so a lost packet costs nothing.
 - Clients estimate server tick from ping samples and keep an adaptive input lead
   (2-6 ticks) so inputs arrive just before the server needs them. Late inputs are
   reused from the last known input, never rewound.
@@ -145,11 +147,21 @@ port on the shared VPS.
 
 ### 4. Player movement
 
-- **Local player:** the client runs `player::update_player` on its replica world
-  each step and records `(input seq, input, resulting pose)`. Each snapshot
-  carries the server's last processed seq and pose. The client resets to that
-  pose, replays later inputs, and blends any remaining visual error over 100 ms.
-  Float results need not match bit for bit. Errors under 1/64 voxel are ignored.
+- **Local player: owner movement, server validation.** The client runs
+  `player::update_player` on its replica world and sends its resulting pose and
+  movement state each step, batched per net tick. The server does not re-simulate
+  the body. It checks each pose against the previous accepted one: displacement
+  within the movement state's speed bound plus slack, no body overlap with solid
+  published cells, flight only with permission, and no fall-damage skips. A
+  failed check returns a correction (pose plus correction id); the client snaps
+  to it and ignores its own poses until it echoes that id. Minecraft and Mycopunk
+  both work this way. It gives zero-latency movement with no rubber-banding when a
+  replica's collision lags an edit, which input replay cannot avoid in an
+  editable voxel world. Prediction with replay (sending inputs, server
+  re-simulates) remains the fallback if validation proves too loose for PvP
+  servers, and is a server setting, not the default.
+- **Server-moved players** (knockback, teleport, mounts, conveyors) go through the
+  same correction message, so the client never fights the server over the body.
 - **Remote players and enemies:** an interpolation buffer 100 ms behind the newest
   snapshot, widened adaptively by measured jitter (up to 200 ms). On starvation,
   extrapolate one snapshot interval, then hold.
@@ -168,16 +180,31 @@ network id. Per client the server keeps:
   far ones update less often within the byte budget;
 - a **baseline** per entity: the last state the client acknowledged. Snapshots
   send only changed fields against it, with a field bitmask.
+- **dead reckoning** between updates: each update carries velocity, and clients
+  advance low-priority entities by it until the next one arrives, so a far entity
+  updated every fourth snapshot still moves smoothly.
+
+Only the root pose and a few state bytes are replicated. Leg IK, bob, sway,
+viewmodel motion and particles are derived on each client from that state.
 
 Spell casts: the caster's client spawns the projectile immediately with a local
 id. The server spawns the authoritative one from the cast input and sends the
 mapping, and the client swaps its local projectile for the server's. Other clients
 receive spawn events (spell id, origin, direction, server tick, seed) and simulate
-the flight locally for visuals. Hits are decided only on the server.
+the flight locally for visuals.
 
-Lag compensation: when a player's attack reaches the server, it tests hits against
-enemy positions rewound to the tick that player was viewing (bounded to 200 ms).
-PvP follows the owner decision below.
+Hits on enemies are **claimed by the shooter's client**: it reports (entity id,
+spell or weapon, hit point, the tick it was viewing). The client shows the hit and
+health change at once. The server accepts the claim after plausibility checks
+(target alive and within interest, distance within the weapon's range plus the
+target's movement since that tick, fire-rate and mana spent, line of sight
+against published cells) and computes damage itself from the spell table. The
+client never sends an amount. A refused claim restores the target's health on
+that client. This is what co-op shooters do for PvE, and it needs no rewind.
+Enemy hits on players, explosions and terrain damage are decided on the server.
+
+Lag compensation (rewinding targets to the attacker's view tick, bounded to
+200 ms) is built only for PvP, which is off by default.
 
 ### 6. Terrain and chunks
 
@@ -297,12 +324,17 @@ first, then the split that every later step builds on.
 | M0 | `Transport` trait, loopback, `NetSim`, byte counters, in-process scenario runner, bandwidth bench | the current build's numbers are recorded as the baseline |
 | M1 | server/client split, in-game host via loopback, `world.players`, multi-anchor simulation, chunk tickets, CI build without the renderer feature | host and guest share one code path; a far guest sees live water |
 | M2 | channels and scheduler, entity interest, priority, delta baselines, quantisation, interpolation buffer; retire the 10 Hz gameplay image except at join | walking budget met at 2% loss, 100 ms RTT |
-| M3 | local movement prediction and reconciliation, predicted edits, predicted inventory clicks | zero-frame local response; pose error bound holds in the netsim scenario |
+| M3 | owner movement with server validation and corrections, predicted edits, predicted inventory clicks | zero-frame local response; a scripted speed-hack and wall-clip are corrected in the netsim scenario; no correction fires on an honest route at 2% loss |
 | M4 | chunk streaming order, pristine hashes, client chunk cache, Tier A cell deltas | rejoin sends only changed chunks; dam-break bench within budget |
-| M5 | container sessions, machine components, item routes, enemies and spells with lag compensation, grave markers and respawn, claims, sleep vote, per-player save data, save bump, open to LAN | a survival session with shared factory and combat plays end to end |
+| M5 | container sessions, machine components, item routes, enemies, spells and client-claimed hits with server checks, grave markers and respawn, claims, sleep vote, per-player save data, save bump, open to LAN | a survival session with shared factory and combat plays end to end |
 | M6 | content manifest, identity keys, chat, commands, permissions, `server.ron` | whitelist and ops work by key; rebuilt exes with equal content connect |
 | M7 | UDP relay (needs decision 5), GNS hole punching, transport fallback order; Steam Networking Sockets before a Steam launch | WAN session at 2% loss shows no stalls in the bench |
 | M8 | Tier B deterministic cellular mirrors | dam-break bandwidth drops by at least 10x against Tier A with zero unresolved mismatches |
+
+## Reference studies
+
+- `docs/research/mycopunk-netcode.md`: what a shipped co-op voxel-adjacent shooter
+  does for movement, hits, entity sync and joins, and what to avoid from it.
 
 ## Left to the builder
 
