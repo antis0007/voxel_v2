@@ -247,3 +247,25 @@ setups, not new tiers.
    thresholds, `RenderOrigin`, one RON trajectory replacing the 4 copies.
 5. **M3, M4, M5.** Not startable as written. M4 is MASTER_PLAN M1; M3 needs
    an ADR 0007 decision; M5 starts as fog consolidation.
+
+## 13. Progress (2026-10-27)
+
+Owner decisions in `docs/decisions/0036-axiom-brief-scope.md`: tests and local
+gates, this reordered plan, 4.5–5.5 mm texels, the pack text register.
+
+| Item | State | Commit |
+|---|---|---|
+| M0 clone completeness: `just deps [rev]` in `just verify`, `just deps-inventory` | done; HEAD 0 edges, working tree 75 edges in 64 commit sets | ae618c79 |
+| M0 untracked inventory | `docs/integration/untracked-inventory.md` (generated snapshot) | this commit |
+| M0 HEAD failure `water_depth_probe` | fixed: fixture pinned to generator 52 (gen 53 moved the coast) | efaa19ee |
+| M0 HEAD failure `sand_falls` | fixed: bisect names c0e4c288; all three scenarios pinned to 52 and reproduce committed hashes; `smoke` and `water_falls` had drifted too | 08e11ae3 |
+| M0 HEAD failure `repo_layout` (TRACKING.md names untracked paths) | open: TRACKING.md has uncommitted peer edits; fixed when its owner commits the named files or rewords | — |
+| M0 buildable commit sets per owner | open: owners' files; the inventory lists each set and its referrers | — |
+| M0 `engine_net` optional under `multiplayer` | open: multiplayer files are a live peer's | — |
+| M1 frame-time scenes, baseline, gate | done: `just frame-bench[-check\|-save]`, 5 scenes, contention-aware | 3cbfca6f |
+| M1 audit | `docs/perf/audit-08e11ae3.md`: shadow cascades, render submission, idle streaming | 3cbfca6f |
+| M2 text register | `UI_RULES.md` rules 12, 14, 15 and tooltip contract; CLAUDE.md lore line | 00245107, ad3b6d5b |
+| M2 texel density | recorded in decision 0036 | be6db90f |
+| M2 egui helper consolidation | open: helpers sit in panels peers are editing; needs before/after UI captures | — |
+| Meridian distance | blocked: generator 65 uncommitted | — |
+| M5 fog consolidation | open: touches `world_shader.wgsl`, which the orbital session is editing; needs A/B captures | — |
