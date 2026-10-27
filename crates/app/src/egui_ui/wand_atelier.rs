@@ -336,7 +336,7 @@ pub fn draw(ctx: &egui::Context, open: &mut bool) {
                             style = WandStyle::default();
                         }
                     });
-                    ui.small("[U] Close");
+                    ui.small(format!("[{}] Close", crate::keybinds::hint(crate::keybinds::Action::WandAtelier)));
                 });
             });
         });

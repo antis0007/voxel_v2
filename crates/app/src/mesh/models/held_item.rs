@@ -76,7 +76,7 @@ pub(crate) fn torch_flame_offset() -> Vec3 {
 }
 
 fn frame(v: &View) -> (Vec3, Quat) {
-    let walk = (v.speed / 4.0).clamp(0.0, 1.0);
+    let walk = (v.speed / 4.0).clamp(0.0, 1.0) * crate::comfort::camera_motion();
     let bob = Vec3::new(v.gait.cos() * 0.006, -(v.gait * 2.0).sin().abs() * 0.010, 0.0) * walk;
     // Placing or using pokes the item forward and down.
     let poke = v.interact.clamp(0.0, 1.0);

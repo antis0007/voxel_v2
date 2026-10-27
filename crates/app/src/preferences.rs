@@ -22,6 +22,10 @@ const CLOUDS_OFF_BIT: u32 = 8;
 const AUTO_QUALITY_OFF_BIT: u32 = 9;
 /// Bits 10-17 of the same word: render resolution in percent (0 = unset = 100).
 const RENDER_SCALE_SHIFT: u32 = 10;
+/// Bits 18-24 and 25-31: camera motion and FOV effects stored as the percent
+/// removed, so files written before the setting decode as 100%.
+const CAMERA_MOTION_CUT_SHIFT: u32 = 18;
+const FOV_EFFECTS_CUT_SHIFT: u32 = 25;
 fn path() -> PathBuf {
     storage::save_directory().join("preferences.vxp")
 }
@@ -83,6 +87,10 @@ pub struct Preferences {
     /// Menu and HUD zoom on top of the native DPI correction.
     pub ui_scale: f32,
     pub hotbar_scale: f32,
+    /// Walk bob and held-item sway, 0 to 100 percent.
+    pub camera_motion: u32,
+    /// Sprint and dash FOV kick and zoom easing, 0 to 100 percent.
+    pub fov_effects: u32,
     pub magic: crate::egui_ui::magic_style::Settings,
     pub typography: crate::egui_ui::typography::Settings,
 }
@@ -121,6 +129,8 @@ impl Default for Preferences {
             render_scale: 100,
             ui_scale: UI_SCALE_DEFAULT,
             hotbar_scale: 1.0,
+            camera_motion: 100,
+            fov_effects: 100,
             magic: Default::default(),
             typography: Default::default(),
         }
@@ -154,6 +164,8 @@ impl Preferences {
         render::set_indirect_lighting_enabled(self.indirect_lighting);
         crate::quality::set_auto_enabled(self.auto_quality);
         render::set_scene_scale_percent(self.render_scale);
+        crate::comfort::set_camera_motion_percent(self.camera_motion);
+        crate::comfort::set_fov_effects_percent(self.fov_effects);
         // The old stock setting kept full blocks for three chunks and then
         // threw the rest away at 256 m. Promote that exact preset once.
         let (view, lod, levels) = if self.view == 16 && self.lod == 3 && self.levels == 3 {
@@ -234,6 +246,8 @@ impl Preferences {
             render_scale: render::scene_scale_percent(),
             ui_scale: ui.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX),
             hotbar_scale: ui.hotbar_scale.clamp(0.7, 1.6),
+            camera_motion: crate::comfort::camera_motion_percent(),
+            fov_effects: crate::comfort::fov_effects_percent(),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
             typography: crate::egui_ui::typography::get(&ui.ctx),
         }
@@ -265,7 +279,9 @@ impl Preferences {
             self.cloud_scale
                 | u32::from(!self.clouds) << CLOUDS_OFF_BIT
                 | u32::from(!self.auto_quality) << AUTO_QUALITY_OFF_BIT
-                | self.render_scale.clamp(render::MIN_SCENE_SCALE_PERCENT, 100) << RENDER_SCALE_SHIFT,
+                | self.render_scale.clamp(render::MIN_SCENE_SCALE_PERCENT, 100) << RENDER_SCALE_SHIFT
+                | (100 - self.camera_motion.min(100)) << CAMERA_MOTION_CUT_SHIFT
+                | (100 - self.fov_effects.min(100)) << FOV_EFFECTS_CUT_SHIFT,
             self.indirect_lighting as u32,
             self.ui_scale.to_bits(),
             self.hotbar_scale.to_bits(),
@@ -360,6 +376,8 @@ impl Preferences {
                 .filter(|p| *p != 0)
                 .map_or(100, |p| p.clamp(render::MIN_SCENE_SCALE_PERCENT, 100)),
             indirect_lighting: w.get(23).is_none_or(|v| *v != 0),
+            camera_motion: 100 - w.get(22).map_or(0, |n| n >> CAMERA_MOTION_CUT_SHIFT & 0x7f).min(100),
+            fov_effects: 100 - w.get(22).map_or(0, |n| n >> FOV_EFFECTS_CUT_SHIFT & 0x7f).min(100),
             ui_scale: w
                 .get(24)
                 .map(|n| f32::from_bits(*n))
@@ -637,6 +655,28 @@ mod tests {
         let checksum = hash(&bytes[..end]).to_le_bytes();
         bytes[end..].copy_from_slice(&checksum);
         assert_eq!(Preferences::decode(&bytes).expect("decode").render_scale, 100);
+    }
+
+    #[test]
+    fn comfort_scales_round_trip_and_old_files_read_full_motion() {
+        let mut preferences = Preferences::default();
+        preferences.camera_motion = 0;
+        preferences.fov_effects = 35;
+        preferences.render_scale = 60;
+        preferences.clouds = false;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!((decoded.camera_motion, decoded.fov_effects), (0, 35));
+        assert_eq!(decoded.render_scale, 60);
+        assert!(!decoded.clouds);
+        // A file from before the setting has zero in the high bits of word 22.
+        let mut bytes = Preferences::default().bytes();
+        let word = 8 + 22 * 4;
+        bytes[word..word + 4].copy_from_slice(&(3u32 | 80 << RENDER_SCALE_SHIFT).to_le_bytes());
+        let end = bytes.len() - 8;
+        let checksum = hash(&bytes[..end]).to_le_bytes();
+        bytes[end..].copy_from_slice(&checksum);
+        let old = Preferences::decode(&bytes).expect("decode");
+        assert_eq!((old.camera_motion, old.fov_effects, old.render_scale), (100, 100, 80));
     }
 
     #[test]

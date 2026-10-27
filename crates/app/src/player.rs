@@ -3,16 +3,11 @@ use winit::keyboard::KeyCode;
 
 pub mod viewmodel;
 
-pub const CAST_SPELL_KEY: KeyCode = KeyCode::KeyR;
-pub const NEXT_SPELL_KEY: KeyCode = KeyCode::KeyT;
+use crate::keybinds::{self, Action, Binding};
 
-/// The HUD reads the same fixed bindings as input dispatch.
-pub fn spell_binding_hint() -> &'static str {
-    static HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    HINT.get_or_init(|| {
-        let label = |key: KeyCode| format!("{key:?}").trim_start_matches("Key").to_owned();
-        format!("{} Cast / {} Next", label(CAST_SPELL_KEY), label(NEXT_SPELL_KEY))
-    })
+/// The HUD reads the same bindings as input dispatch.
+pub fn spell_binding_hint() -> String {
+    format!("{} Cast / {} Next", keybinds::hint(Action::Cast), keybinds::hint(Action::NextSpell))
 }
 
 use crate::world::{
@@ -54,9 +49,14 @@ pub struct Input {
     /// Retain a quick press/release until gameplay consumes the input frame.
     pub cast_pressed: bool,
     pub cycle_spell: bool,
+    /// Hold-to-zoom; presentation only.
+    pub zoom: bool,
     shift_keys: u8,
     control_keys: u8,
     alt_keys: u8,
+    /// Bit `action * SLOTS + slot` per pressed binding, so releasing one of
+    /// two keys on an action keeps it held.
+    held: u32,
 }
 
 impl Input {
@@ -77,21 +77,63 @@ impl Input {
                 *keys &= !bit;
             }
         }
-        self.sneak = self.shift_keys != 0;
+        // Ctrl and Alt stay raw modifiers for tool clicks whatever sprint is bound to.
         self.ctrl_down = self.control_keys != 0;
-        self.sprint = self.ctrl_down;
         self.alt_down = self.alt_keys != 0;
-        match key {
-            KeyCode::KeyW => self.forward = pressed,
-            KeyCode::KeyS => self.back = pressed,
-            KeyCode::KeyA => self.left = pressed,
-            KeyCode::KeyD => self.right = pressed,
-            KeyCode::Space => self.jump = pressed,
-            CAST_SPELL_KEY => {
-                self.cast_pressed |= pressed && !self.cast_spell;
-                self.cast_spell = pressed;
+        self.binding(Binding::Key(key), pressed);
+    }
+
+    pub fn mouse(&mut self, button: winit::event::MouseButton, pressed: bool) {
+        self.binding(Binding::Mouse(button), pressed);
+    }
+
+    fn binding(&mut self, binding: Binding, pressed: bool) {
+        if let Some((action, slot)) = keybinds::lookup(binding) {
+            self.apply(action, slot, pressed);
+        }
+    }
+
+    fn action_held(&self, action: Action) -> bool {
+        let mask = ((1u32 << keybinds::SLOTS) - 1) << (action as usize * keybinds::SLOTS);
+        self.held & mask != 0
+    }
+
+    /// Applies one binding edge of an input-held action; other actions are dispatched by the window loop.
+    pub fn apply(&mut self, action: Action, slot: usize, pressed: bool) {
+        if !action.mouse_bindable() || slot >= keybinds::SLOTS {
+            return;
+        }
+        let was = self.action_held(action);
+        let bit = 1u32 << (action as usize * keybinds::SLOTS + slot);
+        if pressed {
+            self.held |= bit;
+        } else {
+            self.held &= !bit;
+        }
+        let on = self.action_held(action);
+        match action {
+            Action::Forward => self.forward = on,
+            Action::Back => self.back = on,
+            Action::Left => self.left = on,
+            Action::Right => self.right = on,
+            Action::Jump => self.jump = on,
+            Action::Sneak => self.sneak = on,
+            Action::Sprint => self.sprint = on,
+            Action::Break => {
+                self.break_pressed |= on && !self.break_block;
+                self.break_block = on;
             }
-            KeyCode::KeyI => self.inspect_equipment = pressed,
+            Action::Place => {
+                self.place_pressed |= on && !self.place_block;
+                self.place_block = on;
+            }
+            Action::Pick => self.pick_block |= on && !was,
+            Action::Cast => {
+                self.cast_pressed |= on && !self.cast_spell;
+                self.cast_spell = on;
+            }
+            Action::Inspect => self.inspect_equipment = on,
+            Action::Zoom => self.zoom = on,
             _ => {}
         }
     }
@@ -333,7 +375,10 @@ fn update_player_local(
     } else {
         0.0
     };
-    let target_walk_bob = 0.018 * stride_weight * (player.walk_phase * 2.0).sin();
+    let target_walk_bob = 0.018
+        * stride_weight
+        * (player.walk_phase * 2.0).sin()
+        * crate::comfort::camera_motion();
     player.walk_bob_meters +=
         (target_walk_bob - player.walk_bob_meters) * (1.0 - (-dt * 14.0).exp());
     let fresh_jump = input.jump && !player.jump_was_down;

@@ -553,6 +553,6 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
         .stroke(Stroke::new(1.0, EDGE))
         .inner_margin(egui::Margin::symmetric(3, 0))
         .show(ui, |ui| {
-            ui.label(RichText::new(format!("[{key}]")).size(SMALL).strong().color(PAPER));
+            ui.label(RichText::new(format!("[{}]", crate::keybinds::rebound_label(key))).size(SMALL).strong().color(PAPER));
         });
 }

@@ -86,6 +86,7 @@ pub(super) fn home(
                                         .text("Mouse sensitivity"),
                                 );
                                 ui.checkbox(&mut owner.invert_mouse, "Invert vertical look");
+                                super::controls::comfort(ui);
                                 ui.checkbox(&mut owner.show_hud, "Show the in-game HUD");
                                 super::magic_fx::motion_setting(ui);
                                 super::typography::controls(ui, &mut owner.ui_scale);
@@ -475,7 +476,11 @@ pub(super) fn journal(
     ui.add_space(12.0);
     }
     if e.lamp {
-        ui.label(format!("Lumen Lantern: {} · [L]", if e.lamp_enabled() { "On" } else { "Off" }));
+        ui.label(format!(
+            "Lumen Lantern: {} · [{}]",
+            if e.lamp_enabled() { "On" } else { "Off" },
+            crate::keybinds::hint(crate::keybinds::Action::Lamp)
+        ));
     }
     caption(ui, "WORKSHOP PREPARATION");
     if !e.objective().is_empty() {
@@ -659,8 +664,11 @@ pub(super) fn pause(
                                     .text("Mouse sensitivity"),
                             );
                             ui.checkbox(&mut owner.invert_mouse, "Invert vertical look");
+                            super::controls::comfort(ui);
                             settings::audio_settings(ui);
                             presentation::controls(ui);
+                            ui.separator();
+                            super::controls::bindings(ui);
                         }
                         PausePage::Environment => {
                             heading(

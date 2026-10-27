@@ -7,6 +7,7 @@ mod chip_fab;
 mod chip_panel;
 mod chip_report;
 mod chip_tools;
+mod controls;
 #[cfg(test)]
 mod text_rules;
 mod description_copy;
@@ -442,16 +443,17 @@ fn draw_held_tool_overlay(
     };
     let equip = pose.equip_phase.clamp(0.0, 1.0);
     let walk_t = pose.bob_time;
+    let bob_weight = pose.bob_weight * crate::comfort::camera_motion();
 
     // True 3D projection mapping
     let aspect = rect.width() / rect.height().max(1.0);
     let proj = Mat4::perspective_rh(70.0_f32.to_radians(), aspect, 0.01, 10.0);
 
     // 2. Base camera bobbing
-    let bob_x = (walk_t * 1.0).sin() * 0.006 * pose.bob_weight;
-    let bob_y = walk_t.cos() * 0.004 * pose.bob_weight;
-    let bob_pitch = walk_t.sin() * 0.002 * pose.bob_weight;
-    let bob_roll = walk_t.cos() * 0.002 * pose.bob_weight;
+    let bob_x = (walk_t * 1.0).sin() * 0.006 * bob_weight;
+    let bob_y = walk_t.cos() * 0.004 * bob_weight;
+    let bob_pitch = walk_t.sin() * 0.002 * bob_weight;
+    let bob_roll = walk_t.cos() * 0.002 * bob_weight;
 
     let base_mat = Mat4::from_translation(Vec3::new(bob_x, bob_y, 0.0))
         * Mat4::from_quat(Quat::from_euler(
@@ -1102,15 +1104,16 @@ fn draw_perf_graph(
         });
 }
 
-fn tool_shortcut_label(tool: ToolKind) -> &'static str {
-    match tool {
-        ToolKind::Hand => "Z",
-        ToolKind::Brush => "X",
-        ToolKind::BuildersWand => "C",
-        ToolKind::DestructorWand => "V",
-        ToolKind::AreaTool => "G",
-        ToolKind::ExplosiveWand => "H",
-    }
+fn tool_shortcut_label(tool: ToolKind) -> String {
+    use crate::keybinds::Action;
+    crate::keybinds::hint(match tool {
+        ToolKind::Hand => Action::ToolHand,
+        ToolKind::Brush => Action::ToolBrush,
+        ToolKind::BuildersWand => Action::ToolBuilders,
+        ToolKind::DestructorWand => Action::ToolDestructor,
+        ToolKind::AreaTool => Action::ToolArea,
+        ToolKind::ExplosiveWand => Action::ToolExplosive,
+    })
 }
 
 fn tool_scale_ui(ui: &mut egui::Ui, c: &mut CreativeState) {

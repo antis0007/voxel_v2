@@ -16,7 +16,11 @@ use winit::{
 
 use engine_audio as audio;
 mod crash_log;
+mod comfort;
 mod creative;
+mod keybinds;
+use keybinds::Action as BindAction;
+mod screenshot;
 mod egui_ui;
 use engine_core::fast_hash;
 mod fluid;
@@ -874,21 +878,6 @@ fn summarize_benchmark_telemetry(samples: &[PerfSample]) -> BenchmarkTelemetrySu
     summary
 }
 
-fn hotbar_slot_from_key(key: PhysicalKey) -> Option<usize> {
-    match key {
-        PhysicalKey::Code(KeyCode::Digit1) => Some(0),
-        PhysicalKey::Code(KeyCode::Digit2) => Some(1),
-        PhysicalKey::Code(KeyCode::Digit3) => Some(2),
-        PhysicalKey::Code(KeyCode::Digit4) => Some(3),
-        PhysicalKey::Code(KeyCode::Digit5) => Some(4),
-        PhysicalKey::Code(KeyCode::Digit6) => Some(5),
-        PhysicalKey::Code(KeyCode::Digit7) => Some(6),
-        PhysicalKey::Code(KeyCode::Digit8) => Some(7),
-        PhysicalKey::Code(KeyCode::Digit9) => Some(8),
-        _ => None,
-    }
-}
-
 fn consume_tool_action(
     button_down: bool,
     was_down: &mut bool,
@@ -1510,6 +1499,9 @@ fn main() -> Result<()> {
     }
     let low_spec = low_spec::requested() && !benchmark_config.enabled;
     let mut preferences = preferences::PreferenceStore::new(!benchmark_config.enabled && !low_spec);
+    if !benchmark_config.enabled {
+        keybinds::load();
+    }
     if low_spec {
         low_spec::apply(&mut preferences.loaded);
     }
@@ -1571,6 +1563,10 @@ fn main() -> Result<()> {
     // Orbit time off the default day pace, with the calendar it was last in step with.
     let mut sky_clock: Option<(f64, f64)> = None;
     let mut input = Input::default();
+    let mut view_zoom = comfort::Zoom::default();
+    let mut pending_screenshot: Option<std::path::PathBuf> = None;
+    // Shown a frame after the request so the notice is not in the image.
+    let mut screenshot_notice: Option<String> = None;
     let mut creative = CreativeState::default();
     player.selected_block = creative.selected_block();
     let mut render_debug_view = benchmark_config.debug_view;
@@ -1797,6 +1793,15 @@ fn main() -> Result<()> {
 
                         let pressed = key.state == ElementState::Pressed;
                         let fresh_press = pressed && !key.repeat;
+                        // A pending rebind on the controls screen takes the next press, Escape included.
+                        if let PhysicalKey::Code(code) = key.physical_key
+                            && fresh_press && keybinds::offer(keybinds::Binding::Key(code)) {
+                                return;
+                            }
+                        let action = match key.physical_key {
+                            PhysicalKey::Code(code) => keybinds::action_for_key(code),
+                            PhysicalKey::Unidentified(_) => None,
+                        };
                         // Releases always reach gameplay; presses belong to the active surface.
                         if let PhysicalKey::Code(code) = key.physical_key
                             && (!pressed || (matches!(mode, AppMode::Playing) && grabbed && !egui_consumed)) {
@@ -1806,27 +1811,33 @@ fn main() -> Result<()> {
                         if text_editing && !matches!(key.physical_key, PhysicalKey::Code(KeyCode::Escape)) {
                             return;
                         }
-                        if fresh_press && key.physical_key == PhysicalKey::Code(KeyCode::F11) {
+                        if fresh_press && action == Some(BindAction::Fullscreen) {
                             let fullscreen = if window.fullscreen().is_some() { None } else {
                                 Some(winit::window::Fullscreen::Borderless(None))
                             };
                             window.set_fullscreen(fullscreen);
                             return;
                         }
-                        if fresh_press && key.physical_key == PhysicalKey::Code(KeyCode::F3) {
+                        if fresh_press && action == Some(BindAction::Debug) {
                             if let Some(ui) = egui_ui.as_mut() { ui.toggle_debug(); }
                             return;
                         }
-                        if fresh_press && key.physical_key == PhysicalKey::Code(KeyCode::F1) {
+                        if fresh_press && action == Some(BindAction::ToggleHud) {
                             if let Some(ui) = egui_ui.as_mut() { ui.show_hud = !ui.show_hud; }
+                            return;
+                        }
+                        if fresh_press && action == Some(BindAction::Screenshot) {
+                            pending_screenshot = Some(screenshot::next_path());
                             return;
                         }
                         if matches!(mode, AppMode::Paused)
                             && key.physical_key != PhysicalKey::Code(KeyCode::Escape) { return; }
                         if matches!(mode,AppMode::WorldSelect) {return;}
 
-                        match key.physical_key {
-                            PhysicalKey::Code(KeyCode::Escape) if fresh_press => {
+                        // Escape is fixed: it is never offered as a binding.
+                        let escape = key.physical_key == PhysicalKey::Code(KeyCode::Escape);
+                        match action {
+                            _ if escape && fresh_press => {
                                 player.jump_tap_timer = 0.0;
                                 player.jump_was_down = false;
                                 if matches!(mode, AppMode::Playing) && creative.any_ui_open() {
@@ -1860,7 +1871,7 @@ fn main() -> Result<()> {
                                     AppMode::WorldSelect => AppMode::WorldSelect,
                                 };
                             }
-                            PhysicalKey::Code(KeyCode::KeyB) if fresh_press => {
+                            Some(BindAction::CreativePanel) if fresh_press => {
                                 let open = !creative.show_panel; creative.close_panels(); creative.show_panel = open; input.clear(); player.jump_tap_timer = 0.0;
                                 sync_creative_ui_cursor(
                                     window,
@@ -1870,16 +1881,16 @@ fn main() -> Result<()> {
                                     &creative,
                                 );
                             }
-                            PhysicalKey::Code(KeyCode::KeyF) if fresh_press && grabbed && !creative.any_ui_open() => {
+                            Some(BindAction::Interact) if fresh_press && grabbed && !creative.any_ui_open() => {
                                 input.interact = true;
                             }
-                            PhysicalKey::Code(KeyCode::KeyL) if fresh_press && grabbed && !creative.any_ui_open() => {
+                            Some(BindAction::Lamp) if fresh_press && grabbed && !creative.any_ui_open() => {
                                 if let Some(w) = world.as_mut() {
                                     w.expedition.toggle_lamp();
                                 }
                             }
-                            PhysicalKey::Code(player::NEXT_SPELL_KEY) if fresh_press && grabbed && !creative.any_ui_open() => { input.cycle_spell=true; }
-                            PhysicalKey::Code(KeyCode::KeyE) | PhysicalKey::Code(KeyCode::Tab)
+                            Some(BindAction::NextSpell) if fresh_press && grabbed && !creative.any_ui_open() => { input.cycle_spell=true; }
+                            Some(BindAction::Inventory)
                                 if fresh_press && (key.physical_key != PhysicalKey::Code(KeyCode::Tab) || !creative.show_palette) => {
                                 let open = !creative.show_palette;
                                 if !open
@@ -1896,7 +1907,7 @@ fn main() -> Result<()> {
                                     &creative,
                                 );
                             }
-                            PhysicalKey::Code(KeyCode::KeyU) if fresh_press && !creative.show_palette => {
+                            Some(BindAction::WandAtelier) if fresh_press && !creative.show_palette => {
                                 let open = !creative.show_wand_atelier; creative.close_panels(); creative.show_wand_atelier = open; input.clear(); player.jump_tap_timer = 0.0;
                                 sync_creative_ui_cursor(
                                     window,
@@ -1906,7 +1917,7 @@ fn main() -> Result<()> {
                                     &creative,
                                 );
                             }
-                            PhysicalKey::Code(KeyCode::KeyQ) if fresh_press && !creative.show_palette => {
+                            Some(BindAction::QuickSelect) if fresh_press && !creative.show_palette => {
                                 let open = !creative.show_quick_select; creative.close_panels(); creative.show_quick_select = open; input.clear(); player.jump_tap_timer = 0.0;
                                 sync_creative_ui_cursor(
                                     window,
@@ -1916,30 +1927,30 @@ fn main() -> Result<()> {
                                     &creative,
                                 );
                             }
-                            PhysicalKey::Code(KeyCode::BracketLeft) | PhysicalKey::Code(KeyCode::BracketRight)
+                            Some(BindAction::RangeDown | BindAction::RangeUp)
                                 if fresh_press && grabbed && !creative.any_ui_open() => {
-                                creative.adjust_range(if key.physical_key == PhysicalKey::Code(KeyCode::BracketRight) { 1 } else { -1 });
+                                creative.adjust_range(if action == Some(BindAction::RangeUp) { 1 } else { -1 });
                             }
-                            PhysicalKey::Code(KeyCode::KeyZ) if fresh_press && !creative.any_ui_open() => {
+                            Some(BindAction::ToolHand) if fresh_press && !creative.any_ui_open() => {
                                 creative.tool = creative::ToolKind::Hand;
                             }
-                            PhysicalKey::Code(KeyCode::KeyX) if fresh_press && !creative.any_ui_open() => {
+                            Some(BindAction::ToolBrush) if fresh_press && !creative.any_ui_open() => {
                                 creative.tool = creative::ToolKind::Brush;
                             }
-                            PhysicalKey::Code(KeyCode::KeyC) if fresh_press && !creative.any_ui_open() => {
+                            Some(BindAction::ToolBuilders) if fresh_press && !creative.any_ui_open() => {
                                 creative.tool = creative::ToolKind::BuildersWand;
                             }
-                            PhysicalKey::Code(KeyCode::KeyV) if fresh_press && !creative.any_ui_open() => {
+                            Some(BindAction::ToolDestructor) if fresh_press && !creative.any_ui_open() => {
                                 creative.tool = creative::ToolKind::DestructorWand;
                             }
-                            PhysicalKey::Code(KeyCode::KeyG) if fresh_press && !creative.any_ui_open() => {
+                            Some(BindAction::ToolArea) if fresh_press && !creative.any_ui_open() => {
                                 creative.tool = creative::ToolKind::AreaTool;
                             }
-                            PhysicalKey::Code(KeyCode::KeyH) if fresh_press && !creative.any_ui_open() => {
+                            Some(BindAction::ToolExplosive) if fresh_press && !creative.any_ui_open() => {
                                 creative.tool = creative::ToolKind::ExplosiveWand;
                             }
-                            _ if fresh_press => {
-                                if let Some(slot) = hotbar_slot_from_key(key.physical_key) {
+                            Some(bound) if fresh_press => {
+                                if let Some(slot) = bound.hotbar_slot() {
                                     player.selected_block = creative.select_slot(slot);
                                     if creative.show_palette { creative.tool = creative::ToolKind::Hand; }
                                 }
@@ -1954,33 +1965,19 @@ fn main() -> Result<()> {
                         }
 
                         let pressed = state == ElementState::Pressed;
-
-                        if egui_consumed {
-                            if !pressed {
-                                if button == MouseButton::Left {
-                                    input.break_block = false;
-                                }
-                                if button == MouseButton::Right {
-                                    input.place_block = false;
-                                }
-                            }
+                        if pressed && keybinds::offer(keybinds::Binding::Mouse(button)) {
                             return;
                         }
-
-                        match mode {
-                            AppMode::WorldSelect | AppMode::Paused => {}
-                            AppMode::Playing => {
-                                if pressed && (!grabbed || creative.any_ui_open()) { return; }
-                                if button == MouseButton::Middle && pressed { input.pick_block = true; }
-                                if button == MouseButton::Left {
-                                    input.break_pressed |= pressed && !input.break_block;
-                                    input.break_block = pressed;
-                                }
-                                if button == MouseButton::Right {
-                                    input.place_pressed |= pressed && !input.place_block;
-                                    input.place_block = pressed;
-                                }
-                            }
+                        // Releases always reach gameplay so a held action cannot stick.
+                        if !pressed {
+                            input.mouse(button, false);
+                            return;
+                        }
+                        if egui_consumed {
+                            return;
+                        }
+                        if matches!(mode, AppMode::Playing) && grabbed && !creative.any_ui_open() {
+                            input.mouse(button, true);
                         }
                     }
 
@@ -2249,6 +2246,17 @@ fn main() -> Result<()> {
                             last = now;
                             if !matches!(mode, AppMode::WorldSelect) {
                                 fps_counter.tick(display_frame_dt);
+                            }
+                            view_zoom.update(input.zoom && matches!(mode, AppMode::Playing), display_frame_dt);
+                            if let Some(text) = screenshot_notice.take() {
+                                egui_ui.quality_notice = Some((text, 3.0));
+                            }
+                            if let Some(path) = pending_screenshot.take() {
+                                screenshot_notice = Some(format!(
+                                    "Screenshot {}",
+                                    path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+                                ));
+                                gpu.request_capture(path);
                             }
                             let spawn_progress = chunk_cache.spawn_progress();
                             // Distant coverage is part of the loading transition too.
@@ -3913,12 +3921,12 @@ fn main() -> Result<()> {
                                 // converts this conventional infinite projection to
                                 // reverse-Z; terrain culling keeps its finite budget.
                                 let proj = Mat4::perspective_infinite_rh(
-                                    egui_ui.fov_degrees.to_radians(),
+                                    view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
                                     0.05 * world_scale,
                                 );
                                 let cull_proj = Mat4::perspective_rh(
-                                    egui_ui.fov_degrees.to_radians(),
+                                    view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
                                     0.05,
                                     far_plane_voxels,
@@ -4127,12 +4135,12 @@ fn main() -> Result<()> {
                                 cpu_stats.horizon_ms = horizon_start.elapsed().as_secs_f32() * 1000.0;
                                 let cull_view = Mat4::look_to_rh(eye, forward, Vec3::Y);
                                 let proj = Mat4::perspective_infinite_rh(
-                                    egui_ui.fov_degrees.to_radians(),
+                                    view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
                                     0.05 * world_scale,
                                 );
                                 let cull_proj = Mat4::perspective_rh(
-                                    egui_ui.fov_degrees.to_radians(),
+                                    view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
                                     0.05,
                                     far_plane_voxels,
@@ -4294,7 +4302,7 @@ fn main() -> Result<()> {
                             }
 
                             let render_start = Instant::now();
-                            let orbital_pixel_angle = 2.0 * (egui_ui.fov_degrees.to_radians() * 0.5).tan()
+                            let orbital_pixel_angle = 2.0 * (view_zoom.fov_degrees(egui_ui.fov_degrees).to_radians() * 0.5).tan()
                                 / window.inner_size().height.max(1) as f32;
                             // The day clock moves in whole simulation steps; stations cross
                             // the sky at tens of degrees per second, so those hops read as
@@ -4637,7 +4645,8 @@ fn main() -> Result<()> {
                 ..
             } if grabbed && focused && matches!(mode, AppMode::Playing) => {
                 if matches!(startup, StartupState::Ready { .. }) {
-                    let sensitivity = egui_ui.as_ref().map_or(0.0025, |ui| ui.mouse_sensitivity);
+                    let sensitivity = egui_ui.as_ref().map_or(0.0025, |ui| ui.mouse_sensitivity)
+                        * view_zoom.sensitivity_scale();
                     player.yaw += delta.0 as f32 * sensitivity;
                     let y_sign = if egui_ui.as_ref().is_some_and(|ui| ui.invert_mouse) { -1.0 } else { 1.0 };
                     player.pitch -= delta.1 as f32 * sensitivity * y_sign;

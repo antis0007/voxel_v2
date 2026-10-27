@@ -81,7 +81,7 @@ pub fn tick(player: &mut super::Player, world: &crate::world::World,
     state.previous_angles = angles;
     let target = (-turn / dt * 0.007).clamp(Vec2::splat(-0.035), Vec2::splat(0.035))
         + if inertia.is_finite() { inertia } else { Vec2::ZERO };
-    state.sway.step(target, 16.0, dt);
+    state.sway.step(target * crate::comfort::camera_motion(), 16.0, dt);
     approach(&mut state.speed, speed.min(14.0), 10.0, dt);
     state.gait = (state.gait + speed * dt * 1.8).rem_euclid(std::f32::consts::TAU);
     let held = adv.wand > 0 && adv.swing() <= 0.0;
