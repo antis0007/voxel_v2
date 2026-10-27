@@ -15,3 +15,4 @@ paths:
 - Worldgen is a pure function of `WorldSampleConfig`. A behaviour change needs a new generator version gate; never edit a historical gate (see saves rule).
 - Horizon modules are reached only through `render/horizon.rs`. `VOXEL_HORIZON_CUBES=1` is required for the cube band.
 - Bounded passes take an `engine_core::Budget`; no `Instant::now()` in simulation.
+- A new gate number is claimed in `docs/worldgen/GENERATOR_GATES.md` before it appears in code; dormant work names its gate with a `pub const` so it can be renumbered.
