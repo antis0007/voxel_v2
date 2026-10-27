@@ -5,6 +5,7 @@
 //! datagrams unacknowledged past the timeout, over the last 256 that resolved, so
 //! the player list shows a link's state now rather than a keepalive from seconds ago.
 use std::collections::VecDeque;
+use std::hash::{BuildHasher, RandomState};
 
 const WINDOW: usize = 256;
 const RATE_US: u64 = 1_000_000;
@@ -177,10 +178,11 @@ const PROBES: usize = 64;
 /// Ping echo for stream transports such as the TCP lobby relay, which have no
 /// datagram acks. The host sends `probe` ids; the guest returns each unchanged.
 /// A stream never drops a probe, so one still missing after `STALL_US` is a
-/// stall, the stream's form of loss. Ids are hashed from a seed, so a guest cannot
-/// echo a probe before receiving it to show a lower ping.
+/// stall, the stream's form of loss. Ids come from SipHash under a 128-bit key the
+/// OS supplies per probe, so a guest cannot predict one to echo it early and show
+/// a lower ping. Ids are not simulation state, so they need not replay.
 pub struct EchoProbe {
-    seed: u32,
+    key: RandomState,
     counter: u32,
     srtt_us: Option<f64>,
     rttvar_us: f64,
@@ -189,10 +191,10 @@ pub struct EchoProbe {
     stalled: usize,
 }
 
-impl EchoProbe {
-    pub fn new(seed: u32) -> Self {
+impl Default for EchoProbe {
+    fn default() -> Self {
         Self {
-            seed,
+            key: RandomState::new(),
             counter: 0,
             srtt_us: None,
             rttvar_us: 0.0,
@@ -201,7 +203,9 @@ impl EchoProbe {
             stalled: 0,
         }
     }
+}
 
+impl EchoProbe {
     fn record(&mut self, stalled: bool) {
         self.outcomes.push_back(stalled);
         self.stalled += usize::from(stalled);
@@ -221,7 +225,7 @@ impl EchoProbe {
     pub fn probe(&mut self, now_us: u64) -> u32 {
         self.resolve(now_us);
         self.counter = self.counter.wrapping_add(1);
-        let id = engine_core::hash::hash_u32(self.seed ^ self.counter.wrapping_mul(0x9e37_79b9));
+        let id = self.key.hash_one(self.counter) as u32;
         self.outstanding.push_back((id, now_us));
         if self.outstanding.len() > PROBES {
             self.outstanding.pop_front();

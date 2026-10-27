@@ -88,7 +88,7 @@ fn bars_fall_with_delay_jitter_and_loss() {
 
 #[test]
 fn echo_probes_read_a_stream_round_trip_and_its_stalls() {
-    let mut p = EchoProbe::new(11);
+    let mut p = EchoProbe::default();
     // One probe a second over a 40 ms stream; the sixth echo is held for 3 s.
     let mut held = None;
     for s in 0..10u64 {
@@ -109,7 +109,7 @@ fn echo_probes_read_a_stream_round_trip_and_its_stalls() {
 
 #[test]
 fn echo_ids_cannot_be_guessed_or_replayed() {
-    let mut p = EchoProbe::new(3);
+    let mut p = EchoProbe::default();
     let first = p.probe(0);
     let second = p.probe(1_000);
     assert_ne!(second, first.wrapping_add(1));
