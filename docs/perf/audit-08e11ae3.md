@@ -56,6 +56,12 @@ frame against the brief's 800 for a flat surface.
 | 2 | CPU render submission: 11.5–26.7 ms per frame on the main thread | `cpu_avg_ms.render_call`; tracks draw count | renderer (`render.rs` `Gpu::step_inner`) | ≤ 3 ms (brief budget) after #1 cuts draws |
 | 3 | Main-thread streaming with nothing to load: 3.8–7.9 ms per frame | `cpu_avg_ms.stream` in static scenes | streaming (`render/streaming*`) | ≤ 1 ms when no chunk changes |
 
+Cost 1, addressed in aa53325f: all five cascades redrew every frame (sun drift
+marked every layer urgent; any ownership change forced all layers). After it,
+an interleaved A/B on the same commit measured hills-static GPU shadow 8.9 → 4.6
+ms per frame and shadow draws 10.9 k → 5.8 k; hills-orbit 6.3 → 3.2 ms and 7.4 k
+→ 3.4 k. The baselines above predate it.
+
 Clouds (4.2–5.8 ms GPU) are fourth; they were first on 2026-10-24 before the
 single-evaluation march landed.
 
