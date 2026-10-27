@@ -18,10 +18,12 @@ const STEPS: [IVec3; 6] = [IVec3::NEG_X, IVec3::X, IVec3::NEG_Y, IVec3::Y, IVec3
 
 static LAST_CULLED: AtomicUsize = AtomicUsize::new(0);
 
-/// `VOXEL_CAVE_CULL=0` turns cave culling off for A/B comparisons.
+/// Opt-in with `VOXEL_CAVE_CULL=1`. Off by default: residency already skips
+/// sealed underground chunks, so on 2026-10-27 the walk culled 0-1 chunks at
+/// surface, Undercrown and cave poses for about 0.15 ms of CPU per frame.
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("VOXEL_CAVE_CULL").map_or(true, |v| v.trim() != "0"))
+    *ENABLED.get_or_init(|| std::env::var("VOXEL_CAVE_CULL").is_ok_and(|v| v.trim() == "1"))
 }
 
 /// Chunks inside the frustum that the last draw list dropped as occluded.
