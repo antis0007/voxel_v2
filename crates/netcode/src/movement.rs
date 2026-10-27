@@ -8,14 +8,26 @@
 //! - ascent refills only while the body is supported, so jumps pass and flight
 //!   without permission runs dry.
 //!
+//! A body off the ground must also fall: after a short hang it has to drop at
+//! least as far as gravity takes it, so repeating one pose in the air (hover) or
+//! descending slowly fails. The server measures each fall from its own support
+//! test and reports it through `take_landing`, so a client cannot skip fall damage.
+//!
 //! A rejected pose returns a numbered correction. The client snaps to it and the
 //! server ignores its poses until one echoes that number, so packets already in
 //! flight cannot re-trigger it.
 use glam::{IVec3, Vec3};
 
+mod air;
+
 /// Solid-cell query on the server's published world.
 pub trait Solid {
     fn solid(&self, cell: IVec3) -> bool;
+    /// Cells that hold the body up and end a fall: solid ground, plus fluids and
+    /// climbables. A fall that ends in a fluid still reports its height.
+    fn supports(&self, cell: IVec3) -> bool {
+        self.solid(cell)
+    }
 }
 
 /// Limits in voxels and seconds, supplied from the game's movement constants.
@@ -27,11 +39,18 @@ pub struct Limits {
     pub burst: f32,
     /// Height gained from support with every jump the body can chain.
     pub ascent: f32,
+    /// Weakest downward acceleration an unsupported body has, and its fall speed cap.
+    pub gravity: f32,
+    pub terminal: f32,
+    /// Seconds a body may hold its height in the air (apex, air dash).
+    pub hang: f32,
     /// Body half-width and height; feet are at the pose position.
     pub half_width: f32,
     pub height: f32,
     /// Overlap allowed against solid cells, for replicas a tick behind an edit.
     pub skin: f32,
+    /// Largest coordinate magnitude on any axis; beyond it `f32` loses sub-voxel precision.
+    pub bound: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,7 +65,11 @@ pub enum Verdict {
 pub enum Reason {
     Speed,
     Ascent,
+    /// Stayed in the air or fell slower than gravity allows.
+    Float,
     Solid,
+    /// Non-finite or out of bounds.
+    Bound,
 }
 
 pub struct Validator {
@@ -56,6 +79,8 @@ pub struct Validator {
     vertical: f32,
     correction: u16,
     awaiting: bool,
+    air: air::Air,
+    /// Set while the game grants flight or lift (creative, thrusters); skips both air checks.
     pub flying_allowed: bool,
     pub last_reason: Option<Reason>,
 }
@@ -69,6 +94,7 @@ impl Validator {
             vertical: limits.ascent,
             correction: 0,
             awaiting: false,
+            air: air::Air::new(position.y),
             flying_allowed: false,
             last_reason: None,
         }
@@ -82,6 +108,14 @@ impl Validator {
     pub fn impulse(&mut self, horizontal: f32, vertical: f32) {
         self.horizontal += horizontal.max(0.0);
         self.vertical += vertical.max(0.0);
+        if vertical > 0.0 {
+            self.air.restart(self.accepted.y);
+        }
+    }
+
+    /// Height of the last fall the server saw end on support, once.
+    pub fn take_landing(&mut self) -> Option<f32> {
+        self.air.take_landing()
     }
 
     /// Server-placed body (teleport, respawn, mount): always a correction.
@@ -89,6 +123,7 @@ impl Validator {
         self.accepted = position;
         self.horizontal = self.limits.burst;
         self.vertical = self.limits.ascent;
+        self.air = air::Air::new(position.y);
         self.correct()
     }
 
@@ -98,15 +133,40 @@ impl Validator {
         Verdict::Correct { id: self.correction, position: self.accepted }
     }
 
-    fn body_hits(&self, world: &impl Solid, feet: Vec3) -> bool {
+    /// Whether the body at `feet`, widened by `grow` on each side, overlaps a cell passing `test`.
+    fn overlaps(&self, feet: Vec3, grow: f32, test: impl Fn(IVec3) -> bool) -> bool {
         let l = self.limits;
-        let lo = (feet + Vec3::new(-l.half_width + l.skin, l.skin, -l.half_width + l.skin)).floor().as_ivec3();
-        let hi = (feet + Vec3::new(l.half_width - l.skin, l.height - l.skin, l.half_width - l.skin)).floor().as_ivec3();
-        (lo.x..=hi.x).any(|x| (lo.y..=hi.y).any(|y| (lo.z..=hi.z).any(|z| world.solid(IVec3::new(x, y, z)))))
+        let side = l.half_width - l.skin + grow;
+        let lo = (feet + Vec3::new(-side, l.skin, -side)).floor().as_ivec3();
+        let hi = (feet + Vec3::new(side, l.height - l.skin, side)).floor().as_ivec3();
+        (lo.x..=hi.x).any(|x| (lo.y..=hi.y).any(|y| (lo.z..=hi.z).any(|z| test(IVec3::new(x, y, z)))))
     }
 
-    fn supported(&self, world: &impl Solid, feet: Vec3) -> bool {
-        self.body_hits(world, feet - Vec3::Y * (self.limits.skin + 0.05))
+    fn body_hits(&self, world: &impl Solid, feet: Vec3) -> bool {
+        self.overlaps(feet, 0.0, |c| world.solid(c))
+    }
+
+    fn grounded(&self, world: &impl Solid, feet: Vec3) -> bool {
+        self.overlaps(feet - Vec3::Y * (self.limits.skin + 0.05), 0.0, |c| world.supports(c))
+    }
+
+    /// Side contact, which wall runs and climbs need; it restarts the hover clock only.
+    fn touching(&self, world: &impl Solid, feet: Vec3) -> bool {
+        self.overlaps(feet, self.limits.skin + 0.05, |c| world.solid(c))
+    }
+
+    /// Moves the accepted body down to `floor` or onto whatever stops it first.
+    fn drop_toward(&mut self, world: &impl Solid, floor: f32) {
+        let start = self.accepted;
+        let steps = ((start.y - floor) / 0.4).ceil().max(1.0) as u32;
+        for i in 1..=steps {
+            let next = Vec3::new(start.x, start.y + (floor - start.y) * (i as f32 / steps as f32), start.z);
+            if self.body_hits(world, next) {
+                break;
+            }
+            self.accepted = next;
+        }
+        self.air.restart(self.accepted.y);
     }
 
     /// Checks one reported step of `dt` seconds. `ack` is the newest correction
@@ -120,14 +180,15 @@ impl Validator {
             // Impulse surplus fades with a ~0.3 s half-life instead of vanishing.
             cap + (self.horizontal - cap) * 0.5f32.powf(dt / 0.3)
         };
+        self.air.advance(dt);
         if self.awaiting {
             if ack != self.correction {
                 return Verdict::Ignored;
             }
             self.awaiting = false;
         }
-        if !position.is_finite() {
-            self.last_reason = Some(Reason::Speed);
+        if !position.is_finite() || position.abs().max_element() > l.bound {
+            self.last_reason = Some(Reason::Bound);
             return self.correct();
         }
         let delta = position - self.accepted;
@@ -136,113 +197,39 @@ impl Validator {
         let steps = (delta.length() / 0.4).ceil().max(1.0) as u32;
         let through_wall = (1..=steps).any(|i| self.body_hits(world, self.accepted + delta * (i as f32 / steps as f32)));
         let rising = delta.y.max(0.0);
+        let grounded = self.grounded(world, position);
+        let touching = self.touching(world, position);
+        let ceiling = self.air.ceiling(l.gravity, l.terminal, l.hang);
         let reason = if through_wall {
             Some(Reason::Solid)
         } else if run > self.horizontal {
             Some(Reason::Speed)
         } else if !self.flying_allowed && rising > self.vertical {
             Some(Reason::Ascent)
+        } else if !self.flying_allowed && !grounded && !touching && position.y > ceiling {
+            Some(Reason::Float)
         } else {
             None
         };
         if let Some(reason) = reason {
             self.last_reason = Some(reason);
+            if reason == Reason::Float {
+                // Correcting to the last mid-air pose would let a hover hold its height.
+                self.drop_toward(world, ceiling.min(self.accepted.y) - air::SLACK);
+            }
             return self.correct();
         }
         self.horizontal -= run;
-        if self.flying_allowed || self.supported(world, position) {
+        if self.flying_allowed || grounded {
             self.vertical = l.ascent;
         } else {
             self.vertical -= rising;
         }
         self.accepted = position;
+        self.air.accept(position.y, grounded || self.flying_allowed, touching);
         Verdict::Accept
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Flat floor at y < 0 and a wall at x = 10.
-    struct Room;
-    impl Solid for Room {
-        fn solid(&self, c: IVec3) -> bool {
-            c.y < 0 || c.x == 10
-        }
-    }
-
-    const LIMITS: Limits = Limits { speed: 6.0, burst: 3.0, ascent: 2.6, half_width: 0.3, height: 1.8, skin: 0.02 };
-    const DT: f32 = 1.0 / 120.0;
-
-    /// Feeds a path sampled at 120 Hz; returns the corrections and the first reason.
-    fn walk(v: &mut Validator, path: impl Fn(f32) -> Vec3, seconds: f32) -> (usize, Option<Reason>) {
-        let (mut ack, mut corrections) = (0, 0);
-        for i in 1..=(seconds / DT) as u32 {
-            match v.step(&Room, path(i as f32 * DT), DT, ack) {
-                Verdict::Correct { id, .. } => {
-                    corrections += 1;
-                    ack = id;
-                }
-                Verdict::Accept | Verdict::Ignored => {}
-            }
-        }
-        (corrections, v.last_reason)
-    }
-
-    #[test]
-    fn honest_sprint_dash_and_jumps_are_accepted() {
-        let mut v = Validator::new(LIMITS, Vec3::new(0.0, 0.0, 0.0));
-        // 6 voxels/s along z, a 16 voxels/s dash for 0.16 s, hops of 1.2 voxels.
-        let path = |t: f32| {
-            let dash = (t - 1.0).clamp(0.0, 0.16) * 10.0;
-            let hop = (t * std::f32::consts::PI).sin().max(0.0) * 1.2;
-            Vec3::new(0.0, hop, t * 6.0 + dash)
-        };
-        assert_eq!(walk(&mut v, path, 4.0), (0, None));
-    }
-
-    #[test]
-    fn a_sustained_speed_hack_is_corrected() {
-        let mut v = Validator::new(LIMITS, Vec3::ZERO);
-        let (n, reason) = walk(&mut v, |t| Vec3::new(0.0, 0.0, -t * 9.0), 3.0);
-        assert!(n > 0);
-        assert_eq!(reason, Some(Reason::Speed));
-        assert!(v.accepted().z > -3.0 * 6.0 - LIMITS.burst - 0.1, "{}", v.accepted());
-    }
-
-    #[test]
-    fn walking_through_a_wall_is_corrected_even_in_one_step() {
-        let mut v = Validator::new(LIMITS, Vec3::new(9.0, 0.0, 0.0));
-        assert!(matches!(v.step(&Room, Vec3::new(11.5, 0.0, 0.0), DT, 0), Verdict::Correct { .. }));
-        assert_eq!(v.last_reason, Some(Reason::Solid));
-        assert_eq!(v.accepted(), Vec3::new(9.0, 0.0, 0.0));
-    }
-
-    #[test]
-    fn unpermitted_flight_is_corrected_and_permitted_flight_is_not() {
-        let rise = |t: f32| Vec3::new(0.0, t * 3.0, 0.0);
-        let mut v = Validator::new(LIMITS, Vec3::ZERO);
-        assert_eq!(walk(&mut v, rise, 3.0).1, Some(Reason::Ascent));
-        let mut v = Validator::new(LIMITS, Vec3::ZERO);
-        v.flying_allowed = true;
-        assert_eq!(walk(&mut v, rise, 3.0), (0, None));
-    }
-
-    #[test]
-    fn poses_in_flight_are_ignored_until_the_correction_is_acknowledged() {
-        let mut v = Validator::new(LIMITS, Vec3::ZERO);
-        let Verdict::Correct { id, .. } = v.step(&Room, Vec3::new(50.0, 0.0, 0.0), DT, 0) else { panic!() };
-        assert_eq!(v.step(&Room, Vec3::new(50.1, 0.0, 0.0), DT, 0), Verdict::Ignored);
-        assert_eq!(v.step(&Room, Vec3::new(0.0, 0.0, 0.04), DT, id), Verdict::Accept);
-    }
-
-    #[test]
-    fn server_placement_and_knockback_do_not_count_against_the_client() {
-        let mut v = Validator::new(LIMITS, Vec3::ZERO);
-        let Verdict::Correct { id, position } = v.place(Vec3::new(-40.0, 0.0, 5.0)) else { panic!() };
-        assert_eq!(v.step(&Room, position, DT, id), Verdict::Accept);
-        v.impulse(8.0, 0.0);
-        assert_eq!(v.step(&Room, position + Vec3::X * 8.0, DT, id), Verdict::Accept);
-    }
-}
+mod tests;
