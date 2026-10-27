@@ -29,6 +29,10 @@ impl<'a> Reader<'a> {
         self.at == self.bytes.len()
     }
 
+    pub fn remaining(&self) -> usize {
+        self.bytes.len() - self.at
+    }
+
     pub fn u8(&mut self) -> Result<u8, WireError> {
         let b = *self.bytes.get(self.at).ok_or(WireError("short payload"))?;
         self.at += 1;
