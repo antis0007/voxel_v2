@@ -14,7 +14,7 @@ const LIMITS: Limits = Limits {
     ascent: 2.6,
     gravity: 20.0,
     terminal: 40.0,
-    hang: 0.2,
+    hang: 0.6,
     half_width: 0.3,
     height: 1.8,
     skin: 0.02,
@@ -71,7 +71,8 @@ fn walking_through_a_wall_is_corrected_even_in_one_step() {
 fn unpermitted_flight_is_corrected_and_permitted_flight_is_not() {
     let rise = |t: f32| Vec3::new(0.0, t * 3.0, 0.0);
     let mut v = Validator::new(LIMITS, Vec3::ZERO);
-    assert_eq!(walk(&mut v, rise, 3.0).1, Some(Reason::Ascent));
+    // Steady rise breaks the gravity curve or the ascent budget, whichever comes first.
+    assert!(matches!(walk(&mut v, rise, 3.0).1, Some(Reason::Ascent | Reason::Float)));
     let mut v = Validator::new(LIMITS, Vec3::ZERO);
     v.flying_allowed = true;
     assert_eq!(walk(&mut v, rise, 3.0), (0, None));
@@ -132,4 +133,28 @@ fn out_of_bounds_and_non_finite_poses_are_corrected() {
     let mut v = Validator::new(LIMITS, Vec3::new(LIMITS.bound, 0.0, 0.0));
     assert!(matches!(v.step(&Room, Vec3::new(LIMITS.bound + 0.05, 0.0, 0.0), DT, 0), Verdict::Correct { .. }));
     assert_eq!(v.last_reason, Some(Reason::Bound));
+}
+
+#[test]
+fn creeping_upward_does_not_refresh_the_hang_window() {
+    let mut v = Validator::new(LIMITS, Vec3::ZERO);
+    // A 1-voxel hop, then 0.001 voxel of rise each step, which stays inside the ascent budget.
+    let creep = |t: f32| Vec3::new(0.0, (t * 8.0).min(1.0) + t * 0.12, 0.0);
+    assert_eq!(walk(&mut v, creep, 3.0).1, Some(Reason::Float));
+}
+
+#[test]
+fn a_withheld_ack_cannot_make_one_correction_sweep_without_limit() {
+    let mut v = Validator::new(LIMITS, Vec3::new(0.0, 1_000.0, 0.0));
+    let hover = Vec3::new(0.0, 1_000.0, 0.0);
+    let id = (1..400).find_map(|_| match v.step(&Room, hover, DT, 0) {
+        Verdict::Correct { id, .. } => Some(id),
+        _ => None,
+    });
+    let id = id.expect("hover corrected");
+    let before = v.accepted().y;
+    assert_eq!(v.step(&Room, hover, 1.0e9, 0), Verdict::Ignored);
+    assert!(matches!(v.step(&Room, hover, DT, id), Verdict::Correct { .. }));
+    let after = v.accepted().y;
+    assert!(after.is_finite() && after >= before - 16.0 - 1e-3, "{before} -> {after}");
 }

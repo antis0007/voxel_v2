@@ -5,12 +5,14 @@
 
 /// Height a pose may sit above the gravity curve, in voxels.
 pub(super) const SLACK: f32 = 0.5;
+/// Farthest one float correction moves the body down; later ones continue.
+pub(super) const MAX_DROP: f32 = 16.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Air {
-    /// Highest feet height since the body last rose, touched a wall or was placed.
+    /// Highest feet height in the current arc.
     peak: f32,
-    /// Seconds since `peak` was set.
+    /// Seconds since the arc started: support, wall contact, impulse or correction.
     since: f32,
     /// Highest feet height since the body last stood on support.
     top: f32,
@@ -24,7 +26,8 @@ impl Air {
     }
 
     pub(super) fn advance(&mut self, dt: f32) {
-        self.since += dt;
+        // Capped so a client withholding its ack cannot grow the required drop without limit.
+        self.since = (self.since + dt).min(600.0);
     }
 
     /// Highest feet height the body may report now.
@@ -50,8 +53,12 @@ impl Air {
         }
         self.airborne = true;
         self.top = self.top.max(y);
-        if touching || y > self.peak {
+        if touching {
             self.restart(y);
+        } else {
+            // Rising lifts the peak but keeps the clock, so creeping upward by tiny
+            // steps cannot refresh the hang window.
+            self.peak = self.peak.max(y);
         }
     }
 

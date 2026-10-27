@@ -42,7 +42,8 @@ pub struct Limits {
     /// Weakest downward acceleration an unsupported body has, and its fall speed cap.
     pub gravity: f32,
     pub terminal: f32,
-    /// Seconds a body may hold its height in the air (apex, air dash).
+    /// Seconds from leaving support before the body must fall: the apex time of the
+    /// highest jump chain plus any gravity-free move such as an air dash.
     pub hang: f32,
     /// Body half-width and height; feet are at the pose position.
     pub half_width: f32,
@@ -158,7 +159,8 @@ impl Validator {
     /// Moves the accepted body down to `floor` or onto whatever stops it first.
     fn drop_toward(&mut self, world: &impl Solid, floor: f32) {
         let start = self.accepted;
-        let steps = ((start.y - floor) / 0.4).ceil().max(1.0) as u32;
+        let floor = floor.max(start.y - air::MAX_DROP).max(-self.limits.bound);
+        let steps =((start.y - floor) / 0.4).ceil().max(1.0) as u32;
         for i in 1..=steps {
             let next = Vec3::new(start.x, start.y + (floor - start.y) * (i as f32 / steps as f32), start.z);
             if self.body_hits(world, next) {
