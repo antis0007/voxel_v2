@@ -36,7 +36,7 @@ Finishing work in a shared tree: other sessions edit this tree at the same time.
 - All player-visible text follows `crates/app/src/egui_ui/UI_RULES.md`: states and nouns, numbers with units, no prose that explains a screen, no second person, no exclamation marks. If a screen needs a sentence, change the widget. `just lint-ui` reports violations; files listed in `egui_ui/text_rules.rs` are enforced by `just test`, so add a file there once it is clean.
 - No rule-of-three lists for rhythm; give the real count. No "not just X, it's Y". No em-dash asides in comments.
 - Banned in any text: seamless, robust, leverage, delve, elevate, comprehensive, crucial, ensure, streamline, powerful, elegant. In player text also: amazing, ultimate, epic, unleash, journey, immersive, explore, harness, mysterious, ancient, forgotten, echo, essence, resonance, unless the word is part of a real item or material name.
-- No new proper nouns, factions or lore concepts without the owner's approval. Lore lives only on items, blocks or guidebook entries and names something the player can do or observe.
+- No new proper nouns, factions or lore concepts without the owner's approval. Flavour and lore follow `UI_RULES.md` rules 12 and 14: one optional italic line that never carries mechanics, longer text only in a `lore` field or the guidebook.
 - Comments state why or an invariant, never restate the code. Default to no comment. Doc comments open with what the item does in under 12 words. No closing summary paragraphs.
 
 ## Don't
