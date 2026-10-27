@@ -4,4 +4,5 @@
 //! and the network simulator replays identically from a seed.
 pub mod interp;
 pub mod link;
+pub mod movement;
 pub mod pose;
