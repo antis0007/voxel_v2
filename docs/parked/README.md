@@ -9,3 +9,6 @@ removed on their account.
   not one of the inputs of record. Its [review](../design/PROJECT_AXIOM_REV4_REVIEW.md)
   and [original](../specs/project-axiom-revision-4.txt) stay where they are as
   reference.
+- [Player-freedom addendum 07](2026-10-26-player-freedom-addendum.md): brief
+  and its C-PF claim and scenario rows, demoted by the human on 2026-10-26
+  ([decision 0034](../decisions/0034-player-freedom-addendum.md)).

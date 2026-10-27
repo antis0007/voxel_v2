@@ -1,13 +1,13 @@
 # Player freedom and the non-coercive economy: audit and first slice
 
 Owner brief, 2026-10-26: `07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md`, preserved
-byte-for-byte at [docs/NEW/07](../../NEW/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md)
+byte-for-byte at [docs/parked/07](../../parked/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md)
 (SHA-256 in `docs/specs/README.md`). Its §14 kickoff asks for an audit of the
 real repository before any edit, integration into the claims harness, and a
 smallest "two-path resource + one functioning site" demo. This note is the
 audit and the slice design. Routing is proposed in
 [decision 0034](../../decisions/0034-player-freedom-addendum.md); nothing here
-is an input of record until the human adopts it (decision 0022 froze intake).
+is an input of record: the human demoted the brief to reference on 2026-10-26.
 
 Two other pastes arrived with the brief. The "Axiom Magic Overhaul" paste is
 already the wand chapter of `docs/NEW/03_ART_CONTENT_AND_WORLDGEN.md` and a

@@ -1,7 +1,7 @@
-//! `afk_vs_adventure_factory` (claim C-PF12): a machine's ledger is a function
-//! of simulated time only, never of where the player stands or whether the
-//! machine's chunk is near the player. Source brief:
-//! `docs/NEW/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md` §8 and §11.
+//! `afk_vs_adventure_factory`: a machine's ledger is a function of simulated
+//! time only, never of where the player stands or whether the machine's chunk
+//! is near the player. Origin, now reference only:
+//! `docs/parked/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md` §8 and §11.
 use super::{fixture_place, Kind, RESOURCE_COUNT};
 use crate::headless::Session;
 use engine_core::VoxelScalePreset;

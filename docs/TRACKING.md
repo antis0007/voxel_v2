@@ -221,7 +221,7 @@ that does not exist.
 3. Cross-player damage through the existing `Hit` path.
 4. Resync and digest; per-recipient image deltas.
 5. An ADR for the transport and authority model; a master-plan row (co-op
-   touches C-PF05 `cooperative_discovery_credit`).
+   would have touched the parked C-PF05 `cooperative_discovery_credit`).
 
 ## 4. Everything else
 

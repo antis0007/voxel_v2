@@ -1,6 +1,7 @@
 # 0034: Player-freedom addendum (07) as an acceptance addendum
 
-Date: 2026-10-26. Status: proposed. The human supplied
+Date: 2026-10-26. Status: reversed the same day; the human demoted the brief
+to reference (see [Owner ruling](#owner-ruling-2026-10-26)). The human supplied
 `07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md` after [0022](0022-master-plan-review.md)
 froze inputs; its own §12 asks to be an acceptance addendum first. Routing below
 follows the [0023](0023-worldgen-spec-input.md) precedent and waits for the
@@ -70,3 +71,27 @@ slice that adds a record picks its version against then-current source.
 The human demotes the brief to reference: the C-PF rows and the proposed
 scenario rows move to `docs/parked/` with it. The `authority_tests` module
 stays as an ordinary factory determinism test.
+
+## Owner ruling, 2026-10-26
+
+Reversal applied. The brief is at
+[docs/parked/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md](../parked/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md)
+(same SHA-256); the C-PF and scenario rows are in
+[docs/parked/2026-10-26-player-freedom-addendum.md](../parked/2026-10-26-player-freedom-addendum.md).
+
+Two of the conflicts above were product questions in their own right and
+were answered independently of the brief:
+
+- **Hunger.** Default is no drain; food heals. The current sprint-linked
+  drain stays available as an opt-in world mode. Not yet implemented.
+- **Ordinary materials from machines.** Yes. Drills and a crusher route yield
+  sand and gravel as `Item::Block` through `Node::stock`; no new resource ids,
+  so no save bump for this alone. Not yet implemented.
+
+Blast recovery, the first functioning ruin and respawn persistence stay open
+and unowned by any claim row.
+
+Sequencing ruled at the same time
+([direction review](../superpowers/specs/2026-10-26-direction-and-technology-review.md)
+§6): the S06 machine-network spike runs first after M1, ahead of the
+far-field, Hi-Z and variable-scale step 2 work.

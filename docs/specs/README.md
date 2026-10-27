@@ -64,18 +64,18 @@ human wants that.
 | `VARIABLE_SCALE_UNDERGROUND.md` | Complete. Source of [the variable-scale plan](../plans/2026-10-25-variable-scale-and-underground.md) and ADR 0023, which cite it as the owner brief. | `a434c873bda7059cac12ef41faded3edf950f6ec2a04b60a4af996e0f85c26e8` |
 | `LIVING_WORLD.md` | Truncated. The paste stopped at its 50,000-character limit inside §11 Phase III, after "The player can undertake di". Everything past that point is missing; resupplying the full file replaces this copy. | `43ea2c082772c8d41a073d451f917dc770f13d72fc80b8928e6cfcc3bcbff8ce` |
 
-## Brief supplied 2026-10-26 (acceptance addendum, decision 0034 proposed)
+## Brief supplied 2026-10-26 (parked, decision 0034 reversed)
 
 The owner attached `07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md`, the seventh
-document of the U1 set staged untracked in `docs/NEW/`. It is preserved
-there, next to its companions, as an exact copy of the Downloads attachment.
-[Decision 0034](../decisions/0034-player-freedom-addendum.md) proposes its
-routing; the audit and first slice are in
+document of the U1 set. The human demoted it to reference on 2026-10-26; the
+exact copy of the Downloads attachment now sits in `docs/parked/`.
+[Decision 0034](../decisions/0034-player-freedom-addendum.md) records the
+ruling; the audit and first slice are in
 [the player-freedom note](../superpowers/specs/2026-10-26-player-freedom-economy-design.md).
 
 | File | Status | SHA-256 |
 |---|---|---|
-| `../NEW/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md` | Complete (47,319 bytes). Twelve C-PF claims and seventeen named scenarios. | `a58a43ad11a8a3402c557b6bf3df8311a20dec72478cbe534c3ca406cce1e958` |
+| `../parked/07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md` | Complete (47,319 bytes). Twelve C-PF claims and seventeen named scenarios. | `a58a43ad11a8a3402c557b6bf3df8311a20dec72478cbe534c3ca406cce1e958` |
 
 Two pastes arrived with it and were not preserved: "Axiom Magic Overhaul" is
 already the wand chapter of `../NEW/03_ART_CONTENT_AND_WORLDGEN.md` and is
