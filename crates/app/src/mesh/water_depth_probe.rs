@@ -5,8 +5,12 @@ use crate::fluid::VoxelScalePreset;
 use crate::world::{World, WorldType};
 use std::sync::atomic::AtomicBool;
 
+// The border tests need ocean at chunks x -12..-9. Generator 53 shrank seas and
+// moved this coast; a historical generator never changes, so pin one.
 fn config() -> crate::world::WorldSampleConfig {
-    World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 0xA341_316C).sample_config()
+    let mut world = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 0xA341_316C);
+    world.generator_version = 52;
+    world.sample_config()
 }
 
 #[test]
