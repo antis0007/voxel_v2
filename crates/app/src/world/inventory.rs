@@ -4,6 +4,7 @@ use super::{BlockId, expedition, factory};
 mod crafting;
 mod descriptions;
 pub mod resources;
+pub mod sorting;
 pub use crafting::CraftBlocker;
 
 pub const HOTBAR_SLOTS: usize = 9;
@@ -1281,49 +1282,10 @@ impl SurvivalInventory {
         }
     }
 
-    /// Inventory Profiles Next style sort & compact for the 27-slot backpack:
-    /// merges partial stacks and sorts by category (Tools/Weapons/Armor -> Food -> Resources -> Blocks) and count.
+    /// Merges, sorts and compacts the pack; the hotbar keeps its layout.
     pub fn sort_pack(&mut self) {
-        let mut combined: Vec<ItemStack> = Vec::new();
-        for slot in &mut self.pack {
-            if let Some(st) = slot.take() {
-                if let Some(existing) = combined.iter_mut().find(|e| e.item == st.item) {
-                    existing.count = existing.count.saturating_add(st.count);
-                } else {
-                    combined.push(st);
-                }
-            }
-        }
-        let sort_key = |item: Item| -> (u8, u32) {
-            let (kind, payload) = item.encode_u32();
-            let order = match item {
-                Item::Weapon(_) | Item::Tool(_) | Item::Wand { .. } => 0,
-                Item::Armor(_, _) => 1,
-                Item::Food(_) => 2,
-                Item::Resource(_) => 3,
-                Item::Block(_) | Item::PowerKit(_) => 4,
-            };
-            (order, (kind << 16) | (payload & 0xFFFF))
-        };
-        combined.sort_by(|a, b| {
-            sort_key(a.item)
-                .cmp(&sort_key(b.item))
-                .then_with(|| b.count.cmp(&a.count))
-        });
-
-        let mut idx = 0usize;
-        for mut st in combined {
-            let max = self.stack_limit(st.item);
-            while st.count > 0 && idx < PACK_SLOTS {
-                let take = st.count.min(max);
-                self.pack[idx] = Some(ItemStack {
-                    item: st.item,
-                    count: take,
-                });
-                st.count -= take;
-                idx += 1;
-            }
-        }
+        let voxel_m = self.voxel_m;
+        sorting::sort_slots(&mut self.pack, |item| Self::limit_at_scale(item, voxel_m));
     }
 
     /// Quick-Stacks backpack items into any existing matching partial stacks in the hotbar,

@@ -12,6 +12,7 @@ pub mod overview;
 pub mod pile;
 pub mod power;
 pub mod portable;
+mod quick_stack;
 pub mod stats;
 pub mod recipes;
 pub mod transit;
@@ -368,6 +369,8 @@ pub enum Action {
     FitToolPart(u8, u8),
     ToggleToolModifier(u8),
     ClearToolParts,
+    /// Move pack resources a storage container already holds into it.
+    QuickStack(IVec3),
 }
 
 struct Network {
@@ -717,6 +720,7 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
         Action::Load(p)
         | Action::Collect(p)
         | Action::BufferMove(p, _, _, _)
+        | Action::QuickStack(p)
         | Action::Toggle(p)
         | Action::SetRecipe(p, _)
         | Action::SetFilter(p, _)
@@ -921,6 +925,9 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                             }
                         }
                         world.expedition.say("Collected what fits. Remaining supplies stay in the machine.");
+                    }
+                    Action::QuickStack(_) => {
+                        quick_stack::quick_stack(n, &mut world.inventory, &mut world.expedition.resources);
                     }
                     _ => {}
                 }

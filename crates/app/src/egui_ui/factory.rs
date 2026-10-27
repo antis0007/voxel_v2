@@ -12,6 +12,7 @@ use crate::world::{
 };
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, vec2};
 use glam::IVec3;
+mod container_tools;
 
 fn ingredients(ui: &mut egui::Ui, cost: &[(usize, u32)], inventory: &Expedition) {
     ui.horizontal_wrapped(|ui| {
@@ -116,11 +117,11 @@ fn resource_grid(
     node: &crate::world::factory::Node,
     action: &mut UiAction,
 ) {
+    let order = container_tools::cell_order(&node.input, cells, container_tools::sorted(ui.ctx(), pos));
     egui::Grid::new(("container", salt, pos))
         .spacing([2.0, 2.0])
         .show(ui, |ui| {
-            for index in 0..cells {
-                let item = (index < NAMES.len()).then_some(index);
+            for (index, &item) in order.iter().enumerate() {
                 let count = item.map(|i| node.input[i]).unwrap_or(0);
                 let response = container_cell(ui, item, count);
                 if let Some(item) = item {
@@ -247,8 +248,10 @@ pub(super) fn container_panel(
         2 => (9, 18),
         _ => (5, 20),
     };
+    container_tools::toolbar(ui, pos, action);
     resource_grid(ui, node.mode, pos, columns, cells, node, action);
     ui.label(RichText::new(status_label(node.status)).color(icons::GOLD));
+    container_tools::middle_click_sort(ui, pos);
 }
 
 fn pipe_panel(
