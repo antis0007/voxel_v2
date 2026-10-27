@@ -53,10 +53,11 @@ below current), `uncommitted` (in the shared tree or a worktree only),
 | 66 | Biome fields and family weights (`biome::BIOME_WEIGHTS_GENERATOR`), was 56 | biome-p1 | dormant, renumbered 2026-10-26 |
 | 67 | Abandoned Anchor districts, industrial materials, dock machines (`ruins::VERSION`), was 55 | anchor-ruins d013536b | dormant, renumber pending |
 | 68 | Underground 3D biome cells (`docs/plans/2026-10-25-underground-biomes.md`), was 55 | none | planned |
+| 69 | Surface site kind picked by the region's biome (`sites::kind::BIOME_SITES_GENERATOR`) | sites-enum | dormant |
 
 ## Reserved
 
-69 onward is free. Rows 54 to 65 belong to the peer session that holds the
+70 onward is free. Rows 54 to 65 belong to the peer session that holds the
 shared tree's uncommitted worldgen edits; when that work commits, replace
 "uncommitted" with the commit hash. If it lands under different numbers, the
 rows above move with it and 66 to 68 stay as claimed.
