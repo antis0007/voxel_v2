@@ -27,6 +27,7 @@ Start with `CLAUDE.md` at the repo root.
 - `PLAN.md`: the revamp phases with measured before/after numbers and the ranked debt list.
 - `PLAN2.md`: the Phase 2 foundations plan, superseded 2026-10-23 and kept as history.
 - `AUDIT.md`: the 2026-10-22 audit the plan was built from (a snapshot, not kept current).
+- `TRACKING.md`: per-subsystem implementation status (2026-10-26): what is playable, tested, library-only or untracked, and the repair queue; sections on elevators and megastructures, the first-person wand and hand, and multiplayer.
 - `adr/`: short records of the decisions made during the revamp.
 - `plans/`: execution-ready task plans with verified file:line facts. `docs/plans/2026-10-22-render-arena-and-horizon-evidence.md` covers the capture-tool fix, a render baseline, the chunk mesh arena and multi-draw indirect (the detailed spec of PLAN2 B1), and horizon agreement measurement.
   - `plans/2026-10-24-engine-and-world-refinement.md`: current integration order, 12–18-month planning envelope, painterly/architecture dependencies, contract corrections and the sparse CPU activity increment.
