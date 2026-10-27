@@ -33,6 +33,7 @@ pub use spell_defs::{
     spell_kind_tag, spell_name, spell_recharge_delta, spell_spread_delta,
 };
 pub(crate) mod growth;
+pub(crate) mod hunger;
 pub mod inscriptions;
 mod quest;
 mod rare_magic;
@@ -623,6 +624,9 @@ pub struct Adventure {
     pub ward: f32,
     pub ward_hits: u32,
     pub hunger: f32,
+    /// Session choice, not saved: a save-format field needs its own version bump.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub hunger_mode: hunger::HungerMode,
     pub rations: u32,
     /// Bit 0 is a copper sword; bit 1 is a steel sword.
     pub weapons: u32,
@@ -718,6 +722,7 @@ impl Default for Adventure {
             ward: 0.0,
             ward_hits: 0,
             hunger: 100.0,
+            hunger_mode: hunger::HungerMode::default(),
             rations: 0,
             weapons: 0,
             weapon: 0,
@@ -1141,14 +1146,9 @@ impl Adventure {
         // Hunger drains slowly; adequate food restores health only when safe.
         world.inventory.tick(dt);
         let armor_reduction = world.inventory.armor_reduction();
-        if !player.flying {
-            let sprint_factor = if player.sprinting && player.vel.length_squared() > 0.25 {
-                2.2
-            } else {
-                1.0
-            };
-            self.hunger = (self.hunger - dt * 0.04 * sprint_factor).max(0.0);
-        }
+        let sprinting = player.sprinting && player.vel.length_squared() > 0.25;
+        let drain = hunger::drain_per_second(self.hunger_mode, sprinting, player.flying);
+        self.hunger = (self.hunger - dt * drain).max(0.0);
         if self.hunger >= 75.0 && self.health < self.max_health() && self.hurt <= 0.0 {
             self.health = (self.health + dt * 0.36).min(self.max_health());
         } else if self.hunger <= 0.0 && !player.flying {
