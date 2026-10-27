@@ -24,6 +24,7 @@ mod main_menu;
 pub(crate) mod menu_capture;
 mod orbital;
 mod magic_fx;
+pub mod map;
 pub(crate) mod magic_style;
 pub(crate) mod pixel_art;
 mod presentation;
@@ -2649,6 +2650,15 @@ impl EguiUi {
             if notice_expired {
                 self.quality_notice = None;
             }
+            // Below the F3 readout when it is open, else flush with the corner.
+            let minimap_top = if self.show_debug_performance_panel { 104.0 } else { 12.0 };
+            map::pump(
+                &self.ctx,
+                player.pos,
+                player.yaw,
+                self.show_hud && !creative_state.any_ui_open(),
+                minimap_top,
+            );
             if self.show_hud {
                 let mut status_rect = None;
                 if self.show_debug_performance_panel {
@@ -2705,7 +2715,8 @@ impl EguiUi {
                 if self.ctx.input(|i| i.modifiers.alt)
                     && !creative_state.any_ui_open() && !self.show_debug_performance_panel
                     && (creative_state.tool != ToolKind::Hand || self.adventure.wand == 0) {
-                    tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback);
+                    let top = if map::minimap_enabled() { 184.0 } else { 64.0 };
+                    tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback, top);
                 }
                 if !creative_state.any_ui_open() {
                     if let Some(enemy) = self
@@ -3026,6 +3037,7 @@ impl EguiUi {
                 if creative_state.show_wand_atelier {
                     wand_atelier::draw(&self.ctx, &mut creative_state.show_wand_atelier);
                 }
+                map::panel(&self.ctx, &mut creative_state.show_world_map);
                 if creative_state.show_material_editor {
                     crate::material_studio::draw(
                         &self.ctx,

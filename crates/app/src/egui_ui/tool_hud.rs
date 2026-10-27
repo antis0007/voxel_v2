@@ -32,10 +32,10 @@ impl Feedback {
     }
 }
 
-pub fn draw(ctx: &egui::Context, tool: &CreativeState, feedback: &Feedback) {
+/// `top` clears the compass label and, when shown, the minimap above.
+pub fn draw(ctx: &egui::Context, tool: &CreativeState, feedback: &Feedback, top: f32) {
     egui::Area::new("tool_telemetry".into())
-        // Below the compass, whose quest label hangs under the bar and ran into this box.
-        .anchor(Align2::RIGHT_TOP, [-12.0, 64.0])
+        .anchor(Align2::RIGHT_TOP, [-12.0, top])
         .interactable(false)
         .show(ctx, |ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(220.0, 80.0), egui::Sense::hover());

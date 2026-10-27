@@ -111,6 +111,7 @@ pub struct CreativeState {
     pub show_material_editor: bool,
     pub show_quick_select: bool,
     pub show_wand_atelier: bool,
+    pub show_world_map: bool,
     pub tool: ToolKind,
     pub brush_shape: BrushShape,
     pub brush_radius: i32,
@@ -144,6 +145,7 @@ impl Default for CreativeState {
             show_material_editor: false,
             show_quick_select: false,
             show_wand_atelier: false,
+            show_world_map: false,
             tool: ToolKind::Hand,
             brush_shape: BrushShape::Cube,
             brush_radius: 0,
@@ -322,6 +324,7 @@ impl CreativeState {
         self.show_material_editor = false;
         self.show_quick_select = false;
         self.show_wand_atelier = false;
+        self.show_world_map = false;
     }
     pub fn cancel_edits(&mut self) {
         self.pending = None;
@@ -387,6 +390,7 @@ impl CreativeState {
             || self.show_quick_select
             || self.show_material_editor
             || self.show_wand_atelier
+            || self.show_world_map
     }
 
     pub fn reach_distance_blocks(&self, voxel_scale: VoxelScalePreset) -> f32 {

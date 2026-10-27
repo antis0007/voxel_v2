@@ -1519,6 +1519,7 @@ impl ChunkStreamer {
                 Ok(()) => {
                     self.meshing.insert(job.key, (job_id, cancelled));
                     dispatched += 1;
+                    crate::egui_ui::map::note_chunk(job.key.coord);
                 }
                 Err(mpsc::TrySendError::Full(_)) => {
                     self.ready_chunks.push_front(job);
@@ -1784,6 +1785,12 @@ impl ChunkStreamer {
         }
 
         let mesh_dispatched = self.dispatch_ready_chunks(cache, revision);
+        crate::egui_ui::map::absorb(
+            &snapshot.regions.root,
+            snapshot.cfg.voxel_scale.meters(),
+            |c| cache.cpu_chunks.get(&c).map(|s| &***s),
+            engine_core::Budget::wall(Duration::from_micros(600)),
+        );
 
         // Drain the pending queue rather than scanning all visible chunks each frame.
         // pending_schedule is populated by push_pending() when expand_visible() adds
