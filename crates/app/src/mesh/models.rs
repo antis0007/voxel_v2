@@ -12,6 +12,7 @@ use crate::world::{
 use glam::{IVec3, Quat, Vec3};
 
 mod wand;
+pub(crate) mod held_item;
 pub(crate) mod wand_kit;
 pub(crate) mod wand_sprite;
 mod wayfarer;
@@ -1917,8 +1918,9 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
     // The held wand: styled from the player's atelier choices, idle in the hand
     // and drawn forward when a cast is under way. The tool takes the hand on a swing.
+    let pinned = held_item::pinned();
     if (world.adventure.wand > 0 || player.viewmodel.equip > 0.01)
-        && world.adventure.swing() <= 0.0 {
+        && world.adventure.swing() <= 0.0 && !pinned {
         let adv = &world.adventure;
         let spell = if adv.casting() { adv.last_cast } else { adv.loadout.slot(adv.loadout.cursor) };
         let held_seed=if adv.wand>0 { adv.loadout.seed } else { player.viewmodel.seed };
@@ -1941,6 +1943,19 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                 spell: crate::world::adventure::spell_color(spell),
             },
         );
+    }
+    // Any other hotbar item rides in the hand; it drops away while a wand is drawn.
+    if (pinned || world.adventure.wand == 0 && player.viewmodel.equip < 0.95) && world.adventure.swing() <= 0.0
+        && let Some(item) = held_item::held(world, player) {
+        held_item::draw(&mut mesh, item, &held_item::View {
+            eye, forward, right, up,
+            time: world.adventure.time,
+            sway: player.viewmodel.sway.value,
+            gait: player.viewmodel.gait,
+            speed: player.viewmodel.speed,
+            interact: player.viewmodel.interact,
+            lowered: if pinned { 0.0 } else { player.viewmodel.equip },
+        });
     }
     tag_camera_relative(&mut mesh.vertices[viewmodel_mark..]);
     for vertex in &mut mesh.vertices[viewmodel_mark..] {

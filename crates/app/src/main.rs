@@ -947,9 +947,10 @@ fn held_torch_light(
     player: &Player,
     voxel_scale: VoxelScalePreset,
     world_scale: f32,
+    torch: bool,
     lumen_lantern: bool,
 ) -> Option<TorchLight> {
-    if !player.selected_block.is_torch() && !lumen_lantern {
+    if !torch && !lumen_lantern {
         return None;
     }
 
@@ -957,9 +958,11 @@ fn held_torch_light(
     let forward = player.forward_dir();
     let right = player.right_dir();
     let inv_world_scale = world_scale.recip().max(1e-6);
+    // At the drawn flame, so the light and the held torch agree.
+    let flame = mesh::models::held_item::torch_flame_offset();
     Some(TorchLight {
         position: (eye
-            + (forward * 0.42 + right * 0.18 + Vec3::new(0.0, -0.28, 0.0)) * inv_world_scale)
+            + (forward * flame.z + right * flame.x + Vec3::Y * flame.y) * inv_world_scale)
             * world_scale,
         radius: if lumen_lantern { 22.0 } else { TORCH_LIGHT_RADIUS },
         color: if lumen_lantern {
@@ -3926,7 +3929,7 @@ fn main() -> Result<()> {
                                     culling_start.elapsed().as_secs_f32() * 1000.0;
                                 if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 let held_torch =
-                                    held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp_enabled());
+                                    held_torch_light(&player, world.voxel_scale, world_scale, mesh::models::held_item::holds_torch(world, &player), world.expedition.lamp_enabled());
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, &chunk_cache, player.pos, world_scale);
@@ -4140,7 +4143,7 @@ fn main() -> Result<()> {
                                     culling_start.elapsed().as_secs_f32() * 1000.0;
                                 if benchmark.is_some() { visible_missing = chunk_cache.missing_in_view(cull_proj * cull_view); }
                                 let held_torch =
-                                    held_torch_light(&player, world.voxel_scale, world_scale, world.expedition.lamp_enabled());
+                                    held_torch_light(&player, world.voxel_scale, world_scale, mesh::models::held_item::holds_torch(world, &player), world.expedition.lamp_enabled());
                                 let torch_start = Instant::now();
                                 let mut nearby_torches =
                                     collect_nearby_torches(&snapshot, &chunk_cache, player.pos, world_scale);

@@ -135,18 +135,10 @@ fn draw_creative_item_card(ui: &mut egui::Ui, size: [f32; 2], item: Item) -> egu
 }
 
 pub(super) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: Item) {
-    match item {
-        Item::PowerKit(k) => draw_voxel_icon(painter, rect, k.kind.block()),
-        Item::Block(block) => draw_voxel_icon(painter, rect, block),
-        Item::Resource(i) => icons::paint(painter, rect, icons::Icon::Resource(i as usize)),
-        Item::Food(f) => icons::paint(painter, rect, icons::Icon::Food(f as u8)),
-        Item::Weapon(tier) => icons::paint(painter, rect, icons::Icon::Sword(tier as u32)),
-        Item::Armor(slot, tier) => {
-            icons::paint(painter, rect, icons::Icon::Armor(slot as u8, tier as u8))
-        }
-        Item::Tool(1 | 2) => icons::paint(painter, rect, icons::Icon::Bore),
-        Item::Tool(t) => icons::paint(painter, rect, icons::Icon::Wand(t)),
-        Item::Wand { look, .. } => super::wand_icon::paint(painter, rect, look),
+    match super::held_art::art(item) {
+        super::held_art::Art::Block(block) => draw_voxel_icon(painter, rect, block),
+        super::held_art::Art::Icon(icon) => icons::paint(painter, rect, icon),
+        super::held_art::Art::Wand(look) => super::wand_icon::paint(painter, rect, look),
     }
 }
 

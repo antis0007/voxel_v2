@@ -20,6 +20,11 @@ pub enum Icon {
     Armor(u8, u8),
     Food(u8),
 }
+/// Glyph rows and accent colour of an icon.
+pub(super) fn rows(icon: Icon) -> (&'static [&'static str], C) {
+    art(icon)
+}
+
 fn art(icon: Icon) -> (&'static [&'static str], C) {
     let gem = &[
         "      33      ",
