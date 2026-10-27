@@ -1927,6 +1927,17 @@ fn main() -> Result<()> {
                                     &creative,
                                 );
                             }
+                            Some(BindAction::Map) if fresh_press && !creative.show_palette => {
+                                egui_ui::map::toggle_panel(&mut creative); input.clear(); player.jump_tap_timer = 0.0;
+                                sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
+                            }
+                            Some(BindAction::Waypoint) if fresh_press && grabbed && !creative.any_ui_open() => {
+                                if let Some(index) = egui_ui::map::add_waypoint_at_player()
+                                    && let Some(ui) = egui_ui.as_mut() {
+                                        ui.quality_notice = Some((format!("Waypoint {}", index + 1), 2.0));
+                                    }
+                            }
+                            Some(BindAction::Minimap) if fresh_press => egui_ui::map::toggle_minimap(),
                             Some(BindAction::RangeDown | BindAction::RangeUp)
                                 if fresh_press && grabbed && !creative.any_ui_open() => {
                                 creative.adjust_range(if action == Some(BindAction::RangeUp) { 1 } else { -1 });

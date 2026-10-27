@@ -41,7 +41,7 @@ actions!(
     Inspect, Zoom,
     Interact, NextSpell, Lamp, ToolHand, ToolBrush, ToolBuilders, ToolDestructor,
     ToolArea, ToolExplosive, RangeDown, RangeUp, Inventory, CreativePanel, WandAtelier,
-    QuickSelect, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
+    QuickSelect, Map, Waypoint, Minimap, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
     Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9,
 );
 
