@@ -832,6 +832,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_netcode"
+version = "0.1.0"
+dependencies = [
+ "engine_core",
+ "glam",
+]
+
+[[package]]
 name = "engine_sim"
 version = "0.1.0"
 dependencies = [

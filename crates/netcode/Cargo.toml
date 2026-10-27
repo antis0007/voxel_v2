@@ -1,0 +1,14 @@
+# Transport-independent multiplayer logic: link impairment, snapshot
+# interpolation, pose quantisation. No sockets and no game state, so every
+# piece runs in plain unit tests (docs/superpowers/specs/2026-10-26-multiplayer-design.md).
+[package]
+name = "engine_netcode"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine_core = { path = "../core" }
+glam = "0.32.0"
+
+[lints]
+workspace = true
