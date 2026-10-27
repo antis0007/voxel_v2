@@ -5,6 +5,7 @@
 pub mod body;
 pub mod cells;
 pub mod chunk_pace;
+pub mod chunk_stream;
 pub mod connection;
 pub mod container;
 pub mod edits;
