@@ -23,6 +23,9 @@ pub const SHADOW_MAP_SIZE: u32 = 2048;
 pub const NEAR_CASCADE_COUNT: usize = 4;
 pub const CASCADE_COUNT: usize = NEAR_CASCADE_COUNT + 1;
 pub const SHADOW_UPDATE_EPSILON: f32 = 2.0e-4;
+/// Squared sun-direction drift a fitted cascade keeps before refitting: about a quarter degree.
+/// The sun drifts past the old 1e-8 bound on nearly every frame, which redrew all cascades each frame.
+pub const SUN_REUSE_DIST2: f32 = 2.0e-5;
 pub const FAR_SHADOW_DISTANCE: f32 = 8192.0;
 
 #[repr(C)]
@@ -95,11 +98,19 @@ struct FrustumSlice {
 /// One cascade's light projection over origin-frame metres.
 struct CascadeFit {
     light_view_proj: DMat4,
+    /// `light_view_proj` with its far face at `CASTER_DEPTH_RADII` sphere radii
+    /// from the light-side tangent plane. Casters past it lie behind every
+    /// receiver the layer can serve; the reuse test keeps receivers inside it.
+    caster_view_proj: DMat4,
     /// World metres per shadow texel.
     texel_m: f64,
     near: f64,
     far: f64,
 }
+
+/// Receiver depth a fitted layer accepts, in receiver-sphere radii from its
+/// light-side tangent plane: the sphere spans 2, the rest is drift room for reuse.
+const CASTER_DEPTH_RADII: f64 = 3.0;
 
 pub struct ShadowRenderer {
     pub uniform_buffer: wgpu::Buffer,
@@ -108,7 +119,10 @@ pub struct ShadowRenderer {
 
     gen_buffers: [wgpu::Buffer; CASCADE_COUNT],
     gen_bind_groups: [wgpu::BindGroup; CASCADE_COUNT],
+    /// Parent (horizon) casters: the fragment stage discards resident-owned columns.
     pipeline: wgpu::RenderPipeline,
+    /// Chunk casters: depth only.
+    child_pipeline: wgpu::RenderPipeline,
     layer_views: [wgpu::TextureView; CASCADE_COUNT],
 
     active_uniform: ShadowUniform,
@@ -123,6 +137,9 @@ pub struct ShadowRenderer {
     force_refresh: bool,
     active_light_dirs: [Vec3; CASCADE_COUNT],
     desired_light_dirs: [Vec3; CASCADE_COUNT],
+    /// Caster volume of each layer's stored matrix (`CascadeFit::caster_view_proj`).
+    active_casters: [Mat4; CASCADE_COUNT],
+    desired_casters: [Mat4; CASCADE_COUNT],
     /// Render origin of each layer's stored matrix.
     active_origins: [Option<RenderOrigin>; CASCADE_COUNT],
     desired_origin: RenderOrigin,
@@ -149,8 +166,9 @@ fn unproject_clip(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
     world.truncate() / world.w.max(1e-6)
 }
 
-fn covers_receivers(cascade: &CascadeData, corners: &[Vec3; 8]) -> bool {
-    let matrix = Mat4::from_cols_array_2d(&cascade.light_view_proj);
+/// True when every receiver corner lies inside the layer's caster volume.
+fn covers_receivers(caster_view_proj: Mat4, corners: &[Vec3; 8]) -> bool {
+    let matrix = caster_view_proj;
     // Leave three shadow texels for the PCF footprint at the map edge.
     let edge = 1.0 - 6.0 / SHADOW_MAP_SIZE as f32;
     corners.iter().all(|&p| {
@@ -162,6 +180,42 @@ fn covers_receivers(cascade: &CascadeData, corners: &[Vec3; 8]) -> bool {
             && q.z > 0.0
             && q.z < q.w
     })
+}
+
+/// Vertical half-extent assumed for a chunk column, metres: above any terrain or build height.
+const COLUMN_HALF_HEIGHT_M: f64 = 100_000.0;
+
+/// True when chunk column `(x, z)`, at any height, meets a layer's caster volume.
+///
+/// `origin_m` is the layer's render origin in metres; the matrix maps origin-frame metres.
+fn column_reaches(caster_view_proj: Mat4, origin_m: DVec3, scale: f32, (x, z): (i32, i32)) -> bool {
+    let span = f64::from(CHUNK_SIZE) * f64::from(scale);
+    let low = DVec3::new(f64::from(x) * span, -COLUMN_HALF_HEIGHT_M, f64::from(z) * span) - origin_m;
+    let high = DVec3::new(low.x + span, COLUMN_HALF_HEIGHT_M - origin_m.y, low.z + span);
+    // A tall column is rarely outside any single plane of an oblique volume,
+    // so per-plane corner tests accept nearly every column. Instead each plane
+    // bounds the column's height for its best x/z corner; an empty
+    // intersection of those height ranges proves the column misses.
+    let (mut y_low, mut y_high) = (low.y, high.y);
+    for plane in crate::render::extract_planes(caster_view_proj) {
+        let n = plane.as_dvec4();
+        let x = if n.x >= 0.0 { high.x } else { low.x };
+        let z = if n.z >= 0.0 { high.z } else { low.z };
+        let rest = n.x * x + n.z * z + n.w;
+        if n.y.abs() < 1e-12 {
+            if rest < 0.0 {
+                return false;
+            }
+        } else if n.y > 0.0 {
+            y_low = y_low.max(-rest / n.y);
+        } else {
+            y_high = y_high.min(-rest / n.y);
+        }
+        if y_low > y_high {
+            return false;
+        }
+    }
+    true
 }
 
 /// Receiver split distances, metres: four near layers and the far layer.
@@ -247,7 +301,7 @@ fn fit_cascade(center_m: DVec3, radius: f64, light_dir: DVec3, up: DVec3, origin
     let offset = world_locked_texel_offset(view, origin_m, texel_m);
     let near = -z_pullback;
     let far = radius * 2.0 + z_pullback;
-    let proj = DMat4::orthographic_rh(
+    let ortho = |far| DMat4::orthographic_rh(
         -extent + offset.x,
         extent + offset.x,
         -extent + offset.y,
@@ -255,7 +309,13 @@ fn fit_cascade(center_m: DVec3, radius: f64, light_dir: DVec3, up: DVec3, origin
         near,
         far,
     );
-    CascadeFit { light_view_proj: proj * view, texel_m, near, far }
+    CascadeFit {
+        light_view_proj: ortho(far) * view,
+        caster_view_proj: ortho(radius * CASTER_DEPTH_RADII) * view,
+        texel_m,
+        near,
+        far,
+    }
 }
 
 impl ShadowRenderer {
@@ -320,8 +380,8 @@ impl ShadowRenderer {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow gen pipeline"),
+        let pipeline_with = |label, fragment| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shadow_shader,
@@ -340,12 +400,7 @@ impl ShadowRenderer {
                     DrawTransform::LAYOUT,
                 ],
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shadow_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[],
-            }),
+            fragment,
             primitive: wgpu::PrimitiveState {
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
@@ -365,6 +420,15 @@ impl ShadowRenderer {
             multiview: None,
             cache: None,
         });
+        let pipeline = pipeline_with("shadow gen pipeline", Some(wgpu::FragmentState {
+            module: shadow_shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[],
+        }));
+        // Chunk casters never discard. Without a fragment stage the GPU writes
+        // their depth early; the ownership discard is only for parent pages.
+        let child_pipeline = pipeline_with("shadow child caster pipeline", None);
 
         let gen_buffers = std::array::from_fn(|_| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -400,6 +464,7 @@ impl ShadowRenderer {
             gen_buffers,
             gen_bind_groups,
             pipeline,
+            child_pipeline,
             layer_views,
             active_uniform: unsafe { std::mem::zeroed() },
             desired_uniform: unsafe { std::mem::zeroed() },
@@ -413,6 +478,8 @@ impl ShadowRenderer {
             force_refresh: true,
             active_light_dirs: [Vec3::ZERO; CASCADE_COUNT],
             desired_light_dirs: [Vec3::ZERO; CASCADE_COUNT],
+            active_casters: [Mat4::IDENTITY; CASCADE_COUNT],
+            desired_casters: [Mat4::IDENTITY; CASCADE_COUNT],
             active_origins: [None; CASCADE_COUNT],
             desired_origin: CascadeView::IDENTITY.origin,
             cascade_centers: [DVec3::ZERO; CASCADE_COUNT],
@@ -478,19 +545,22 @@ impl ShadowRenderer {
             // Reuse its actual texture/matrix pair while every new receiver
             // still fits, rather than rerasterizing all four maps each frame.
             // A matrix from another render origin is in another frame.
-            if self.initialized
+            let same_frame = self.initialized
                 && self.active_origins[i] == Some(view.origin)
                 && self.active_uniform.world_scale == scale
-                && (self.active_uniform.cascades[i].far_plane - splits[i + 1]).abs() < 1e-4
-                && safe_dir.distance_squared(self.active_light_dirs[i]) <= 1e-8
-                && covers_receivers(&self.active_uniform.cascades[i], &corners)
-            {
+                && (self.active_uniform.cascades[i].far_plane - splits[i + 1]).abs() < 1e-4;
+            let covered = same_frame && covers_receivers(self.active_casters[i], &corners);
+            if covered && safe_dir.distance_squared(self.active_light_dirs[i]) <= SUN_REUSE_DIST2 {
                 cascades[i] = self.active_uniform.cascades[i];
                 self.desired_light_dirs[i] = self.active_light_dirs[i];
+                self.desired_casters[i] = self.active_casters[i];
                 continue;
             }
             self.pending_cascades |= 1 << i;
-            self.urgent_cascades |= 1 << i;
+            // Sun drift alone may wait for the rotation; lost coverage may not.
+            if !covered {
+                self.urgent_cascades |= 1 << i;
+            }
 
             let fit = fit_cascade(
                 center_m,
@@ -500,6 +570,7 @@ impl ShadowRenderer {
                 origin_m,
                 f64::from(scale),
             );
+            self.desired_casters[i] = fit.caster_view_proj.as_mat4();
             let texel_size = fit.texel_m as f32;
             let depth_range = (fit.far - fit.near) as f32;
             cascades[i] = CascadeData {
@@ -543,10 +614,9 @@ impl ShadowRenderer {
                 .map(|(x, y)| (x - y).abs())
                 .fold(0.0f32, f32::max);
             if delta > SHADOW_UPDATE_EPSILON {
+                // Urgency was decided by the fit above; a refit alone does not
+                // justify redrawing a layer out of rotation.
                 self.pending_cascades |= 1 << i;
-                // Refresh every changed projection immediately, but retain
-                // other layers whose world-space coverage is still valid.
-                self.urgent_cascades |= 1 << i;
             }
         }
     }
@@ -564,15 +634,34 @@ impl ShadowRenderer {
     }
 
     pub fn set_horizon_source(&mut self, generation: u64, coverage: &ResidentCoverage) {
-        if self.horizon_generation != generation
-            || self.resident_coverage != *coverage
-        {
+        if self.horizon_generation != generation {
             self.horizon_generation = generation;
             self.resident_coverage = *coverage;
-            // A parent publication or ownership handoff invalidates every
-            // layer together. Do not retain shadows from an obsolete owner.
+            // A parent publication replaces parent casters in every layer
+            // together. Do not retain shadows from an obsolete owner.
             self.shadow_map_dirty = true;
             self.force_refresh = true;
+        } else if self.resident_coverage != *coverage {
+            let changed = self.resident_coverage.changed_columns(coverage);
+            self.resident_coverage = *coverage;
+            // An ownership handoff swaps parent and chunk casters in the
+            // changed columns. Every layer whose caster volume reaches one of
+            // them would keep the obsolete owner, so it redraws now; layers
+            // that cannot see those columns keep their maps.
+            let scale = self.active_uniform.world_scale.max(0.25);
+            let mut reached = 0u8;
+            for i in 0..CASCADE_COUNT {
+                let Some(origin) = self.active_origins[i] else {
+                    reached |= 1 << i;
+                    continue;
+                };
+                let origin_m = origin.voxel.as_dvec3() * f64::from(scale);
+                if changed.iter().any(|&c| column_reaches(self.active_casters[i], origin_m, scale, c)) {
+                    reached |= 1 << i;
+                }
+            }
+            self.pending_cascades |= reached;
+            self.urgent_cascades |= reached;
         }
     }
 
@@ -609,6 +698,7 @@ impl ShadowRenderer {
             }
             self.active_uniform.cascades[i] = self.desired_uniform.cascades[i];
             self.active_light_dirs[i] = self.desired_light_dirs[i];
+            self.active_casters[i] = self.desired_casters[i];
             self.active_origins[i] = Some(self.desired_origin);
             let gen_uni = ShadowGenUniform {
                 light_view_proj: self.active_uniform.cascades[i].light_view_proj,
@@ -692,7 +782,8 @@ impl ShadowRenderer {
             self.draw_lists[i].clear();
             self.parent_draw_lists[i].clear();
             let matrix = Mat4::from_cols_array_2d(&self.active_uniform.cascades[i].light_view_proj);
-            let planes = crate::render::extract_planes(matrix);
+            // Cull against the caster volume: geometry deeper than every receiver casts nothing here.
+            let planes = crate::render::extract_planes(self.active_casters[i]);
             // The matrix maps origin-frame metres; offset the chunk in integers first.
             let origin = self.active_origins[i].unwrap_or(self.desired_origin);
             let scale = self.active_uniform.world_scale;
@@ -785,7 +876,7 @@ impl ShadowRenderer {
                 ),
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.child_pipeline);
             pass.set_bind_group(0, &self.gen_bind_groups[i], &[]);
             pass.set_vertex_buffer(1, draw_offsets.slice(..));
             let mut bound_page = None;
@@ -803,7 +894,10 @@ impl ShadowRenderer {
                     pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
                 }
             }
-            if let Some(horizon) = horizon {
+            if let Some(horizon) = horizon
+                && !self.parent_draw_lists[i].is_empty()
+            {
+                pass.set_pipeline(&self.pipeline);
                 for (page_index, indices) in &self.parent_draw_lists[i] {
                     let page = &horizon.pages[*page_index];
                     pass.set_vertex_buffer(0, page.vertices.slice(..));
@@ -838,6 +932,53 @@ mod tests {
         let fit = fit_cascade(slice.center_m, f64::from(slice.radius), dir, DVec3::Y, origin_m, scale);
         let ndc = fit.light_view_proj.project_point3(world_point * scale - origin_m);
         (ndc.truncate() * 0.5 + 0.5) * f64::from(SHADOW_MAP_SIZE)
+    }
+
+    /// A layer fitted around a receiver sphere far from spawn, sun low in the south-west.
+    fn far_layer() -> (CascadeFit, DVec3, DVec3, f64, DVec3) {
+        let scale = 1.0;
+        let origin = RenderOrigin { voxel: IVec3::new(-897_024, 0, 4096) };
+        let origin_m = origin.voxel.as_dvec3() * scale;
+        let center = DVec3::new(-897_000.0, 70.0, 4100.0);
+        let radius = 40.0;
+        let dir = DVec3::new(-0.6, 0.45, -0.66).normalize();
+        (fit_cascade(center, radius, dir, DVec3::Y, origin_m, scale), origin_m, center, radius, dir)
+    }
+
+    #[test]
+    fn caster_volume_keeps_receivers_and_light_side_casters_and_drops_deeper_ones() {
+        let (fit, origin_m, center, radius, dir) = far_layer();
+        let caster = fit.caster_view_proj.as_mat4();
+        let inside = |world: DVec3| {
+            let q = caster * (world - origin_m).as_vec3().extend(1.0);
+            q.x.abs() <= q.w && q.y.abs() <= q.w && q.z >= 0.0 && q.z <= q.w
+        };
+        for offset in [DVec3::ZERO, dir * radius, -dir * radius * 0.99, DVec3::X * radius * 0.7] {
+            assert!(inside(center + offset), "receiver {offset}");
+        }
+        assert!(inside(center + dir * 5000.0), "a mountain toward the sun still casts");
+        assert!(!inside(center - dir * radius * 2.2), "behind every receiver");
+        // Same lateral window as the drawn matrix: only the far face moved.
+        let p = (center + DVec3::new(13.0, -4.0, 9.0) - origin_m).as_vec3().extend(1.0);
+        let (a, b) = (fit.light_view_proj.as_mat4() * p, caster * p);
+        assert!((a.x - b.x).abs() < 1e-5 && (a.y - b.y).abs() < 1e-5);
+    }
+
+    #[test]
+    fn ownership_changes_reach_only_layers_whose_caster_volume_holds_the_column() {
+        let (fit, origin_m, center, radius, dir) = far_layer();
+        let caster = fit.caster_view_proj.as_mat4();
+        let column = |p: DVec3| ((p.x / 32.0).floor() as i32, (p.z / 32.0).floor() as i32);
+        assert!(column_reaches(caster, origin_m, 1.0, column(center)));
+        // Toward the sun, 3 km out along its azimuth: tall casters there shade the receivers.
+        let sunward = center + DVec3::new(dir.x, 0.0, dir.z).normalize() * 3000.0;
+        assert!(column_reaches(caster, origin_m, 1.0, column(sunward)));
+        // Away from the sun the column runs below the receivers' depth.
+        let behind = center - DVec3::new(dir.x, 0.0, dir.z).normalize() * 3000.0;
+        assert!(!column_reaches(caster, origin_m, 1.0, column(behind)));
+        // Sideways, outside the lateral window.
+        let side = center + DVec3::new(-dir.z, 0.0, dir.x).normalize() * (radius * 4.0 + 64.0);
+        assert!(!column_reaches(caster, origin_m, 1.0, column(side)));
     }
 
     #[test]

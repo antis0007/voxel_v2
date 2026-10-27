@@ -157,6 +157,56 @@ impl ResidentCoverage {
         self.sparse_contains(x, z)
     }
 
+    /// Columns owned by exactly one of the two maps.
+    pub fn changed_columns(&self, other: &Self) -> Vec<(i32, i32)> {
+        let mut changed = Vec::new();
+        for (a, b) in [(self, other), (other, self)] {
+            a.for_each_column(|x, z| {
+                if !b.contains_column(x, z) {
+                    changed.push((x, z));
+                }
+            });
+        }
+        changed
+    }
+
+    /// Every owned column, as `contains_column` answers: dense bits first,
+    /// then sparse keys outside the dense window.
+    fn for_each_column(&self, mut f: impl FnMut(i32, i32)) {
+        let width = self.header[2];
+        if self.header[3] == 0 || !(1..=MAX_SIDE).contains(&width) {
+            return;
+        }
+        let cells = (width * width) as usize;
+        for (index, &word) in self.words.iter().flatten().enumerate() {
+            let mut bits = word;
+            while bits != 0 {
+                let linear = index * 32 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if linear >= cells {
+                    continue;
+                }
+                let x = i64::from(self.header[0]) + (linear % width as usize) as i64;
+                let z = i64::from(self.header[1]) + (linear / width as usize) as i64;
+                if let (Ok(x), Ok(z)) = (i32::try_from(x), i32::try_from(z)) {
+                    f(x, z);
+                }
+            }
+        }
+        if !(1..=MAX_SPARSE_COLUMNS as i32).contains(&self.sparse_header[0]) {
+            return;
+        }
+        if self.sparse_header[1] == 1 && !self.in_dense_window(i32::MIN, i32::MIN) {
+            f(i32::MIN, i32::MIN);
+        }
+        for slot in 0..SPARSE_SLOTS {
+            let [x, z] = self.sparse_key(slot);
+            if [x, z] != EMPTY_KEY && !self.in_dense_window(x, z) {
+                f(x, z);
+            }
+        }
+    }
+
     /// Test all columns touched by a world-metre AABB. Nonzero extents are
     /// half-open: a high edge exactly on a chunk boundary does not own the next
     /// column. Zero-width axes are point queries, matching the shader's floor.
@@ -464,6 +514,28 @@ mod tests {
                 assert!(!map.contains_bounds(Vec3::splat(-1e10), Vec3::splat(1e10), scale));
             }
         }
+    }
+
+    #[test]
+    fn changed_columns_is_the_symmetric_difference_across_windows_and_sparse_keys() {
+        use std::collections::HashSet;
+        let mut a = ResidentCoverage { header: [-64, -64, 129, 1], ..Default::default() };
+        let mut b = ResidentCoverage { header: [-63, -64, 129, 1], ..Default::default() };
+        for (x, z) in [(0, 0), (-64, -64), (64, 64), (5000, -7000), (i32::MIN, i32::MIN)] {
+            assert!(a.set_column(x, z));
+        }
+        // (64, 64) moves from a's dense window to b's; (65, 64) is sparse in a only.
+        for (x, z) in [(0, 0), (64, 64), (1, 0), (5000, -7000), (-9000, 9000)] {
+            assert!(b.set_column(x, z));
+        }
+        assert!(a.set_column(65, 64));
+        let changed: HashSet<_> = a.changed_columns(&b).into_iter().collect();
+        let expected: HashSet<_> =
+            [(-64, -64), (i32::MIN, i32::MIN), (65, 64), (1, 0), (-9000, 9000)].into_iter().collect();
+        assert_eq!(changed, expected);
+        assert!(a.changed_columns(&a).is_empty());
+        let disabled = ResidentCoverage { header: [-64, -64, 129, 0], ..a };
+        assert_eq!(disabled.changed_columns(&a).len(), 6, "a disabled map owns nothing");
     }
 
     #[test]

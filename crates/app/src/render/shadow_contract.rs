@@ -134,7 +134,8 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&renderer.pipeline);
+            // As in `render`: parent pages use the discard pipeline, chunks the depth-only one.
+            pass.set_pipeline(if ao < 0.0 { &renderer.pipeline } else { &renderer.child_pipeline });
             pass.set_bind_group(0, &renderer.gen_bind_groups[0], &[]);
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             pass.set_vertex_buffer(1, draw_offsets.slice(..));
@@ -197,10 +198,13 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
     renderer.shadow_map_dirty = false;
     renderer.set_horizon_source(7, &owned);
     assert!(!renderer.force_refresh && !renderer.shadow_map_dirty);
+    // An ownership-only change redraws the layers that can see the changed
+    // columns, at once; a layer with no fitted volume yet counts as seeing all.
+    const ALL: u8 = (1 << CASCADE_COUNT) - 1;
     renderer.set_horizon_source(7, &empty);
-    assert!(renderer.force_refresh && renderer.shadow_map_dirty);
-    renderer.force_refresh = false;
-    renderer.shadow_map_dirty = false;
+    assert!(!renderer.force_refresh && renderer.pending_cascades == ALL && renderer.urgent_cascades == ALL);
+    renderer.pending_cascades = 0;
+    renderer.urgent_cascades = 0;
     renderer.set_horizon_source(8, &empty);
     assert!(renderer.force_refresh && renderer.shadow_map_dirty);
     renderer.force_refresh = false;
@@ -211,8 +215,8 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
     assert_eq!(sparse_change.words, empty.words);
     renderer.set_horizon_source(8, &sparse_change);
     assert!(
-        renderer.force_refresh && renderer.shadow_map_dirty,
-        "sparse-only ownership changes invalidate all shadow layers"
+        renderer.urgent_cascades == ALL,
+        "sparse-only ownership changes reach unfitted shadow layers"
     );
     println!(
         "[far-shadow-contract] adapter={:?} layers={} gen_bytes={} receiver_bytes={} publication/map/clear invalidation passed",
