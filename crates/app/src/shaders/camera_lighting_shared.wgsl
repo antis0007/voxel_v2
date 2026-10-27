@@ -41,6 +41,8 @@ struct Lighting {
     moon_color_twilight : vec4<f32>,
     ambient_exposure : vec4<f32>,
     sky_top_saturation : vec4<f32>,
+    // xyz: horizon sky colour. w: distant terrain range in metres, 0 when
+    // no backdrop is drawn.
     sky_horizon_reserved : vec4<f32>,
     fog_color_density : vec4<f32>,
     fog_params : vec4<f32>,

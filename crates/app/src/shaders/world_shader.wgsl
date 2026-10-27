@@ -3525,10 +3525,20 @@ fn fs_main(in: VsOut) -> WorldOutput {
     atmosphere_scatter *= mix(1.0, 0.28, cave_amount);
     lit = lit * atmosphere_transmittance + atmosphere_scatter;
     // Earth-scale Rayleigh barely tints land inside the 6 km coverage, so far
-    // forest stayed saturated up to the streaming edge. Fade it toward the
-    // horizon sky along the view azimuth, as the reference backdrops do.
-    let veil_toward_sun = saturate1(dot(safe_normalize2(view_dir.xz, sun_az), sun_az) * 0.5 + 0.5);
-    let veil_sky = max(mix(antisolar_horizon, solar_horizon, veil_toward_sun), vec3<f32>(0.0));
+    // forest stayed saturated up to the streaming edge. Fade it toward the sky
+    // the viewer sees behind it, as the reference backdrops do. The target was
+    // the horizon probe nine degrees up, which at sunset is the solar aureole:
+    // brighter than the horizon itself, so far ground outshone the sky it
+    // stood against by half again and the backdrop edge drew a bright line.
+    let far_limit = max(select(cam.world_params.w, light.sky_horizon_reserved.w,
+        light.sky_horizon_reserved.w > 0.0), 1.0);
+    // The backdrop stops at the distant terrain range; its last ring must be
+    // the sky pass, or the mesh edge is a line at the horizon.
+    let far_close = smoothstep(far_limit * 0.75, far_limit, dist) * (1.0 - cave_amount);
+    var veil_sky = raw_sky_radiance;
+    if LEAN_SHADING && far_close > 0.0 {
+        veil_sky = max(atmosphere_color(view_dir), vec3<f32>(0.0));
+    }
     let veil = (1.0 - exp(-max(dist - 80.0, 0.0) / 2400.0)) * 0.78 * (1.0 - cave_amount);
     // Take the horizon's hue at the surface's own brightness, and only part of
     // the horizon's brightness. A plain mix toward a low sun's horizon gave lit
@@ -3536,7 +3546,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let veil_luma = max(dot(veil_sky, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
     let veil_hue = veil_sky * (max(dot(lit, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0) / veil_luma);
     lit = mix(mix(lit, veil_hue, veil * 0.55), veil_sky, veil * 0.15);
-    let total_fog_t = 1.0 - atmosphere_transmittance * cloud_transmittance * (1.0 - veil);
+    lit = mix(lit, veil_sky, far_close);
+    let total_fog_t = 1.0 - atmosphere_transmittance * cloud_transmittance * (1.0 - veil) * (1.0 - far_close);
 
     if uw_active() {
         if kind == 8 && world_pos.y > cam.camera_pos.y {

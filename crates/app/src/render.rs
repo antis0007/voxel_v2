@@ -845,6 +845,8 @@ struct LightingUniform {
     moon_color_twilight: [f32; 4],
     ambient_exposure: [f32; 4],
     sky_top_saturation: [f32; 4],
+    /// xyz: horizon sky colour. w: distant terrain range in metres, zero
+    /// when no backdrop is drawn; the world shader closes its far edge there.
     sky_horizon_reserved: [f32; 4],
     fog_color_density: [f32; 4],
     fog_params: [f32; 4],
@@ -1037,7 +1039,7 @@ fn lighting_uniform_from_state(
             state.sky_horizon[0],
             state.sky_horizon[1],
             state.sky_horizon[2],
-            0.0,
+            if render_isolation().skip_horizon { 0.0 } else { horizon::horizon_range_m() as f32 },
         ],
         fog_color_density: [
             state.fog_color[0],
