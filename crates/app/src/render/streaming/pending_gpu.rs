@@ -185,7 +185,7 @@ impl ChunkStreamer {
                     cache.edit_proxies.mesh_publications+=1;
                     cache.edit_proxies.latest_mesh_revision=cache.edit_proxies.latest_mesh_revision.max(cpu.revision);
                 }
-                cache.install_mesh_with_casters(key.coord,gpu,std::mem::take(&mut cpu.shadow_casters));
+                cache.install_mesh_unpublished(key.coord,gpu,std::mem::take(&mut cpu.shadow_casters));
             } else {cache.lod_meshes.remember(key.coord,gpu);cache.trim_lod_budget();}
             if desired_lod!=key.lod && cache.gpu_meshes.get(&key.coord).is_none_or(|m|m.lod!=desired_lod) {
                 let desired=ChunkKey{coord:key.coord,lod:desired_lod};
@@ -199,6 +199,7 @@ impl ChunkStreamer {
             }
             self.upload_error=None;published+=1;vertices+=cpu.mesh.vertices.len();indices+=cpu.mesh.indices.len();
         }
+        cache.refresh_published_columns();
         (published,vertices,indices)
     }
 }

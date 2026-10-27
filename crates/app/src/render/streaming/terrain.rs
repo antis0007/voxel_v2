@@ -111,7 +111,7 @@ impl TerrainGenerator {
             job.cancelled.store(true, Ordering::Relaxed);
         }
     }
-    pub(super) fn retain_visible(&mut self, visible: &HashSet<ChunkKey>) {
+    pub(super) fn retain_visible<S: std::hash::BuildHasher>(&mut self, visible: &HashSet<ChunkKey, S>) {
         let coords: HashSet<_> = visible.iter().map(|key| key.coord).collect();
         for job in self.pending.values() {
             if !coords.contains(&job.key.coord) {

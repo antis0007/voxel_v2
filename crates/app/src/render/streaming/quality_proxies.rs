@@ -205,10 +205,10 @@ impl ChunkCache {
             self.edit_proxies.promote_quality_column(key,&members,admitted,now);
             self.quality_proxies.columns.remove(&key);
         }
-        self.sync_quality_membership(snapshot,streamer);
         // A same-LOD dirty replacement can complete without changing the mesh
-        // set. Recheck freshness at every bounded policy tick as well.
-        self.publication_dirty=true;self.refresh_published_columns();
+        // set, so freshness is rechecked every policy tick: the membership sync
+        // rebuilds the visible sets, which always republishes columns.
+        self.sync_quality_membership(snapshot,streamer);
         // Once the canonical parent owns a retired column, release only its
         // exclusively quality resources. Ordinary/edit/handoff owners win.
         let mut released=false;

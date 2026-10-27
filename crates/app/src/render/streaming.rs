@@ -54,6 +54,7 @@ use visibility::{
 use glam::{IVec3, Vec3};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use crate::fast_hash::{FastMap, FastSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -118,19 +119,19 @@ pub struct ChunkCache {
     pending_gpu: Arc<PendingGpuLedger>,
     gpu_world_epoch: u64,
     pub visible: Vec<ChunkKey>,
-    pub visible_keys: HashSet<ChunkKey>,
-    pub visible_coords: HashSet<IVec3>,
+    pub visible_keys: FastSet<ChunkKey>,
+    pub visible_coords: FastSet<IVec3>,
     /// Actual complete column members admitted to drawing. Desired vertical
     /// expansion cannot revoke these while its additional meshes are pending.
-    pub(super) published_coords: HashSet<IVec3>,
-    published_columns: HashMap<(i32,i32),Vec<IVec3>>,
+    pub(super) published_coords: FastSet<IVec3>,
+    published_columns: FastMap<(i32,i32),Vec<IVec3>>,
     publication_dirty: bool,
-    horizon_pins: HashSet<(i32,i32)>,
-    horizon_pin_coords: HashSet<IVec3>,
+    horizon_pins: FastSet<(i32,i32)>,
+    horizon_pin_coords: FastSet<IVec3>,
     edit_proxies: edit_proxies::EditProxies,
     quality_proxies: quality_proxies::QualityProxies,
     seeded_sources: HashSet<IVec3>,
-    pub gpu_meshes: HashMap<IVec3, ChunkGpuMesh>,
+    pub gpu_meshes: FastMap<IVec3, ChunkGpuMesh>,
     /// Storage behind every `ChunkGpuMesh::alloc`.
     arena: arena::MeshArena,
     /// Draw/list caches track every GPU mesh change. Shadow depth has a
@@ -139,7 +140,7 @@ pub struct ChunkCache {
     /// Only validated, exactly unchanged caster inputs may retain this revision.
     pub shadow_caster_revision: u64,
     shadow_casters: shadow_casters::Cache,
-    dirty_meshes: HashSet<IVec3>,
+    dirty_meshes: FastSet<IVec3>,
     pub cpu_chunks: HashMap<IVec3, Arc<ResidentChunk>>,
     pub center_chunk: IVec3,
     /// Cached column Y-ranges to avoid repeated terrain sampling.
@@ -348,7 +349,7 @@ impl ChunkCache {
             (i64::from(x)-i64::from(self.center_chunk.x)).abs()+(i64::from(z)-i64::from(self.center_chunk.z)).abs(),x,z));
         wanted.dedup();
         let requested=wanted.len();
-        let mut pins=HashSet::new(); let mut coords=HashSet::new();
+        let mut pins=FastSet::default(); let mut coords=FastSet::default();
         let mut reserved=self.edit_proxies.coords.clone();
         let mut bytes=reserved.iter().filter_map(|q|self.gpu_meshes.get(q)).map(|m|m.bytes).sum::<usize>();
         let proxy_columns=self.edit_proxies.columns().count(); let mut extra_pins=0usize;
@@ -389,20 +390,20 @@ impl ChunkCache {
             visible,
             visible_keys,
             visible_coords,
-            published_coords:HashSet::new(),
-            published_columns:HashMap::new(),
+            published_coords:FastSet::default(),
+            published_columns:FastMap::default(),
             publication_dirty:true,
-            horizon_pins: HashSet::new(),
-            horizon_pin_coords: HashSet::new(),
+            horizon_pins: FastSet::default(),
+            horizon_pin_coords: FastSet::default(),
             edit_proxies: edit_proxies::EditProxies::default(),
             quality_proxies: quality_proxies::QualityProxies::default(),
             seeded_sources: HashSet::new(),
-            gpu_meshes: HashMap::new(),
+            gpu_meshes: FastMap::default(),
             arena: arena::MeshArena::new(arena_budget(residency::limits().1)),
             gpu_mesh_revision: 0,
             shadow_caster_revision: 0,
             shadow_casters: shadow_casters::Cache::default(),
-            dirty_meshes: HashSet::new(),
+            dirty_meshes: FastSet::default(),
             cpu_chunks: HashMap::new(),
             center_chunk,
             column_y_cache: ColumnPlans::new(),
@@ -545,9 +546,7 @@ impl ChunkCache {
                 self.gpu_meshes.get(&coord).map_or_else(||self.desired_lod(coord),|mesh|mesh.lod)
             } else { self.desired_lod(coord) };
         }
-        self.visible_keys.clear();
-        self.visible_keys.extend(self.visible.iter().copied());
-        self.visible_keys.extend(self.edit_proxies.coords.iter().map(|&coord| ChunkKey { coord, lod: 0 }));
+        // The refresh below rebuilds `visible_keys` from these same sets.
         self.publication_dirty=true;
         self.refresh_published_columns();
     }
@@ -556,7 +555,7 @@ impl ChunkCache {
         if !self.publication_dirty { return; }
         self.publication_dirty=false;
         let radius=render_distance_settings().view_distance_chunks.clamp(1,64);
-        let mut desired:HashMap<(i32,i32),Vec<IVec3>>=HashMap::new();
+        let mut desired:FastMap<(i32,i32),Vec<IVec3>>=FastMap::default();
         for &q in &self.visible_coords {
             let dx=i64::from(q.x)-i64::from(self.center_chunk.x);let dz=i64::from(q.z)-i64::from(self.center_chunk.z);
             if dx*dx+dz*dz<=i64::from(radius)*i64::from(radius) || self.horizon_pins.contains(&(q.x,q.z)) {
@@ -569,7 +568,12 @@ impl ChunkCache {
         for (column, members) in self.edit_proxies.desired_columns() {
             desired.insert(column, members.to_vec());
         }
-        self.published_columns.retain(|column,members|desired.contains_key(column) && members.iter().all(|q|self.gpu_meshes.contains_key(q)));
+        let mut columns_changed=false;
+        self.published_columns.retain(|column,members|{
+            let keep=desired.contains_key(column) && members.iter().all(|q|self.gpu_meshes.contains_key(q));
+            columns_changed|=!keep;
+            keep
+        });
         for (column,mut members) in desired {
             let quality_only=self.quality_proxies.contains_column(&column);
             if members.iter().all(|q|self.gpu_meshes.get(q).is_some_and(|mesh| !self.edit_proxies.contains(q) || mesh.lod == 0))
@@ -578,13 +582,25 @@ impl ChunkCache {
                 members.sort_unstable_by_key(|q|(q.y,q.x,q.z));
                 self.edit_proxies.mark_admitted(column);
                 self.quality_proxies.mark_admitted(column);
-                self.published_columns.insert(column,members);
+                if self.published_columns.get(&column)!=Some(&members) {
+                    columns_changed=true;
+                    self.published_columns.insert(column,members);
+                }
             }
         }
         self.edit_proxies.set_quality_admitted(self.quality_proxies.admitted_columns());
-        let published_coords=self.published_columns.values().flatten().copied().collect();
-        let membership_changed=self.published_coords!=published_coords;
-        self.published_coords=published_coords;
+        // Rebuilding and comparing the coordinate set costs two hash operations
+        // per published chunk. Columns are disjoint, so equal counts with no
+        // column change mean the set is already current.
+        let published_count:usize=self.published_columns.values().map(Vec::len).sum();
+        let membership_changed=if columns_changed || published_count!=self.published_coords.len() {
+            let published_coords=self.published_columns.values().flatten().copied().collect();
+            let changed=self.published_coords!=published_coords;
+            self.published_coords=published_coords;
+            changed
+        } else {
+            false
+        };
         self.visible_keys.clear();
         self.visible_keys.extend(self.visible.iter().copied());
         self.visible_keys.extend(self.edit_proxies.coords.iter().map(|&coord| ChunkKey { coord, lod: 0 }));
@@ -897,6 +913,19 @@ impl ChunkCache {
         mesh: ChunkGpuMesh,
         prepared: shadow_casters::Prepared,
     ) {
+        self.install_mesh_unpublished(coord, mesh, prepared);
+        self.refresh_published_columns();
+    }
+
+    /// Installs without refreshing column publication. A batch of installs
+    /// ends with one `refresh_published_columns`: each refresh walks every
+    /// visible chunk (about 1 ms at 4.8k), and none of the installs reads it.
+    fn install_mesh_unpublished(
+        &mut self,
+        coord: IVec3,
+        mesh: ChunkGpuMesh,
+        prepared: shadow_casters::Prepared,
+    ) {
         let same_lod = self.gpu_meshes.get(&coord).is_some_and(|old| old.lod == mesh.lod);
         let unchanged_casters = self.shadow_casters.install(coord, mesh.lod, same_lod, prepared);
         // Column readiness depends on buffer presence and LOD, not geometry
@@ -923,7 +952,6 @@ impl ChunkCache {
             self.shadow_caster_revision = self.shadow_caster_revision.wrapping_add(1);
         }
         self.publication_dirty |= ownership_changed;
-        self.refresh_published_columns();
         self.trim_lod_budget();
     }
 
@@ -1361,7 +1389,7 @@ impl ChunkStreamer {
         }
     }
 
-    pub fn retain_visible(&mut self, visible: &HashSet<ChunkKey>) {
+    pub fn retain_visible<S: std::hash::BuildHasher>(&mut self, visible: &HashSet<ChunkKey, S>) {
         let coords: HashSet<_> = visible.iter().map(|key| key.coord).collect();
         self.dirty_revisions
             .retain(|coord, _| coords.contains(coord) || self.pending_gpu_coords.contains_key(coord));
