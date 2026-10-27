@@ -12,6 +12,7 @@ use crate::world::{
 use glam::{IVec3, Quat, Vec3};
 
 mod wand;
+pub(crate) mod wand_kit;
 mod hart;
 mod orbital;
 pub use hart::HartPose;

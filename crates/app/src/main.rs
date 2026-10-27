@@ -44,6 +44,7 @@ mod repo_layout;
 #[cfg(test)]
 mod shader_contract_tests;
 mod wand_review;
+mod wand_appearance;
 mod wand_style;
 mod water_review;
 mod world;

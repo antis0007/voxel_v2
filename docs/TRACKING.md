@@ -178,6 +178,38 @@ Capture recipe: `tools/Review-Artificer.ps1 -Executable <exe> -Label <unique>`
 with `-Mode`, `-Shaft/-Head/-Grip`, `-Pose`, `-Item`, `-Spell`; output
 `target/artificer-20261025/<Label>/camera.png`.
 
+### 2.6 Wand appearance foundation (2026-10-26, WAND-FOUNDATION-01)
+
+Committed and reproducible from HEAD: `assets/wands.ron` (schema v1, twelve
+families, six modeled), `crates/app/src/wand_appearance.rs` (loader,
+validation), `crates/app/src/mesh/models/wand_kit.rs` (extruded family
+sprites, icons, dropped wands), schema in
+`docs/design/WAND_APPEARANCE_SCHEMA.md`. Head index 0-5 now draws six
+families with distinct silhouettes (witchwood switch, shard cluster,
+bifurcated focus, astral filament, cinder rod, bone needle); shaft and grip
+indices recolour material ramps. Look bits and `WandStyle` are unchanged.
+
+| Item | State |
+|---|---|
+| `% 3` aliasing | gone; a test fails if two heads share a family or their silhouettes overlap above 0.72 |
+| Texel size | one size, `pixel_m` 6 mm model = 5.0 mm held (0.84 rig); 3.4/4.5/5.5 mm compared natively |
+| Generic glow cube | removed for families; emitter texels take the spell colour and emit with cast energy; cube kept only for review GLBs |
+| AI-generated PNG | no longer read by any code (`png_modular/source.png`) |
+| Vertices per held draw | 3,576-5,880 (was 12,096-13,440); no new draw call, pipeline or texture |
+| Save | working-tree `look` grip bits reverted: `inventory.rs` rejects wand looks above bit 11 |
+
+Shared-tree only (their parents are the uncommitted viewmodel closure in
+2.1): `mesh/models/wand_sprite.rs` now hangs `wand_kit` on the hand socket,
+and `wand.rs` keeps the glow cube only for review items.
+
+Open: six families planned without art (runic key, rootbound scepter,
+alchemical quill, forked conductor, grave reliquary, ancient prism); the
+three review GLBs are separate from these sprites. Icons are the full sprite
+scaled to the slot, not authored native-size icons. Animation states from
+2.2 are unchanged: walk, sprint, continuous cast, rapid fire and failed cast
+are missing. Family art is a first authored pass judged in native captures,
+not an approved style.
+
 ## 3. Multiplayer
 
 ### 3.1 What exists

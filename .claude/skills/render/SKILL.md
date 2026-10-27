@@ -14,7 +14,7 @@ Invariants that prevent flicker we already shipped:
 2. Never discard small moving geometry with the world voxel grid (`fract(voxel_pos)`); shrink the geometry instead (`Model::glow_voxel_with_dissolve`).
 3. Ambient motes (`mood_ambience`) are a pure function of world position and the clock: one mote per cell, bounded drift, one native pixel, palette colour.
 
-One pixel size: world textures use `PIXEL_RES` (20 texels/m) for every hash cell, dither and noise lookup; seams are one texel; motes are one screen pixel; wand orbs are `voxel_sphere`s of `WAND_PIXEL` cubes. Palette: `assets/pixel_palette.txt`, mirrored as `MOTE_*` in `mood_shared.wgsl`.
+One pixel size: world textures use `PIXEL_RES` (20 texels/m) for every hash cell, dither and noise lookup; seams are one texel; motes are one screen pixel; held wands are authored family sprites from `assets/wands.ron` with one texel size (`pixel_m`, schema in `docs/design/WAND_APPEARANCE_SCHEMA.md`). Palette: `assets/pixel_palette.txt`, mirrored as `MOTE_*` in `mood_shared.wgsl`.
 
 Verify a visual change: `just verify`, then a fixed-pose capture before and after (`docs/design/VISUAL_DIRECTION_EXECUTION.md`; flags in `docs/design/MIRAGE_AND_COSMOS_UPDATE.md`). Evidence goes under `target/`, never overwrite a label.
 

@@ -1,9 +1,9 @@
 //! Pixel-art icon for a wand item, drawn from the look bits carried on the item:
-//! a diagonal shaft whose length grows with tier, a grip, and one of six heads.
-use crate::world::adventure::wand_items::decode_look;
+//! the same authored family sprite and palette as the held and dropped model.
+
 use egui::{Color32 as C, Pos2, Rect, vec2};
 
-const GRID: i32 = 14;
+
 
 fn rgb(c: [f32; 3], k: f32) -> C {
     let f = |v: f32| ((v * k).clamp(0.0, 1.0) * 255.0) as u8;
@@ -11,82 +11,23 @@ fn rgb(c: [f32; 3], k: f32) -> C {
 }
 
 pub(super) fn paint(p: &egui::Painter, r: Rect, look: u16) {
-    let l = decode_look(look);
-    let unit = (r.width().min(r.height()) / GRID as f32).floor().max(1.0);
-    let origin = r.center() - vec2(unit, unit) * GRID as f32 * 0.5;
-    let px = |x: i32, y: i32, c: C| {
-        if (0..GRID).contains(&x) && (0..GRID).contains(&y) {
-            let min = origin + vec2(x as f32, y as f32) * unit;
-            p.rect_filled(Rect::from_min_size(Pos2::new(min.x, min.y), vec2(unit, unit)), 0.0, c);
-        }
+    // One texture per family and palette, independent of tier and save ID.
+    let key=crate::mesh::models::wand_kit::icon_key(look);
+    let id=egui::Id::new(("wand_kit_icon",key));
+    let cached=p.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id));
+    let texture=if let Some(texture)=cached { texture } else {
+        let Some((size,pixels))=crate::mesh::models::wand_kit::icon_rgba(look) else { return };
+        // load_texture takes the Context lock itself. Creating a first icon
+        // inside data_mut recursively acquired that lock and deadlocked.
+        let image=egui::ColorImage::from_rgba_unmultiplied(size,&pixels);
+        let t=p.ctx().load_texture(format!("wand-{key:?}"),image,egui::TextureOptions::NEAREST);
+        p.ctx().data_mut(|d| d.insert_temp(id,t.clone())); t
     };
-    let outline = rgb(l.dark, 0.45);
-    let len = 6 + l.tier as i32 * 2;
-    // Shaft from the lower-left corner toward the head, one pixel wide with a rim.
-    for i in 0..len {
-        let (x, y) = (1 + i, GRID - 2 - i);
-        px(x - 1, y, outline);
-        px(x, y + 1, outline);
-        let grip = i < 3;
-        px(x, y, if grip { rgb(l.dark, 1.0) } else { rgb(l.shaft, if i % 3 == 0 { 0.8 } else { 1.0 }) });
-    }
-    let (hx, hy) = (1 + len, GRID - 2 - len);
-    px(hx - 1, hy + 1, rgb(l.accent, 1.0));
-    let glow = rgb(l.glow, 1.0);
-    let bright = rgb(l.glow, 1.4);
-    match l.head {
-        // Cradled orb
-        0 => {
-            for (dx, dy) in [(0, 0), (1, 0), (0, -1), (1, -1)] {
-                px(hx + dx, hy + dy, glow);
-            }
-            px(hx, hy - 1, bright);
-            px(hx - 1, hy - 1, rgb(l.accent, 0.9));
-            px(hx + 2, hy, rgb(l.accent, 0.9));
-        }
-        // Resonant crystal: a tall shard.
-        1 => {
-            for d in 0..4 {
-                px(hx + d / 2, hy - d, if d == 3 { bright } else { glow });
-            }
-        }
-        // Twin prisms
-        2 => {
-            px(hx - 1, hy - 1, glow);
-            px(hx - 1, hy - 2, bright);
-            px(hx + 1, hy, glow);
-            px(hx + 2, hy, bright);
-        }
-        // Orbit ring around a spark
-        3 => {
-            for (dx, dy) in [(-1, -1), (0, -2), (1, -2), (2, -1), (2, 0), (1, 1), (0, 1), (-1, 0)] {
-                px(hx + dx, hy + dy, rgb(l.accent, 1.0));
-            }
-            px(hx, hy - 1, bright);
-            px(hx + 1, hy - 1, glow);
-        }
-        // Living flame
-        4 => {
-            px(hx, hy, glow);
-            px(hx + 1, hy - 1, glow);
-            px(hx, hy - 2, bright);
-            px(hx + 1, hy - 3, rgb([1.0, 0.85, 0.5], 1.0));
-        }
-        // Watching eye
-        _ => {
-            for (dx, dy) in [(-1, 0), (0, -1), (1, -1), (2, 0), (1, 1), (0, 1)] {
-                px(hx + dx, hy + dy, rgb(l.accent, 1.0));
-            }
-            px(hx, hy, glow);
-            px(hx + 1, hy, C::BLACK);
-        }
-    }
-    // Masterwork wands carry a second gem on the collar.
-    if l.tier >= 3 {
-        px(hx - 2, hy + 2, glow);
-    }
+    let [w,h]=texture.size();
+    let height=r.height().min(r.width())*0.94;
+    let target=Rect::from_center_size(r.center(),vec2(height*w as f32/h.max(1) as f32,height));
+    p.image(texture.id(),target,Rect::from_min_max(Pos2::ZERO,Pos2::new(1.0,1.0)),C::WHITE);
 }
-
 #[derive(Clone)]
 struct Cards {
     bank: Vec<crate::world::adventure::wand_items::WandRecord>,

@@ -91,38 +91,9 @@ pub fn look(record: &WandRecord) -> u16 {
         | u16::from(record.loadout.seed == 0) << 11
 }
 
-/// Colours and shape for a wand drawn only from its item bits (icons, ground drops).
-pub struct Look {
-    pub tier: u32,
-    pub head: usize,
-    pub shaft: [f32; 3],
-    pub dark: [f32; 3],
-    pub accent: [f32; 3],
-    pub glow: [f32; 3],
-}
-pub fn decode_look(look: u16) -> Look {
-    let shaft = &SHAFTS[((look >> 2) & 7) as usize % SHAFTS.len()];
-    let glow = GLOWS[((look >> 8) & 7) as usize % GLOWS.len()].1.unwrap_or(shaft.accent);
-    Look {
-        tier: (look & 3) as u32,
-        head: ((look >> 5) & 7) as usize % HEADS.len(),
-        shaft: shaft.base,
-        dark: shaft.dark,
-        accent: shaft.accent,
-        glow,
-    }
-}
-
 /// A wand lying on the ground: a small tilted shaft with its head glowing.
 pub fn draw_dropped(m: &mut crate::mesh::models::Model, centre: Vec3, rot: Quat, look: u16) {
-    let l = decode_look(look);
-    let half = 0.16 + l.tier as f32 * 0.035;
-    let axis = rot * Quat::from_rotation_z(0.9) * Vec3::Y;
-    let (a, b) = (centre - axis * half, centre + axis * half);
-    m.beam(a, b, 0.022, l.shaft, 0.0);
-    m.beam(a, a + axis * 0.07, 0.03, l.dark, 0.0);
-    m.cuboid(b, Vec3::splat(0.035), rot, l.accent, 0.3);
-    m.orb(b + axis * 0.05, 0.035 + l.tier as f32 * 0.006, l.glow, 1.6);
+    crate::mesh::models::wand_kit::draw_dropped(m, centre, rot, look);
 }
 
 fn usable(id: u32, tier: u32) -> bool {
