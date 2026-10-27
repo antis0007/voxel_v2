@@ -40,6 +40,8 @@ pub struct ChunkMesh {
 pub const CHUNK_PAD: i32 = 1;
 pub use engine_core::PADDED_CHUNK_SIZE;
 #[cfg(test)]
+mod coarse_seams;
+#[cfg(test)]
 mod terrain_contract;
 /// Vertical inset (in voxel units) keeping free water surfaces recessed below
 /// the top edge of surrounding bank and shoreline blocks.
@@ -689,6 +691,21 @@ fn terrain_reaches(tops: &[i32], x0: i32, z0: i32, step: i32, bottom: i32) -> bo
     2 * bottom + step < 2 * seen[seen.len() / 2]
 }
 
+/// Whether one voxel layer of a coarse cell is all terrain.
+fn seam_slab_sealed(chunk: &GeneratedChunk, min: IVec3, step: i32, axis: usize, layer: i32) -> bool {
+    let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    (0..step).all(|du| {
+        (0..step).all(|dv| {
+            let mut p = min;
+            p[axis] = layer;
+            p[u] += du;
+            p[v] += dv;
+            let b = chunk.get_world(p);
+            b.is_opaque() && !coarse_vegetation(b)
+        })
+    })
+}
+
 fn coarse_cell(chunk: &GeneratedChunk, min: IVec3, step: i32) -> Option<BlockId> {
     let padded = chunk.origin();
     let (mut terrain, mut liquid) = (None, None);
@@ -750,12 +767,20 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
     for cz in 0..n {
         for cx in 0..n {
             for cy in 0..n {
-                let chosen = coarse_cell(chunk, origin + IVec3::new(cx, cy, cz) * step, step)
-                    .filter(|b| {
-                        b.is_liquid()
-                            || coarse_vegetation(*b)
-                            || terrain_reaches(&tops, cx * step, cz * step, step, cy * step)
-                    });
+                let cell = IVec3::new(cx, cy, cz);
+                let chosen = coarse_cell(chunk, origin + cell * step, step).filter(|b| {
+                    b.is_liquid()
+                        || coarse_vegetation(*b)
+                        || terrain_reaches(&tops, cx * step, cz * step, step, cy * step)
+                        || (0..3).any(|axis| {
+                            let layer = match cell[axis] {
+                                0 => 0,
+                                c if c == n - 1 => CHUNK_SIZE - 1,
+                                _ => return false,
+                            };
+                            seam_slab_sealed(chunk, origin + cell * step, step, axis, origin[axis] + layer)
+                        })
+                });
                 if let Some(chosen) = chosen {
                     let id = index(cx, cy, cz);
                     solid[id] = true;
@@ -764,13 +789,24 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
             }
         }
     }
-    // Neighbour cells are classified by the same rule from the one-voxel halo,
-    // so both sides of a seam agree on whether a crown continues across it.
-    let occupied = |x: i32, y: i32, z: i32| -> bool {
-        if (0..n).contains(&x) && (0..n).contains(&y) && (0..n).contains(&z) {
+    // The neighbour's median needs columns beyond the halo, so a seam face is
+    // culled only when the halo slab is sealed: the neighbour then keeps that
+    // cell by the rule above, and the two chunks cannot both skip the wall.
+    // Crowns still continue across seams by coverage.
+    let occupied = |own: BlockId, x: i32, y: i32, z: i32| -> bool {
+        let cell = IVec3::new(x, y, z);
+        if cell.cmpge(IVec3::ZERO).all() && cell.cmplt(IVec3::splat(n)).all() {
             return solid[index(x, y, z)];
         }
-        coarse_cell(chunk, origin + IVec3::new(x, y, z) * step, step).is_some()
+        let min = origin + cell * step;
+        let outside = (0..3).find(|&axis| !(0..n).contains(&cell[axis]));
+        let sealed = outside.is_some_and(|axis| {
+            let layer = if cell[axis] < 0 { -1 } else { CHUNK_SIZE };
+            seam_slab_sealed(chunk, min, step, axis, origin[axis] + layer)
+        });
+        sealed
+            || (coarse_vegetation(own)
+                && coarse_cell(chunk, min, step).is_some_and(coarse_vegetation))
     };
     let mut mesh = ChunkMesh::empty();
     let emit = |mesh: &mut ChunkMesh,
@@ -838,7 +874,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                 // Corner order is CCW when looking along the outward normal.
                 // The previous lists were the reverse of that, so back-face
                 // culling drew the inside of every coarse cell.
-                if !occupied(cx, cy + 1, cz) {
+                if !occupied(material, cx, cy + 1, cz) {
                     emit(
                         &mut mesh,
                         x,
@@ -858,7 +894,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                         0.0,
                     );
                 }
-                if !occupied(cx, cy - 1, cz) {
+                if !occupied(material, cx, cy - 1, cz) {
                     emit(
                         &mut mesh,
                         x,
@@ -878,7 +914,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                         0.0,
                     );
                 }
-                if !occupied(cx + 1, cy, cz) {
+                if !occupied(material, cx + 1, cy, cz) {
                     let push = edge(false, cx + 1 == n);
                     emit(
                         &mut mesh,
@@ -899,7 +935,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                         push,
                     );
                 }
-                if !occupied(cx - 1, cy, cz) {
+                if !occupied(material, cx - 1, cy, cz) {
                     let push = edge(cx == 0, false);
                     emit(
                         &mut mesh,
@@ -920,7 +956,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                         push,
                     );
                 }
-                if !occupied(cx, cy, cz + 1) {
+                if !occupied(material, cx, cy, cz + 1) {
                     let push = edge(false, cz + 1 == n);
                     emit(
                         &mut mesh,
@@ -941,7 +977,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                         push,
                     );
                 }
-                if !occupied(cx, cy, cz - 1) {
+                if !occupied(material, cx, cy, cz - 1) {
                     let push = edge(cz == 0, false);
                     emit(
                         &mut mesh,
@@ -966,7 +1002,7 @@ pub fn coarsened_mesh(chunk: &GeneratedChunk, lod: u8) -> ChunkMesh {
                 // cell shorter; the lip covers that crack without a second mesh.
                 // Heightfield cracks only exist in terrain. On a crown the lip
                 // is a flat sheet hanging on the seam, so vegetation skips it.
-                if !occupied(cx, cy + 1, cz)
+                if !occupied(material, cx, cy + 1, cz)
                     && !material.is_liquid()
                     && !coarse_vegetation(material)
                 {
