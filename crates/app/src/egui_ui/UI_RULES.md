@@ -10,6 +10,11 @@ The UI shows state. It never narrates, coaches, encourages, or explains itself. 
 
 If a screen only makes sense because a sentence explains it, the screen is wrong. Fix the widget, not the copy.
 
+Register: a modded-Minecraft pack. Nouns and numbers, the same tooltip shape on every
+item, block, fluid and machine, names built from one grammar. `Nickel-iron Battery`,
+`Transfers: 2,000 FE/t`, `Requires: Tier 2 Casing`. Owner decision 2026-10-27
+(`docs/plans/2026-10-26-axiom-brief-reality-check.md` §11).
+
 ---
 
 ## Part 1: Text
@@ -27,14 +32,28 @@ If a screen only makes sense because a sentence explains it, the screen is wrong
 9. **Numbers over words, always with units.** `1,240 / 8,000 FE`, `12.5 mB/t`, `64x`, `3.2s`, `840°C`.
 10. **States are one or two words.** `Idle`, `Working`, `No Fuel`, `Output Full`.
 11. **Errors say what is wrong.** `Structure Incomplete: 3/12 Casings`. Never "Oops!".
-12. **One name per thing, everywhere.** Machines are named for what they do: `Electric Furnace`, `Pulverizer`. Never "Processor Unit" or "Advanced Device".
+12. **One name per thing, everywhere, from one grammar.** Items `<Material> <Thing>` (`Iron Plate`); machines `<Material> <Function>` (`Copper Pulverizer`) or the function alone (`Electric Furnace`); wands `<Family adjective> <Core> Wand`, the adjective from the family table in `assets/wands.ron`. A tier is carried by the material ladder (`Lead-acid` → `Nickel-iron`) and by a `Tier: 2` stat line, never by a generic adjective: no "Processor Unit", "Advanced Device", "Basic Cube".
 13. **Keys show as keys.** `[Shift]`, `[R]`, `[RMB]`.
-14. **Lore exists only on items/blocks/guidebook entries, and only if it explains something the player can do or observe.** One italic line, under 10 words. Never on machines, ores, or components.
+14. **Flavour is optional and never mechanical.** At most one italic dim line, under 10 words, after the stats, on any item, block, fluid or machine. It may not state a number, an effect or an instruction; anything a player acts on is a stat line. Longer discovery text lives in a separate `lore` field or the guidebook, is never required to play, and follows every rule here (no second person). New proper nouns still need the owner's approval.
+15. **Separators are middots, not dashes.** `Molten Iron · Liquid · 1,540°C`.
 
 ### Vanilla text budget
 
 - Item name: 1–3 words.
 - Tooltip: name + at most 3 stat lines without [Shift].
+
+### Tooltip contract
+
+Identical for items, blocks, fluids and machines; only the lines that apply appear.
+
+```
+Nickel-iron Battery          name, rarity colour
+Energy Storage               category, dim
+Capacity: 40,000 FE          stats, `Label: value unit`, at most 3
+Tier: 2
+Cells hum faintly when full  flavour, italic dim, optional
+[Shift] Details              expansion: description, cost, codex copy
+```
 - HUD text visible at rest: none, except chat that fades out.
 - Menu buttons: 1–2 words. `Singleplayer`, `Options`, `Done`, `Back`.
 
