@@ -13,6 +13,7 @@ pub mod edits;
 pub mod flood;
 pub mod interp;
 pub mod link;
+pub mod lockstep;
 pub mod movement;
 pub mod pose;
 pub mod quality;
