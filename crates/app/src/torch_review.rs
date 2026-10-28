@@ -172,6 +172,7 @@ fn factory_review_focus() -> Option<IVec3> {
         "cable" => IVec3::new(5, 0, 1),
         "pump" => IVec3::new(3, 0, 0),
         "pile" => IVec3::new(-4, 0, 2),
+        "quarry" => IVec3::new(-11, 6, 12),
         _ => return None,
     })
 }
@@ -250,6 +251,11 @@ fn install_factory(world: &mut World) {
                 c.input[2] = 8 * 64;
             }
         }
+    }
+    // Line F: a 9 m quarry part-way down its second layer.
+    if let Some(d) = factory::fixture_place(world, at(-11, 0, 0), Kind::MiningDrill) {
+        d.mode = 1;
+        d.excavation = (factory::quarry::layer(n, 1) * 2 * n + 9 * n * 4 + 4 * n) as u32;
     }
     // Line E: a 4 x 4 x 4 induction matrix with cells and a provider,
     // a transformer onto an HV line, and an assembler building generators.
@@ -441,6 +447,38 @@ pub fn apply_survival_phase(
                 d.insert_temp(egui::Id::new("inventory_page"), 7u32);
                 d.insert_temp(egui::Id::new("production_mode"), true);
             });
+        }
+        7 => {
+            // Phase 7: a workbench beside the player and the bed pattern
+            // staged in its 3 × 3 grid.
+            use crate::world::inventory::{Item, ItemStack, all_recipes};
+            creative.show_palette = true;
+            let bench = player.pos.floor().as_ivec3() + IVec3::new(0, 0, -2);
+            if world.factory.bench != Some(bench) {
+                world.set_many(&[(bench, BlockId::Workbench)]);
+                world.factory.bench = Some(bench);
+                let _ = world.inventory.try_insert(ItemStack::new(Item::Block(BlockId::Planks), 8));
+                let _ = world.inventory.try_insert(ItemStack::new(Item::Resource(4), 8));
+                if let Some(bed) = all_recipes().iter().find(|r| r.name == "Bed") {
+                    world.inventory.stage_recipe_into_grid(bed, true);
+                    world.inventory.stage_recipe_into_grid(bed, true);
+                }
+            }
+            egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), 2u32));
+        }
+        8 => {
+            // Phase 8: the recipe browser on a shaped grid recipe.
+            creative.show_palette = true;
+            egui_ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new("inventory_page"), 6u32);
+                d.insert_temp(egui::Id::new("jei_selected"), Some(crate::world::inventory::Item::Weapon(1)));
+                d.insert_temp(egui::Id::new("jei_tab"), 0u8);
+            });
+        }
+        9 => {
+            // Phase 9: the wand page.
+            creative.show_palette = true;
+            egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), 1u32));
         }
         _ => {
             creative.show_palette = false;

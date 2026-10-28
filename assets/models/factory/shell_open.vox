@@ -1,0 +1,53 @@
+size 8 8 8
+p B 6a737b 0.0
+p C 636c74 0.0
+p K 08090b 0.0
+p M 4a565e 0.0
+p N 2f373d 0.0
+p T d9822b 0.0
+p W 0b0d11 0.0
+y 0
+NMMMMMMN
+MNNNNNNM
+MNBCBCNM
+MNCBCBNM
+MNBCBCNM
+MNCBCBNM
+MNNNNNNM
+NMMMMMMN
+y 1
+MNTTTTNM
+N......T
+T......T
+T......T
+T......T
+T......T
+N......T
+MNTTTTNM
+y 2
+MNTKKTNM
+N......T
+T......W
+K......W
+K......W
+T......W
+N......T
+MNTKKTNM
+y 3
+MNTKKTNM
+N......T
+T......T
+K......T
+K......T
+T......T
+N......T
+MNTKKTNM
+y 4
+NMTTTTMN
+MNNNNNNM
+TNTTTTNM
+TNTBBTNM
+TNTBBTNM
+TNTTTTNM
+MNNNNNNM
+NMTTTTMN

@@ -12,7 +12,9 @@ pub mod overview;
 pub mod pile;
 pub mod power;
 pub mod portable;
+pub mod quarry;
 mod quick_stack;
+pub mod sides;
 pub mod stats;
 pub mod recipes;
 pub mod transit;
@@ -32,7 +34,7 @@ pub const MAX_NODES: usize = 1024;
 /// Layout version `Factory::encode` writes (save version 20 and later).
 #[cfg(test)]
 pub const FACTORY_FORMAT: u8 = 10;
-const DIRS: [IVec3; 6] = [
+pub(crate) const DIRS: [IVec3; 6] = [
     IVec3::X,
     IVec3::NEG_X,
     IVec3::Y,
@@ -356,6 +358,8 @@ pub enum Action {
     /// `deposit` sends pack → container. `u32::MAX` means the whole compartment.
     BufferMove(IVec3, usize, u32, bool),
     Toggle(IVec3),
+    /// Close or reopen one face of a conduit (face index into `DIRS`).
+    ToggleSide(IVec3, u8),
     Upgrade,
     SetRecipe(IVec3, u32),
     SetFilter(IVec3, Option<usize>),
@@ -381,6 +385,8 @@ struct Network {
     /// Built once with the network. Path searches borrow this instead of
     /// allocating a new set for every ingot.
     pipes: HashSet<IVec3>,
+    /// Directed (conduit, neighbour) pairs whose shared face a conduit closed.
+    closed: HashSet<(IVec3, IVec3)>,
 }
 impl Network {
     fn new(ports: Vec<IVec3>, conduits: Vec<IVec3>) -> Self {
@@ -389,9 +395,15 @@ impl Network {
             ports,
             conduits,
             pipes,
+            closed: HashSet::new(),
             tier: 0,
         }
     }
+}
+
+/// Fraction of a water-port machine's buffer that is full.
+pub fn tank_level(n: &Node) -> f32 {
+    n.water as f32 / extraction::WATER_CAPACITY as f32
 }
 
 pub fn step(world: &World) -> i32 {
@@ -716,6 +728,13 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                     .expedition
                     .say("Use a nearby workbench with the wand ingredients shown in E.");
             }
+        }
+        Action::ToggleSide(p, side) => {
+            if !near(world, p, player) {
+                world.expedition.say("Move within 7 metres of the conduit.");
+                return None;
+            }
+            sides::toggle_side(world, p, side);
         }
         Action::Load(p)
         | Action::Collect(p)
@@ -1260,7 +1279,7 @@ impl Factory {
                     "Invalid fluid buffer"
                 );
                 ensure!(
-                    n.excavation <= (24 * size * 3 * size * 3 * size) as u32
+                    n.excavation <= quarry::limit(size, n.mode) as u32
                         && (n.excavation == 0 || n.kind == Kind::MiningDrill),
                     "Invalid drill depth"
                 );
@@ -1271,6 +1290,7 @@ impl Factory {
                 let target_ok = match n.kind {
                     Kind::Assembler => n.target == 0 || assembler::recipe(&n).is_some(),
                     Kind::Battery => n.target <= power::battery_rate(n.upgrade),
+                    k if sides::is_conduit(k) => n.target <= sides::SIDE_BITS,
                     _ => n.target == 0,
                 };
                 ensure!(target_ok, "Invalid machine target");
@@ -1372,17 +1392,29 @@ impl Factory {
             let mut queue = VecDeque::from([p]);
             let mut ports = HashSet::new();
             let mut conduits = Vec::new();
+            let mut closed = HashSet::new();
             while let Some(p) = queue.pop_front() {
                 conduits.push(p);
-                for d in DIRS {
+                for (side, d) in DIRS.into_iter().enumerate() {
                     let q = p + d * size;
                     if let Some(n) = self.nodes.get(&q) {
                         if n.kind == conduit {
-                            if (conduit != Kind::Cable || n.upgrade == tier) && visited.insert(q) {
+                            if conduit == Kind::Cable && n.upgrade != tier {
+                                continue;
+                            }
+                            if !self.link_open(p, side, size) {
+                                closed.insert((p, q));
+                                continue;
+                            }
+                            if visited.insert(q) {
                                 queue.push_back(q);
                             }
                         } else if !n.kind.conduit() && !n.kind.structural() {
-                            ports.insert(q);
+                            if self.side_open(p, side) {
+                                ports.insert(q);
+                            } else {
+                                closed.insert((p, q));
+                            }
                         }
                     }
                 }
@@ -1390,6 +1422,7 @@ impl Factory {
             let mut ports: Vec<_> = ports.into_iter().collect();
             ports.sort_by_key(|p| (p.x, p.y, p.z));
             let mut net = Network::new(ports, conduits);
+            net.closed = closed;
             net.tier = tier;
             nets.push(net);
         }
@@ -1698,7 +1731,7 @@ pub fn conduit_bounds(world: &World, cell: IVec3) -> Option<Vec<(Vec3, Vec3)>> {
     let c = p.as_vec3() + Vec3::splat(size as f32 * 0.5);
     let r = if n.kind == Kind::Cable { 0.10 } else { 0.19 } * size as f32;
     let mut bounds = vec![(c - Vec3::splat(r), c + Vec3::splat(r))];
-    for d in DIRS {
+    for (side, d) in DIRS.into_iter().enumerate() {
         if world
             .factory
             .nodes
@@ -1707,6 +1740,7 @@ pub fn conduit_bounds(world: &World, cell: IVec3) -> Option<Vec<(Vec3, Vec3)>> {
                 other.kind == n.kind
                     || !matches!(other.kind, Kind::Pipe | Kind::Cable | Kind::FluidPipe)
             })
+            && world.factory.link_open(p, side, size)
         {
             let end = c + d.as_vec3() * size as f32 * 0.5;
             let extent = Vec3::splat(r) * (Vec3::ONE - d.as_vec3().abs());

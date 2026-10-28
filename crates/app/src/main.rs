@@ -3531,7 +3531,11 @@ fn main() -> Result<()> {
                                     && creative.tool == creative::ToolKind::Hand;
                                 if input.interact {
                                     if grabbed && !creative.any_ui_open() && !spawning {
-                                        if hit.is_some_and(|(cell,_)| world::fittings::interact(world,cell,&player,&mut dirty_blocks,&mut dirty_chunks)) {
+                                        if active_input.sneak
+                                            && let Some((p, side)) = hit.and_then(|(cell, front)| world::factory::sides::side_toward(world, cell, front))
+                                            && world::factory::action(world, player.pos, world::factory::Action::ToggleSide(p, side)).is_none() {
+                                            break_edit=false;place_edit=false;
+                                        } else if hit.is_some_and(|(cell,_)| world::fittings::interact(world,cell,&player,&mut dirty_blocks,&mut dirty_chunks)) {
                                             break_edit=false;place_edit=false;
                                         } else if world.inventory.retrieve_nearby(player.pos * world.voxel_scale.meters()) {
                                             world.sync_from_inventory();

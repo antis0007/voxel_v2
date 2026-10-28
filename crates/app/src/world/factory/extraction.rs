@@ -262,18 +262,12 @@ pub(crate) fn tick_world(
                     n.status = if sediment_blocked { "Intake clogged: clear sediment or relocate pump" } else { "Intake dry" };
                 }
             } else {
-                let width = 3 * size;
-                let layer = width * width;
                 let index = n.excavation as i32;
-                if index >= layer * 24 * size {
-                    n.status = "Shaft complete";
+                if index >= super::quarry::limit(size, n.mode) {
+                    n.status = if n.mode == 0 { "Shaft complete" } else { "Quarry complete" };
                     break;
                 }
-                let q = p + IVec3::new(
-                    index % width - size,
-                    -1 - index / layer,
-                    (index / width) % width - size,
-                );
+                let q = p + super::quarry::offset(index, size, n.mode);
                 if q.y < world.sample_config().min_world_y() {
                     n.status = "Bedrock reached";
                     break;
