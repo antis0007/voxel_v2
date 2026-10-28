@@ -146,6 +146,7 @@ impl Item {
         {
             return None;
         }
+        if let Some(b) = engine_content::fittings::canonical(block) { return Some(b); }
         if block.is_torch() {
             Some(BlockId::Torch)
         } else {

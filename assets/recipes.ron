@@ -5,6 +5,55 @@
 (
     hand: [
         (
+            name: "Oak door",
+            output: (
+                item: Block(OakDoor),
+                count: 3,
+            ),
+            pattern: [
+                "PP",
+                "PP",
+                "PP",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "Two metres tall. Use to open or close.",
+        ),
+        (
+            name: "Oak trapdoor",
+            output: (
+                item: Block(OakTrapdoor),
+                count: 2,
+            ),
+            pattern: [
+                "PPP",
+                "PPP",
+                " U ",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('U', Resource(6)),
+            ],
+            description: "Hinged hatch. Sneak to place against fittings.",
+        ),
+        (
+            name: "Lever",
+            output: (
+                item: Block(Lever),
+                count: 1,
+            ),
+            pattern: [
+                "P",
+                "c",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('c', Block(Cobblestone)),
+            ],
+            description: "Switch doors and hatches within three metres.",
+        ),
+        (
             name: "Oak planks",
             output: (
                 item: Block(Planks),

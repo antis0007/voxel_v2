@@ -397,6 +397,7 @@ pub fn harvest(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if super::fittings::harvest(world, p, blocks, chunks) { return true; }
     if let Some(done) = super::farming::harvest(world, p, blocks, chunks) { return done; }
     if super::factory::dismantle(world, p, blocks, chunks) {
         world.reconcile_legacy_to_inventory();
@@ -532,6 +533,7 @@ pub fn spell_blast(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if super::fittings::harvest(world, p, blocks, chunks) { return true; }
     let b = world.get(p);
     if b == B::Air || b.is_liquid() {
         return false;
@@ -573,6 +575,7 @@ pub fn blast_harvest(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if super::fittings::harvest(world, p, blocks, chunks) { return true; }
     let b = world.get(p);
     // Ordinary terrain changes inventory directly. Rebuilding all legacy
     // resource counters for every tiny voxel makes large blasts crawl; the
@@ -655,6 +658,9 @@ pub fn blast_harvest(
 }
 
 pub fn hint(block: B, tier: u32) -> &'static str {
+    if let Some(s)=engine_content::fittings::state(block) {
+        return if s.lever { "F / Right mouse  Switch" } else if s.open { "F / Right mouse  Close" } else { "F / Right mouse  Open" };
+    }
     if super::factory::Kind::from_block(block).is_some() {
         return "F  Inspect   ·   E  Inventory";
     }

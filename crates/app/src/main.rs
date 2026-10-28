@@ -3531,7 +3531,9 @@ fn main() -> Result<()> {
                                     && creative.tool == creative::ToolKind::Hand;
                                 if input.interact {
                                     if grabbed && !creative.any_ui_open() && !spawning {
-                                        if world.inventory.retrieve_nearby(player.pos * world.voxel_scale.meters()) {
+                                        if hit.is_some_and(|(cell,_)| world::fittings::interact(world,cell,&player,&mut dirty_blocks,&mut dirty_chunks)) {
+                                            break_edit=false;place_edit=false;
+                                        } else if world.inventory.retrieve_nearby(player.pos * world.voxel_scale.meters()) {
                                             world.sync_from_inventory();
                                             break_edit=false;place_edit=false;
                                         } else if world::orbital::receiver::focused(world, &player) {
@@ -3705,6 +3707,11 @@ fn main() -> Result<()> {
                                     blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
                                 }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
 
+                                if place_edit && can_act && !active_input.sneak
+                                    && creative.tool == creative::ToolKind::Hand
+                                    && hit.is_some_and(|(cell,_)|world::fittings::interact(world,cell,&player,&mut dirty_blocks,&mut dirty_chunks)) {
+                                    place_edit=false;
+                                }
                                 if place_edit && can_act
                                     && creative.tool == creative::ToolKind::Hand
                                     && world::farming::interact(world,hit,eye*world.voxel_scale.meters(),forward,creative.selected_slot,&mut dirty_blocks,&mut dirty_chunks) {
@@ -3837,6 +3844,7 @@ fn main() -> Result<()> {
                                                     continue;
                                                 };
                                                 let held = if survival_hand { world.inventory.hotbar[creative.selected_slot].map(|s|s.item) } else { None };
+                                                if world::fittings::place(world,cell,place_block,&player,survival_hand.then_some(creative.selected_slot),&mut dirty_blocks,&mut dirty_chunks) { continue; }
                                                 if world::factory::place(world,cell,place_block,&player,held,&mut dirty_blocks,&mut dirty_chunks) {
                                                     continue;
                                                 }

@@ -30,6 +30,10 @@ pub fn collides_world_local(world: &World, min: Vec3, max: Vec3, origin: IVec3) 
         for y in a.y..=b.y {
             for x in a.x..=b.x {
                 if world.solid(origin + IVec3::new(x, y, z)) {
+                    let cell = origin + IVec3::new(x,y,z);
+                    if engine_content::fittings::state(world.get(cell)).is_some()
+                        && !engine_content::fittings::boxes(world.get(cell),cell,world.voxel_scale.meters()).iter().any(|&(a,b)|
+                            min.cmplt(b-origin.as_vec3()).all() && max.cmpgt(a-origin.as_vec3()).all()) { continue; }
                     if let Some(bounds) =
                         super::factory::conduit_bounds(world, origin + IVec3::new(x, y, z))
                         && !bounds.iter().any(|&(a, b)| {
@@ -289,6 +293,9 @@ pub fn raycast_block_precise(
         .min(65_536);
     for _ in 0..max_steps {
         if world.get(cell + offset).is_ray_pickable()
+            && (engine_content::fittings::state(world.get(cell+offset)).is_none()
+                || engine_content::fittings::boxes(world.get(cell+offset),cell+offset,world.voxel_scale.meters()).iter().any(|&(a,b)|
+                    super::factory::ray_box(origin,dir,a-offset.as_vec3(),b-offset.as_vec3(),max_dist)))
             && super::factory::conduit_bounds(world, cell + offset).is_none_or(|bounds| {
                 bounds.into_iter().any(|(a, b)| {
                     super::factory::ray_box(

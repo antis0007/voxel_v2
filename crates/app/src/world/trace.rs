@@ -42,7 +42,10 @@ pub(crate) fn solid(world: &World, a: Vec3, b: Vec3) -> Option<(Vec3, IVec3)> {
     let count = (d.abs().element_sum().ceil() as usize + 4).min(65536);
     for _ in 0..count {
         if world.solid(cell) {
-            let entry = if let Some(boxes) = factory::conduit_bounds(world, cell) {
+            let fitting=engine_content::fittings::state(world.get(cell)).is_some();
+            let boxes=if fitting { Some(engine_content::fittings::boxes(world.get(cell),cell,scale)) }
+                else { factory::conduit_bounds(world,cell) };
+            let entry = if let Some(boxes) = boxes {
                 boxes
                     .into_iter()
                     .filter_map(|(min, max)| box_entry(start, d, min, max))

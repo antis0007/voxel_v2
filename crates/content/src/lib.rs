@@ -1,3 +1,4 @@
+pub mod fittings;
 mod size_class;
 pub mod descriptions;
 pub mod environment;
@@ -307,6 +308,13 @@ block_ids! {
     CarvedStone,
     GlazedTiles,
     Bed,
+    RoofTiles,
+    LimePlaster,
+    TimberPost,
+    TimberBeamX,
+    TimberBeamZ,
+    DressedStone,
+    OakDoor, OakDoorOpen, OakDoorUpper, OakDoorUpperOpen, OakDoorZ, OakDoorZOpen, OakDoorZUpper, OakDoorZUpperOpen, OakTrapdoor, OakTrapdoorOpen, OakTrapdoorZ, OakTrapdoorZOpen, OakTrapdoorTop, OakTrapdoorTopOpen, OakTrapdoorZTop, OakTrapdoorZTopOpen, Lever, LeverOn,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {

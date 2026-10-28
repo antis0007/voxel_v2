@@ -23,6 +23,7 @@ pub(super) struct SolidPlan {
     torches: bool,
     compact_torches: bool,
     partial_water: bool,
+    fittings: Vec<(IVec3, BlockId)>,
 }
 impl SolidPlan {
     pub fn new(chunk: &GeneratedChunk, cancelled: &AtomicBool) -> Option<Self> {
@@ -41,6 +42,8 @@ impl SolidPlan {
             super::has_water_flow_step(chunk, chunk.chunk * CHUNK_SIZE + IVec3::new(x, y, z))
         })));
         let mut torches = 0;
+        let mut fittings = Vec::new();
+        let mut fitting_boxes = 0;
         let mut water_faces = 0;
         for y in 0..P {
             if cancelled.load(Ordering::Relaxed) {
@@ -54,6 +57,11 @@ impl SolidPlan {
                     if inside && b.is_torch() {
                         torches += 1;
                     }
+                    if inside && engine_content::fittings::state(b).is_some() {
+                        let p=chunk.chunk*CHUNK_SIZE+IVec3::new(x as i32-1,y as i32-1,z as i32-1);
+                        fitting_boxes+=engine_content::fittings::boxes(b,p,chunk.voxel_meters).len();
+                        fittings.push((p,b));
+                    }
                     // Six faces are a conservative bound only for cells carrying partial water.
                     if inside && partial_water && b == BlockId::Water {
                         water_faces += 6;
@@ -63,6 +71,7 @@ impl SolidPlan {
                     let draw = !b.is_empty()
                         && !b.is_torch()
                         && !b.is_model()
+                        && engine_content::fittings::state(b).is_none()
                         && (!partial_water || b != BlockId::Water);
                     for axis in 0..3 {
                         if b.is_opaque() {
@@ -82,11 +91,12 @@ impl SolidPlan {
         let torch_vertices = if compact_torches { 48 } else { 344 };
         let mut plan = Self {
             patches: Vec::new(),
-            vertices: torches * torch_vertices + water_faces * 4,
-            indices: torches * (torch_vertices / 4 * 6) + water_faces * 6,
+            vertices: torches * torch_vertices + water_faces * 4 + fitting_boxes * 24,
+            indices: torches * (torch_vertices / 4 * 6) + water_faces * 6 + fitting_boxes * 36,
             torches: torches > 0,
             compact_torches,
             partial_water,
+            fittings,
         };
         let mut masks = vec![None; (N + 1) * N * N];
         let mut lighting = vec![None; (N + 1) * N * N];
@@ -282,9 +292,32 @@ impl SolidPlan {
         self.partial_water
     }
     pub fn lod_invariant(&self) -> bool {
-        self.patches.is_empty() && !self.torches
+        self.patches.is_empty() && !self.torches && self.fittings.is_empty()
     }
     pub fn build(&self, chunk: &GeneratedChunk, mut mesh: ChunkMesh, lod: u8) -> ChunkMesh {
+        for &(p,b) in &self.fittings {
+            for (lo,hi) in engine_content::fittings::boxes(b,p,chunk.voxel_meters) {
+                let c=(lo+hi)*0.5; let size=hi-lo;
+                let mut surface=BlockId::Planks.surface();
+                surface.material_id=b as u32+1;
+                let fitting=engine_content::fittings::state(b).unwrap();
+                let size_m=size*chunk.voxel_meters;
+                let latch=fitting.door && (size_m.y-0.10).abs()<0.002;
+                let local_top=(hi-engine_content::fittings::anchor(p,engine_content::fittings::step(chunk.voxel_meters)).as_vec3())*chunk.voxel_meters;
+                let color=if latch { [0.64,0.42,0.19] } else if fitting.lever && local_top.y<0.141 { [0.36,0.37,0.34] } else { b.color(p) };
+                if latch { surface.texture_kind=41; surface.roughness=0.46; }
+                for (normal,u,v) in [(glam::Vec3::X,glam::Vec3::Y,glam::Vec3::Z),
+                    (-glam::Vec3::X,glam::Vec3::Z,glam::Vec3::Y),
+                    (glam::Vec3::Y,glam::Vec3::Z,glam::Vec3::X),
+                    (-glam::Vec3::Y,glam::Vec3::X,glam::Vec3::Z),
+                    (glam::Vec3::Z,glam::Vec3::X,glam::Vec3::Y),
+                    (-glam::Vec3::Z,glam::Vec3::Y,glam::Vec3::X)] {
+                    let face=c+normal*size*0.5; let u=u*size*0.5; let v=v*size*0.5;
+                    let quad=[face-u-v,face+u-v,face+u+v,face-u+v].map(|p|p.to_array());
+                    super::push_face(&mut mesh.vertices,&mut mesh.indices,quad,color,normal.to_array(),surface,[1.0;4]);
+                }
+            }
+        }
         for p in &self.patches {
             super::emit_greedy_face(
                 &mut mesh, chunk, p.axis, p.positive, p.plane, p.u, p.v, p.width, p.height,

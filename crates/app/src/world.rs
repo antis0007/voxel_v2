@@ -18,6 +18,7 @@ pub mod factory;
 pub mod farming;
 pub mod habitats;
 pub mod interaction;
+pub mod fittings;
 pub mod inventory;
 pub mod mining;
 pub mod recipe_index;
@@ -1557,6 +1558,16 @@ impl World {
         self.set_many(&[(p, id)]);
     }
 
+    /// Make one chunk resident so a player edit commits on this frame.
+    ///
+    /// `WorldSimulation` has an asynchronous source lane for bulk cellular
+    /// fronts. Its eight slots stay full while water or gas is moving, so a
+    /// click that waited for a slot never landed and the tool stroke jammed.
+    /// Tool input gets the same synchronous admission `set` has always used.
+    pub(crate) fn admit_edit_chunk(&mut self, chunk: IVec3) -> bool {
+        self.resident_edit(chunk).is_ok()
+    }
+
     /// Eight volume units per voxel. Unedited procedural water starts full.
     pub fn water_volume(&self, p: IVec3) -> u8 {
         // Legacy query units are a view only. The CA keeps every sixty-fourth.
@@ -1831,7 +1842,7 @@ impl World {
     }
 
     pub fn set_many(&mut self, edits: &[(IVec3, BlockId)]) {
-        self.set_many_with(edits, false, false, |_, _, _| {});
+        self.set_many_with(edits, false, false, false, |_, _, _| {});
     }
 
     /// Reports only applied edits, in input order. This is an intentionally
@@ -1842,13 +1853,18 @@ impl World {
         edits: &[(IVec3, BlockId)],
         committed: impl FnMut(IVec3, BlockId, BlockId),
     ) {
-        self.set_many_with(edits, false, true, committed);
+        self.set_many_with(edits, false, true, false, committed);
     }
 
     /// Edits written by an authored mechanism: the only path that may open a
     /// tombstone seal.
     pub fn set_many_mechanism(&mut self, edits: &[(IVec3, BlockId)]) {
-        self.set_many_with(edits, true, false, |_, _, _| {});
+        self.set_many_with(edits, true, false, false, |_, _, _| {});
+    }
+
+    /// Assembly effects preflight every member before changing fitting states.
+    pub(crate) fn set_many_fittings(&mut self, edits: &[(IVec3, BlockId)]) {
+        self.set_many_with(edits, false, false, true, |_,_,_|{});
     }
 
     fn set_many_with(
@@ -1856,6 +1872,7 @@ impl World {
         edits: &[(IVec3, BlockId)],
         unseal: bool,
         require_admission: bool,
+        fitting_edit: bool,
         mut committed: impl FnMut(IVec3, BlockId, BlockId),
     ) {
         let mut changed = false;
@@ -1879,6 +1896,7 @@ impl World {
                 continue;
             }
             let current = self.get(p);
+            if !fitting_edit && engine_content::fittings::state(current).is_some() { continue; }
             if current == id || current == BlockId::Bedrock || (current == BlockId::TombStone && !unseal) {
                 continue;
             }

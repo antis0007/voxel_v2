@@ -165,3 +165,44 @@ pub fn place(
 
 mod water;
 pub use water::{WaterDirection, exchange_water};
+
+/// Bounded structural edit. Only empty space and fitting states are admitted;
+/// all residency and environmental capacity is checked before any cell changes.
+pub fn fitting_batch(world: &mut World, edits: &[(IVec3,BlockId)],
+    blocks: &mut HashSet<IVec3>, chunks: &mut HashSet<IVec3>) -> Result<(),Failure> {
+    if edits.is_empty() || edits.len()>1024 { return Err(Failure::Rejected); }
+    let mut affected=HashSet::new();
+    let mut owners=HashSet::new();
+    for &(p,b) in edits {
+        admit(world,p)?;
+        let old=world.get(p);
+        if (old!=BlockId::Air && engine_content::fittings::state(old).is_none())
+            || (b!=BlockId::Air && engine_content::fittings::state(b).is_none())
+            || world.water_microlitres(p)>0
+            || world.environment.sediment_at(p)>0
+            || world.environment.patches.get(&environment::key(p)).is_some_and(|p|p.soil.water>0) { return Err(Failure::Rejected); }
+        for d in [IVec3::ZERO,IVec3::X,IVec3::NEG_X,IVec3::Y,IVec3::NEG_Y,IVec3::Z,IVec3::NEG_Z] {
+            affected.insert(p+d);
+        }
+        for d in std::iter::once(IVec3::ZERO).chain(super::activity::WAKE_NEIGHBORS) {
+            owners.insert(chunk_coord_from_world_block(p+d));
+        }
+    }
+    if !world.activity.can_wake(&owners.into_iter().collect::<Vec<_>>()) { return Err(Failure::Deferred); }
+    if environment::State::enabled(world.generator_version) {
+        let affected:Vec<_>=affected.into_iter().collect();
+        let patch_owners:HashSet<_>=affected.iter().map(|&p|world.environment.owner(p)).collect();
+        let refinement:usize=patch_owners.iter().filter_map(|p|world.environment.patches.get(p))
+            .map(|p|(p.extent as usize).pow(3)-1).sum();
+        if !world.environment.can_refine(&affected)
+            || world.environment.scheduled.len()+world.environment.light.len()+affected.len()+refinement+128 > environment::MAX_EVENTS {
+            return Err(Failure::Deferred);
+        }
+    }
+    world.set_many_fittings(edits);
+    for &(p,b) in edits {
+        debug_assert_eq!(world.get(p),b);
+        blocks.insert(p); mark_chunk_and_neighbors_dirty(chunks,p);
+    }
+    Ok(())
+}
