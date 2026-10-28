@@ -12,6 +12,10 @@ const REGION: f32 = 128.0;
 const EDGE: usize = 33;
 const COUNT: usize = EDGE * EDGE;
 const STEPS: usize = 48;
+// The horizon samples exact terrain and trees out to 4.2 km, about 3,500 tiles,
+// in several passes. At 1,024 each pass evicted the last one's tiles and rebuilt
+// them at ~5-14 ms each. A tile is ~9 KB, so the cap bounds the cache near 75 MB.
+const MAX_TILES: usize = 8192;
 
 // Shared desert exclusion keeps distant vegetation consistent with terrain.
 fn desert_climate(temperature: f32, moisture: f32) -> bool {
@@ -846,7 +850,7 @@ fn tile(key: TileKey) -> Arc<Tile> {
         } else {
             // Never evict an in-flight initialization: neighboring workers join
             // the same erosion calculation instead of rebuilding it in parallel.
-            if cache.entries.len() >= 1024
+            if cache.entries.len() >= MAX_TILES
                 && let Some(i) = cache
                     .recent
                     .iter()
