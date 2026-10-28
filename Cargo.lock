@@ -846,6 +846,7 @@ dependencies = [
  "bytemuck",
  "criterion",
  "engine_core",
+ "engine_netcode",
  "glam",
  "proptest",
 ]

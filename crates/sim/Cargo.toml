@@ -13,6 +13,8 @@ bytemuck = { version = "1", features = ["derive"] }
 glam = "0.32.0"
 
 [dev-dependencies]
+# Test-only: the lockstep proof drives worlds through the netcode link simulator.
+engine_netcode = { path = "../netcode" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 proptest = { version = "1.11", default-features = false, features = ["std"] }
 
