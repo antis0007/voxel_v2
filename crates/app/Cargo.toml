@@ -5,6 +5,10 @@ name = "minecraft_style_voxel_prototype"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Declared so cfg(feature = "multiplayer") is a known cfg; the stack that enables it lands separately.
+multiplayer = []
+
 [dependencies]
 engine_core = { path = "../core" }
 engine_content = { path = "../content" }
