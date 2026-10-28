@@ -251,7 +251,7 @@ impl BuildTarget {
                 && Arc::ptr_eq(&cached.snapshot.regions.root,&other.snapshot.regions.root)
                 && Arc::ptr_eq(&cached.snapshot.regions.records,&other.snapshot.regions.records) { return cached.valid; }
         let scale=self.snapshot.cfg.voxel_meters();
-        let valid = !edits::structural_changed(&self.snapshot,&other.snapshot,self.center)
+        let valid = !edits::structural_changed(&self.snapshot,&other.snapshot,self.center,&other.coverage)
             && !self.omitted.iter().any(|&(lo,hi)| self.coverage.contains_bounds(lo*scale,hi*scale,scale)
                 && !other.coverage.contains_bounds(lo*scale,hi*scale,scale))
             && self.valid_for_resident(&other.snapshot, other.eye, other.hidden_radius, &other.coverage);
@@ -1675,7 +1675,24 @@ mod continuity_contract {
         let current=world.snapshot();
         let q=crate::world::chunk_coord_from_world_block(IVec3::new(400,40,0));
         assert!(current.chunks[&q].structural_bounds.is_none());
-        assert!(!edits::structural_changed(&old,&current,(0,0)),"fluid microstate is a separate dependency class");
+        assert!(!edits::structural_changed(&old,&current,(0,0),&ResidentCoverage::default()),"fluid microstate is a separate dependency class");
+    }
+
+    #[test]
+    fn resident_structural_edit_waits_for_its_column_to_leave_residency() {
+        let mut world=World::with_seed(WorldType::Superflat,VoxelScalePreset::OneMeter,7);
+        let eye=Vec3::new(0.0,30.0,0.0);
+        let published=target(&mut world,eye);
+        world.set(IVec3::new(1,20,1),BlockId::Stone);
+        let mut resident=ResidentCoverage { header:[-1,-1,3,1], ..Default::default() };
+        for z in -1..=1 { for x in -1..=1 { assert!(resident.set_column(x,z)); } }
+        let mut desired=target(&mut world,eye);
+        desired.coverage=Arc::new(resident);
+        assert!(published.matches(&desired),"the resident mesh draws the edit");
+        let mut desired=target(&mut world,eye);
+        resident.header[3]=0;
+        desired.coverage=Arc::new(resident);
+        assert!(!published.matches(&desired),"leaving residency exposes the edit to the cover");
     }
 
     #[test]

@@ -80,8 +80,9 @@ fn random(state: &mut u32) -> f32 {
 // Sampling the authoritative forest can build expensive erosion tiles. Do it
 // on bounded shared workers, then consume results in the original cell order:
 // random streams, geometry order and whole-tree budget decisions stay identical.
-// Each worker builds its own erosion tiles, so the cap trades wall time against
-// memory. `VOXEL_HORIZON_TREE_WORKERS` overrides it for timing sweeps.
+// Erosion tiles and site footprints are process-wide caches, so extra workers
+// add little memory; 4 workers made trees 24 s of a 44 s cold build, 12 cut
+// that to 15 s. `VOXEL_HORIZON_TREE_WORKERS` overrides it for timing sweeps.
 fn sample_trees(
     cfg: &WorldSampleConfig,
     cells: &[(i32, i32, u32)],
@@ -104,7 +105,7 @@ fn sample_trees(
     if misses.is_empty() {
         return Some(result);
     }
-    let workers = super::parallel::workers(super::parallel::cap_from_env("VOXEL_HORIZON_TREE_WORKERS", 4));
+    let workers = super::parallel::workers(super::parallel::cap_from_env("VOXEL_HORIZON_TREE_WORKERS", 12));
     let sampled = super::parallel::map_blocks(&misses, 64, workers, cancel, |&i| {
         let (x, z, _) = cells[i];
         Some(if exact { tree_visual(cfg, x, z) } else { crate::world::tree_visual_lod(cfg, x, z, 8.0) })

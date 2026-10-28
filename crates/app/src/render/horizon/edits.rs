@@ -755,11 +755,16 @@ pub(super) fn trace_rejection(old:&WorldSnapshot,new:&WorldSnapshot,omitted:&Omi
 
 /// Structural refinement must be requested even while residents mask it, so
 /// departure has an edited parent ready rather than waiting for exposure.
-pub(super) fn structural_changed(old: &WorldSnapshot, new: &WorldSnapshot, center:(i32,i32)) -> bool {
+pub(super) fn structural_changed(old: &WorldSnapshot, new: &WorldSnapshot, center:(i32,i32), coverage: &ResidentCoverage) -> bool {
+    // A chunk inside resident columns is drawn by its own mesh, as in
+    // `changes_visible_inner`. Simulation edits there (soil cover, sediment)
+    // rebuilt the whole cover every interval; a coverage change re-checks them.
     let relevant=|q:IVec3| {
         let scale=new.cfg.voxel_meters(); let lo=q.as_vec3()*32.0*scale;let hi=lo+Vec3::splat(32.0*scale);
         let c=glam::Vec2::new(center.0 as f32,center.1 as f32);
         c.distance(c.clamp(lo.xz(),hi.xz()))<=super::SOURCE_REACH
+            && !coverage.contains_bounds((q.as_vec3()*32.0-Vec3::splat(2.0))*scale,
+                ((q.as_vec3()+Vec3::ONE)*32.0+Vec3::splat(2.0))*scale,scale)
     };
     for (q,data) in new.chunks.iter() {
         if !relevant(*q) { continue; }
