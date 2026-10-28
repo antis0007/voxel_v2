@@ -46,6 +46,9 @@ pub mod status;
 mod tactics;
 mod navigation;
 mod encounters;
+mod records;
+#[cfg(test)]
+mod records_tests;
 mod modifiers;
 pub mod tinkering;
 pub mod wands;
@@ -969,8 +972,10 @@ impl Adventure {
         }
     }
     fn spawn(&mut self, world: &mut World, player: Vec3) {
-        for (id, center, kind) in sites::encounters(&world.sample_config(), player) {
-            if self.records.len() >= MAX_RECORDS && !self.records.contains_key(&id) {
+        let encounters = sites::encounters(&world.sample_config(), player);
+        let nearby: Vec<IVec3> = encounters.iter().map(|e| e.0).collect();
+        for (id, center, kind) in encounters {
+            if !self.admit_record(id, &nearby) {
                 continue;
             }
             let record = {
@@ -2675,7 +2680,7 @@ impl Adventure {
                 && a.spell <= MAX_SPELL_ID
                 && a.spell != wands::EMPTY
                 && (a.wand > 0 || a.spell == 0)
-                && count <= MAX_RECORDS,
+                && count <= records::RECORD_CEILING,
             "Invalid spell or encounter state"
         );
         for _ in 0..count {

@@ -23,7 +23,7 @@ impl State {
             .filter_map(|p| self.patches.get(p))
             .map(|patch| (patch.extent as usize).pow(3) - 1)
             .sum();
-        self.patches.len() + additional <= MAX_PATCHES
+        self.patches.len() + additional <= PATCH_CEILING
             && self.scheduled.len() + additional + positions.len() <= MAX_EVENTS
     }
 

@@ -83,7 +83,7 @@ fn environment_infiltration_and_excavation_conserve_actual_world_water() {
     assert_eq!(soil_water + world.water_microlitres(above), initial);
     world.set(p, B::Air);
     soil::process(&mut world, p, 1_001, &mut blocks, &mut chunks);
-    let remaining = world.environment.patches[&env::key(p)].soil.water;
+    let remaining = world.environment.patches.get(&env::key(p)).map_or(0, |patch| patch.soil.water);
     assert_eq!(remaining + world.water_microlitres(p) + world.water_microlitres(above), initial);
 }
 

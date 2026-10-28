@@ -32,9 +32,9 @@ pub(super) fn process(
     let Some(definition) = engine_content::environment::definition() else {
         return false;
     };
+    // A full table leaves the cell implicit; the event then completes.
     if !ensure_patch(world, p) {
-        return definition.soil(world.get(p)).is_some()
-            && world.environment.patches.len() >= env::MAX_PATCHES;
+        return false;
     }
     let p = env::position(world.environment.owner(p));
     let Some(mut patch) = world.environment.patches.get(&env::key(p)).cloned() else {
@@ -189,6 +189,11 @@ pub(super) fn process(
                 || patch.soil.biomass > 0
                 || (patch.soil.litter > 0 && patch.soil.water > 0 && conditions.temperature_c > 0);
         }
+    }
+    if super::prune::inert(&patch, definition.soil(material).is_some()) {
+        // An empty record over a dug-out cell regenerates identically.
+        world.environment.patches.remove(&env::key(p));
+        return pending;
     }
     patch.last_tick = tick;
     if patch.soil != before {

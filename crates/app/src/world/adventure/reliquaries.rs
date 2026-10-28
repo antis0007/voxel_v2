@@ -125,10 +125,9 @@ impl Adventure {
     pub(super) fn update_reliquaries(&mut self, world: &mut World, feet: Vec3) {
         self.reliquaries.clear();
         let cfg = world.sample_config();
-        for (site, center, _) in sites::encounters(&cfg, feet) {
-            if self.records.len() >= MAX_RECORDS && !self.records.contains_key(&site) {
-                continue;
-            }
+        let encounters = sites::encounters(&cfg, feet);
+        let nearby: Vec<IVec3> = encounters.iter().map(|e| e.0).collect();
+        for (site, center, _) in encounters {
             let kind = sites::reward_kind(&cfg, site);
             if !self.valid_relic_kind(kind) {
                 continue;
@@ -136,6 +135,9 @@ impl Adventure {
             let Some(pos) = place(world, center) else {
                 continue;
             };
+            if !self.admit_record(site, &nearby) {
+                continue;
+            }
             // A failed placement must not consume a new persistent record slot.
             // Existing records keep their saved flags; only a new slot starts as PHYSICAL.
             let state = *self.records.entry(site).or_insert(PHYSICAL);

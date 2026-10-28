@@ -73,7 +73,10 @@ pub(super) fn process(
     }
     let owner = world.environment.owner(below);
     let Some(patch) = world.environment.patches.get_mut(&owner) else {
-        return true;
+        // A full patch table leaves the bank implicit; the work dissipates
+        // instead of rescheduling this event every second.
+        world.environment.hydraulic_work.remove(&env::key(p));
+        return settling;
     };
     let roots = definition.species(patch.species).map_or(0, |s| {
         let mature =

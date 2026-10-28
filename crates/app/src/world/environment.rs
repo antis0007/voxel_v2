@@ -33,13 +33,16 @@ pub fn position(k: Key) -> IVec3 {
     IVec3::new(k.0, k.1, k.2)
 }
 /// Conservative reservations include ordered-map nodes and allocator overhead.
+/// New cells stop allocating at this soft limit and stay implicit instead.
 pub const MAX_PATCHES: usize = 65_536;
+/// Refinement before an edit may pass the soft limit so the edit still lands.
+pub const PATCH_CEILING: usize = MAX_PATCHES + 8_192;
 pub const MAX_EVENTS: usize = 65_536;
 pub const MAX_SEDIMENT: usize = 32_768;
 pub const MAX_FRACTIONS: usize = 32_768;
 pub const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const _: () = assert!(
-    MAX_PATCHES * 352
+    PATCH_CEILING * 352
         + MAX_EVENTS * 224
         + MAX_SEDIMENT * 96
         + MAX_FRACTIONS * 384
@@ -102,6 +105,9 @@ pub struct State {
     pub erosion_rate: u32,
     pub evaporation_um_s: u32,
     pub cells_per_metre: i32,
+    /// Last patch the redundancy sweep examined. Transient: a reload restarts
+    /// the sweep, which only drops records that regenerate identically.
+    pub(crate) prune_cursor: Option<Key>,
 }
 
 impl Default for State {
@@ -127,6 +133,7 @@ impl Default for State {
             erosion_rate: definition.map_or(0, |d| d.erosion_rate),
             evaporation_um_s: definition.map_or(0, |d| d.evaporation_um_s),
             cells_per_metre: 1,
+            prune_cursor: None,
         }
     }
 }
@@ -135,11 +142,12 @@ impl State {
     pub fn enabled(generator: u32) -> bool {
         generator >= ENVIRONMENT_GENERATOR
     }
-    pub fn admit_material(&self, p: IVec3, old: BlockId, new: BlockId) -> bool {
-        let porous = engine_content::environment::definition()
-            .is_some_and(|d| d.soil(old).is_some() || d.soil(new).is_some());
-        !porous || self.patches.contains_key(&key(p)) || self.patches.len() < MAX_PATCHES
+    /// Admits every material edit; the patch table never blocks one.
+    pub fn admit_material(&self, _p: IVec3, _old: BlockId, _new: BlockId) -> bool {
+        true
     }
+    /// Stores a fresh patch. Returns false only for a non-porous material;
+    /// past `MAX_PATCHES` the cell stays implicit (natural) and true is returned.
     pub fn create_patch(
         &mut self,
         cfg: super::WorldSampleConfig,
@@ -151,15 +159,27 @@ impl State {
         if self.patches.contains_key(&self.owner(p)) {
             return true;
         }
-        let Some(definition) = engine_content::environment::definition() else {
-            return false;
-        };
-        let Some(law) = definition.soil(material) else {
-            return false;
-        };
         if self.patches.len() >= MAX_PATCHES {
-            return false;
+            return engine_content::environment::definition().is_some_and(|d| d.soil(material).is_some());
         }
+        let Some(patch) = self.fresh_patch(cfg, p, material, exposed, natural) else {
+            return false;
+        };
+        self.ledger.initial_soil_water += patch.soil.water;
+        self.patches.insert(key(p), patch);
+        true
+    }
+    /// The patch `create_patch` would store, without touching the ledger.
+    pub fn fresh_patch(
+        &self,
+        cfg: super::WorldSampleConfig,
+        p: IVec3,
+        material: BlockId,
+        exposed: bool,
+        natural: bool,
+    ) -> Option<Patch> {
+        let definition = engine_content::environment::definition()?;
+        let law = definition.soil(material)?;
         let metric = p.as_vec3() * cfg.voxel_meters();
         let conditions = engine_worldgen::ecology::conditions(&cfg, metric, if exposed { 0 } else { 1_000 });
         let water = if natural {
@@ -174,24 +194,19 @@ impl State {
         } else {
             0
         };
-        self.ledger.initial_soil_water += water;
         let nutrient = if natural {
             engine_core::environment::cell_volume(cfg.voxel_scale) * 10_240 / 1_000_000_000
         } else {
             0
         };
-        self.patches.insert(
-            key(p),
-            Patch {
-                material,
-                species,
-                revision: 0,
-                last_tick: self.event_tick.map_or(self.target_tick, |tick| tick.saturating_sub(1)),
-                extent: 1,
-                soil: Soil { water, nutrient, biomass, plant_nutrient: biomass / 40, ..Default::default() },
-            },
-        );
-        true
+        Some(Patch {
+            material,
+            species,
+            revision: 0,
+            last_tick: self.event_tick.map_or(self.target_tick, |tick| tick.saturating_sub(1)),
+            extent: 1,
+            soil: Soil { water, nutrient, biomass, plant_nutrient: biomass / 40, ..Default::default() },
+        })
     }
     pub fn can_wake(&self, positions: &[IVec3]) -> bool {
         let mut owners = [(0, 0, 0); 128];

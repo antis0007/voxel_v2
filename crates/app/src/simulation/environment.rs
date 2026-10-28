@@ -15,6 +15,9 @@ mod cost_tests;
 #[cfg(test)]
 mod interaction_tests;
 mod light;
+mod prune;
+#[cfg(test)]
+mod prune_tests;
 mod roots;
 mod sediment;
 mod soil;
@@ -91,6 +94,7 @@ pub(super) fn update(
             world.environment.schedule(owner, next + delay);
         }
     }
+    prune::sweep(world, player);
 }
 
 /// Every stored patch belongs to one actual cell. Purely solid neighbors are

@@ -34,7 +34,9 @@ pub fn compost(world: &mut World, p: IVec3, hotbar: usize) -> bool {
         engine_core::environment::cell_volume(world.voxel_scale) * u64::from(input.dry_mg_m3) / 1_000_000_000;
     let nutrient = dry * u64::from(input.nutrient_per_mille) / 1_000;
     let key = world.environment.owner(p);
-    let patch = world.environment.patches.get_mut(&key).unwrap();
+    let Some(patch) = world.environment.patches.get_mut(&key) else {
+        return false;
+    };
     // At most a 5 cm litter layer at 200 kg/m3 dry bulk density.
     let layer_limit = engine_core::environment::face_area_cm2(world.voxel_scale) * 1_000;
     if patch.soil.litter + dry > layer_limit {

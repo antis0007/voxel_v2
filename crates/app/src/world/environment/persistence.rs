@@ -134,7 +134,7 @@ impl State {
             edited_water_removed_ul: get64(read)?,
         };
         let count = read()? as usize;
-        ensure!(count <= MAX_PATCHES, "Too many soil patches");
+        ensure!(count <= PATCH_CEILING, "Too many soil patches");
         let definition = engine_content::environment::definition()
             .ok_or_else(|| anyhow::anyhow!("Environmental content unavailable"))?;
         let volume = engine_core::environment::cell_volume(scale);
