@@ -135,15 +135,17 @@ pub(crate) fn tick_world(
     mana_fonts(world, player.pos * scale, dt, size);
     let (lo, hi) =
         super::super::player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t);
-    let mut machines: Vec<_> = world
-        .factory
-        .nodes
-        .iter()
-        .filter(|(_, n)| {
-            (matches!(n.kind, Kind::MiningDrill | Kind::Pump) && n.enabled) || n.draining
-        })
-        .map(|(&p, _)| p)
-        .collect();
+    // Reuses one buffer: this runs every fixed step.
+    let mut machines = std::mem::take(&mut world.factory.machine_scratch);
+    machines.clear();
+    machines.extend(
+        world
+            .factory
+            .nodes
+            .iter()
+            .filter(|(_, n)| (matches!(n.kind, Kind::MiningDrill | Kind::Pump) && n.enabled) || n.draining)
+            .map(|(&p, _)| p),
+    );
     machines.sort_by_key(|p| (p.x, p.y, p.z));
     if !machines.is_empty() {
         let rotation = *cursor % machines.len();
@@ -155,7 +157,7 @@ pub(crate) fn tick_world(
         let n = world.factory.nodes.get_mut(p).unwrap();
         n.work_clock = (n.work_clock + dt).min(0.5);
     }
-    for p in machines {
+    for &p in &machines {
         if !deadline.has_time() {
             break;
         }
@@ -351,6 +353,7 @@ pub(crate) fn tick_world(
         }
         world.factory.nodes.insert(p, n);
     }
+    world.factory.machine_scratch = machines;
 }
 
 fn drain(

@@ -18,8 +18,13 @@ pub mod sides;
 pub mod stats;
 pub mod recipes;
 pub mod transit;
+mod routes;
 #[cfg(test)]
 mod authority_tests;
+#[cfg(test)]
+mod routing_reference;
+#[cfg(test)]
+mod routing_tests;
 pub(crate) use extraction::tick_world;
 
 pub const RESOURCE_COUNT: usize = 22;
@@ -305,6 +310,13 @@ pub struct Factory {
     refunds: Vec<(usize, u32)>,
     /// Item pipe cell -> index into `items`.
     item_net: HashMap<IVec3, usize>,
+    /// Route trees for `items`; cleared whenever the networks are rebuilt.
+    routes: routes::Routes,
+    /// Drill and pump positions, reused by every fixed step.
+    machine_scratch: Vec<IVec3>,
+    /// Tests: route with the uncached reference pass instead.
+    #[cfg(test)]
+    reference_routing: bool,
     /// Measured state of each power network, parallel to `power`.
     power_stats: Vec<power::NetStats>,
     /// Cable or port -> index into `power`.
@@ -1452,6 +1464,7 @@ impl Factory {
             self.items = self.networks(Kind::Pipe, size);
             self.fluids = self.networks(Kind::FluidPipe, size);
             self.item_net.clear();
+            self.routes.clear();
             for (ni, net) in self.items.iter().enumerate() {
                 for c in &net.conduits {
                     self.item_net.insert(*c, ni);
@@ -1627,95 +1640,15 @@ impl Factory {
             }
         }
         self.stats.tick();
-        self.run_extractors(size);
-        self.run_distributors(size);
-        // Only outputs travel. Material filters make the processing graph acyclic:
-        // feeder -> crusher -> furnace -> crate, and feeder -> generator.
-        // One unit per source per tick; backpressure retains everything at source.
-        let mut moved = HashSet::new();
-        // Reused for every launch. Storage sorts after processors, then by
-        // distance, so a bus feeds the nearest machine that can take the item
-        // instead of walking the whole port list and pathfinding each one.
-        let mut near: Vec<(u8, i32, i32, IVec3)> = Vec::new();
-        for network in &self.items {
-            let net = &network.ports;
-            let mut flow = false;
-            if net.is_empty() {
-                continue;
-            }
-            let port_count = net.len() as i32;
-            for k in 0..net.len() {
-                let p = net[(k + self.cursor) % net.len()];
-                if moved.contains(&p) || !self.nodes[&p].enabled {
-                    continue;
-                }
-                'items: for i in 0..RESOURCE_COUNT {
-                    if self.nodes[&p].kind == Kind::Feeder
-                        && self.nodes[&p].filter.is_some_and(|filter| filter != i)
-                    {
-                        continue;
-                    }
-                    let available = self.nodes[&p].output[i].min(64);
-                    if available == 0 {
-                        continue;
-                    }
-                    near.clear();
-                    for (offset, &q) in net.iter().enumerate() {
-                        if q == p {
-                            continue;
-                        }
-                        let dest = &self.nodes[&q];
-                        if !dest.enabled || dest.kind == Kind::Feeder || !self.container_takes(q, i)
-                        {
-                            continue;
-                        }
-                        let reserved = self.reserved.get(&(q, i)).copied().unwrap_or(0);
-                        if dest.input[i].saturating_add(reserved) >= CAPACITY {
-                            continue;
-                        }
-                        let dist = (q.x - p.x).abs() + (q.y - p.y).abs() + (q.z - p.z).abs();
-                        let tie = (offset as i32 + self.cursor as i32) % port_count;
-                        let storage = u8::from(dest.kind == Kind::Storage);
-                        near.push((storage, dist, tie, q));
-                    }
-                    near.sort_unstable_by_key(|row| (row.0, row.1, row.2));
-                    for &(_, _, _, q) in &near {
-                        let room = CAPACITY.saturating_sub(
-                            self.nodes[&q].input[i]
-                                + self.reserved.get(&(q, i)).copied().unwrap_or(0),
-                        );
-                        let amount = available.min(room);
-                        if amount == 0 {
-                            continue;
-                        }
-                        if self.packets.len() >= transit::MAX_PACKETS {
-                            break 'items;
-                        }
-                        let Some(path) = transit::find_path(network, p, q, size, None) else {
-                            continue;
-                        };
-                        self.nodes.get_mut(&p).unwrap().output[i] -= amount;
-                        *self.reserved.entry((q, i)).or_insert(0) += amount;
-                        self.packets.push(transit::Packet {
-                            item: i,
-                            amount,
-                            src: p,
-                            dst: q,
-                            path,
-                            progress: 0.0,
-                        });
-                        flow = true;
-                        moved.insert(p);
-                        break 'items;
-                    }
-                }
-            }
-            if flow {
-                for p in &network.conduits {
-                    self.nodes.get_mut(p).unwrap().activity = 1.0;
-                }
-            }
+        #[cfg(test)]
+        if self.reference_routing {
+            self.reference_route(size);
+            return;
         }
+        let mut inbound = routes::Inbound::new(&self.packets);
+        self.run_extractors(size, &mut inbound);
+        self.run_distributors(size, &mut inbound);
+        self.route_outputs(size, &mut inbound);
     }
 }
 
@@ -1937,6 +1870,12 @@ impl Factory {
     /// A barrel with nothing stored yet will take the first shipment only.
     /// A second resource already on the way does not sneak in behind it.
     fn container_takes(&self, cell: IVec3, item: usize) -> bool {
+        self.takes_unless(cell, item, || self.packets.iter().any(|p| p.dst == cell && p.item != item))
+    }
+
+    /// `container_takes`, with `other_inbound` answering whether a different
+    /// resource is already headed to `cell`.
+    fn takes_unless(&self, cell: IVec3, item: usize, other_inbound: impl FnOnce() -> bool) -> bool {
         let Some(dest) = self.nodes.get(&cell) else {
             return false;
         };
@@ -1945,15 +1884,25 @@ impl Factory {
         }
         if dest.kind == Kind::Storage && dest.mode == 2 && dest.filter.is_none() {
             let empty = dest.input.iter().all(|n| *n == 0);
-            if empty && self.packets.iter().any(|p| p.dst == cell && p.item != item) {
+            if empty && other_inbound() {
                 return false;
             }
         }
         true
     }
 
+    /// A port that can take another shipment of `item` right now.
+    fn open_for(&self, q: IVec3, item: usize, inbound: &routes::Inbound) -> bool {
+        let dest = &self.nodes[&q];
+        let reserved = self.reserved.get(&(q, item)).copied().unwrap_or(0);
+        dest.enabled
+            && dest.kind != Kind::Feeder
+            && dest.input[item].saturating_add(reserved) < CAPACITY
+            && self.takes_unless(q, item, || inbound.other_than(q, item))
+    }
+
     /// Extractor pipes pull from adjacent crates and machine outputs.
-    fn run_extractors(&mut self, size: i32) {
+    fn run_extractors(&mut self, size: i32, inbound: &mut routes::Inbound) {
         let mut extractors: Vec<IVec3> = self
             .nodes
             .iter()
@@ -1970,7 +1919,10 @@ impl Factory {
             };
             let network = &self.items[ni];
             let filter = self.nodes[&p].filter;
-            'pull: for d in DIRS {
+            'pull: for (side, d) in DIRS.into_iter().enumerate() {
+                if !self.side_open(p, side) {
+                    continue;
+                }
                 let s = p + d * size;
                 let Some(src) = self.nodes.get(&s) else {
                     continue;
@@ -1995,14 +1947,18 @@ impl Factory {
                     if available == 0 {
                         continue;
                     }
-                    let mut destinations: Vec<_> = (0..network.ports.len())
-                        .map(|k| network.ports[(k + self.cursor) % network.ports.len()])
-                        .filter(|q| *q != s)
-                        .collect();
-                    destinations.sort_by_key(|q| self.nodes[q].kind == Kind::Storage);
-                    for q in destinations {
+                    // Machines before storage, each in rotated port order.
+                    let count = network.ports.len();
+                    let rotated = (0..2 * count).map(|k| (k >= count, network.ports[(k % count + self.cursor) % count]));
+                    for (to_storage, q) in rotated {
+                        if q == s {
+                            continue;
+                        }
                         let dest = &self.nodes[&q];
-                        if !dest.enabled || dest.kind == Kind::Feeder || !self.container_takes(q, i)
+                        if (dest.kind == Kind::Storage) != to_storage
+                            || !dest.enabled
+                            || dest.kind == Kind::Feeder
+                            || !self.takes_unless(q, i, || inbound.other_than(q, i))
                         {
                             continue;
                         }
@@ -2013,7 +1969,7 @@ impl Factory {
                         if amount == 0 {
                             continue;
                         }
-                        let Some(path) = transit::find_path(network, s, q, size, Some(p)) else {
+                        let Some(path) = self.routes.path(ni, network, size, s, q, Some(p)) else {
                             continue;
                         };
                         let source = self.nodes.get_mut(&s).unwrap();
@@ -2023,6 +1979,7 @@ impl Factory {
                             source.output[i] -= amount;
                         }
                         *self.reserved.entry((q, i)).or_insert(0) += amount;
+                        inbound.add(q, i);
                         self.packets.push(transit::Packet {
                             item: i,
                             amount,
@@ -2041,7 +1998,7 @@ impl Factory {
 
     /// One distributor pipe per item network moves a single stack from the
     /// fullest container to the emptiest one that will accept it.
-    fn run_distributors(&mut self, size: i32) {
+    fn run_distributors(&mut self, size: i32, inbound: &mut routes::Inbound) {
         let mut pipes: Vec<IVec3> = self
             .nodes
             .iter()
@@ -2113,11 +2070,12 @@ impl Factory {
             if amount == 0 {
                 continue;
             }
-            let Some(path) = transit::find_path(&self.items[ni], src, dst, size, None) else {
+            let Some(path) = self.routes.path(ni, &self.items[ni], size, src, dst, None) else {
                 continue;
             };
             self.nodes.get_mut(&src).unwrap().input[item] -= amount;
             *self.reserved.entry((dst, item)).or_insert(0) += amount;
+            inbound.add(dst, item);
             self.packets.push(transit::Packet {
                 item,
                 amount,
@@ -2129,6 +2087,105 @@ impl Factory {
             let pipe_node = self.nodes.get_mut(&pipe).unwrap();
             pipe_node.activity = 1.0;
             pipe_node.status = "Balancing";
+        }
+    }
+
+    /// Machine outputs travel to the nearest port that can take them.
+    /// Material filters make the processing graph acyclic: feeder -> crusher
+    /// -> furnace -> crate, and feeder -> generator. One unit per source per
+    /// pass; backpressure retains everything at source.
+    fn route_outputs(&mut self, size: i32, inbound: &mut routes::Inbound) {
+        let mut moved = HashSet::new();
+        // Storage sorts after processors, then by distance, then by rotated
+        // port order; the keys never tie.
+        let mut near: Vec<(u8, i32, i32, IVec3)> = Vec::new();
+        // Per resource, the ports (offset, is storage) that could take it when
+        // first asked. Inputs do not change during this pass and reservations
+        // only grow, so a port missing from a list stays unable to take it.
+        let mut open: Vec<Option<Vec<(u32, u8)>>> = vec![None; RESOURCE_COUNT];
+        for (ni, network) in self.items.iter().enumerate() {
+            let net = &network.ports;
+            let mut flow = false;
+            if net.is_empty() {
+                continue;
+            }
+            open.iter_mut().for_each(|list| *list = None);
+            let port_count = net.len() as i32;
+            for k in 0..net.len() {
+                let p = net[(k + self.cursor) % net.len()];
+                if moved.contains(&p) || !self.nodes[&p].enabled {
+                    continue;
+                }
+                'items: for i in 0..RESOURCE_COUNT {
+                    let source = &self.nodes[&p];
+                    if source.kind == Kind::Feeder && source.filter.is_some_and(|filter| filter != i) {
+                        continue;
+                    }
+                    let available = source.output[i].min(64);
+                    if available == 0 {
+                        continue;
+                    }
+                    let list = open[i].get_or_insert_with(|| {
+                        net.iter()
+                            .enumerate()
+                            .filter(|&(_, &q)| self.open_for(q, i, inbound))
+                            .map(|(offset, q)| (offset as u32, u8::from(self.nodes[q].kind == Kind::Storage)))
+                            .collect()
+                    });
+                    near.clear();
+                    for &(offset, storage) in list.iter() {
+                        let q = net[offset as usize];
+                        if q == p || !self.open_for(q, i, inbound) {
+                            continue;
+                        }
+                        let dist = (q.x - p.x).abs() + (q.y - p.y).abs() + (q.z - p.z).abs();
+                        let tie = (offset as i32 + self.cursor as i32) % port_count;
+                        near.push((storage, dist, tie, q));
+                    }
+                    let Some(&(_, _, _, best)) = near.iter().min_by_key(|row| (row.0, row.1, row.2)) else {
+                        continue;
+                    };
+                    if self.packets.len() >= transit::MAX_PACKETS {
+                        break 'items;
+                    }
+                    let mut chosen = self.routes.path(ni, network, size, p, best, None).map(|path| (best, path));
+                    if chosen.is_none() {
+                        near.sort_unstable_by_key(|row| (row.0, row.1, row.2));
+                        chosen = near.iter().skip(1).find_map(|&(_, _, _, q)| {
+                            self.routes.path(ni, network, size, p, q, None).map(|path| (q, path))
+                        });
+                    }
+                    let Some((q, path)) = chosen else {
+                        continue;
+                    };
+                    let room = CAPACITY
+                        .saturating_sub(self.nodes[&q].input[i] + self.reserved.get(&(q, i)).copied().unwrap_or(0));
+                    let amount = available.min(room);
+                    if let Some(n) = self.nodes.get_mut(&p) {
+                        n.output[i] -= amount;
+                    }
+                    *self.reserved.entry((q, i)).or_insert(0) += amount;
+                    inbound.add(q, i);
+                    self.packets.push(transit::Packet {
+                        item: i,
+                        amount,
+                        src: p,
+                        dst: q,
+                        path,
+                        progress: 0.0,
+                    });
+                    flow = true;
+                    moved.insert(p);
+                    break 'items;
+                }
+            }
+            if flow {
+                for p in &network.conduits {
+                    if let Some(n) = self.nodes.get_mut(p) {
+                        n.activity = 1.0;
+                    }
+                }
+            }
         }
     }
 }

@@ -60,7 +60,9 @@ pub(super) fn find_path(
     via: Option<IVec3>,
 ) -> Option<Vec<IVec3>> {
     let pipes = &network.pipes;
-    let touches = |cell: IVec3, machine: IVec3| DIRS.iter().any(|d| cell + *d * size == machine);
+    let touches = |cell: IVec3, machine: IVec3| {
+        DIRS.iter().any(|d| cell + *d * size == machine) && !network.closed.contains(&(cell, machine))
+    };
     let starts: Vec<IVec3> = match via {
         Some(v) if pipes.contains(&v) && touches(v, from) => vec![v],
         Some(_) => return None,
@@ -94,7 +96,7 @@ pub(super) fn find_path(
         }
         for d in DIRS {
             let n = c + d * size;
-            if pipes.contains(&n) && seen.insert(n) {
+            if pipes.contains(&n) && !network.closed.contains(&(c, n)) && seen.insert(n) {
                 parent.insert(n, c);
                 queue.push_back(n);
             }
