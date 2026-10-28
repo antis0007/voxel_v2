@@ -466,7 +466,11 @@ fn parse_benchmark_config() -> BenchmarkConfig {
                 "sky-access" => RenderDebugView::SkyAccess,
                 "mesh-kind" => RenderDebugView::MeshKind,
                 "water-depth" => RenderDebugView::WaterDepth,
-                _ => RenderDebugView::None,
+                "shadow-split" => RenderDebugView::ShadowSplit,
+                other => {
+                    eprintln!("[benchmark] unknown --benchmark-debug={other}; rendering without a debug view");
+                    RenderDebugView::None
+                }
             };
             continue;
         }

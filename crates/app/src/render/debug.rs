@@ -34,6 +34,7 @@ pub enum RenderDebugView {
     SkyAccess,
     MeshKind,
     WaterDepth,
+    ShadowSplit,
 }
 
 impl RenderDebugView {
@@ -71,6 +72,7 @@ impl RenderDebugView {
             Self::SkyAccess => 29,
             Self::MeshKind => 30,
             Self::WaterDepth => 31,
+            Self::ShadowSplit => 33,
         }
     }
 
@@ -108,10 +110,11 @@ impl RenderDebugView {
             Self::SkyAccess => "Cached Sky Access",
             Self::MeshKind => "Mesh: resident green / backdrop blue / edited orange",
             Self::WaterDepth => "Water Optical Depth (white: 32 metres)",
+            Self::ShadowSplit => "Sun Shadow Split: cascades red / distant ranges green",
         }
     }
 
-    pub fn all() -> [Self; 32] {
+    pub fn all() -> [Self; 33] {
         [
             Self::None,
             Self::WeatherClipmapNear,
@@ -145,6 +148,7 @@ impl RenderDebugView {
             Self::SkyAccess,
             Self::MeshKind,
             Self::WaterDepth,
+            Self::ShadowSplit,
         ]
     }
 }

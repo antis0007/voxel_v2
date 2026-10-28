@@ -2996,23 +2996,32 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // PCF shadow
     let sun_shadow_strength = 0.94 * smoothstep(0.03, 0.16, light.sun_dir_intensity.w);
     var shadow_visibility = 1.0;
-    if cam.scene_seed.w == 0u && (sun_shadow_strength > 0.0 || debug_mode == 11) {
+    var cascade_visibility = 1.0;
+    var range_visibility = 1.0;
+    if cam.scene_seed.w == 0u && (sun_shadow_strength > 0.0 || debug_mode == 11 || debug_mode == 33) {
         // Real resident, exact fallback, and procedural receivers share CSM
         // wherever it has coverage; N.L already handles unlit slope orientations.
         // Origin-frame receiver: eye_from_origin plus relative_pos is exact
         // near the eye, where absolute f32 metres lose centimetres far from spawn.
         shadow_visibility = sample_sun_shadow(cam.eye_from_origin.xyz + relative_pos, linear_depth,
             clamp(dot(geometric_normal, sun_dir), 0.0, 1.0), world_dx, world_dy);
+        cascade_visibility = shadow_visibility;
         // Distant ranges as casters: the cascades end within a few hundred
         // metres, the detail map reaches the far plane. Skipped where the
         // surface already faces away from the sun or has no sky.
         if sun_shadow_strength > 0.0 && !is_viewmodel && sky_access > 0.05
             && dot(macro_normal, sun_dir) > 0.0 {
-            shadow_visibility = min(shadow_visibility, horizon_detail_sun_visibility(world_pos, sun_dir));
+            range_visibility = horizon_detail_sun_visibility(world_pos, sun_dir);
+            shadow_visibility = min(shadow_visibility, range_visibility);
         }
     }
 
     if debug_mode == 11 { return debug_surface_output(vec4<f32>(vec3<f32>(shadow_visibility), 1.0)); }
+    // Red: lit by cascades only. Green: lit by distant ranges only. Yellow:
+    // both agree lit; black: both shadowed; pure red or green: they disagree.
+    if debug_mode == 33 {
+        return debug_surface_output(vec4<f32>(cascade_visibility, range_visibility, 0.0, 1.0));
+    }
 
     let sun_shadow = mix(1.0, shadow_visibility, sun_shadow_strength);
 
