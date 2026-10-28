@@ -52,6 +52,7 @@ pub struct Installed {
 }
 
 pub struct Bay {
+    pub production: Arc<production::Production>,
     /// Shared with the UI's view snapshot; copied only when it changes.
     pub library: Arc<Library>,
     installed: BTreeMap<Key, Installed>,
@@ -69,7 +70,7 @@ impl Default for Bay {
     fn default() -> Self {
         let mut library = Library::default();
         library.session = session();
-        Self { library: Arc::new(library), installed: BTreeMap::new(), now: 0, queue: BinaryHeap::new() }
+        Self { production: Arc::default(), library: Arc::new(library), installed: BTreeMap::new(), now: 0, queue: BinaryHeap::new() }
     }
 }
 
@@ -87,6 +88,13 @@ pub enum Action {
     Reset(IVec3),
     /// Start a wafer lot of a revision in a lab ("bench" or "clean").
     StartLot { revision: u32, lab: String },
+    Manufacture { site: IVec3, recipe: u8 },
+    ResumeLot { site: IVec3, lot: u32 },
+    MoveBatch { from: IVec3, site: IVec3 },
+    SetOrder { site: IVec3, recipe: u8, target: u32, enabled: bool },
+    FeedOrder(IVec3),
+    ClearOrder(IVec3),
+    MoveOrder { from: IVec3, site: IVec3 },
     /// Discard one stocked part.
     Scrap(u32),
 }
@@ -218,10 +226,7 @@ impl Factory {
         let bay = &mut self.chips;
         bay.now += ticks;
         let now = bay.now;
-        // Only touch the shared library when a lot step is due.
-        if bay.library.lots.iter().any(|l| l.busy_until <= now && l.records.last().is_none_or(|r| r.kind != engine_chip::fab::StepKind::Package)) {
-            Arc::make_mut(&mut bay.library).advance_lots(registry(), now);
-        }
+        // Wafer clocks advance only through energy-backed machine work below.
         let mut orphans = Vec::new();
         while let Some(&Reverse((due, k))) = bay.queue.peek() {
             if due > now {
@@ -274,11 +279,14 @@ impl Factory {
                 Arc::make_mut(&mut bay.library).put_back(c.package);
             }
         }
+        self.step_fabrication(ticks);
     }
 }
 
 mod actions;
 mod save;
+pub mod production;
+mod orders;
 mod sensors;
 pub use sensors::fits;
 use sensors::{level, sensors};
@@ -287,7 +295,7 @@ type Key = (i32, i32, i32);
 fn key(p: IVec3) -> Key {
     (p.x, p.y, p.z)
 }
-pub use actions::{chip_action, resources, review_fixture};
+pub use actions::{chip_action, review_fixture};
 
 #[cfg(test)]
 #[path = "chips_tests.rs"]

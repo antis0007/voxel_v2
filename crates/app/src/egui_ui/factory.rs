@@ -362,6 +362,7 @@ pub(super) fn status_label(status: &str) -> &str {
         "Shaft complete" => "Complete",
         "Processing" => "Working",
         "Held by controller" => "Held",
+        "Stock ready" => "Stock Ready",
         other => other,
     }
 }
@@ -1322,7 +1323,8 @@ pub(super) fn draw(
             if crate::world::factory::chips::controllable(node.kind) {
                 super::chip_panel::section(ui, view, *pos, action);
             }
-            if let Some(recipe)=node.process() {
+            let lab_owned = view.fabrication.owns((pos.x, pos.y, pos.z));
+            if let Some(recipe)=node.process().filter(|_| !lab_owned) {
                 ui.horizontal_wrapped(|ui| {
                     for &(i,n) in &recipe.inputs {if n>0 {icons::slot(ui,Icon::Resource(i),Some(n),false,NAMES[i]);}}
                     ui.label(RichText::new("→").size(26.0).color(icons::GOLD));
@@ -1330,7 +1332,7 @@ pub(super) fn draw(
                 });
                 icons::gauge(ui,node.progress as f32/recipe.ticks as f32,icons::TEAL,"Batch progress");
             }
-            for (i,label) in node.kind.modes().iter().enumerate() {
+            for (i,label) in node.kind.modes().iter().enumerate().filter(|_| !lab_owned) {
                 let short=label.split(':').next().unwrap_or(label);
                 if ui.selectable_label(node.mode==i as u32,short).on_hover_text(*label).clicked(){*action=UiAction::Factory(Action::SetRecipe(*pos,i as u32));}
             }

@@ -10,6 +10,7 @@ const CHECKED: &[&str] = &[
     "crates/app/src/egui_ui/chip_panel.rs",
     "crates/app/src/egui_ui/chip_report.rs",
     "crates/app/src/egui_ui/chip_tools.rs",
+    "crates/app/src/egui_ui/semiconductor.rs",
     "crates/app/src/egui_ui/debug_overlay.rs",
     "crates/app/src/egui_ui/map.rs",
     "crates/app/src/egui_ui/map/minimap.rs",

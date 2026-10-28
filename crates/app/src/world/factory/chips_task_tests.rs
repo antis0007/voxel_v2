@@ -121,7 +121,7 @@ fn a_brownout_hangs_sentinel_until_reset_and_twin_watch_recovers() {
 }
 
 #[test]
-fn a_wafer_lot_is_paid_once_runs_at_game_time_and_survives_a_save() {
+fn a_wafer_lot_is_paid_once_runs_on_fabricator_power_and_survives_a_save() {
     let mut f = Factory::default();
     f.topology = true;
     let lib = Arc::make_mut(&mut f.chips.library);
@@ -138,16 +138,30 @@ fn a_wafer_lot_is_paid_once_runs_at_game_time_and_survives_a_save() {
     assert_eq!(refused, "Missing Materials");
     assert_eq!(f.chips.library.lots.len(), 1, "an unpaid lot does not start");
 
+    // Wafer clocks advance only through powered Fabricator work.
+    run(&mut f, 120 * 10, |_| {});
+    assert_eq!(f.chips.library.lots[0].step, 0, "an unbound lot waits for a fabricator");
+    let site = IVec3::new(0, 0, 0);
+    let fab = Node::new(Kind::Fabricator);
+    f.nodes.insert(site, fab.clone());
+    let reserved = super::production::lot_capacity(&f.chips.library, rev).unwrap();
+    let clock = f.chips.now;
+    Arc::make_mut(&mut f.chips.production).lots.push(super::production::PoweredLot {
+        id: 1, site: (0, 0, 0), clock, credit: 0, reserved,
+    });
+    let charge = |f: &mut Factory| f.nodes.get_mut(&site).unwrap().energy = 1 << 20;
+
     // Half way: save the bay, finish both copies, compare.
-    run(&mut f, 120 * 60, |_| {});
+    run(&mut f, 120 * 60, charge);
     let mut bytes = Vec::new();
     f.chips.encode(&mut bytes);
     let mut words = bytes.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
     let mut g = Factory { chips: Bay::decode(&mut || words.next().ok_or_else(|| anyhow::anyhow!("eof"))).unwrap(), ..Factory::default() };
     g.topology = true;
+    g.nodes.insert(site, fab);
     assert!(f.chips.library.lots[0].outcome.is_none(), "still in the fab");
-    run(&mut f, 120 * 300, |_| {});
-    run(&mut g, 120 * 300, |_| {});
+    run(&mut f, 120 * 300, charge);
+    run(&mut g, 120 * 300, charge);
     let (a, b) = (&f.chips.library, &g.chips.library);
     assert_eq!(a.lots, b.lots);
     assert_eq!(a.stock, b.stock);

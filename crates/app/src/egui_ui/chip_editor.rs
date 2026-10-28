@@ -197,8 +197,10 @@ pub(super) fn window(ctx: &egui::Context, view: &View, action: &mut UiAction) {
                     egui::ScrollArea::vertical().id_salt("chip_report").max_height(screen.height() * 0.7).show(ui, |ui| {
                         chip_report::report(ui, &mut ed);
                         ui.separator();
-                        chip_report::revisions(ui, &mut ed, &library, view.bench_chips, action);
-                        chip_fab::section(ui, &mut ed, &library, view.bench_chips, view.chips_now, action);
+                        super::semiconductor::section(ui, view, action);
+                        let free = view.fabrication_site.is_some_and(|s| !view.fabrication.owns((s.x, s.y, s.z)));
+                        chip_report::revisions(ui, &mut ed, &library, free, action);
+                        chip_fab::section(ui, &mut ed, &library, free, &view.fabrication, action);
                     });
                 });
             });

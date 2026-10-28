@@ -1,4 +1,4 @@
-//! Save 34 block: the library, installed parts and the bay clock as
+//! Save 34+ block: library, installed parts, lab inventory and powered work as
 //! length-prefixed RON text packed into little-endian words.
 use super::{Bay, Installed, Key, session};
 use anyhow::{Result, ensure};
@@ -11,6 +11,8 @@ const MAX_TEXT: usize = 1 << 24;
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct Saved {
+    #[serde(default)]
+    production: super::production::Production,
     library: Library,
     installed: Vec<(Key, Installed)>,
     now: u64,
@@ -19,14 +21,15 @@ pub(super) struct Saved {
 impl Bay {
     pub fn encode(&self, bytes: &mut Vec<u8>) {
         let saved = Saved {
+            production: (*self.production).clone(),
             library: (*self.library).clone(),
             installed: self.installed.iter().map(|(k, c)| (*k, c.clone())).collect(),
             now: self.now,
         };
-        // Plain data always serialises; an empty library still decodes.
+        // This is plain serializable data. Never replace a failed serialization
+        // with an empty library: that would discard paid stock and installed parts.
         let text = ron::to_string(&saved)
-            .or_else(|_| ron::to_string(&Saved { library: Library::default(), installed: Vec::new(), now: self.now }))
-            .unwrap_or_default()
+            .expect("validated chip state serializes as RON")
             .into_bytes();
         bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
         for chunk in text.chunks(4) {
@@ -46,6 +49,7 @@ impl Bay {
         text.truncate(len);
         let saved: Saved = ron::from_str(std::str::from_utf8(&text)?)?;
         saved.library.validate().map_err(anyhow::Error::msg)?;
+        saved.production.validate(&saved.library, saved.now, saved.installed.len()).map_err(anyhow::Error::msg)?;
         let mut serials: Vec<u32> = saved.library.stock.iter().map(|p| p.serial).collect();
         for (_, c) in &saved.installed {
             ensure!(saved.library.serial_issued(c.package.serial), "Installed chip with an unissued serial");
@@ -58,7 +62,7 @@ impl Bay {
         ensure!(serials.len() == count, "Chip package present twice");
         let mut library = saved.library;
         library.session = session();
-        let mut bay = Self { library: Arc::new(library), installed: saved.installed.into_iter().collect(), now: saved.now, queue: BinaryHeap::new() };
+        let mut bay = Self { production: Arc::new(saved.production), library: Arc::new(library), installed: saved.installed.into_iter().collect(), now: saved.now, queue: BinaryHeap::new() };
         let keys: Vec<Key> = bay.installed.keys().copied().collect();
         for k in keys {
             bay.schedule(k);

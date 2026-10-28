@@ -5,6 +5,7 @@ mod chip_art;
 mod chip_canvas;
 mod chip_editor;
 mod chip_fab;
+mod semiconductor;
 mod chip_panel;
 mod chip_report;
 mod chip_tools;

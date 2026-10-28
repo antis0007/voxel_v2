@@ -79,7 +79,7 @@ impl Record {
             None => self.kind.label().to_string(),
         };
         let v = match self.kind {
-            StepKind::Oxidize | StepKind::DepositFilm | StepKind::DepositMetal | StepKind::Passivate => format!("{:.0} nm", self.value),
+            StepKind::Oxidize | StepKind::DepositFilm | StepKind::GateStack | StepKind::DepositMetal | StepKind::Passivate => format!("{:.0} nm", self.value),
             StepKind::Expose => format!("Overlay {:.2} µm", self.value),
             StepKind::Etch => format!("Bias {:.2} µm", self.value),
             StepKind::Implant => format!("Dose {:.1}%", self.value),
@@ -105,6 +105,8 @@ pub struct Outcome {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WaferLot {
+    #[serde(default)]
+    pub route_version: u8,
     pub id: u32,
     pub revision: u32,
     pub mask_set: u64,
@@ -123,6 +125,7 @@ pub struct WaferLot {
 impl WaferLot {
     pub fn new(id: u32, revision: u32, mask_set: u64, lab: &str, now: u64, first: Step) -> Self {
         Self {
+            route_version: 0,
             id,
             revision,
             mask_set,
@@ -152,6 +155,7 @@ impl WaferLot {
                 StepKind::Oxidize => (100.0 * (1.0 + 0.04 * gauss(h)), false),
                 StepKind::DepositFilm | StepKind::Passivate => (400.0 * (1.0 + 0.04 * gauss(h)), false),
                 StepKind::DepositMetal => (800.0 * (1.0 + 0.04 * gauss(h)), false),
+                StepKind::GateStack => (200.0 * (1.0 + 0.04 * gauss(h)), false),
                 StepKind::Implant => (100.0 + 3.0 * gauss(h), false),
                 StepKind::Etch => (0.2 * gauss(h).abs(), false),
                 StepKind::Expose => {

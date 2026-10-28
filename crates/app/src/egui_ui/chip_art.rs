@@ -5,6 +5,7 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke, vec2};
 use engine_chip::fab::Grade;
 use engine_chip::firmware::Task;
 use engine_chip::lot::Die;
+use crate::world::factory::chips::production::Supply;
 use engine_chip::registry::Role;
 
 pub const BIN_A: Color32 = Color32::from_rgb(101, 183, 175);
@@ -114,4 +115,86 @@ pub fn wafer(p: &Painter, r: Rect, side: f32, sites: impl Iterator<Item = ((f32,
 /// Dies before probe: every site in the unprobed tone.
 pub fn unprobed(sites: &[(f32, f32)]) -> impl Iterator<Item = ((f32, f32), Color32)> + '_ {
     sites.iter().map(|&s| (s, UNPROBED))
+}
+
+/// Lab supply sprite and tone: silicon stages, wafer and mask, bottled
+/// chemistry, sputter targets and hood filters.
+fn supply_glyph(s: Supply) -> (&'static [&'static str], Color32) {
+    match s {
+        Supply::Crude => (
+            &["  3333   ", " 322223  ", "32242213 ", "32222213 ", " 3211123 ", "  331133 ", "   3333  "],
+            Color32::from_rgb(142, 118, 96),
+        ),
+        Supply::Pure => (
+            &["  33     ", " 3243    ", " 32243   ", "  32243  ", "   32213 ", "    3213 ", "     333 "],
+            Color32::from_rgb(190, 196, 206),
+        ),
+        Supply::Ingot => (
+            &["   333   ", "  34423  ", " 3242213 ", " 3222213 ", " 3222213 ", " 3211113 ", "  33333  "],
+            Color32::from_rgb(168, 180, 204),
+        ),
+        Supply::Wafer => (
+            &["  33333  ", " 3244223 ", "32422223 ", "32222213 ", "32222113 ", " 3211113 ", "  33333  "],
+            Color32::from_rgb(118, 132, 164),
+        ),
+        Supply::Mask => (
+            &["333333333", "342222213", "322222213", "322222213", "322222213", "311111113", "333333333"],
+            Color32::from_rgb(146, 190, 210),
+        ),
+        Supply::Resist => (
+            &["   333   ", "   323   ", "  33333  ", " 3242223 ", " 3222213 ", " 3222213 ", " 3211113 ", "  33333  "],
+            Color32::from_rgb(214, 150, 70),
+        ),
+        Supply::Solvent => (
+            &["   333   ", "   323   ", "  33333  ", " 3244423 ", " 3222213 ", " 3222213 ", " 3211113 ", "  33333  "],
+            Color32::from_rgb(118, 190, 200),
+        ),
+        Supply::Dopant => (
+            &["333333333", "322242223", "322444223", "322242223", "322222223", "311111113", "333333333"],
+            Color32::from_rgb(172, 122, 204),
+        ),
+        Supply::Gas => (
+            &["   33    ", "  3323   ", "  3333   ", " 324223  ", " 322223  ", " 322223  ", " 321113  ", "  3333   "],
+            Color32::from_rgb(120, 200, 140),
+        ),
+        Supply::Metal => (
+            &["  33333  ", " 3444423 ", "322222213", "322222213", "311111113", " 3111113 ", "  33333  "],
+            Color32::from_rgb(204, 160, 110),
+        ),
+        Supply::Filter => (
+            &["333333333", "324242423", "342424243", "324242423", "342424243", "311111113", "333333333"],
+            Color32::from_rgb(160, 170, 150),
+        ),
+    }
+}
+
+/// A lab supply's sprite in its own tone.
+pub fn supply(p: &Painter, r: Rect, s: Supply) -> Rect {
+    let (rows, tone) = supply_glyph(s);
+    paint_rows(p, r, rows, tone)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_supply_sprite_obeys_the_pixel_grid() {
+        for s in Supply::ALL {
+            let (rows, _) = supply_glyph(s);
+            let label = s.name();
+            assert!(rows.len() <= 9, "{label} is taller than 9 px");
+            assert!(rows.iter().all(|row| row.len() <= 9), "{label} is wider than 9 px");
+            assert!(rows.iter().any(|row| row.contains('2')), "{label} has no body role");
+            assert!(rows.iter().any(|row| row.contains('3')), "{label} has no outline role");
+            for row in rows {
+                for ch in row.bytes() {
+                    assert!(
+                        ch == b' ' || super::super::pixel_art::glyph(ch, icons::PAPER).is_some(),
+                        "{label} contains unknown glyph {ch}"
+                    );
+                }
+            }
+        }
+    }
 }

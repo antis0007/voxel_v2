@@ -21,6 +21,9 @@ fn channel_name(sensor: Sensor) -> &'static str {
 /// The socket section of any controllable machine's panel, plus the
 /// designer window when it is open.
 pub(super) fn section(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut UiAction) {
+    if view.focused.as_ref().is_some_and(|(_, n)| n.kind == crate::world::factory::Kind::Fabricator) {
+        super::semiconductor::section(ui, view, action);
+    }
     socket(ui, view, pos, action);
     chip_editor::window(ui.ctx(), view, action);
 }

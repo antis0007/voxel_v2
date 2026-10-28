@@ -103,6 +103,8 @@ pub enum StepKind {
     Implant,
     Anneal,
     DepositFilm,
+    /// Authored gate dielectric/conductor stack, distinct from interlayer oxide.
+    GateStack,
     DepositMetal,
     Passivate,
     Probe,
@@ -122,6 +124,7 @@ impl StepKind {
             StepKind::Implant => "Implant",
             StepKind::Anneal => "Anneal",
             StepKind::DepositFilm => "Deposit Oxide",
+            StepKind::GateStack => "Gate Stack",
             StepKind::DepositMetal => "Deposit Metal",
             StepKind::Passivate => "Passivate",
             StepKind::Probe => "Probe",
@@ -132,7 +135,7 @@ impl StepKind {
     pub fn seconds(self) -> u32 {
         match self {
             StepKind::Oxidize | StepKind::Anneal => 8,
-            StepKind::Implant | StepKind::DepositMetal | StepKind::DepositFilm => 5,
+            StepKind::Implant | StepKind::DepositMetal | StepKind::DepositFilm | StepKind::GateStack => 5,
             StepKind::Probe | StepKind::Package => 4,
             _ => 2,
         }
@@ -144,6 +147,7 @@ impl StepKind {
             StepKind::Implant => &[(Material::Dopant, 1)],
             StepKind::Oxidize | StepKind::Anneal | StepKind::DepositFilm | StepKind::Passivate => &[(Material::Gas, 1)],
             StepKind::DepositMetal => &[(Material::Metal, 2)],
+            StepKind::GateStack => &[(Material::Metal, 1), (Material::Gas, 1)],
             StepKind::Package => &[(Material::Metal, 1)],
             _ => &[],
         }
@@ -184,6 +188,16 @@ pub fn route(layers: u8) -> Vec<Step> {
     }
     r.extend([s(StepKind::Passivate), s(StepKind::Probe), s(StepKind::Package)]);
     r
+}
+
+/// Version 0 retains historical lots. Version 1 explicitly supplies the gate
+/// conductor instead of presenting oxide deposition as a working gate.
+pub fn manufacturing_route(layers: u8, version: u8) -> Vec<Step> {
+    let mut steps = route(layers);
+    if version >= 1 && let Some(step) = steps.iter_mut().find(|s| s.kind == StepKind::DepositFilm) {
+        step.kind = StepKind::GateStack;
+    }
+    steps
 }
 
 /// Masks are content-addressed: one per layer, patterned from the layout.

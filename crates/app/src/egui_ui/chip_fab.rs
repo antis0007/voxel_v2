@@ -3,18 +3,17 @@
 //! intended (the full route) against what the lot has built so far.
 use super::chip_editor::Editor;
 use super::{UiAction, chip_art, icons};
-use crate::world::factory::chips::{Action, registry, resources};
-use crate::world::expedition::NAMES;
+use crate::world::factory::chips::{Action, registry, production::Production};
 use egui::{Color32, Rect, RichText, Stroke, pos2, vec2};
 use engine_chip::design::Design;
-use engine_chip::fab::{MaskLayer, Step, StepKind, route};
+use engine_chip::fab::{MaskLayer, Step, StepKind, manufacturing_route};
 use engine_chip::library::Library;
 use engine_chip::lot::WaferLot;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, bench: bool, now: u64, action: &mut UiAction) {
+pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, bench: bool, production: &Production, action: &mut UiAction) {
     let Some(project) = ed.project else { return };
     let revs: Vec<_> = library.revisions_of(project).collect();
     let Some(last) = revs.last() else { return };
@@ -39,17 +38,17 @@ pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, ben
                 }
             }
         });
-        let bill = library.lot_bill(registry(), rev_id, &ed.fab_lab).map(|b| resources(&b)).unwrap_or_default();
-        let tip = bill.iter().map(|(r, n)| format!("{:.1} {}", *n as f32 / 64.0, NAMES[*r])).collect::<Vec<_>>().join("\n");
+        let bill = library.lot_bill(registry(), rev_id, &ed.fab_lab).map(|b| Production::bill(&b)).unwrap_or_default();
+        let tip = bill.iter().map(|(r, n)| format!("{} / {} {}", production.stock[*r as usize], n, r.name())).collect::<Vec<_>>().join("\n");
         let masks = if library.mask_of(rev_id).is_some() { "Masks Made" } else { "Masks Needed" };
-        let start = ui.add_enabled(bench, egui::Button::new("Start Lot")).on_hover_text(format!("{masks}\n{tip}"));
+        let start = ui.add_enabled(bench && production.available(&bill), egui::Button::new("Start Lot")).on_hover_text(format!("{masks}\n{tip}"));
         if start.clicked() {
             *action = UiAction::Chip(Action::StartLot { revision: rev_id, lab: ed.fab_lab.clone() });
         }
     });
     for lot in library.lots.iter().rev().filter(|l| revs.iter().any(|r| r.id == l.revision)).take(6) {
         let Some(rev) = library.revision(lot.revision) else { continue };
-        let steps = route(rev.design.layers);
+        let steps = manufacturing_route(rev.design.layers, lot.route_version);
         let lab = registry().lab(&lot.lab).map_or("?", |l| l.name.as_str());
         let line = match (&lot.outcome, steps.get(usize::from(lot.step))) {
             (Some(o), None) => format!("{} Dies · {} Good · A {} · B {} · C {}", o.dies, o.good, o.bins[0], o.bins[1], o.bins[2]),
@@ -67,7 +66,8 @@ pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, ben
                     ed.lot = if ed.lot == Some(lot.id) { None } else { Some(lot.id) };
                 }
                 let done = lot.step as f32 / steps.len().max(1) as f32;
-                let step_left = lot.busy_until.saturating_sub(now) as f32 / 120.0;
+                let clock = production.lots.iter().find(|p| p.id == lot.id).map_or(0, |p| p.clock);
+                let step_left = lot.busy_until.saturating_sub(clock) as f32 / 120.0;
                 icons::gauge(ui, done, icons::TEAL, &format!("{:.0}% · Next {:.0} s", done * 100.0, step_left));
                 ui.small(line);
             });
@@ -188,6 +188,7 @@ fn build(steps: &[Step], done: usize) -> Stack {
             },
             StepKind::Strip => s.resist = None,
             StepKind::Implant => s.doped = true,
+            StepKind::GateStack => { s.gate = Film::Blanket; films = 1; }
             StepKind::DepositFilm => {
                 films += 1;
                 if films == 1 {
@@ -282,7 +283,7 @@ fn draw(ui: &mut egui::Ui, d: &Design, s: &Stack, y: u8, label: &str) {
 pub(super) fn lot_window(ctx: &egui::Context, ed: &mut Editor, library: &Library) {
     let Some(lot) = ed.lot.and_then(|id| library.lots.iter().find(|l| l.id == id)).cloned() else { return };
     let Some(rev) = library.revision(lot.revision) else { return };
-    let steps = route(rev.design.layers);
+    let steps = manufacturing_route(rev.design.layers, lot.route_version);
     let mut open = true;
     egui::Window::new(format!("Lot {}", lot.id)).open(&mut open).default_width(560.0).show(ctx, |ui| {
         let mut row = ed.section_row.min(rev.design.height.saturating_sub(1));

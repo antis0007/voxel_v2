@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV34";
+const MAGIC: &[u8; 8] = b"VXWSAV36";
 #[cfg(test)]
 #[path = "storage/environment_tests.rs"]
 mod environment_tests;
@@ -35,7 +35,9 @@ mod chip_tests;
 /// Version 32 adds optional resonance expeditions and permanent calibration.
 /// Version 33 stores lantern ownership and switch state in the expedition flags.
 /// Version 34 appends the chip library and installed controllers.
-pub(crate) const SAVE_VERSION: u8 = 34;
+/// Version 35 retains lab stock, manufacturing batches and powered wafer clocks.
+/// Version 36 persists production orders and their bounded sand feed bins.
+pub(crate) const SAVE_VERSION: u8 = 36;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -981,6 +983,23 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, &bytes).unwrap();
         path
+    }
+
+    #[test]
+    fn every_save_version_since_34_loads() {
+        let dir = std::env::temp_dir().join(format!("voxel_versions_since_34_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::HalfMeter, 3434);
+        world.adventure.begin_journey();
+        world.inventory.craft_grid[4] = Some(ItemStack::new(Item::Block(BlockId::Clay), 7));
+        for version in 34..=SAVE_VERSION {
+            let path = synth_save(&world, version, &dir, &format!("world_v{version}.dat"));
+            let loaded = load_exact(&path, &path).unwrap_or_else(|e| panic!("save version {version}: {e:#}"));
+            assert_eq!(loaded.world.seed, world.seed, "save version {version}");
+            assert_eq!(loaded.world.inventory.craft_grid[4].unwrap().count, 7, "save version {version}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

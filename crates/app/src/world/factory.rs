@@ -216,6 +216,8 @@ fn leak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error
 #[derive(Clone)]
 pub struct Node {
     pub kind: Kind,
+    /// Derived from the chip bay's saved production order; not serialized here.
+    pub lab_recipe: Option<u8>,
     pub input: [u32; RESOURCE_COUNT],
     pub output: [u32; RESOURCE_COUNT],
     pub energy: u32,
@@ -258,6 +260,7 @@ impl Node {
     fn new(kind: Kind) -> Self {
         Self {
             kind,
+            lab_recipe: None,
             input: [0; RESOURCE_COUNT],
             output: [0; RESOURCE_COUNT],
             energy: 0,
@@ -324,11 +327,15 @@ pub struct Factory {
     /// Factorio-style production and power history.
     pub stats: stats::Production,
     /// Player-designed controllers and their library.
+    #[cfg_attr(feature="multiplayer", serde(skip))]
     pub chips: chips::Bay,
 }
 
 #[derive(Clone, Default)]
 pub struct View {
+    pub fabrication: std::sync::Arc<chips::production::Production>,
+    pub fabrication_site: Option<IVec3>,
+    pub fabrication_node: Option<Node>,
     pub habitats: super::habitats::View,
     pub kits: [u32; Kind::COUNT],
     pub bench: bool,
@@ -450,7 +457,16 @@ fn at_bench(world: &World, player: Vec3) -> bool {
         .bench
         .is_some_and(|p| near(world, p, player) && world.get(p) == B::Workbench)
 }
+pub(super) fn fabrication_site(world: &World, player: Vec3) -> Option<IVec3> {
+    world.factory.focus.filter(|p| world.factory.nodes.get(p)
+        .is_some_and(|n| n.kind == Kind::Fabricator) && near(world, *p, player))
+        .or_else(|| world.factory.nodes.iter()
+            .filter(|(p, n)| n.kind == Kind::Fabricator && near(world, **p, player))
+            .map(|(p, _)| *p).min_by_key(|p| (p.x, p.y, p.z)))
+}
+
 pub fn view(world: &World, player: Vec3) -> View {
+    let lab = fabrication_site(world, player);
     View {
         habitats: super::habitats::view(world, player * world.voxel_scale.meters()),
         kits: world.factory.kits,
@@ -474,6 +490,9 @@ pub fn view(world: &World, player: Vec3) -> View {
             .map(|s| (s.generated, s.drawn))
             .collect(),
         chips: Some(world.factory.chips.library.clone()),
+        fabrication: world.factory.chips.production.clone(),
+        fabrication_site: lab,
+        fabrication_node: lab.and_then(|p| world.factory.nodes.get(&p).cloned()),
         controller: world.factory.focus.and_then(|p| world.factory.chips.diagnostics(p)),
         bench_chips: at_bench(world, player),
         chips_now: world.factory.chips.now(),
@@ -1073,6 +1092,9 @@ pub fn dismantle(
     let mut inventory = world.inventory.clone();
     let item = portable.map(Item::PowerKit).unwrap_or(Item::Block(node.kind.block()));
     let mut fits = inventory.try_insert(ItemStack::new(item, 1)).1 == 0;
+    if let Some(order) = world.factory.chips.production.orders.iter().find(|o| o.site == (p.x, p.y, p.z)) {
+        fits &= inventory.try_insert(ItemStack::new(Item::Block(B::Sand), order.sand)).1 == 0;
+    }
     if let Some(kind) = assembler::stock_kind(&node)
         && node.stock > 0 {
             fits &= inventory.try_insert(ItemStack { item: Item::Block(kind.block()), count: node.stock }).1 == 0;
@@ -1108,6 +1130,7 @@ pub fn dismantle(
     }
     world.inventory = inventory;
     world.sync_from_inventory();
+    std::sync::Arc::make_mut(&mut world.factory.chips.production).orders.retain(|o| o.site != (p.x, p.y, p.z));
     world.factory.chips.remove(p);
     world.factory.topology = false;
     world.factory.form_matrices(size);
@@ -1566,6 +1589,7 @@ impl Factory {
         extraction::route_water(self);
         self.cursor = self.cursor.wrapping_add(1);
         for (p, n) in self.nodes.iter_mut() {
+            if self.chips.production.owns((p.x, p.y, p.z)) { continue; }
             if !n.enabled || !n.kind.processor() {
                 continue;
             }
@@ -1732,6 +1756,7 @@ pub struct Probe {
     pub pool: Option<(u32, u32, u32)>,
     /// Installed controller: part, revision and output state.
     pub controller: Option<String>,
+    pub lab_work: Option<(&'static str, f32)>,
 }
 
 pub fn probe(world: &World, cell: IVec3) -> Option<Probe> {
@@ -1753,6 +1778,7 @@ pub fn probe(world: &World, cell: IVec3) -> Option<Probe> {
         shell_of,
         pool: world.factory.pool_of(pos),
         controller: world.factory.chips.summary(pos),
+        lab_work: world.factory.chips.production.progress((pos.x, pos.y, pos.z)),
     })
 }
 

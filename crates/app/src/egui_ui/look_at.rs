@@ -287,7 +287,9 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
         });
     }
     if !ui.input(|i| i.modifiers.shift) {
-        if let Some(process) = n.process() {
+        if let Some((name, progress)) = probe.lab_work {
+            bar(ui, progress, JADE, &format!("{name} · {:.0}%", progress * 100.0));
+        } else if let Some(process) = n.process() {
             bar(ui, n.progress as f32 / process.ticks.max(1) as f32, JADE,
                 &format!("{} → {}  {:.0}%", short(NAMES[process.inputs[0].0]),
                     short(NAMES[process.output.0]),
@@ -439,7 +441,9 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
         }
         _ => {}
     }
-    if let Some(process) = n.process() {
+    if let Some((name, progress)) = probe.lab_work {
+        bar(ui, progress, JADE, &format!("{name} · {:.0}%", progress * 100.0));
+    } else if let Some(process) = n.process() {
         let progress = n.progress as f32 / process.ticks.max(1) as f32;
         let speed = if n.kind.powered() { 1 + n.upgrade } else { 1 };
         let left = (process.ticks - n.progress.min(process.ticks)) as f32 * 0.25 / speed as f32;

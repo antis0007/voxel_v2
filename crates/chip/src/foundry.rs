@@ -1,7 +1,7 @@
 //! Wafer-lot production on a library: one mask set per revision, reused by
 //! every lot; materials billed up front; lots advanced at game time; good
 //! dies packaged into stock with their speed bin.
-use crate::fab::{Material, Provenance, mask_set, route};
+use crate::fab::{Material, Provenance, mask_set, manufacturing_route};
 use crate::library::{Library, Package};
 use crate::lot::WaferLot;
 use crate::registry::Registry;
@@ -24,7 +24,7 @@ impl Library {
     pub fn lot_bill(&self, registry: &Registry, revision: u32, lab: &str) -> Option<Vec<(Material, u32)>> {
         let rev = self.revision(revision)?;
         let lab = registry.lab(lab)?;
-        let steps = route(rev.design.layers);
+        let steps = manufacturing_route(rev.design.layers, 1);
         let mut bill: Vec<(Material, u32)> = vec![(Material::Wafer, 1)];
         let mut add = |m: Material, n: u32| match bill.iter_mut().find(|(k, _)| *k == m) {
             Some((_, c)) => *c += n,
@@ -58,7 +58,7 @@ impl Library {
         }
         registry.lab(lab).ok_or("Unknown Lab")?;
         let rev = self.revision(revision).ok_or("No Such Revision")?;
-        let steps = route(rev.design.layers);
+        let steps = manufacturing_route(rev.design.layers, 1);
         if self.mask_of(revision).is_none() {
             let masks = mask_set(&rev.design, registry, revision, rev.fingerprint);
             self.masks.push(masks);
@@ -66,7 +66,9 @@ impl Library {
         let mask = self.mask_of(revision).map_or(0, |m| m.id);
         self.next_lot += 1;
         let id = self.next_lot;
-        self.lots.push(WaferLot::new(id, revision, mask, lab, now, steps[0]));
+        let mut lot = WaferLot::new(id, revision, mask, lab, now, steps[0]);
+        lot.route_version = 1;
+        self.lots.push(lot);
         Ok(id)
     }
 
@@ -88,13 +90,23 @@ impl Library {
 
     /// Advance every lot to `now`. Returns the parts packaged.
     pub fn advance_lots(&mut self, registry: &Registry, now: u64) -> u32 {
+        self.advance_selected(registry, now, None)
+    }
+
+    /// Advance only the lot whose accounted machine work reached this clock.
+    pub fn advance_lot(&mut self, registry: &Registry, id: u32, now: u64) -> u32 {
+        self.advance_selected(registry, now, Some(id))
+    }
+
+    fn advance_selected(&mut self, registry: &Registry, now: u64, selected: Option<u32>) -> u32 {
         let mut made = 0;
         for i in 0..self.lots.len() {
+            if selected.is_some_and(|id| self.lots[i].id != id) { continue; }
             let lot = &self.lots[i];
             let (Some(rev), Some(lab)) = (self.revision(lot.revision), registry.lab(&lot.lab)) else { continue };
             let Some(process) = registry.process(&rev.design.process) else { continue };
             let Some(masks) = self.masks.iter().find(|m| m.id == lot.mask_set).cloned() else { continue };
-            let steps = route(rev.design.layers);
+            let steps = manufacturing_route(rev.design.layers, lot.route_version);
             if lot.done(&steps) || now < lot.busy_until {
                 continue;
             }

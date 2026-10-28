@@ -2,7 +2,7 @@
 //! derived hardware figures, and released revisions side by side.
 use super::chip_editor::{Editor, Tool};
 use super::{UiAction, icons};
-use crate::world::factory::chips::{Action, BLANK, COPPER_PER_BILL, registry};
+use crate::world::factory::chips::{Action, registry, production::Production};
 use egui::{Color32, RichText};
 use engine_chip::characterize::Report;
 use engine_chip::compile::{Compiled, Fix, Severity, compile};
@@ -155,9 +155,9 @@ pub(super) fn revisions(ui: &mut egui::Ui, ed: &mut Editor, library: &engine_chi
             ui.small(format!("{:.1}", report.map_or(m.idle_nw as f32 / 1e6, |r| r.average_w * 1e3)));
             ui.small(report.map_or_else(|| "?".into(), |r| format!("{:.2}", r.die_mm2)));
             ui.small(if m.recovers { "Yes" } else { "No" });
-            let copper = library.bill(rev.id).unwrap_or(0) * COPPER_PER_BILL;
-            let tip = format!("{} Ancient circuits + {:.1} Copper ingots", BLANK.1 / 64, copper as f32 / 64.0);
-            let r = ui.add_enabled(bench, egui::Button::new("Prototype").small()).on_hover_text(tip);
+            let bill = library.lot_bill(registry(), rev.id, "bench").map(|b| Production::bill(&b)).unwrap_or_default();
+            let tip = bill.iter().map(|(s, n)| format!("{n} × {}", s.name())).collect::<Vec<_>>().join("\n");
+            let r = ui.add_enabled(bench, egui::Button::new("Trial Lot").small()).on_hover_text(tip);
             if r.clicked() {
                 *action = UiAction::Chip(Action::Prototype(rev.id));
             }
@@ -165,7 +165,7 @@ pub(super) fn revisions(ui: &mut egui::Ui, ed: &mut Editor, library: &engine_chi
         }
     });
     if !bench {
-        ui.small("Prototype: Workbench Required");
+        ui.small("Free Fabricator Required");
     }
     ui.small(format!("Stock {}", library.stock.len()));
 }

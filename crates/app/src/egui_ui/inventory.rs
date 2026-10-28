@@ -1534,6 +1534,7 @@ pub(super) fn draw(
 
             // Page 6: JEI-style recipe browser and crafting-tree planner.
             if page == 6 {
+                super::semiconductor::section(ui, machines, action);
                 if super::recipe_book::draw(ui, survival, machines.bench) {
                     page = 2;
                 }

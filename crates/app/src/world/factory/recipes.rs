@@ -93,12 +93,21 @@ impl Kind {
                 "Steel: 2 iron ingots + 0.5 coke → 2 steel at 1400 °C",
             ],
             Self::Battery => &super::power::BATTERY_MODES,
+            Self::MiningDrill => &[
+                "Shaft: 3 m wide, 24 m deep",
+                "Quarry: 9 m wide, 24 m deep",
+                "Quarry: 15 m wide, 24 m deep",
+            ],
             _ => &[],
         }
     }
 }
 impl Node {
     pub fn accepts(&self, i: usize) -> bool {
+        if self.kind == Kind::Fabricator && let Some(recipe) = self.lab_recipe {
+            return i < super::RESOURCE_COUNT && super::chips::production::OPERATIONS.get(recipe as usize).is_some_and(|op|
+                op.raw.iter().any(|(item, _)| *item == crate::world::inventory::Item::Resource(i as u8)));
+        }
         if self.kind == Kind::Storage {
             if self.mode == 2 {
                 let locked = self
