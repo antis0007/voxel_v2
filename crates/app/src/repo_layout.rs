@@ -135,14 +135,25 @@ mod tests {
 
     /// The cellular simulation reads the packed material table and nothing else,
     /// so no rule can depend on which block it is (docs/adr/0007-bricks-and-scale.md).
+    /// Dev-dependencies only drive tests (the lockstep proof uses the netcode link
+    /// simulator), so only the sections that link into the library are checked.
     #[test]
     fn engine_sim_depends_on_no_engine_crate_but_core() {
         let manifest = fs::read_to_string(repo_root().join("crates/sim/Cargo.toml")).expect("sim manifest");
-        let deps: Vec<&str> = manifest
-            .lines()
-            .map(str::trim)
-            .filter(|l| l.starts_with("engine_") && !l.starts_with("engine_core") && !l.starts_with("engine_sim"))
-            .collect();
+        let mut linked = false;
+        let mut deps = Vec::new();
+        for line in manifest.lines().map(str::trim) {
+            if line.starts_with('[') {
+                linked = matches!(line, "[dependencies]" | "[build-dependencies]")
+                    || line.starts_with("[target.") && line.ends_with(".dependencies]");
+            } else if linked
+                && line.starts_with("engine_")
+                && !line.starts_with("engine_core")
+                && !line.starts_with("engine_sim")
+            {
+                deps.push(line);
+            }
+        }
         assert!(deps.is_empty(), "engine_sim may depend only on engine_core, found {deps:?}");
     }
 
