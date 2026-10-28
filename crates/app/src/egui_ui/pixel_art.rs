@@ -64,6 +64,102 @@ pub fn glyph(ch: u8, accent: Color32) -> Option<Color32> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Selection glow
+// ---------------------------------------------------------------------------
+
+/// Hue in turns, saturation and value in `[0, 1]`. Hue wraps.
+fn hsv(h: f32, s: f32, v: f32) -> Color32 {
+    let h = h.rem_euclid(1.0) * 6.0;
+    let sector = h.floor();
+    let f = h - sector;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let (r, g, b) = match sector as i32 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0) as u8;
+    Color32::from_rgb(byte(r), byte(g), byte(b))
+}
+
+/// Ordered 4x4 threshold, the same matrix the interaction overlay dithers with.
+fn dither4(x: i32, y: i32) -> f32 {
+    const CELLS: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+    CELLS[((y & 3) * 4 + (x & 3)) as usize] as f32 / 16.0
+}
+
+/// Cell on the rectangle's perimeter, walking clockwise from the top-left.
+fn perimeter_cell(index: i32, nx: i32, ny: i32) -> (i32, i32) {
+    let (w, h) = (nx.max(1), ny.max(1));
+    if index < w {
+        return (index, 0);
+    }
+    let index = index - w;
+    if index < h {
+        return (w - 1, index);
+    }
+    let index = index - h;
+    if index < w {
+        return (w - 1 - index, h - 1);
+    }
+    (0, (h - 1 - (index - w)).max(0))
+}
+
+/// Rainbow selection frame for a chosen slot.
+///
+/// Cells sit on the two-pixel art lattice and roughly a third of them drop out
+/// to the dither threshold, so the frame reads as pixel art instead of a stroke.
+/// Hue travels twice around the perimeter and drifts with `seconds`, coverage
+/// thins toward the bottom, and a short inner halo gathers under the top edge.
+/// The vertical density gradient is the same one the world interaction overlay
+/// uses, which is what ties the two effects together.
+pub fn rainbow_selection(painter: &egui::Painter, rect: egui::Rect, seconds: f64) {
+    const CELL: f32 = 2.0;
+    let nx = ((rect.width() / CELL).round() as i32).max(1);
+    let ny = ((rect.height() / CELL).round() as i32).max(1);
+    let perimeter = 2 * (nx + ny);
+    let drift = (seconds * 0.18) as f32;
+
+    for index in 0..perimeter {
+        let (cx, cy) = perimeter_cell(index, nx, ny);
+        let up = 1.0 - cy as f32 / ny as f32;
+        if dither4(cx, cy) > 0.35 + up * 0.55 {
+            continue;
+        }
+        let hue = index as f32 / perimeter as f32 * 2.0 + drift;
+        let cell = egui::Rect::from_min_size(
+            rect.min + egui::vec2(cx as f32 * CELL, cy as f32 * CELL),
+            egui::vec2(CELL, CELL),
+        );
+        painter.rect_filled(cell, 0, hsv(hue, 0.72, 0.72 + up * 0.28));
+    }
+
+    // Inner halo: three rows under the top edge, fading downward.
+    for row in 0..3 {
+        let up = 1.0 - row as f32 / 3.0;
+        let alpha = (34.0 * up) as u8;
+        for column in 0..nx {
+            let hue = column as f32 / nx as f32 * 2.0 + drift;
+            let shade = hsv(hue, 0.55, 0.88);
+            let cell = egui::Rect::from_min_size(
+                rect.min + egui::vec2(column as f32 * CELL, (row + 1) as f32 * CELL),
+                egui::vec2(CELL, CELL),
+            );
+            painter.rect_filled(
+                cell,
+                0,
+                Color32::from_rgba_unmultiplied(shade.r(), shade.g(), shade.b(), alpha),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
