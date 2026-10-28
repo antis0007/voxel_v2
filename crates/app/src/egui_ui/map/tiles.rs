@@ -9,6 +9,8 @@ pub const TILE: usize = 32;
 /// Tiles per region side; one texture covers 8 x 8 chunk columns.
 pub const REGION: i32 = 8;
 pub const REGION_PX: usize = TILE * REGION as usize;
+const TILE_BYTES: usize = TILE * TILE * 4;
+const REGION_BYTES: usize = REGION_PX * REGION_PX * 4;
 /// Mapped chunk columns kept in memory, about 6 KiB each.
 pub const MAX_TILES: usize = 8192;
 /// Source layer of a column restored from disk: any live chunk replaces it.
@@ -105,6 +107,27 @@ impl TileStore {
         }
     }
 
+    /// Saved columns that arrive after live chunks fill only the columns no
+    /// live layer has written, as if they had been restored first.
+    pub fn merge_saved(&mut self, tile: IVec2, colour: Vec<Color32>) {
+        if colour.len() != COLUMNS {
+            return;
+        }
+        let Some(entry) = self.tiles.get_mut(&tile) else {
+            self.insert_saved(tile, colour);
+            return;
+        };
+        let (live, source) = (Arc::make_mut(&mut entry.colour), &entry.source);
+        let mut changed = false;
+        for i in (0..COLUMNS).filter(|&i| source[i] == SAVED) {
+            changed |= live[i] != colour[i];
+            live[i] = colour[i];
+        }
+        if changed {
+            self.mark(tile);
+        }
+    }
+
     /// Drop whole regions farthest from `centre` until under `limit` tiles.
     pub fn evict_far(&mut self, centre: IVec2, limit: usize) {
         if self.tiles.len() <= limit {
@@ -141,15 +164,21 @@ impl TileStore {
         image
     }
 
-    /// Upload at most `limit` changed tiles; new regions upload whole.
-    pub fn upload(&mut self, ctx: &egui::Context, mut limit: usize) {
-        let pending: Vec<IVec2> = self.regions.iter().filter(|(_, r)| r.dirty != 0).map(|(k, _)| *k).collect();
+    /// Upload changed tiles within `budget` bytes, regions nearest `near` first.
+    /// New regions upload whole; the first upload of a call always goes, so
+    /// a budget below one region still makes progress. Returns bytes queued.
+    pub fn upload(&mut self, ctx: &egui::Context, budget: usize, near: IVec2) -> usize {
+        let mut pending: Vec<IVec2> = self.regions.iter().filter(|(_, r)| r.dirty != 0).map(|(k, _)| *k).collect();
+        let home = region_of(near);
+        pending.sort_unstable_by_key(|r| ((*r - home).length_squared(), r.x, r.y));
+        let mut spent = 0;
+        let fits = |spent: usize, cost: usize| spent == 0 || spent + cost <= budget;
         for key in pending {
-            if limit == 0 {
-                return;
-            }
             let Some(region) = self.regions.get(&key) else { continue };
             if region.texture.is_none() {
+                if !fits(spent, REGION_BYTES) {
+                    return spent;
+                }
                 let image = self.region_image(key, u64::MAX);
                 let name = format!("map-region-{}-{}", key.x, key.y);
                 let handle = ctx.load_texture(name, image, TextureOptions::NEAREST);
@@ -157,14 +186,14 @@ impl TileStore {
                     region.texture = Some(handle);
                     region.dirty = 0;
                 }
-                limit -= 1;
+                spent += REGION_BYTES;
                 continue;
             }
             let mut dirty = region.dirty;
-            while dirty != 0 && limit > 0 {
+            while dirty != 0 && fits(spent, TILE_BYTES) {
                 let b = dirty.trailing_zeros() as i32;
                 dirty &= dirty - 1;
-                limit -= 1;
+                spent += TILE_BYTES;
                 let local = IVec2::new(b % REGION, b / REGION);
                 let Some(tile) = self.tiles.get(&(key * REGION + local)) else { continue };
                 let image = ColorImage::new([TILE, TILE], tile.colour.to_vec());
@@ -177,6 +206,7 @@ impl TileStore {
                 region.dirty = dirty;
             }
         }
+        spent
     }
 
     /// Uploaded region textures whose squares overlap `[min, max]` in tiles.
@@ -240,6 +270,43 @@ mod tests {
         let region = &store.regions[&IVec2::new(-1, -1)];
         assert_eq!(region.dirty, 1 << 63);
         assert_eq!(region_of(IVec2::new(-9, 8)), IVec2::new(-2, 1));
+    }
+
+    #[test]
+    fn map_tiles_upload_budget_counts_bytes_nearest_first() {
+        let ctx = egui::Context::default();
+        let mut store = TileStore::default();
+        for x in 0..3 {
+            store.apply(IVec2::new(x * REGION, 0), 0, &solid(Color32::RED));
+        }
+        let near = IVec2::new(2 * REGION, 0);
+        assert_eq!(store.upload(&ctx, REGION_BYTES + TILE_BYTES, near), REGION_BYTES);
+        assert!(store.regions[&IVec2::new(2, 0)].texture.is_some());
+        assert!(store.regions[&IVec2::new(0, 0)].texture.is_none());
+        // Below one region, the first upload of the frame still goes.
+        assert_eq!(store.upload(&ctx, TILE_BYTES, near), REGION_BYTES);
+        assert_eq!(store.upload(&ctx, 2 * REGION_BYTES, near), REGION_BYTES);
+        for x in 0..3 {
+            store.apply(IVec2::new(x, 0), 1, &solid(Color32::BLUE));
+        }
+        assert_eq!(store.upload(&ctx, 2 * TILE_BYTES, near), 2 * TILE_BYTES);
+        assert_eq!(store.regions[&IVec2::ZERO].dirty.count_ones(), 1);
+        assert_eq!(store.upload(&ctx, REGION_BYTES, near), TILE_BYTES);
+        assert_eq!(store.upload(&ctx, REGION_BYTES, near), 0);
+    }
+
+    #[test]
+    fn map_tiles_late_saved_columns_fill_only_unwritten_columns() {
+        let mut store = TileStore::default();
+        let t = IVec2::new(4, -2);
+        let mut half = vec![None; COLUMNS];
+        half[..COLUMNS / 2].fill(Some(Color32::RED));
+        store.apply(t, 0, &half);
+        store.merge_saved(t, vec![Color32::WHITE; COLUMNS]);
+        store.merge_saved(IVec2::ONE, vec![Color32::WHITE; COLUMNS]);
+        assert_eq!(store.tiles[&t].colour[0], Color32::RED);
+        assert_eq!(store.tiles[&t].colour[COLUMNS - 1], Color32::WHITE);
+        assert!(store.is_mapped(IVec2::ONE));
     }
 
     #[test]

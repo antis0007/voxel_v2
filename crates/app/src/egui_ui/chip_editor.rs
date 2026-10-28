@@ -63,13 +63,20 @@ pub(super) struct Editor {
 
 impl Default for Editor {
     fn default() -> Self {
+        Self { design: presets::sentinel(registry()), ..Self::blank() }
+    }
+}
+
+impl Editor {
+    /// A closed editor with an empty design; costs no preset build.
+    fn blank() -> Self {
         Self {
             open: false,
             session: 0,
             project: None,
             generation: 0,
             projects_seen: 0,
-            design: presets::sentinel(registry()),
+            design: Design::new("", "", 0, 0, 0),
             undo: Vec::new(),
             redo: Vec::new(),
             unsynced: false,
@@ -94,9 +101,7 @@ impl Default for Editor {
             reports: Vec::new(),
         }
     }
-}
 
-impl Editor {
     /// Apply an edit with undo; `f` returns whether it changed anything.
     /// Wires the edit left stale are routed again.
     pub fn commit(&mut self, f: impl FnOnce(&mut Design, &Registry) -> bool) {
@@ -133,11 +138,17 @@ pub(super) fn open_lot(ctx: &egui::Context, lot: u32) {
 }
 
 pub(super) fn window(ctx: &egui::Context, view: &View, action: &mut UiAction) {
-    let mut ed = ctx.data_mut(|d| d.get_temp::<Editor>(id())).unwrap_or_default();
-    if !ed.open {
+    // Moved out and back rather than cloned each frame. Anything reading the
+    // slot in between sees a blank editor that the end of this call replaces.
+    let taken = ctx.data_mut(|d| {
+        let stored = d.get_temp_mut_or_default::<Editor>(id());
+        stored.open.then(|| std::mem::replace(stored, Editor::blank()))
+    });
+    let Some(mut ed) = taken else { return };
+    let Some(library) = view.chips.clone() else {
+        ctx.data_mut(|d| d.insert_temp(id(), ed));
         return;
-    }
-    let Some(library) = view.chips.clone() else { return };
+    };
     if ed.session != library.session {
         ed = Editor { open: true, session: library.session, ..Editor::default() };
     }

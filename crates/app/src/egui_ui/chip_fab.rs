@@ -10,6 +10,9 @@ use engine_chip::design::Design;
 use engine_chip::fab::{MaskLayer, Step, StepKind, route};
 use engine_chip::library::Library;
 use engine_chip::lot::WaferLot;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, bench: bool, now: u64, action: &mut UiAction) {
     let Some(project) = ed.project else { return };
@@ -55,8 +58,8 @@ pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, ben
         };
         ui.horizontal(|ui| {
             let (thumb, _) = ui.allocate_exact_size(vec2(44.0, 44.0), egui::Sense::hover());
-            if let Some((side, dies)) = wafer_dies(library, lot.id) {
-                chip_art::wafer(ui.painter(), thumb, side, dies.into_iter());
+            if let Some(w) = wafer_dies(ui.ctx(), library, lot.id) {
+                chip_art::wafer(ui.painter(), thumb, w.0, w.1.iter().copied());
             }
             ui.vertical(|ui| {
                 let r = ui.selectable_label(ed.lot == Some(lot.id), format!("Lot {} · Rev {} · {lab}", lot.id, rev.letter()));
@@ -72,9 +75,30 @@ pub(super) fn section(ui: &mut egui::Ui, ed: &mut Editor, library: &Library, ben
     }
 }
 
+type Wafer = Arc<(f32, Vec<((f32, f32), Color32)>)>;
+
+/// `wafer_sites` for a lot, cached per lot until an input it reads changes.
+fn wafer_dies(ctx: &egui::Context, library: &Library, lot: u32) -> Option<Wafer> {
+    let l = library.lots.iter().find(|l| l.id == lot)?;
+    let rev = library.revision(l.revision)?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (library.session, l.revision, rev.fingerprint, l.seed, l.contamination, l.survival.to_bits(), l.outcome.map(|o| o.dies), &l.lab).hash(&mut h);
+    let key = h.finish();
+    let cache = egui::Id::new("chip_wafer_dies");
+    let hit = ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<HashMap<u32, (u64, Wafer)>>(cache).get(&lot).filter(|(k, _)| *k == key).map(|(_, w)| w.clone())
+    });
+    if hit.is_some() {
+        return hit;
+    }
+    let wafer = Arc::new(compute_wafer_dies(library, lot)?);
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<HashMap<u32, (u64, Wafer)>>(cache).insert(lot, (key, wafer.clone())));
+    Some(wafer)
+}
+
 /// Dies of a lot at their wafer sites: probe results once probed, the bare
 /// site grid before.
-fn wafer_dies(library: &Library, lot: u32) -> Option<(f32, Vec<((f32, f32), Color32)>)> {
+fn compute_wafer_dies(library: &Library, lot: u32) -> Option<(f32, Vec<((f32, f32), Color32)>)> {
     if let Some((side, map)) = library.wafer_map(registry(), lot) {
         return Some((side, map.into_iter().map(|(at, d)| (at, chip_art::die_colour(d))).collect()));
     }
@@ -90,8 +114,8 @@ fn wafer_dies(library: &Library, lot: u32) -> Option<(f32, Vec<((f32, f32), Colo
 fn wafer_panel(ui: &mut egui::Ui, library: &Library, lot: &WaferLot) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(150.0, 150.0), egui::Sense::hover());
-        if let Some((side, dies)) = wafer_dies(library, lot.id) {
-            chip_art::wafer(ui.painter(), rect, side, dies.into_iter());
+        if let Some(w) = wafer_dies(ui.ctx(), library, lot.id) {
+            chip_art::wafer(ui.painter(), rect, w.0, w.1.iter().copied());
         }
         ui.vertical(|ui| {
             let Some(o) = lot.outcome else {

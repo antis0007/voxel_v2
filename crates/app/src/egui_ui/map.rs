@@ -22,7 +22,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 const MAX_PENDING: usize = 16_384;
 /// Tile sidecar write interval in seconds of UI time while tiles change.
 const TILE_SAVE_SECONDS: f64 = 45.0;
-const UPLOADS_PER_FRAME: usize = 24;
+/// Map texture bytes queued per frame: two new regions or 128 changed tiles.
+const UPLOAD_BYTES_PER_FRAME: usize = 512 * 1024;
+type SavedTiles = Vec<(IVec2, Vec<egui::Color32>)>;
 
 struct MapState {
     world: Option<Arc<PathBuf>>,
@@ -36,6 +38,8 @@ struct MapState {
     prefs: sidecar::Prefs,
     tiles_saved_at: f64,
     writer: Option<std::thread::JoinHandle<()>>,
+    /// Background read of the open world's tile sidecar.
+    loading: Option<std::thread::JoinHandle<SavedTiles>>,
     view: panel::View,
 }
 
@@ -59,6 +63,7 @@ fn with<R>(f: impl FnOnce(&mut MapState) -> R) -> R {
         prefs: sidecar::read(&prefs_path(), sidecar::decode_prefs).unwrap_or_default(),
         tiles_saved_at: 0.0,
         writer: None,
+        loading: None,
         view: Default::default(),
     });
     f(s)
@@ -84,8 +89,26 @@ impl MapState {
         self.waypoints_unsaved = false;
     }
 
+    /// Snapshot of unsaved tiles as a write job; `None` without a world directory.
+    fn tile_write(&mut self) -> Option<impl FnOnce() + Send + 'static> {
+        let root = self.world.clone().filter(|r| r.is_dir())?;
+        let tiles = self.tiles.snapshot();
+        self.tiles.unsaved = false;
+        let path = root.join(sidecar::TILE_FILE);
+        Some(move || {
+            let bytes = sidecar::encode_tiles(tiles.iter().map(|(k, c)| (*k, c.as_slice())));
+            if let Err(e) = sidecar::write_atomic(&path, &bytes) {
+                eprintln!("[map] Cannot write {}: {e:#}", path.display());
+            }
+        })
+    }
+
     fn save_tiles(&mut self, background: bool) {
-        let Some(root) = self.world.clone().filter(|r| r.is_dir()) else { return };
+        // Writing before the saved tiles are restored would drop them from disk.
+        self.finish_load(!background);
+        if self.loading.is_some() {
+            return;
+        }
         if self.writer.as_ref().is_some_and(|w| !w.is_finished()) {
             if !background {
                 self.join_writer();
@@ -93,15 +116,7 @@ impl MapState {
                 return;
             }
         }
-        let tiles = self.tiles.snapshot();
-        self.tiles.unsaved = false;
-        let path = root.join(sidecar::TILE_FILE);
-        let write = move || {
-            let bytes = sidecar::encode_tiles(tiles.iter().map(|(k, c)| (*k, c.as_slice())));
-            if let Err(e) = sidecar::write_atomic(&path, &bytes) {
-                eprintln!("[map] Cannot write {}: {e:#}", path.display());
-            }
-        };
+        let Some(write) = self.tile_write() else { return };
         if background {
             self.writer = std::thread::Builder::new().name("map-save".into()).spawn(write).ok();
         } else {
@@ -115,28 +130,57 @@ impl MapState {
         }
     }
 
+    /// Merges the background tile read once done, or now when `wait`.
+    fn finish_load(&mut self, wait: bool) {
+        if !wait && self.loading.as_ref().is_some_and(|l| !l.is_finished()) {
+            return;
+        }
+        let Some(load) = self.loading.take() else { return };
+        for (key, colour) in load.join().unwrap_or_default() {
+            self.tiles.merge_saved(key, colour);
+        }
+    }
+
+    /// Saves the previous world's tiles and reads the new world's tiles on a
+    /// worker; live chunks mapped meanwhile keep their columns.
     fn open_world(&mut self, root: &Arc<PathBuf>, voxel_m: f32) {
-        // A background write may still be renaming this world's tile file into place.
-        self.join_writer();
+        // The previous world's saved tiles must be restored before they are written back.
+        self.finish_load(true);
         if self.waypoints_unsaved {
             self.save_waypoints();
         }
-        if self.tiles.unsaved {
-            self.save_tiles(false);
-        }
+        let write = if self.tiles.unsaved { self.tile_write() } else { None };
+        // A previous write may still be renaming a tile file into place; the
+        // worker finishes it before writing or reading.
+        let previous = self.writer.take();
+        let path = root.join(sidecar::TILE_FILE);
+        let load = move || {
+            if let Some(w) = previous {
+                let _ = w.join();
+            }
+            if let Some(write) = write {
+                write();
+            }
+            sidecar::read(&path, sidecar::decode_tiles).unwrap_or_default()
+        };
+        self.loading = std::thread::Builder::new().name("map-load".into()).spawn(load)
+            .inspect_err(|e| eprintln!("[map] Cannot start the tile load: {e}"))
+            .ok();
         self.world = Some(root.clone());
         self.voxel_m = voxel_m;
         self.tiles = Default::default();
         self.waypoints = sidecar::read(&root.join(sidecar::WAYPOINT_FILE), sidecar::decode_waypoints)
             .unwrap_or_default();
         self.waypoints_unsaved = false;
-        for (key, colour) in sidecar::read(&root.join(sidecar::TILE_FILE), sidecar::decode_tiles)
-            .unwrap_or_default()
-        {
-            self.tiles.insert_saved(key, colour);
-        }
-        self.tiles.unsaved = false;
         self.view = Default::default();
+    }
+
+    fn upload_tiles(&mut self, ctx: &egui::Context) {
+        let near = self.player_cell().map_or(IVec2::ZERO, |cell| IVec2::new(
+            engine_core::floor_div(cell.x, crate::world::CHUNK_SIZE),
+            engine_core::floor_div(cell.z, crate::world::CHUNK_SIZE),
+        ));
+        self.tiles.upload(ctx, UPLOAD_BYTES_PER_FRAME, near);
     }
 }
 
@@ -165,6 +209,7 @@ pub(crate) fn absorb<'a>(
         if !s.world.as_ref().is_some_and(|w| Arc::ptr_eq(w, world) || w == world) {
             s.open_world(world, voxel_m);
         }
+        s.finish_load(false);
         while budget.has_time() {
             let Some(coord) = s.pending.pop_front() else { break };
             s.pending_set.remove(&coord);
@@ -186,6 +231,7 @@ pub(crate) fn absorb<'a>(
 pub fn flush() {
     let mut guard = state();
     let Some(s) = guard.as_mut() else { return };
+    s.finish_load(true);
     s.join_writer();
     if s.tiles.unsaved {
         s.save_tiles(false);
@@ -243,7 +289,12 @@ pub fn set_death_waypoint(pos: Vec3) {
 pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool, top: f32) {
     with(|s| {
         s.player = Some((pos, yaw));
-        s.tiles.upload(ctx, UPLOADS_PER_FRAME);
+        s.finish_load(false);
+        // Tiles feed only the minimap and the world map; hidden, they wait.
+        let minimap = draw_minimap && s.prefs.minimap;
+        if minimap {
+            s.upload_tiles(ctx);
+        }
         let typing = ctx.memory(|m| m.focused().is_some());
         if s.waypoints_unsaved && !typing {
             s.save_waypoints();
@@ -253,7 +304,7 @@ pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool,
             s.tiles_saved_at = now;
             s.save_tiles(true);
         }
-        if draw_minimap && s.prefs.minimap {
+        if minimap {
             minimap::draw(ctx, s, top);
         }
     });
@@ -261,7 +312,12 @@ pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool,
 
 /// Draws the world map while `open`; closing goes through `CreativeState`.
 pub(super) fn panel(ctx: &egui::Context, open: &mut bool) {
-    with(|s| panel::draw(ctx, s, open));
+    with(|s| {
+        if *open {
+            s.upload_tiles(ctx);
+        }
+        panel::draw(ctx, s, open);
+    });
 }
 
 #[cfg(test)]

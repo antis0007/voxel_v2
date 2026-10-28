@@ -3286,10 +3286,11 @@ impl EguiUi {
 
     pub fn end_frame_no_paint(&mut self, window: &Window) {
         let full_output = self.ctx.end_pass();
-        typography::defer_texture(&self.ctx);
+        let textures = full_output.textures_delta;
+        typography::defer_textures(&self.ctx, textures.set, &textures.free);
         self.state
             .handle_platform_output(window, full_output.platform_output);
-        for id in &full_output.textures_delta.free {
+        for id in &textures.free {
             self.renderer.free_texture(id);
         }
     }

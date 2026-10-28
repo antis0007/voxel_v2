@@ -11,6 +11,8 @@ use crate::world::inventory::{Item, SurvivalInventory, all_recipes};
 use crate::world::recipe_index::{self as index, Choices, Entry, Plan, Station};
 use egui::{Align2, Color32, FontId, RichText, Sense, Stroke, vec2};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 const REQUEST: &str = "jei_request";
 const SELECTED: &str = "jei_selected";
@@ -39,6 +41,40 @@ pub(super) fn take_request(ctx: &egui::Context) -> bool {
         return true;
     }
     false
+}
+
+/// Hash of every stack `count_item` and `stock_of` read; changes with the stock.
+fn stock_key(survival: &SurvivalInventory) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let slots = survival.hotbar.iter().chain(&survival.pack).chain(&survival.craft_grid);
+    for slot in slots.chain(std::iter::once(&survival.cursor)) {
+        slot.map(|s| (s.item, s.count)).hash(&mut h);
+    }
+    survival.resource_remainders.hash(&mut h);
+    h.finish()
+}
+
+type TreeKey = (u64, bool, Item, u32, Choices);
+
+/// The Tree tab's plan, rebuilt only when stock, target, amount or choices change.
+fn tree_plan(ctx: &egui::Context, survival: &SurvivalInventory, bench: bool, item: Item, amount: u32, choices: &Choices) -> Arc<Plan> {
+    let id = egui::Id::new("jei_tree_plan");
+    let key: TreeKey = (stock_key(survival), bench, item, amount, choices.clone());
+    if let Some((cached, plan)) = ctx.data(|d| d.get_temp::<(TreeKey, Arc<Plan>)>(id))
+        && cached == key
+    {
+        return plan;
+    }
+    let mut stock: HashMap<Item, f32> = index::known_items()
+        .iter()
+        .map(|&i| (i, stock_of(survival, i)))
+        .filter(|(_, n)| *n > 0.0)
+        .collect();
+    // The target itself is what is wanted, not what is used up.
+    stock.remove(&item);
+    let plan = Arc::new(index::plan(item, amount as f32, &mut stock, choices));
+    ctx.data_mut(|d| d.insert_temp(id, (key, plan.clone())));
+    plan
 }
 
 fn amount_text(n: f32) -> String {
@@ -446,14 +482,7 @@ pub(super) fn draw(ui: &mut egui::Ui, survival: &mut SurvivalInventory, bench: b
                                 choices.clear();
                             }
                         });
-                        let mut stock: HashMap<Item, f32> = index::known_items()
-                            .iter()
-                            .map(|&i| (i, stock_of(survival, i)))
-                            .filter(|(_, n)| *n > 0.0)
-                            .collect();
-                        // The target itself is what is wanted, not what is used up.
-                        stock.remove(&item);
-                        let plan = index::plan(item, amount as f32, &mut stock, &choices);
+                        let plan = tree_plan(&ctx, survival, bench, item, amount, &choices);
                         let (seconds, energy) = plan.totals();
                         ui.horizontal_wrapped(|ui| {
                             chip(ui, &format!("{seconds:.0}s"), PAPER);
