@@ -1242,6 +1242,16 @@ fn horizon_detail_normal(value: vec4<f32>) -> vec3<f32> {
     return normalize(vec3<f32>(xz.x, sqrt(max(1.0 - dot(xz, xz), 0.0)), xz.y));
 }
 
+// Must match `fine::HALF_M` in render/horizon/fine.rs. Inside this square,
+// centred like the detail map, the backdrop is the fine rings, whose vertex
+// normals come from 4-16 m knots; the map's 16-128 m normals would blur them.
+const FINE_RING_HALF_M: f32 = 6144.0;
+
+fn horizon_detail_normal_weight(xz_m: vec2<f32>) -> f32 {
+    let d = abs(xz_m - horizon_detail_params.xy);
+    return smoothstep(FINE_RING_HALF_M - 512.0, FINE_RING_HALF_M, max(d.x, d.y));
+}
+
 // Broad terrain occlusion from the map's cavity term: valleys and hollows
 // lose sky, crests gain a little. Smooth, never a step.
 fn horizon_detail_occlusion(cavity: f32) -> f32 {
@@ -2439,7 +2449,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
         if detail.weight > 0.0 {
             if is_backdrop {
                 macro_normal = terrain_safe_unit3(mix(geometric_normal,
-                    horizon_detail_normal(detail.value), detail.weight), geometric_normal);
+                    horizon_detail_normal(detail.value),
+                    detail.weight * horizon_detail_normal_weight(world_pos.xz)), geometric_normal);
             }
             let reach = smoothstep(64.0, 256.0, length(relative_pos));
             macro_occlusion = mix(1.0, horizon_detail_occlusion(detail.value.w), detail.weight * reach);

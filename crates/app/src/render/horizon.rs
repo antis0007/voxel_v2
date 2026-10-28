@@ -84,7 +84,9 @@ fn retry_wait(streak: u32) -> Duration {
 // Whole-mesh publication reserves one old GPU cover plus one replacement. This
 // bound includes edits and foliage, separately from the sample cache and the
 // resident chunk stream. No second completed build can queue behind an upload.
-const MAX_MESH_BYTES: usize = 160 * 1024 * 1024;
+// Raised from 160 MiB for the fine rings (about 56 MB more terrain at the audit
+// vista), so vegetation keeps every tree beside them.
+const MAX_MESH_BYTES: usize = 192 * 1024 * 1024;
 
 fn mesh_bytes(mesh: &ChunkMesh) -> usize {
     mesh.vertices.len() * std::mem::size_of::<Vertex3>() + mesh.indices.len() * 4

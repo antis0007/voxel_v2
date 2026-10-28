@@ -62,6 +62,28 @@ The veil still feeds `total_fog_t` at full weight; reflection visibility is unch
 Merging it into the M5 fog consolidation (`2026-10-26-axiom-brief-reality-check.md`,
 nine fog paths) remains open.
 
+## Fine rings (far-field F4 cell sizes, landed)
+
+Owner report: distant terrain too coarse and below the far-field design doc
+(`docs/superpowers/specs/2026-10-25-far-field-and-water-design.md` F4, cell = outer
+radius / 384). Before: 4 m only to 384 m, 8 m fine grid to 1,536 m, then 32 m and
+64 m lattice cells out to 6,144 m (about 13 px per cell at 1440p). Now
+`render/horizon/fine.rs` builds three rings at the F4 cells, 4 m to 1,536 m, 8 m to
+3,072 m and 16 m to 6,144 m, in 32-cell tiles. A 1.2 M triangle budget goes to the
+tiles with the largest on-screen height error first (relief beyond one voxel, sea
+bed clamped to the sea); skirts only where tile levels differ. Inside the rings the
+shader keeps vertex normals instead of the 16-128 m detail-map normal.
+
+Same base (206febb1), generator 53, vista pose: tile levels per ring (0 = 4/8/16 m)
+`[[228,146,62,34,29,77],[179,66,29,35,21,102],[100,60,40,29,20,183]]`, worst remaining
+error 12 px. Mesh 1.54 M -> 2.54 M triangles, terrain base 40 -> 96 MB, so
+`MAX_MESH_BYTES` went 160 -> 192 MiB; omitted trees 0 (27,960 at 160 MiB). Fine stage
+1.2 s -> 3-10 s depending on peer load; whole horizon build 27 s -> 35-47 s. Frame
+time, best of three interleaved passes: p50 13.5 -> 14.5 ms. Captures
+`final-{before,after5}-{golden,noon,peak}/`: `geometric-normal` shows ridges and
+gullies where the lattice drew single facets, and the violet back-facing peak tips
+are gone. Still a heightfield: overhangs and cave mouths need the F4 coarse field.
+
 ## Recommendations
 
 1. Mountains (item 2): grayscale `clay` acceptance first. Geometry work splits into a
