@@ -207,6 +207,23 @@ fn the_monitor_matches_reports_early_late_and_expired() {
     assert_eq!(m.report(2, 10, 7).map(|v| v.outcome), Some(Outcome::Expired));
 }
 
+#[test]
+fn one_peer_cannot_evict_another_peers_digest_reports() {
+    let mut m = DesyncMonitor::new(10, 2, 2);
+    m.record_host(10, 1);
+    assert_eq!(m.report(2, 20, 5), None);
+    for tick in [20, 30, 20, 30, 20] {
+        assert_eq!(m.report(1, tick, 9), None);
+    }
+    assert_eq!(m.report(1, 25, 9).map(|v| v.outcome), Some(Outcome::Refused), "not a checkpoint");
+    assert_eq!(m.report(1, 40, 9).map(|v| v.outcome), Some(Outcome::Refused), "past the digest window");
+    let v = m.record_host(20, 5);
+    assert!(v.contains(&Verdict { peer: 2, tick: 20, outcome: Outcome::Match }), "{v:?}");
+    assert_eq!(v.iter().filter(|v| v.peer == 1).count(), 1, "peer 1 keeps at most `history` reports: {v:?}");
+    let later = m.record_host(40, 5);
+    assert_eq!(later, vec![Verdict { peer: 1, tick: 30, outcome: Outcome::Expired }], "skipped ticks are purged");
+}
+
 /// Host and two clients over lossy, jittery, duplicating links: every peer releases the same frames
 /// in the same order, each input exactly once.
 #[test]

@@ -10,6 +10,8 @@ pub enum Outcome {
     Mismatch,
     /// The host no longer remembers that tick.
     Expired,
+    /// Not a checkpoint tick, or further ahead than the host's digest window.
+    Refused,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,22 +49,23 @@ impl DesyncMonitor {
     }
 
     /// The host's own digest after stepping `tick`; returns verdicts for reports that waited for it.
+    /// Reports for earlier ticks can never match now and come back `Expired`.
     pub fn record_host(&mut self, tick: u64, digest: u64) -> Vec<Verdict> {
         self.host.push_back((tick, digest));
         if self.host.len() > self.history {
             self.host.pop_front();
         }
         let mut out = Vec::new();
-        let mut i = 0;
-        while i < self.waiting.len() {
-            let (peer, at, theirs) = self.waiting[i];
-            if at == tick {
-                out.push(Verdict { peer, tick, outcome: if theirs == digest { Outcome::Match } else { Outcome::Mismatch } });
-                self.waiting.remove(i);
-            } else {
-                i += 1;
-            }
-        }
+        self.waiting.retain(|&(peer, at, theirs)| {
+            let outcome = match at.cmp(&tick) {
+                std::cmp::Ordering::Greater => return true,
+                std::cmp::Ordering::Equal if theirs == digest => Outcome::Match,
+                std::cmp::Ordering::Equal => Outcome::Mismatch,
+                std::cmp::Ordering::Less => Outcome::Expired,
+            };
+            out.push(Verdict { peer, tick: at, outcome });
+            false
+        });
         out
     }
 
@@ -75,6 +78,16 @@ impl DesyncMonitor {
         let newest = self.host.back().map(|(t, _)| *t);
         if newest.is_some_and(|newest| tick < newest) {
             return Some(Verdict { peer, tick, outcome: Outcome::Expired });
+        }
+        let horizon = self.interval.saturating_mul(self.history as u64);
+        if !self.is_checkpoint(tick) || newest.is_some_and(|newest| tick > newest.saturating_add(horizon)) {
+            return Some(Verdict { peer, tick, outcome: Outcome::Refused });
+        }
+        // Each peer's backlog is capped by its own oldest report, so one peer cannot evict another's.
+        if self.waiting.iter().filter(|w| w.0 == peer).count() >= self.history
+            && let Some(i) = self.waiting.iter().position(|w| w.0 == peer)
+        {
+            self.waiting.remove(i);
         }
         if self.waiting.len() >= self.waiting_cap {
             self.waiting.pop_front();
