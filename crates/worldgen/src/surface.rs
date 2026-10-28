@@ -14,6 +14,19 @@ use std::rc::Rc;
 
 mod routes;
 
+/// Native review camera for the first surveyed crossing, in world metres.
+pub fn bridge_review_view(cfg: &WorldSampleConfig) -> Option<(Vec3, Vec3)> {
+    let plan = plan(cfg);
+    let trail = plan.trails.iter().find(|t| !t.bridges.is_empty())?;
+    let span = trail.bridges.first()?;
+    let t = (span.start + span.end) * 0.5;
+    let (x,z) = trail.at(t);
+    let y = routes::height_at(trail,t);
+    let (tx,tz) = trail.tangent(t);
+    let target = Vec3::new(x,y,z);
+    Some((target + Vec3::new(-tz*24.0-tx*12.0,12.0,tx*24.0-tz*12.0), target))
+}
+
 /// Surface worldbuilding rides the current v18 baseline. It is sampled only in
 /// newly generated or unedited chunks; resident edits always win, as they do
 /// for every other generator layer.
@@ -37,6 +50,7 @@ struct Trail {
     max_z: f32,
     /// Walkable surface heights, sampled along the curve (generator 37+).
     grade: Vec<f32>,
+    bridges: Vec<routes::Span>,
 }
 
 impl Trail {
@@ -68,6 +82,7 @@ impl Trail {
             min_z,
             max_z,
             grade: Vec::new(),
+            bridges: Vec::new(),
         }
     }
 
@@ -352,7 +367,7 @@ pub(super) fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32, terrain_top:
     // Trails live in the top few voxels; structures reach about four metres
     // above and nooks about two metres below. Reject the bulk of a chunk before
     // touching the cached plan.
-    let clearance = if cfg.generator_version >= 37 { -8.0 } else { -4.5 };
+    let clearance = if cfg.generator_version >= 62 { -18.0 } else if cfg.generator_version >= 37 { -8.0 } else { -4.5 };
     if !(clearance..=5.5).contains(&depth) {
         return None;
     }

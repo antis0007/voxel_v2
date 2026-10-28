@@ -3,6 +3,8 @@ use super::{B, Trail, Vec3, WorldSampleConfig, sample_column};
 
 const SHOULDER: f32 = 4.0;
 const MAX_GRADE: f32 = 0.32;
+mod bridges;
+pub(super) use bridges::Span;
 
 fn ground(cfg: &WorldSampleConfig, x: f32, z: f32) -> f32 {
     let c = sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z));
@@ -15,6 +17,7 @@ pub(super) fn fit(
     start: Option<f32>,
     end: Option<f32>,
 ) -> Option<Trail> {
+    if cfg.generator_version >= 62 { return bridges::fit(cfg, trail, start, end); }
     let spacing = if cfg.generator_version >= 40 { 1.0 } else { 2.0 };
     let count = (trail.length() / spacing).ceil().max(2.0) as usize;
     let mut raw = Vec::with_capacity(count + 1);
@@ -88,7 +91,7 @@ pub(super) fn fit(
 fn connect(cfg: &WorldSampleConfig, a: Vec3, b: Vec3, salt: u32) -> Option<Trail> {
     // Try both sides of a rise before giving up. Never paint an impassable trail.
     let mut best: Option<(f32, Trail)> = None;
-    for attempt in 0..5 {
+    for attempt in 0..if cfg.generator_version >= 62 { 2 } else { 5 } {
         let seed = cfg.seed.wrapping_add(salt).wrapping_add(attempt * 7919);
         let trail = Trail::new(a.x, a.z, b.x, b.z, seed, 1.6);
         let Some(trail) = fit(cfg, trail, Some(a.y), Some(b.y)) else {
@@ -117,7 +120,7 @@ pub(super) fn network(cfg: &WorldSampleConfig) -> Vec<Trail> {
             a.distance_squared(target)
                 .total_cmp(&b.distance_squared(target))
         });
-        for origin in origins {
+        for origin in origins.into_iter().take(if cfg.generator_version >= 62 { 3 } else { usize::MAX }) {
             if let Some(route) = connection(cfg, origin, target, i as u32 * 131) {
                 trails.extend(route);
                 edges.push((origin, target));
@@ -148,6 +151,7 @@ pub(super) fn network(cfg: &WorldSampleConfig) -> Vec<Trail> {
     {
         trails.extend(route);
     }
+    if cfg.generator_version >= 62 { bridges::supplement(cfg, &mut trails); }
     trails
 }
 
@@ -163,8 +167,10 @@ fn connection(cfg: &WorldSampleConfig, a: Vec3, b: Vec3, salt: u32) -> Option<Ve
     if length < 8.0 { return None; }
     let normal = Vec3::new(-delta.z / length, 0.0, delta.x / length);
     let mut best: Option<(f32, Vec<Trail>)> = None;
-    for fraction in [0.5, 0.3, 0.7] {
-        for offset in [-24.0, 24.0, -48.0, 48.0, -80.0, 80.0] {
+    let fractions: &[f32] = if cfg.generator_version >= 62 { &[0.5] } else { &[0.5, 0.3, 0.7] };
+    let offsets: &[f32] = if cfg.generator_version >= 62 { &[-24.0, 24.0, -48.0, 48.0] } else { &[-24.0, 24.0, -48.0, 48.0, -80.0, 80.0] };
+    for &fraction in fractions {
+        for &offset in offsets {
             let mut via = a + delta * fraction + normal * offset;
             via.y = ground(cfg, via.x, via.z);
             // Straight legs share an exact ground-height junction. Survey both
@@ -219,6 +225,9 @@ pub(super) fn block(
         }
     }
     let (distance, t, trail) = best?;
+    if let Some(span) = trail.bridges.iter().find(|s| t >= s.start && t <= s.end) {
+        return bridges::block(cfg, trail, span, m, natural_top, distance, t);
+    }
     let grade = height_at(trail, t);
     let shoulder = crate::smoothstep(trail.half_width, trail.half_width + SHOULDER, distance);
     let v = cfg.voxel_meters();
