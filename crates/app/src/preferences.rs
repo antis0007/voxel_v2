@@ -28,6 +28,21 @@ const CAMERA_MOTION_CUT_SHIFT: u32 = 18;
 const FOV_EFFECTS_CUT_SHIFT: u32 = 25;
 /// Bit 1 of the indirect-lighting word, which older files wrote as 0 or 1.
 const SUBTITLES_BIT: u32 = 1;
+/// Bits 2-8 and 9-15 of that word: music and ambience volume as percent + 1,
+/// so the zero older files wrote there decodes as the default.
+const MUSIC_SHIFT: u32 = 2;
+const AMBIENCE_SHIFT: u32 = 9;
+const MUSIC_DEFAULT: f32 = 0.5;
+const AMBIENCE_DEFAULT: f32 = 0.6;
+fn volume_bits(volume: f32, shift: u32) -> u32 {
+    ((volume.clamp(0.0, 1.0) * 100.0).round() as u32 + 1) << shift
+}
+fn volume_from(word: Option<&u32>, shift: u32, default: f32) -> f32 {
+    match word.map_or(0, |w| w >> shift & 0x7f) {
+        0 => default,
+        n => (n - 1).min(100) as f32 / 100.0,
+    }
+}
 fn path() -> PathBuf {
     storage::save_directory().join("preferences.vxp")
 }
@@ -94,6 +109,8 @@ pub struct Preferences {
     /// Sprint and dash FOV kick and zoom easing, 0 to 100 percent.
     pub fov_effects: u32,
     pub subtitles: bool,
+    pub music_volume: f32,
+    pub ambience_volume: f32,
     pub magic: crate::egui_ui::magic_style::Settings,
     pub typography: crate::egui_ui::typography::Settings,
 }
@@ -135,6 +152,8 @@ impl Default for Preferences {
             camera_motion: 100,
             fov_effects: 100,
             subtitles: false,
+            music_volume: MUSIC_DEFAULT,
+            ambience_volume: AMBIENCE_DEFAULT,
             magic: Default::default(),
             typography: Default::default(),
         }
@@ -163,6 +182,8 @@ impl Preferences {
     }
     pub fn apply_globals(self) {
         crate::audio::set_volume(self.effects_volume);
+        crate::audio::set_music_volume(self.music_volume);
+        crate::audio::set_ambience_volume(self.ambience_volume);
         render::set_cloud_render_scale(self.cloud_scale);
         render::set_clouds_enabled(self.clouds);
         render::set_indirect_lighting_enabled(self.indirect_lighting);
@@ -254,6 +275,8 @@ impl Preferences {
             camera_motion: crate::comfort::camera_motion_percent(),
             fov_effects: crate::comfort::fov_effects_percent(),
             subtitles: crate::egui_ui::subtitles::enabled(),
+            music_volume: crate::audio::music_volume(),
+            ambience_volume: crate::audio::ambience_volume(),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
             typography: crate::egui_ui::typography::get(&ui.ctx),
         }
@@ -288,7 +311,10 @@ impl Preferences {
                 | self.render_scale.clamp(render::MIN_SCENE_SCALE_PERCENT, 100) << RENDER_SCALE_SHIFT
                 | (100 - self.camera_motion.min(100)) << CAMERA_MOTION_CUT_SHIFT
                 | (100 - self.fov_effects.min(100)) << FOV_EFFECTS_CUT_SHIFT,
-            u32::from(self.indirect_lighting) | u32::from(self.subtitles) << SUBTITLES_BIT,
+            u32::from(self.indirect_lighting)
+                | u32::from(self.subtitles) << SUBTITLES_BIT
+                | volume_bits(self.music_volume, MUSIC_SHIFT)
+                | volume_bits(self.ambience_volume, AMBIENCE_SHIFT),
             self.ui_scale.to_bits(),
             self.hotbar_scale.to_bits(),
         ];
@@ -383,6 +409,8 @@ impl Preferences {
                 .map_or(100, |p| p.clamp(render::MIN_SCENE_SCALE_PERCENT, 100)),
             indirect_lighting: w.get(23).is_none_or(|v| *v & 1 != 0),
             subtitles: w.get(23).is_some_and(|v| *v >> SUBTITLES_BIT & 1 != 0),
+            music_volume: volume_from(w.get(23), MUSIC_SHIFT, MUSIC_DEFAULT),
+            ambience_volume: volume_from(w.get(23), AMBIENCE_SHIFT, AMBIENCE_DEFAULT),
             camera_motion: 100 - w.get(22).map_or(0, |n| n >> CAMERA_MOTION_CUT_SHIFT & 0x7f).min(100),
             fov_effects: 100 - w.get(22).map_or(0, |n| n >> FOV_EFFECTS_CUT_SHIFT & 0x7f).min(100),
             ui_scale: w
@@ -690,6 +718,37 @@ mod tests {
         bytes[end..].copy_from_slice(&checksum);
         let old = Preferences::decode(&bytes).expect("decode");
         assert_eq!((old.camera_motion, old.fov_effects, old.render_scale), (100, 100, 80));
+    }
+
+    #[test]
+    fn music_and_ambience_volumes_round_trip_and_old_files_keep_defaults() {
+        let mut preferences = Preferences::default();
+        preferences.music_volume = 0.0;
+        preferences.ambience_volume = 0.83;
+        preferences.subtitles = true;
+        preferences.indirect_lighting = false;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.music_volume, 0.0);
+        assert!((decoded.ambience_volume - 0.83).abs() < 1.0e-6);
+        assert!(decoded.subtitles && !decoded.indirect_lighting);
+        let full = Preferences { music_volume: 1.0, ..Preferences::default() };
+        assert_eq!(Preferences::decode(&full.bytes()).expect("decode").music_volume, 1.0);
+        // Files from before the sliders wrote only bits 0 and 1 of word 23.
+        let mut bytes = Preferences::default().bytes();
+        let word = 8 + 23 * 4;
+        bytes[word..word + 4].copy_from_slice(&3u32.to_le_bytes());
+        let end = bytes.len() - 8;
+        let checksum = hash(&bytes[..end]).to_le_bytes();
+        bytes[end..].copy_from_slice(&checksum);
+        let old = Preferences::decode(&bytes).expect("decode");
+        assert_eq!((old.music_volume, old.ambience_volume), (MUSIC_DEFAULT, AMBIENCE_DEFAULT));
+        assert!(old.subtitles && old.indirect_lighting);
+        // A version-three file has no word 23 at all.
+        let mut body = Preferences::default().bytes()[..8 + 23 * 4].to_vec();
+        body[..8].copy_from_slice(b"VXPRF003");
+        body.extend_from_slice(&hash(&body).to_le_bytes());
+        let ancient = Preferences::decode(&body).expect("version three decodes");
+        assert_eq!((ancient.music_volume, ancient.ambience_volume), (MUSIC_DEFAULT, AMBIENCE_DEFAULT));
     }
 
     #[test]

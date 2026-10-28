@@ -119,8 +119,14 @@ impl Reverb {
         (wet_l * 0.22, wet_r * 0.22)
     }
 }
-pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Arc<AtomicBool>) {
+pub(super) fn run(
+    rx: mpsc::Receiver<Play>,
+    layer_rx: mpsc::Receiver<layers::Command>,
+    running: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
+) {
     let bank = super::synth::variants();
+    let mut layers = layers::Layers::new(synth::RATE);
     let mut gain = 0.0;
     while running.load(Ordering::Relaxed) {
         let format = Format {
@@ -138,6 +144,7 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
             STATUS.store(2, Ordering::Relaxed);
             for _ in 0..100 {
                 while rx.try_recv().is_ok() {}
+                layers.receive(&layer_rx);
                 if !running.load(Ordering::Relaxed) {
                     return;
                 }
@@ -155,6 +162,8 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
             if !enabled {
                 voices.clear();
             }
+            layers.begin(enabled);
+            layers.receive(&layer_rx);
             while let Ok(play) = rx.try_recv() {
                 if enabled {
                     // Bound both same-cue repeats and total voices so dense
@@ -238,6 +247,7 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                             voice.cursor = sample.len() as f32;
                         }
                     }
+                    let layered = layers.frame();
                     let (wet_l, wet_r) = reverb.process((stereo[0] + stereo[1]) * 0.5, send);
                     stereo[0] += wet_l;
                     stereo[1] += wet_r;
@@ -254,7 +264,8 @@ pub(super) fn run(rx: mpsc::Receiver<Play>, running: Arc<AtomicBool>, active: Ar
                         } else {
                             limited.signum() * (0.55 + 0.40 * (1.0 - (-((abs - 0.55) / 0.40)).exp()))
                         };
-                        frame[ch] = (shaped * gain * 24000.0) as i16;
+                        // Layers carry their own volumes; the cast saturates.
+                        frame[ch] = ((shaped * gain + layered[ch]) * 24000.0) as i16;
                     }
                 }
                 voices.retain(|v| {

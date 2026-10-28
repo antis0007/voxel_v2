@@ -39,6 +39,7 @@ mod sandbox_review;
 mod receiver_review;
 mod shader_sources;
 mod simulation;
+mod soundscape;
 mod tool_effects;
 mod torch_review;
 mod terrain_review;
@@ -1528,6 +1529,7 @@ fn main() -> Result<()> {
     let mut preferences_render_applied = false;
     let mut windowed_size = (preferences.loaded.width, preferences.loaded.height);
     let mut combat_audio = audio::Audio::new();
+    let mut soundscape = soundscape::Soundscape::default();
     let event_loop = EventLoop::new()?;
     let mut window: Option<Arc<Window>> = None;
 
@@ -3865,6 +3867,7 @@ fn main() -> Result<()> {
                                     egui_ui::subtitles::note(&sound,player.eye(world.voxel_scale)*world.voxel_scale.meters(),player.forward_dir());
                                     combat_audio.play(sound,player.eye(world.voxel_scale)*world.voxel_scale.meters(),player.forward_dir());
                                 }
+                                soundscape.tick(&mut combat_audio, world, &player, &day_night, display_frame_dt);
                                 if let Some(review)=sandbox_review.as_mut(){
                                     let (reloaded,shot)=review.tick(world,&mut player,&day_night,fluid_sim,&mut dirty_blocks,&mut dirty_chunks);
                                     if reloaded {chunk_streamer.reset();let c=chunk_coord_from_world_block(player.pos.floor().as_ivec3());chunk_cache.reset_with_snapshot(c,&world.snapshot_near(c,4));chunk_streamer.queue_needed_visible(&chunk_cache,c);}

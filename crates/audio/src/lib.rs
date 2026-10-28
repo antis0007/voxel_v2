@@ -1,8 +1,19 @@
 //! Bounded, asynchronous combat audio. Original synthesized Foley lives in memory;
 //! no network assets, file decoding, or device calls run on the rendering thread.
+mod beds;
+mod dsp;
+mod layers;
+mod music;
 #[cfg(windows)]
 mod output;
+mod perform;
+mod steps;
 mod synth;
+pub use beds::{Bed, BED_COUNT};
+pub use dsp::hash;
+pub use layers::{ambience_volume, music_volume, set_ambience_volume, set_music_volume};
+pub use music::{compose, Director, Mood, MusicTable, Note, Piece, PieceDef, Timbre};
+pub use steps::Surface;
 use glam::Vec3;
 use std::{
     sync::{
@@ -122,6 +133,7 @@ fn rapid_repeat(last_ms: u64, now_ms: u64, window_ms: u64) -> bool {
 }
 pub struct Audio {
     tx: mpsc::SyncSender<Play>,
+    layer_tx: mpsc::SyncSender<layers::Command>,
     running: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -141,6 +153,7 @@ impl Default for Audio {
 impl Audio {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::sync_channel(64);
+        let (layer_tx, layer_rx) = mpsc::sync_channel(32);
         let running = Arc::new(AtomicBool::new(true));
         let active = Arc::new(AtomicBool::new(false));
         let run = running.clone();
@@ -149,10 +162,10 @@ impl Audio {
             .name("combat-audio".into())
             .spawn(move || {
                 #[cfg(windows)]
-                output::run(rx, run, enabled);
+                output::run(rx, layer_rx, run, enabled);
                 #[cfg(not(windows))]
                 {
-                    let _ = (rx, run, enabled);
+                    let _ = (rx, layer_rx, run, enabled);
                     STATUS.store(3, Ordering::Relaxed);
                 }
             })
@@ -162,6 +175,7 @@ impl Audio {
         }
         Self {
             tx,
+            layer_tx,
             running,
             active,
             worker,

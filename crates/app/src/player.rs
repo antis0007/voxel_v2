@@ -217,6 +217,11 @@ impl Player {
         }
     }
 
+    /// Gait phase in radians; footsteps fall twice per turn.
+    pub fn walk_phase(&self) -> f32 {
+        self.walk_phase
+    }
+
     pub fn forward_dir(&self) -> Vec3 {
         let (sy, cy) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();

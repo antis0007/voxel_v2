@@ -277,5 +277,13 @@ pub(super) fn audio_settings(ui: &mut egui::Ui) {
     {
         crate::audio::set_volume(volume);
     }
+    let mut music = crate::audio::music_volume();
+    if ui.add(egui::Slider::new(&mut music, 0.0..=1.0).text("Music")).changed() {
+        crate::audio::set_music_volume(music);
+    }
+    let mut ambience = crate::audio::ambience_volume();
+    if ui.add(egui::Slider::new(&mut ambience, 0.0..=1.0).text("Ambience")).changed() {
+        crate::audio::set_ambience_volume(ambience);
+    }
     ui.small(crate::audio::status());
 }
