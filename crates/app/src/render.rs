@@ -3,6 +3,7 @@
 
 mod capture;
 mod frame_pacer;
+mod pipeline_cache;
 pub mod coverage;
 pub(crate) fn flush_review_captures() {
     if !capture::flush(std::time::Duration::from_secs(2)) {
@@ -1578,6 +1579,8 @@ pub struct GpuBootstrap {
     adapter_summary: String,
     default_lighting: LightingState,
     clear_color: [f32; 3],
+    /// Shared by the pipelines built during init, saved once they exist.
+    pipeline_cache: Option<pipeline_cache::DiskCache>,
     noise_threads: PendingNoiseThreads,
 }
 
@@ -1654,11 +1657,21 @@ pub struct GpuPendingInit {
     line_pipeline: Option<wgpu::RenderPipeline>,
     line_invert_pipeline: Option<wgpu::RenderPipeline>,
     ui_pipeline: Option<wgpu::RenderPipeline>,
+    /// Post-processing and bounce lighting built during `Pipelines`, with the
+    /// surface and scene sizes they were built for.
+    scene_passes: Option<(ScenePassKey, postprocess::PostProcess, indirect::IndirectLighting)>,
 
     outline_stream: Option<DynamicVertexBuffer>,
     invert_outline_stream: Option<DynamicVertexBuffer>,
     ui_stream: Option<DynamicVertexBuffer>,
 
+}
+
+/// Surface size and scene size; the post-process and bounce targets follow both.
+type ScenePassKey = (u32, u32, (u32, u32));
+
+fn scene_pass_key(config: &wgpu::SurfaceConfiguration) -> ScenePassKey {
+    (config.width, config.height, scene_dims(config.width, config.height))
 }
 impl GpuBootstrap {
     pub async fn new(window: Arc<Window>) -> Result<Self> {
@@ -1707,7 +1720,8 @@ impl GpuBootstrap {
         let requested_features = adapter.features()
             & (wgpu::Features::TIMESTAMP_QUERY
                 | wgpu::Features::FLOAT32_FILTERABLE
-                | wgpu::Features::INDIRECT_FIRST_INSTANCE);
+                | wgpu::Features::INDIRECT_FIRST_INSTANCE)
+            | pipeline_cache::feature(&adapter);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -1721,6 +1735,7 @@ impl GpuBootstrap {
             .await?;
         streaming::indirect_draws::set_supported(&adapter, device.features());
         crate::mesh::models::posed::set_enabled(true);
+        let pipeline_cache = pipeline_cache::DiskCache::open(&device, &adapter_info);
 
         let device_lost = install_device_loss_signal(&device);
         let caps = surface.get_capabilities(&adapter);
@@ -1768,6 +1783,7 @@ impl GpuBootstrap {
             adapter_summary,
             default_lighting,
             clear_color,
+            pipeline_cache,
             noise_threads: PendingNoiseThreads {
                 shape_noise_rx,
                 detail_noise_rx,
@@ -1934,6 +1950,7 @@ impl GpuBootstrap {
             line_pipeline: None,
             line_invert_pipeline: None,
             ui_pipeline: None,
+            scene_passes: None,
 
             outline_stream: None,
             invert_outline_stream: None,
@@ -2588,6 +2605,7 @@ impl GpuPendingInit {
                     scene_dims(config.width, config.height).1,
                     &bootstrap.default_lighting,
                     &CloudControls::default(),
+                    bootstrap.pipeline_cache.as_ref().map(pipeline_cache::DiskCache::cache),
                 );
 
                 self.cloud_sampler = Some(cloud_sampler);
@@ -2683,6 +2701,7 @@ impl GpuPendingInit {
                 let bootstrap = self.bootstrap.as_ref().expect("bootstrap missing");
                 let device = &bootstrap.device;
                 let config = &bootstrap.config;
+                let pipeline_cache = bootstrap.pipeline_cache.as_ref().map(pipeline_cache::DiskCache::cache);
 
                 let cloud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("cloud layout"),
@@ -2782,7 +2801,7 @@ impl GpuPendingInit {
                         depth_stencil,
                         multisample: Default::default(),
                         multiview: None,
-                        cache: None,
+                        cache: pipeline_cache,
                     })
                 };
 
@@ -2843,7 +2862,7 @@ impl GpuPendingInit {
                         }),
                         multisample: Default::default(),
                         multiview: None,
-                        cache: None,
+                        cache: pipeline_cache,
                     })
                 };
 
@@ -2885,7 +2904,7 @@ impl GpuPendingInit {
                         }),
                         multisample: Default::default(),
                         multiview: None,
-                        cache: None,
+                        cache: pipeline_cache,
                     })
                 };
 
@@ -2918,7 +2937,7 @@ impl GpuPendingInit {
                         depth_stencil: None,
                         multisample: Default::default(),
                         multiview: None,
-                        cache: None,
+                        cache: pipeline_cache,
                     })
                 };
 
@@ -2947,12 +2966,24 @@ impl GpuPendingInit {
                 let composite_shader = self.cloud_composite_shader.as_ref().unwrap();
                 let temporal_shader = self.cloud_temporal_shader.as_ref().unwrap();
                 let shadow_shader = self.shadow_shader.as_ref().unwrap();
+                let blue_noise_view = self.blue_noise_view.as_ref().unwrap();
+                let camera_layout = self.camera_layout.as_ref().unwrap();
+                let depth = self.depth.as_ref().unwrap();
 
                 // The driver compiles each shader when its pipeline is created.
                 // After a shader edit that took about 4.4 s in series, so the
-                // pipelines are built on parallel threads.
-                let (cloud, sky, composite, temporal, world, (line, line_invert), ui, shadow) =
+                // pipelines are built on parallel threads. Post-processing and
+                // bounce lighting join them here instead of compiling in series
+                // in `Complete`, which reuses them if the window size still matches.
+                let (cloud, sky, composite, temporal, world, (line, line_invert), ui, shadow, scene_passes) =
                     std::thread::scope(|scope| {
+                        let scene_passes = scope.spawn(|| {
+                            let key = scene_pass_key(config);
+                            let postprocess = postprocess::PostProcess::new(device, config, blue_noise_view);
+                            let indirect = indirect::IndirectLighting::new(
+                                device, &scene_config(config), camera_layout, depth, &postprocess.scene);
+                            (key, postprocess, indirect)
+                        });
                         let cloud = scope.spawn(|| {
                             fullscreen("cloud pipeline", &cloud_layout, cloud_shader,
                                 wgpu::TextureFormat::Rgba16Float, None, None)
@@ -2990,8 +3021,15 @@ impl GpuPendingInit {
                             lines.join().expect(failed),
                             ui.join().expect(failed),
                             shadow.join().expect(failed),
+                            scene_passes.join().expect(failed),
                         )
                     });
+                // Every pipeline that takes the cache exists now (the atmosphere's
+                // were built in `CloudFields`).
+                if let Some(cache) = &bootstrap.pipeline_cache {
+                    cache.save();
+                }
+                self.scene_passes = Some(scene_passes);
                 self.cloud_pipeline = Some(cloud);
                 self.sky_pipeline = Some(sky);
                 self.cloud_composite_pipeline = Some(composite);
@@ -3050,18 +3088,28 @@ impl GpuPendingInit {
                 let bootstrap = self.bootstrap.take().expect("bootstrap missing");
                 let gpu_profiler = GpuProfiler::new(&bootstrap.device, &bootstrap.queue,
                     Arc::clone(&bootstrap.device_lost));
-                let postprocess = postprocess::PostProcess::new(
-                    &bootstrap.device,
-                    &bootstrap.config,
-                    self.blue_noise_view.as_ref().unwrap(),
-                );
-                let indirect = indirect::IndirectLighting::new(
-                    &bootstrap.device,
-                    &scene_config(&bootstrap.config),
-                    self.camera_layout.as_ref().unwrap(),
-                    self.depth.as_ref().unwrap(),
-                    &postprocess.scene,
-                );
+                // Built beside the other pipelines; rebuilt only if the window
+                // or render resolution changed since, as their targets are sized.
+                let (postprocess, indirect) = match self.scene_passes.take() {
+                    Some((key, postprocess, indirect)) if key == scene_pass_key(&bootstrap.config) => {
+                        (postprocess, indirect)
+                    }
+                    _ => {
+                        let postprocess = postprocess::PostProcess::new(
+                            &bootstrap.device,
+                            &bootstrap.config,
+                            self.blue_noise_view.as_ref().unwrap(),
+                        );
+                        let indirect = indirect::IndirectLighting::new(
+                            &bootstrap.device,
+                            &scene_config(&bootstrap.config),
+                            self.camera_layout.as_ref().unwrap(),
+                            self.depth.as_ref().unwrap(),
+                            &postprocess.scene,
+                        );
+                        (postprocess, indirect)
+                    }
+                };
 
                 let initial_cloud_scale = cloud_scale_request(bootstrap.config.width, bootstrap.config.height);
                 let mut gpu = Gpu {

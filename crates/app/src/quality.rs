@@ -20,6 +20,13 @@ const SETTLE_S: f32 = 8.0;
 const HITCH_MS: f32 = 250.0;
 /// Smoothing time constant, seconds.
 const SMOOTHING_S: f32 = 1.5;
+/// Far horizon range after the horizon step, metres.
+const SHORT_HORIZON_M: u32 = 12_288;
+/// Longest a spawned world waits behind the loader for its first distant
+/// horizon. The full range takes about 5 s on the development desktop and longer
+/// on a 4-core laptop; past this, play starts and the horizon appears when published.
+const HORIZON_WAIT_S: f32 = 6.0;
+static HORIZON_WAIT_SINCE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 static AUTO: AtomicBool = AtomicBool::new(true);
 
@@ -41,6 +48,10 @@ pub enum Step {
     ShorterView,
     NoBounceLight,
     ShortestView,
+    /// Shadow maps off for the session; shadows are not a saved setting.
+    NoShadows,
+    /// Far horizon range down to `SHORT_HORIZON_M`.
+    ShorterHorizon,
 }
 
 impl Step {
@@ -50,8 +61,9 @@ impl Step {
     /// biggest single lever but removes a feature, so it waits until a shorter view
     /// and a lower resolution have not been enough. Bounce lighting costs a fraction
     /// of a millisecond and a coarser cloud resolution saves almost nothing; both
-    /// are tried late or not at all.
-    const ORDER: [Step; 8] = [
+    /// are tried late or not at all. Shadows and the far horizon come last: both
+    /// change the look of the whole scene, and the horizon is mostly CPU build time.
+    const ORDER: [Step; 10] = [
         Step::Resolution(85),
         Step::Resolution(70),
         Step::ShorterView,
@@ -60,6 +72,8 @@ impl Step {
         Step::NoBounceLight,
         Step::ShortestView,
         Step::Resolution(50),
+        Step::NoShadows,
+        Step::ShorterHorizon,
     ];
 
     /// What to tell the player, in plain words.
@@ -73,6 +87,8 @@ impl Step {
             Step::ShorterView => "Frame rate was low: view distance was shortened.",
             Step::NoBounceLight => "Frame rate was low: bounce lighting is now off.",
             Step::ShortestView => "Frame rate was low: view distance is now at its minimum.",
+            Step::NoShadows => "Frame rate was low: shadows are off until restart.",
+            Step::ShorterHorizon => "Frame rate was low: far horizon shortened to 12 km.",
         }
     }
 
@@ -95,6 +111,13 @@ impl Step {
                 true
             }
             Step::ShortestView => shorten(view, 8),
+            Step::NoShadows if r::shadow::enabled() => {
+                r::shadow::set_enabled(false);
+                true
+            }
+            Step::ShorterHorizon => shorter_horizon(r::horizon_range_m())
+                .map(r::set_horizon_range_m)
+                .is_some(),
             _ => false,
         }
     }
@@ -110,6 +133,11 @@ fn shorten(view: &mut RenderDistanceSettings, floor: i32) -> bool {
     view.view_distance_chunks = target;
     view.lod_start_chunks = view.lod_start_chunks.clamp(2, (target - 1).max(2));
     true
+}
+
+/// The range the horizon step sets, if it is shorter than `current`.
+fn shorter_horizon(current: u32) -> Option<u32> {
+    (current > SHORT_HORIZON_M).then_some(SHORT_HORIZON_M)
 }
 
 #[derive(Default)]
@@ -172,6 +200,27 @@ impl Governor {
     pub fn remaining(&self) -> usize {
         Step::ORDER.len().saturating_sub(self.next)
     }
+}
+
+/// True while a spawned world should keep waiting for its first distant
+/// horizon. `waiting` means the near terrain is ready but the horizon is not;
+/// the wait is capped at `HORIZON_WAIT_S` from when that began.
+pub fn hold_for_horizon(waiting: bool) -> bool {
+    let mut since = HORIZON_WAIT_SINCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !waiting {
+        *since = None;
+        return false;
+    }
+    let started = *since.get_or_insert_with(std::time::Instant::now);
+    started.elapsed().as_secs_f32() < HORIZON_WAIT_S
+}
+
+/// True once the capped horizon wait has run out and play went ahead without it.
+pub fn horizon_wait_expired() -> bool {
+    HORIZON_WAIT_SINCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_some_and(|started| started.elapsed().as_secs_f32() >= HORIZON_WAIT_S)
 }
 
 /// Marker left when the graphics device was lost, read once at the next start.
@@ -237,10 +286,10 @@ mod tests {
     fn sustained_slow_frames_step_down_in_order_with_pauses() {
         set_auto_enabled(true);
         let mut g = settled();
-        let steps = run(&mut g, 40.0, 100.0);
+        let steps = run(&mut g, 40.0, 140.0);
         assert_eq!(steps, Step::ORDER.to_vec(), "every step taken once, in order");
         assert_eq!(g.remaining(), 0);
-        // Taking all five takes at least four settle windows plus the first wait.
+        // Every step after the first waits a settle window plus a slow stretch.
         let mut g = settled();
         let first_window = run(&mut g, 40.0, SLOW_FOR_S + 1.0);
         assert_eq!(first_window.len(), 1, "one step per slow stretch");
@@ -296,6 +345,22 @@ mod tests {
         assert!(!crate::render::clouds_enabled());
         assert!(!Step::NoClouds.apply(&mut view), "already off: nothing to do");
         assert_eq!(view.view_distance_chunks, 28, "the view is untouched by this step");
+    }
+
+    #[test]
+    fn horizon_step_only_shortens_a_longer_range() {
+        // The range is a global the horizon tests read, so the rule is tested pure.
+        assert_eq!(shorter_horizon(crate::render::MAX_HORIZON_RANGE_M), Some(SHORT_HORIZON_M));
+        assert_eq!(shorter_horizon(SHORT_HORIZON_M), None, "already there");
+        assert_eq!(shorter_horizon(4096), None, "never lengthens it");
+    }
+
+    #[test]
+    fn horizon_wait_resets_when_nothing_is_pending() {
+        assert!(hold_for_horizon(true), "a fresh wait holds");
+        assert!(!horizon_wait_expired());
+        assert!(!hold_for_horizon(false));
+        assert!(!horizon_wait_expired(), "cleared with the wait");
     }
 
     #[test]

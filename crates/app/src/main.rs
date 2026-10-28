@@ -2336,8 +2336,15 @@ fn main() -> Result<()> {
                             // Distant coverage is part of the loading transition too.
                             // Advancing physics behind that screen can change the
                             // snapshot being built and force another cold publication.
+                            // The wait is capped (a 4-core laptop can take 20 s); later
+                            // builds run beside physics as in play, reusing the cached base.
+                            // Benchmarks keep the full wait so captures stay comparable.
+                            let horizon_pending = world.is_some() && chunk_cache.spawn_ready
+                                && !gpu.horizon_ready() && matches!(mode, AppMode::Playing);
+                            let horizon_hold = quality::hold_for_horizon(horizon_pending);
                             let spawning = world.is_some()
-                                && (!chunk_cache.spawn_ready || !gpu.horizon_ready())
+                                && (!chunk_cache.spawn_ready || horizon_hold
+                                    || (benchmark_config.enabled && !gpu.horizon_ready()))
                                 && matches!(mode, AppMode::Playing);
                             let simulation_steps = simulation_clock.advance(
                                 raw_frame_dt,
@@ -4529,7 +4536,9 @@ fn main() -> Result<()> {
                                             gpu.request_capture(root.join(format!("bench-{shot:03}.png")));
                                         }
                                     }
-                            if preparing_horizon {
+                            let loader_visible = preparing_horizon
+                                && (benchmark_config.enabled || !quality::horizon_wait_expired());
+                            if loader_visible {
                                 egui_ui.build_loading_ui(&LoadingUiState {
                                     title: "Loading terrain".into(),
                                     progress_01: None,
@@ -4543,7 +4552,7 @@ fn main() -> Result<()> {
                             };
                             // The opaque title/browser needs only its UI pass,
                             // without the world's render setup and postprocessing.
-                            let render_result = if preparing_horizon || matches!(mode, AppMode::WorldSelect) {
+                            let render_result = if loader_visible || matches!(mode, AppMode::WorldSelect) {
                                 gpu.render_loading_frame([0.025, 0.035, 0.05], overlay)
                             } else { gpu.render_cached_with_overlay(
                                 &chunk_cache,

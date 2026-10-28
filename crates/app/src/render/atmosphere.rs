@@ -324,6 +324,7 @@ impl AtmosphereRuntime {
         luts: &AtmosphereLuts,
         params: AtmosphereParameters,
         camera_bind_group_layout: &wgpu::BindGroupLayout,
+        pipeline_cache: Option<&wgpu::PipelineCache>,
     ) -> AtmosphereLutGenerationResources {
         let mut generation_entries = vec![
             wgpu::BindGroupLayoutEntry {
@@ -517,54 +518,51 @@ impl AtmosphereRuntime {
             source: wgpu::ShaderSource::Wgsl(ATMOSPHERE_LUT_GENERATION_WGSL.into()),
         });
 
-        let transmittance_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("atmosphere transmittance generation pipeline"),
-                layout: Some(
-                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("transmittance pipeline layout"),
-                        bind_group_layouts: &[&transmittance_generation_layout],
-                        push_constant_ranges: &[],
-                    }),
-                ),
-                module: &generation_shader,
-                entry_point: Some("generate_transmittance_lut"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
+        let transmittance_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("transmittance pipeline layout"),
+                bind_group_layouts: &[&transmittance_generation_layout],
+                push_constant_ranges: &[],
             });
-
-        let sky_view_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("atmosphere sky-view generation pipeline"),
-            layout: Some(&lut_pipeline_layout),
-            module: &generation_shader,
-            entry_point: Some("generate_sky_view_lut"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-        let multiscatter_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("atmosphere multiscatter generation pipeline"),
-                layout: Some(
-                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("atmosphere transport pipeline layout"),
-                        bind_group_layouts: &[&multiscatter_generation_layout],
-                        push_constant_ranges: &[],
-                    }),
-                ),
-                module: &generation_shader,
-                entry_point: Some("generate_multiscatter_lut"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
+        let multiscatter_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("atmosphere transport pipeline layout"),
+                bind_group_layouts: &[&multiscatter_generation_layout],
+                push_constant_ranges: &[],
             });
-
-        let ap_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("atmosphere ap generation pipeline"),
-            layout: Some(&ap_pipeline_layout),
-            module: &generation_shader,
-            entry_point: Some("generate_aerial_perspective"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let compute = |label: &str, layout: &wgpu::PipelineLayout, entry_point: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                module: &generation_shader,
+                entry_point: Some(entry_point),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: pipeline_cache,
+            })
+        };
+        // The driver compiles each entry point when its pipeline is created;
+        // the four are independent, so they compile on parallel threads.
+        let (transmittance_pipeline, sky_view_pipeline, multiscatter_pipeline, ap_pipeline) =
+            std::thread::scope(|scope| {
+                let transmittance = scope.spawn(|| {
+                    compute("atmosphere transmittance generation pipeline",
+                        &transmittance_pipeline_layout, "generate_transmittance_lut")
+                });
+                let sky_view = scope.spawn(|| {
+                    compute("atmosphere sky-view generation pipeline",
+                        &lut_pipeline_layout, "generate_sky_view_lut")
+                });
+                let multiscatter = scope.spawn(|| {
+                    compute("atmosphere multiscatter generation pipeline",
+                        &multiscatter_pipeline_layout, "generate_multiscatter_lut")
+                });
+                let ap = compute("atmosphere ap generation pipeline",
+                    &ap_pipeline_layout, "generate_aerial_perspective");
+                let join = |handle: std::thread::ScopedJoinHandle<'_, wgpu::ComputePipeline>| {
+                    handle.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                };
+                (join(transmittance), join(sky_view), join(multiscatter), ap)
+            });
 
         AtmosphereLutGenerationResources {
             uniform_buffer: generation_uniform_buffer,
@@ -590,6 +588,7 @@ impl AtmosphereRuntime {
         surface_height: u32,
         initial_lighting: &LightingState,
         initial_cloud_controls: &CloudControls,
+        pipeline_cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let surface_width = surface_width.max(1);
         let surface_height = surface_height.max(1);
@@ -649,6 +648,7 @@ impl AtmosphereRuntime {
             &luts,
             last_parameters,
             camera_bind_group_layout,
+            pipeline_cache,
         );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

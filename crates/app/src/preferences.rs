@@ -32,6 +32,10 @@ const SUBTITLES_BIT: u32 = 1;
 /// so the zero older files wrote there decodes as the default.
 const MUSIC_SHIFT: u32 = 2;
 const AMBIENCE_SHIFT: u32 = 9;
+/// Bits 16-22 of that word: far horizon range in 256 m units, so the zero older
+/// files wrote there decodes as the full range. Older builds ignore these bits.
+const HORIZON_SHIFT: u32 = 16;
+const HORIZON_UNIT_M: u32 = 256;
 const MUSIC_DEFAULT: f32 = 0.5;
 const AMBIENCE_DEFAULT: f32 = 0.6;
 fn volume_bits(volume: f32, shift: u32) -> u32 {
@@ -41,6 +45,16 @@ fn volume_from(word: Option<&u32>, shift: u32, default: f32) -> f32 {
     match word.map_or(0, |w| w >> shift & 0x7f) {
         0 => default,
         n => (n - 1).min(100) as f32 / 100.0,
+    }
+}
+fn horizon_bits(metres: u32) -> u32 {
+    let clamped = metres.clamp(render::MIN_HORIZON_RANGE_M, render::MAX_HORIZON_RANGE_M);
+    (clamped + HORIZON_UNIT_M / 2) / HORIZON_UNIT_M << HORIZON_SHIFT
+}
+fn horizon_from(word: Option<&u32>) -> u32 {
+    match word.map_or(0, |w| w >> HORIZON_SHIFT & 0x7f) {
+        0 => render::MAX_HORIZON_RANGE_M,
+        n => (n * HORIZON_UNIT_M).clamp(render::MIN_HORIZON_RANGE_M, render::MAX_HORIZON_RANGE_M),
     }
 }
 fn path() -> PathBuf {
@@ -111,6 +125,8 @@ pub struct Preferences {
     pub subtitles: bool,
     pub music_volume: f32,
     pub ambience_volume: f32,
+    /// Far horizon range in metres, stored to the nearest 256 m.
+    pub horizon_m: u32,
     pub magic: crate::egui_ui::magic_style::Settings,
     pub typography: crate::egui_ui::typography::Settings,
 }
@@ -154,6 +170,7 @@ impl Default for Preferences {
             subtitles: false,
             music_volume: MUSIC_DEFAULT,
             ambience_volume: AMBIENCE_DEFAULT,
+            horizon_m: render::MAX_HORIZON_RANGE_M,
             magic: Default::default(),
             typography: Default::default(),
         }
@@ -189,6 +206,7 @@ impl Preferences {
         render::set_indirect_lighting_enabled(self.indirect_lighting);
         crate::quality::set_auto_enabled(self.auto_quality);
         render::set_scene_scale_percent(self.render_scale);
+        render::set_horizon_range_m(self.horizon_m);
         crate::comfort::set_camera_motion_percent(self.camera_motion);
         crate::comfort::set_fov_effects_percent(self.fov_effects);
         crate::egui_ui::subtitles::set_enabled(self.subtitles);
@@ -277,6 +295,7 @@ impl Preferences {
             subtitles: crate::egui_ui::subtitles::enabled(),
             music_volume: crate::audio::music_volume(),
             ambience_volume: crate::audio::ambience_volume(),
+            horizon_m: render::horizon_range_m(),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
             typography: crate::egui_ui::typography::get(&ui.ctx),
         }
@@ -314,7 +333,8 @@ impl Preferences {
             u32::from(self.indirect_lighting)
                 | u32::from(self.subtitles) << SUBTITLES_BIT
                 | volume_bits(self.music_volume, MUSIC_SHIFT)
-                | volume_bits(self.ambience_volume, AMBIENCE_SHIFT),
+                | volume_bits(self.ambience_volume, AMBIENCE_SHIFT)
+                | horizon_bits(self.horizon_m),
             self.ui_scale.to_bits(),
             self.hotbar_scale.to_bits(),
         ];
@@ -411,6 +431,7 @@ impl Preferences {
             subtitles: w.get(23).is_some_and(|v| *v >> SUBTITLES_BIT & 1 != 0),
             music_volume: volume_from(w.get(23), MUSIC_SHIFT, MUSIC_DEFAULT),
             ambience_volume: volume_from(w.get(23), AMBIENCE_SHIFT, AMBIENCE_DEFAULT),
+            horizon_m: horizon_from(w.get(23)),
             camera_motion: 100 - w.get(22).map_or(0, |n| n >> CAMERA_MOTION_CUT_SHIFT & 0x7f).min(100),
             fov_effects: 100 - w.get(22).map_or(0, |n| n >> FOV_EFFECTS_CUT_SHIFT & 0x7f).min(100),
             ui_scale: w
@@ -763,6 +784,31 @@ mod tests {
         assert_eq!(decoded.cloud_scale, 4);
         let decoded = Preferences::decode(&Preferences::default().bytes()).expect("decode");
         assert!(decoded.auto_quality && decoded.clouds);
+    }
+
+    #[test]
+    fn horizon_range_round_trips_and_old_files_read_full_range() {
+        assert_eq!(Preferences::default().horizon_m, render::MAX_HORIZON_RANGE_M);
+        let mut preferences = Preferences::default();
+        preferences.horizon_m = 12_288;
+        preferences.music_volume = 0.4;
+        preferences.subtitles = true;
+        let decoded = Preferences::decode(&preferences.bytes()).expect("preferences must decode");
+        assert_eq!(decoded.horizon_m, 12_288);
+        assert!((decoded.music_volume - 0.4).abs() < 1.0e-6 && decoded.subtitles);
+        // Rounded to 256 m and clamped to the offered range.
+        let odd = Preferences { horizon_m: 5_000, ..Preferences::default() };
+        assert_eq!(Preferences::decode(&odd.bytes()).expect("decode").horizon_m, 5_120);
+        let short = Preferences { horizon_m: 100, ..Preferences::default() };
+        assert_eq!(Preferences::decode(&short.bytes()).expect("decode").horizon_m, render::MIN_HORIZON_RANGE_M);
+        // Files from before the setting have zero in bits 16-22 of word 23.
+        let mut bytes = Preferences::default().bytes();
+        let word = 8 + 23 * 4;
+        bytes[word..word + 4].copy_from_slice(&3u32.to_le_bytes());
+        let end = bytes.len() - 8;
+        let checksum = hash(&bytes[..end]).to_le_bytes();
+        bytes[end..].copy_from_slice(&checksum);
+        assert_eq!(Preferences::decode(&bytes).expect("decode").horizon_m, render::MAX_HORIZON_RANGE_M);
     }
 
     #[test]
