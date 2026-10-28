@@ -5,7 +5,9 @@ use engine_core::material::{MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::hash::hash_u32;
 use engine_core::reaction::{ReactionTable, SimRules};
 use engine_core::Budget;
-use engine_sim::{AMBIENT_DECIKELVIN, BRICKS_PER_CHUNK, BrickStore, Cell, FineRegion, MatterStore, VOLUME_FULL, step};
+use engine_sim::{
+    AMBIENT_DECIKELVIN, BRICKS_PER_CHUNK, BrickStore, Cell, FineRegion, MatterStore, RegionDigest, VOLUME_FULL, step,
+};
 use glam::IVec3;
 use std::time::Duration;
 
@@ -159,10 +161,37 @@ fn fine(c: &mut Criterion) {
     });
 }
 
+/// The lockstep checksum's worst tick: every brick of a 196,608-cell region (64 x 48 x 64, 384
+/// bricks) changed, so `observe` finds all of them dirty and `refresh` rehashes all of them.
+fn digest(c: &mut Criterion) {
+    c.bench_function("digest_tick_196k_cells_all_awake", |b| {
+        let mut s = mixed_region(false);
+        for cy in 0..2 {
+            for cz in 0..2 {
+                for cx in 0..2 {
+                    let chunk = IVec3::new(cx, cy, cz);
+                    s.fill_chunk(chunk, |l| {
+                        let p = chunk * 32 + l;
+                        let h = hash_u32((p.x as u32) ^ hash_u32((p.y as u32) ^ hash_u32(p.z as u32)));
+                        if p.y >= 48 || h.is_multiple_of(3) { Cell::EMPTY } else { Cell::filled(1 + (h % 3) as u8) }
+                    })
+                    .expect("pool holds 8 chunks");
+                }
+            }
+        }
+        let mut d = RegionDigest::of(&s);
+        b.iter(|| {
+            wake_all(&mut s);
+            d.observe(&s);
+            std::hint::black_box(d.refresh(&s))
+        })
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10).warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(2));
-    targets = bricks, ca, fine
+    targets = bricks, ca, fine, digest
 }
 criterion_main!(benches);

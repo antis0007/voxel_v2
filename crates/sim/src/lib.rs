@@ -7,6 +7,7 @@
 mod anchors;
 pub mod environment;
 mod cell;
+mod digest;
 mod fine;
 mod matter;
 mod matter_jobs;
@@ -16,6 +17,8 @@ mod pinned;
 mod react;
 mod rules;
 mod store;
+#[cfg(test)]
+mod digest_tests;
 #[cfg(test)]
 mod fine_tests;
 #[cfg(test)]
@@ -33,6 +36,7 @@ pub use cell::{
     AMBIENT_DECIKELVIN, BRICK_CELLS, BRICK_SIZE, BRICKS_PER_AXIS, BRICKS_PER_CHUNK, BrickCoord, CHUNK_CELLS, Cell,
     Scale, VOLUME_FULL, brick_and_cell, local_of, split_voxel,
 };
+pub use digest::{RegionDigest, brick_hash, step_tracked};
 pub use fine::{
     BLOCK_UNITS, Collapse, FINE_CELLS, FINE_SIZE, FineStore, SUB_BRICK_BYTES, collapsed,
 };

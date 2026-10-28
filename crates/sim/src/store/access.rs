@@ -20,6 +20,11 @@ impl BrickStore {
         self.pool[slot as usize * BRICK_CELLS + cell]
     }
 
+    /// The cells of one pool slot, for the region digest.
+    pub(crate) fn slot_cells(&self, slot: u32) -> &[Cell] {
+        self.brick(slot)
+    }
+
     pub(crate) fn set_cell_in_slot(&mut self, slot: u32, cell: usize, value: Cell) {
         self.pool[slot as usize * BRICK_CELLS + cell] = value;
     }
