@@ -208,6 +208,10 @@ fn terrain_water_ownership_weight(world_xz: vec2<f32>, scale: f32) -> f32 {
     let span = 32.0 * scale;
     let cell = floor(world_xz / span);
     let width = max(2.0 * scale, 0.24);
+    // Every neighbour lies at least this far away, so none can lower the weight.
+    let in_cell = world_xz - cell * span;
+    let nearest_edge = min(in_cell, vec2<f32>(span) - in_cell);
+    if min(nearest_edge.x, nearest_edge.y) >= width { return 1.0; }
     var distance_squared = width * width;
     // Include diagonal holes: four owned sides do not imply an owned corner.
     // Beyond this neighbourhood every boundary is farther than the blend width.
@@ -215,9 +219,11 @@ fn terrain_water_ownership_weight(world_xz: vec2<f32>, scale: f32) -> f32 {
         for (var x = -1; x <= 1; x += 1) {
             if x == 0 && z == 0 { continue; }
             let low = (cell + vec2<f32>(f32(x), f32(z))) * span;
-            if !terrain_resident_column_owned(low + vec2<f32>(span * 0.5), 0.0) {
-                let delta = max(max(low - world_xz, world_xz - (low + vec2<f32>(span))), vec2<f32>(0.0));
-                distance_squared = min(distance_squared, dot(delta, delta));
+            let delta = max(max(low - world_xz, world_xz - (low + vec2<f32>(span))), vec2<f32>(0.0));
+            let d2 = dot(delta, delta);
+            // A neighbour that cannot lower the minimum skips its hash lookup.
+            if d2 < distance_squared && !terrain_resident_column_owned(low + vec2<f32>(span * 0.5), 0.0) {
+                distance_squared = d2;
             }
         }
     }
@@ -1075,12 +1081,14 @@ fn eval_torch_light(
     let radius = max(torch_pos_radius.w, 0.001);
     let to_torch = torch_pos_radius.xyz - world_pos;
     let dist2 = dot(to_torch, to_torch);
-    if dist2 >= radius * radius {
+    let radius2 = radius * radius;
+    if dist2 >= radius2 || torch_color_strength.w <= 0.0 {
         return TorchLightSample(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
     }
-    let distance_m = sqrt(max(dist2, 1e-8));
     let l = terrain_safe_unit3(to_torch, n);
-    let cutoff = clamp(1.0 - pow(distance_m / radius, 4.0), 0.0, 1.0);
+    // (d / r)^4 from squared distances, without pow or sqrt.
+    let fraction2 = dist2 / radius2;
+    let cutoff = clamp(1.0 - fraction2 * fraction2, 0.0, 1.0);
     // Keep a readable pool around the source without summing a hall full of
     // distant flames into a uniform amber wash. Distances are physical metres;
     // the soft core preserves nearby surfaces and the finite cutoff is smooth.
@@ -1288,6 +1296,8 @@ fn horizon_detail_sun_visibility(p_m: vec3<f32>, sun: vec3<f32>) -> f32 {
         let rise = (s.value.x - start) / t;
         let width = 0.010 + 0.5 * texel / t;
         clearance = min(clearance, (tan_sun - rise) / width * s.weight + (1.0 - s.weight) * 1e3);
+        // The minimum only falls, and smoothstep(-1, 1, x) is 0 from here on.
+        if clearance <= -1.0 { return 0.0; }
         t = t * 1.45;
     }
     return smoothstep(-1.0, 1.0, clearance);
@@ -2444,7 +2454,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // between them shows no brightness step.
     var macro_normal = geometric_normal;
     var macro_occlusion = 1.0;
-    if is_natural && !is_viewmodel {
+    let macro_dist = length(relative_pos);
+    // Resident terrain within 64 m has zero cavity reach, so it skips the sample.
+    if is_natural && !is_viewmodel && (is_backdrop || macro_dist > 64.0) {
         let detail = horizon_detail_sample(world_pos.xz, horizon_detail_lod(fp_m));
         if detail.weight > 0.0 {
             if is_backdrop {
@@ -2452,7 +2464,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
                     horizon_detail_normal(detail.value),
                     detail.weight * horizon_detail_normal_weight(world_pos.xz)), geometric_normal);
             }
-            let reach = smoothstep(64.0, 256.0, length(relative_pos));
+            let reach = smoothstep(64.0, 256.0, macro_dist);
             macro_occlusion = mix(1.0, horizon_detail_occlusion(detail.value.w), detail.weight * reach);
         }
     }
@@ -3008,9 +3020,11 @@ fn fs_main(in: VsOut) -> WorldOutput {
         cascade_visibility = shadow_visibility;
         // Distant ranges as casters: the cascades end within a few hundred
         // metres, the detail map reaches the far plane. Skipped where the
-        // surface already faces away from the sun or has no sky.
+        // surface already faces away from the sun or has no sky, and where the
+        // cascades already give full shadow, unless view 33 shows both terms.
         if sun_shadow_strength > 0.0 && !is_viewmodel && sky_access > 0.05
-            && dot(macro_normal, sun_dir) > 0.0 {
+            && dot(macro_normal, sun_dir) > 0.0
+            && (shadow_visibility > 0.0 || debug_mode == 33) {
             range_visibility = horizon_detail_sun_visibility(world_pos, sun_dir);
             shadow_visibility = min(shadow_visibility, range_visibility);
         }
