@@ -9,6 +9,7 @@ use std::collections::HashMap;
 pub mod boss_access;
 pub mod modifiers;
 mod workings;
+mod footprints;
 mod workshop_route;
 
 pub(super) fn region_span(cfg: &WorldSampleConfig) -> f32 {
@@ -223,6 +224,7 @@ fn fit_ground(
         let nx = ((x1 - x0) / 3.0).ceil() as usize;
         let nz = ((z1 - z0) / 3.0).ceil() as usize;
         let mut heights = Vec::with_capacity((nx + 1) * (nz + 1));
+        let (mut low, mut high) = (f32::MAX, f32::MIN);
         for iz in 0..=nz {
             for ix in 0..=nx {
                 let lx = x0 + (x1 - x0) * ix as f32 / nx.max(1) as f32;
@@ -238,6 +240,12 @@ fn fit_ground(
                 let h = cfg.world_y(column.height);
                 if h <= 14.0 || column.cave.opening.carves(1.0, h - super::WATER_LEVEL_METERS)
                     || super::undercrown::reserved(cfg, Vec3::new(wx, h, wz)) {
+                    return None;
+                }
+                // Relief only grows as the survey continues, and every other
+                // failure is also None, so stop at the first excess.
+                (low, high) = (low.min(h), high.max(h));
+                if high - low > max_relief {
                     return None;
                 }
                 heights.push(h);
@@ -294,7 +302,8 @@ thread_local! {
     static HOME_LAST: RefCell<Option<(WorldSampleConfig, (i32, i32), HomeSlot)>> = const { RefCell::new(None) };
 }
 
-fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
+/// Seed, centre and building of a homestead cell, before any terrain test.
+fn home_layout(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<(u32, f32, f32, super::architecture::Building)> {
     let seed = cfg
         .seed
         .wrapping_add((ix as u32).wrapping_mul(0x9E37_79B1))
@@ -306,6 +315,22 @@ fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
     let jitter = if cfg.generator_version >= 39 { 6.0 } else { 24.0 };
     let x = ix as f32 * HOME_CELL + (hash2(ix, iz, seed.wrapping_add(901)) - 0.5) * jitter;
     let z = iz as f32 * HOME_CELL + (hash2(ix, iz, seed.wrapping_add(902)) - 0.5) * jitter;
+    let mut building = super::architecture::homestead_building(seed);
+    if cfg.generator_version >= 39 {
+        let (x0, z0, x1, z1) = building.extent();
+        building = super::architecture::Building::new(building.wings, building.curtains,
+            Some((x0 - 1.0, x1 + 1.0, z0 - 1.0, z1 + 1.0, B::Cobblestone, 12.0)));
+    }
+    Some((seed, x, z, building))
+}
+
+fn home_reach(building: &super::architecture::Building) -> f32 {
+    let (x0, z0, x1, z1) = building.extent();
+    x0.abs().max(z0.abs()).max(x1.abs()).max(z1.abs()) * 1.5 + 2.0
+}
+
+fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
+    let (seed, x, z, building) = home_layout(cfg, ix, iz)?;
     if x.hypot(z) < 90.0 || super::valley::reserves(cfg, x, z) || super::amberroot::reserves(cfg, x, z) {
         return None;
     }
@@ -343,12 +368,6 @@ fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
     if super::undercrown::reserved(cfg, Vec3::new(x, ground, z)) {
         return None;
     }
-    let mut building = super::architecture::homestead_building(seed);
-    if cfg.generator_version >= 39 {
-        let (x0, z0, x1, z1) = building.extent();
-        building = super::architecture::Building::new(building.wings, building.curtains,
-            Some((x0 - 1.0, x1 + 1.0, z0 - 1.0, z1 + 1.0, B::Cobblestone, 12.0)));
-    }
     let turn = (hash2(ix, iz, seed.wrapping_add(903)) * 4.0) as u32 % 4;
     if cfg.generator_version >= 37 {
         ground = fit_ground(cfg, x, z, turn, building.extent(), 6.0)?;
@@ -360,8 +379,7 @@ fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
             ground = height(x + dx, z + dz);
         }
     }
-    let (x0, z0, x1, z1) = building.extent();
-    let reach = x0.abs().max(z0.abs()).max(x1.abs()).max(z1.abs()) * 1.5 + 2.0;
+    let reach = home_reach(&building);
     Some(std::rc::Rc::new(Homestead {
         x,
         z,
@@ -1305,10 +1323,9 @@ pub(crate) fn building_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool
             let cx = ix as f32 * span;
             let cz = if ix == 0 && iz == 0 { -42.0 } else { iz as f32 * span };
             if (x - cx).abs() > 90.0 || (z - cz).abs() > 90.0 { continue; }
-            if let Some(s) = site(cfg, ix, iz) {
+            if let Some((s, extent)) = footprints::site(cfg, ix, iz) {
                 let q = local(s, Vec3::new(x, s.ground, z));
-                if let Some(b) = super::architecture::site_building_version(s.kind, s.seed, s.starter, cfg.generator_version) {
-                    let (x0, z0, x1, z1) = b.extent();
+                if let Some((x0, z0, x1, z1)) = extent {
                     if q.x >= x0 - 5.0 && q.x <= x1 + 5.0 && q.z >= z0 - 5.0 && q.z <= z1 + 5.0 { return true; }
                 } else if q.x.abs() < 25.0 && q.z.abs() < 25.0 { return true; }
                 // Reserve the workshop's mine as well as its roofed hall.
@@ -1322,8 +1339,10 @@ pub(crate) fn building_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool
         for dx in -1..=1 {
             if (x - (ix + dx) as f32 * HOME_CELL).abs() > 64.0
                 || (z - (iz + dz) as f32 * HOME_CELL).abs() > 64.0 { continue; }
-            if let Some(h) = homestead(cfg, ix + dx, iz + dz)
-                && (x - h.x).hypot(z - h.z) < h.reach + 5.0 { return true; }
+            // The terrain-free bound decides most trees before any home is planned.
+            if let Some((hx, hz, reach)) = footprints::home_bound(cfg, ix + dx, iz + dz)
+                && (x - hx).hypot(z - hz) < reach + 5.0
+                && footprints::home(cfg, ix + dx, iz + dz) { return true; }
         }
     }
     false

@@ -1097,12 +1097,13 @@ pub fn generate_padded(
     let mut blocks = vec![BlockId::Air; (size * size * size) as usize];
     let mut bed_height = vec![0; (size * size) as usize];
     let profiles = RegionProfiles::new(cfg, origin.x, origin.z, size);
+    let columns = generation_cache::footprint(cfg, origin.x, origin.z, size, cancelled)?;
     for z in 0..size {
         for x in 0..size {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
-            let column = sample_column(cfg, origin.x + x, origin.z + z);
+            let column = columns[(z * size + x) as usize];
             bed_height[(z * size + x) as usize] = column.height;
             for y in 0..size {
                 blocks[((y * size + z) * size + x) as usize] =
