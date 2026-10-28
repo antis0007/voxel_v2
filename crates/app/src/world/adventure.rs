@@ -5,6 +5,7 @@ use crate::{mesh::models::Model, player::Player};
 use glam::{IVec3, Quat, Vec3};
 use std::collections::HashMap;
 mod bestiary;
+pub(crate) mod wildlife;
 mod enemy_presentation;
 mod enemy_review;
 pub use enemy_review::camera as enemy_review_camera;
@@ -239,6 +240,8 @@ pub struct Enemy {
     matron: matron::State,
     engine: engine::State,
     glass: glassweaver::State,
+    /// Grazer youth: 1 at birth, 0 when grown; the model scales with it.
+    pub(crate) youth: f32,
 }
 
 #[cfg(test)]
@@ -291,6 +294,7 @@ impl Enemy {
             matron: matron::State::default(),
             engine: engine::State::default(),
             glass: glassweaver::State::default(),
+            youth: 0.0,
         }
     }
     fn with_affixes(mut self, affixes: status::Affixes) -> Self {
@@ -357,6 +361,7 @@ impl Enemy {
         self.pos + Vec3::Y * height
     }
     pub fn model(&self, m: &mut Model, time: f32) {
+        if wildlife::passive(self.kind) { wildlife::draw(self, m, time); return; }
         if encounters::disguise(self, m, time) { return; }
         if is_boss(self.kind) {
             bosses::model(self, m, time);
@@ -672,6 +677,7 @@ pub struct Adventure {
     cast_pose: f32,
     // One bit per defeated guardian; bit 8 records the one-time clear reward.
     pub records: HashMap<IVec3, u32>,
+    pub(crate) wildlife: wildlife::State,
     farm_mastery: usize,
     farm_shots_restored: bool,
     tollkeepers: HashMap<IVec3, tollkeeper::Saved>,
@@ -759,6 +765,7 @@ impl Default for Adventure {
             strike_delay: 0.0,
             cast_pose: 0.0,
             records: HashMap::new(),
+            wildlife: wildlife::State::default(),
             farm_mastery: 0,
             farm_shots_restored: false,
             tollkeepers: HashMap::new(),
@@ -1021,7 +1028,7 @@ impl Adventure {
                 if menace >= 2 && slot == 0 && variation.is_multiple_of(3) {
                     kind = 9;
                 }
-                if self.enemies.iter().filter(|e|e.habitat.is_none()).count() >= MAX_ENEMIES
+                if self.enemies.iter().filter(|e|e.habitat.is_none() && !wildlife::passive(e.kind)).count() >= MAX_ENEMIES
                     || record & (1 << slot) != 0
                     || self.enemies.iter().any(|e| e.site == id && e.slot == slot)
                 {
@@ -1375,7 +1382,10 @@ impl Adventure {
         if self.spawn_timer <= 0.0 {
             self.spawn_timer = 1.0;
             growth::cultivate(world);
-            self.spawn(world, feet);
+            if world.rules.mob_spawning {
+                self.spawn(world, feet);
+                wildlife::spawn(self, world, feet);
+            }
             self.update_reliquaries(world, feet);
             for r in self.reliquaries.clone() {
                 let state = *self.records.get(&r.site).unwrap_or(&0);
@@ -1418,7 +1428,7 @@ impl Adventure {
         let alerts: Vec<_> = self
             .enemies
             .iter()
-            .filter(|e| e.health > 0.0 && e.visible)
+            .filter(|e| e.health > 0.0 && e.visible && !wildlife::passive(e.kind))
             .map(|e| (e.pos, e.site, e.last_seen))
             .collect();
         let mut navigation_budget = 1;
@@ -1455,6 +1465,7 @@ impl Adventure {
                 }
             }
             if !is_boss(e.kind) { navigation::gravity(e, world, dt); }
+            if wildlife::passive(e.kind) { wildlife::tick(e, world, feet, self.time, dt); continue; }
             if encounters::ambush(e, world, feet, eye, forward, dt, &mut self.sounds) { continue; }
             if e.status.any() || !e.affixes.is_empty() {
                 // One mote when the half-second changes. The old gate was true
@@ -2367,6 +2378,7 @@ impl Adventure {
         self.tick_crosses(world, dt);
         self.tick_particles(world, dt);
         modifiers::reap(&mut self.enemies);
+        self.wildlife.remember(&self.enemies);
         let mut death_blasts: Vec<Vec3> = Vec::new();
         let mut resonance_kills = Vec::new();
         // Spells found this frame: (salt, where). Applied after the loop, which
@@ -2378,6 +2390,7 @@ impl Adventure {
             if e.health > 0.0 {
                 continue;
             }
+            if wildlife::passive(e.kind) { wildlife::fall(&mut self.wildlife, world, e); continue; }
             if let Some(id) = e.habitat {
                 if settle_habitat_death(world,e,id) {
                     sound(&mut self.sounds, Cue::Defeat, Some(e.center()), 0.7);
@@ -2479,6 +2492,7 @@ impl Adventure {
                 rank_name(self.rank())
             ));
         }
+        self.wildlife.remember(&self.enemies);
         for e in &self.enemies {
             if let Some(id) = e.habitat {
                 // A volatile chain reaction may kill after the main death pass.
@@ -2785,6 +2799,7 @@ pub fn tick(
     let feet = player.pos * world.voxel_scale.meters();
     super::habitats::tick(world, feet, dt.clamp(0.0, 0.1));
     super::farming::tick(world, engine_core::Budget::UNBOUNDED);
+        wildlife::husbandry(world, feet);
     let old_rank = world.adventure.rank();
     world.adventure.farm_mastery = world.habitats.mastered.count_ones() as usize;
     if world.adventure.rank() > old_rank {

@@ -11,13 +11,16 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV36";
+const MAGIC: &[u8; 8] = b"VXWSAV37";
 #[cfg(test)]
 #[path = "storage/environment_tests.rs"]
 mod environment_tests;
 #[cfg(test)]
 #[path = "storage/chip_tests.rs"]
 mod chip_tests;
+#[cfg(test)]
+#[path = "storage/wildlife_tests.rs"]
+mod wildlife_tests;
 /// Current writer version. Companion bytes follow the adventure block from 18;
 /// the found-spell log (3 words) follows the companion from 19. Version 20
 /// widens the resource table to 22 and the machine table to 21 kinds, and
@@ -37,7 +40,8 @@ mod chip_tests;
 /// Version 34 appends the chip library and installed controllers.
 /// Version 35 retains lab stock, manufacturing batches and powered wafer clocks.
 /// Version 36 persists production orders and their bounded sand feed bins.
-pub(crate) const SAVE_VERSION: u8 = 36;
+/// Version 37 appends passive wildlife identities, health and positions.
+pub(crate) const SAVE_VERSION: u8 = 37;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -254,6 +258,7 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
         }
     }
     if save_version >= 34 { world.factory.chips.encode(&mut bytes); }
+    if save_version >= 37 { world.adventure.wildlife.encode(&world.adventure.enemies, &mut bytes); }
     bytes
 }
 fn manifest(
@@ -601,6 +606,9 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             }
             if version >= 34 {
                 world.factory.chips = super::factory::chips::Bay::decode(&mut || input.u32())?;
+            }
+            if version >= 37 {
+                world.adventure.wildlife = super::adventure::wildlife::State::decode(&mut || input.u32())?;
             }
             let bank = world.adventure.wand_bank.len();
             let inv = &world.inventory;
@@ -963,7 +971,7 @@ mod tests {
 
     /// Builds a manifest the way the production writer does, but at an explicit
     /// footer version, so older layouts can be loaded through the real decoder.
-    fn synth_save(world: &World, version: u8, dir: &Path, name: &str) -> PathBuf {
+    pub(super) fn synth_save(world: &World, version: u8, dir: &Path, name: &str) -> PathBuf {
         let player = Player::new();
         let day_night = DayNightCycle::default();
         let mut bytes = Vec::with_capacity(512);

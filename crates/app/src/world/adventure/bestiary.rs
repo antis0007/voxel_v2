@@ -6,6 +6,7 @@
 //! outer `Enemy::model` pass, so animation never changes collision or save state.
 
 use super::Enemy;
+use crate::world::inventory::Item;
 use crate::mesh::models::Model;
 use glam::{Quat, Vec3};
 
@@ -15,6 +16,7 @@ pub enum Role {
     Defender,
     Flyer,
     Rooted,
+    Grazer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -34,6 +36,27 @@ pub struct Species {
     pub attack_range: f32,
     pub windup: f32,
     pub cooldown: f32,
+    /// Food that readies a grazer to breed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub food: Option<Item>,
+    /// Stacks left on death; counts roll per identity between `min` and `max`.
+    #[serde(default, skip_serializing_if = "no_drops", deserialize_with = "leak_drops")]
+    pub drops: &'static [Drop],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Drop {
+    pub item: Item,
+    pub min: u32,
+    pub max: u32,
+}
+
+fn no_drops(d: &&'static [Drop]) -> bool {
+    d.is_empty()
+}
+
+fn leak_drops<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static [Drop], D::Error> {
+    <Vec<Drop> as serde::Deserialize>::deserialize(d).map(|v| &*Box::leak(v.into_boxed_slice()))
 }
 
 /// The first proven families. Kinds 2, 3, 6–9 keep their existing definitions

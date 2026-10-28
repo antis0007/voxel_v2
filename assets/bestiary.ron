@@ -1,4 +1,5 @@
 // Enemy species: (enemy kind, stats). Kinds without a row keep their older presentation.
+// Grazers: `food` readies breeding; `drops` are stacks left on death (count rolled in min..=max).
 // Edit here, not in Rust. `cargo test bestiary_ron_round_trips` checks the format.
 [
     (0, (
@@ -135,5 +136,61 @@
         attack_range: 14.0,
         windup: 1.1,
         cooldown: 3.0,
+    )),
+    (16, (
+        name: "Sheep",
+        role: Grazer,
+        health: 24.0,
+        body_height: 1.35,
+        body_width: 1.45,
+        center_height: 0.7,
+        tall: false,
+        flying: false,
+        brawler: false,
+        speed: 1.1,
+        attack_range: 0.0,
+        windup: 0.0,
+        cooldown: 0.0,
+        food: Some(Block(Bush)),
+        drops: [
+            (
+                item: Resource(18),
+                min: 1,
+                max: 2,
+            ),
+            (
+                item: Food(RawMutton),
+                min: 1,
+                max: 2,
+            ),
+        ],
+    )),
+    (17, (
+        name: "Goat",
+        role: Grazer,
+        health: 30.0,
+        body_height: 1.65,
+        body_width: 1.45,
+        center_height: 0.7,
+        tall: false,
+        flying: false,
+        brawler: false,
+        speed: 1.35,
+        attack_range: 0.0,
+        windup: 0.0,
+        cooldown: 0.0,
+        food: Some(Block(Bush)),
+        drops: [
+            (
+                item: Resource(18),
+                min: 1,
+                max: 2,
+            ),
+            (
+                item: Food(RawMutton),
+                min: 1,
+                max: 2,
+            ),
+        ],
     )),
 ]

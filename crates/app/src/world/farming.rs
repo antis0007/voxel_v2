@@ -139,16 +139,19 @@ fn service(world: &mut World, k: Key, now: u64, changed: &mut Vec<IVec3>) {
     }
 }
 
-/// Use action with the held item: plant a seed or till ground.
+/// Use action with the held item: feed a grazer, plant a seed, or till ground.
 pub fn interact(
     world: &mut World,
     hit: Option<(IVec3, IVec3)>,
     eye_m: Vec3,
-    _forward: Vec3,
+    forward: Vec3,
     slot: usize,
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if super::adventure::wildlife::feed(world, eye_m, forward, slot) {
+        return true;
+    }
     let Some(item) = world.inventory.hotbar.get(slot).copied().flatten().map(|s| s.item) else {
         return false;
     };

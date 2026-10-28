@@ -131,12 +131,16 @@ pub fn save(dir: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::rename(&tmp, &path).with_context(|| format!("Cannot publish {}", path.display()))
 }
 
-/// The herd section; this build has no tended herd.
-pub(super) fn herd_bytes(_world: &World) -> Vec<u8> {
-    Vec::new()
+pub(super) fn herd_bytes(world: &World) -> Vec<u8> {
+    let mut out = Vec::new();
+    world.adventure.wildlife.herd_encode(&world.adventure.enemies, &mut out);
+    out
 }
 
-/// Applies the herd section; this build has no tended herd to restore.
-pub(crate) fn apply_herd(_world: &mut World, _bytes: &[u8], _clock: u64) -> Result<()> {
+pub(crate) fn apply_herd(world: &mut World, bytes: &[u8], clock: u64) -> Result<()> {
+    let mut r = Reader { bytes, at: 0 };
+    let herd = crate::world::adventure::wildlife::Herd::decode(&mut r, clock)?;
+    ensure!(r.at == bytes.len(), "Trailing bytes in herd section");
+    world.adventure.wildlife.herd = herd;
     Ok(())
 }

@@ -2860,7 +2860,7 @@ fn main() -> Result<()> {
                                     (elapsed / 12.0) as usize
                                 };
                                 torch_review::motion_camera(&mut player, selected_voxel_scale.meters(), elapsed);
-                                day_night.set_time_of_day(if mode == "survival" { 0.35 } else if mode == "factory" || (mode == "minerals" && phase == 0) { 0.5 } else if phase == 1 || !mode.is_empty() { 0.0 } else { 0.5 });
+                                day_night.set_time_of_day(if mode == "survival" { 0.35 } else if mode == "factory" || mode == "wildlife" || (mode == "minerals" && phase == 0) { 0.5 } else if phase == 1 || !mode.is_empty() { 0.0 } else { 0.5 });
                                 if mode == "factory" { egui_ui.show_hud = (elapsed / 3.0) as usize % 2 == 1; }
                                 freeze_time = true;
                                 if mode == "survival" {

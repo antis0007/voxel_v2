@@ -75,7 +75,9 @@ pub fn install(world: &mut World, player: &mut Player) {
     }
     world.set_many(&edits);
     world.adventure.enemies.clear();
-    let kinds: Vec<u32> = if scenario() == "pack" {
+    let kinds: Vec<u32> = if scenario() == "wildlife" {
+        vec![super::wildlife::SHEEP, super::wildlife::GOAT]
+    } else if scenario() == "pack" {
         vec![12, 0, 11]
     } else {
         single().map_or_else(|| vec![5, 3, 2, 9], |kind| vec![kind])
@@ -123,6 +125,7 @@ pub fn install(world: &mut World, player: &mut Player) {
     );
 }
 pub(super) fn after(world: &mut World, player: &Player) {
+    if scenario() == "wildlife" { super::wildlife::observe_review(world); }
     if super::super::habitats::review::enabled() {return super::super::habitats::review::observe(world,player);}
     if mode().is_empty() {
         return;
