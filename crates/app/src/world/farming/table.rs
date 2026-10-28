@@ -26,8 +26,12 @@ impl Crop {
 const CROPS_RON: &str = include_str!("../../../../../assets/crops.ron");
 
 /// Rows in file order; a plot stores its row index.
+/// The asset is compiled in and checked by a test; a parse failure leaves no crop plantable.
 pub static CROPS: std::sync::LazyLock<Vec<Crop>> = std::sync::LazyLock::new(|| {
-    ron::from_str(CROPS_RON).unwrap_or_else(|error| panic!("assets/crops.ron: {error}"))
+    ron::from_str(CROPS_RON).unwrap_or_else(|error| {
+        eprintln!("[farming] assets/crops.ron: {error}");
+        Vec::new()
+    })
 });
 
 pub fn by_seed(block: BlockId) -> Option<(u8, &'static Crop)> {
