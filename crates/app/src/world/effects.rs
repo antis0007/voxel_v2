@@ -56,29 +56,38 @@ impl<T> Commit<T> {
 }
 
 pub(super) fn admit(world: &World, p: IVec3) -> Result<(), Failure> {
-    let cfg = world.sample_config();
-    if world.ca_view.is_some()
-        || p.y < cfg.min_world_y()
-        || p.y >= cfg.max_world_y()
-        || world
-            .factory
-            .nodes
-            .contains_key(&factory::anchor(p, factory::step(world)))
-    {
+    admit_cells(world, &[p])
+}
+
+fn admit_cells(world: &World, cells: &[IVec3]) -> Result<(), Failure> {
+    if cells.is_empty() || cells.len() > 2 {
         return Err(Failure::Rejected);
     }
-    if !world.chunks.contains_key(&chunk_coord_from_world_block(p)) {
-        return Err(Failure::Deferred);
-    }
-    // Check capacity for the same cellular dependency neighborhood awakened
-    // by World::wake_acting; queue saturation must not strand a committed edit.
-    let mut owners = [chunk_coord_from_world_block(p); 11];
-    let mut count = 1;
-    for offset in super::activity::WAKE_NEIGHBORS {
-        let owner = chunk_coord_from_world_block(p + offset);
-        if !owners[..count].contains(&owner) {
-            owners[count] = owner;
-            count += 1;
+    let cfg = world.sample_config();
+    let mut owners = [IVec3::ZERO; 22];
+    let mut count = 0;
+    for &p in cells {
+        if world.ca_view.is_some()
+            || p.y < cfg.min_world_y()
+            || p.y >= cfg.max_world_y()
+            || world
+                .factory
+                .nodes
+                .contains_key(&factory::anchor(p, factory::step(world)))
+        {
+            return Err(Failure::Rejected);
+        }
+        if !world.chunks.contains_key(&chunk_coord_from_world_block(p)) {
+            return Err(Failure::Deferred);
+        }
+        // Check capacity for the same cellular dependency neighborhood awakened
+        // by World::wake_acting; queue saturation must not strand a committed edit.
+        for offset in std::iter::once(IVec3::ZERO).chain(super::activity::WAKE_NEIGHBORS) {
+            let owner = chunk_coord_from_world_block(p + offset);
+            if !owners[..count].contains(&owner) {
+                owners[count] = owner;
+                count += 1;
+            }
         }
     }
     if !world.activity.can_wake(&owners[..count]) {
@@ -117,73 +126,42 @@ pub fn replace(
     })
 }
 
-#[derive(Clone, Copy)]
-pub enum WaterDirection {
-    IntoBuffer,
-    IntoWorld,
-}
-
-/// Transfer up to `limit` machine units. The exclusively borrowed buffer and
-/// cell commit synchronously; a failed admission changes neither quantity.
-/// Legacy worlds move whole cell packets, exact worlds preserve subpacket water.
-/// This transfers free water only; sediment remains in the intake cell.
-pub fn exchange_water(
+/// Place terrain and charge the selected stack only after commit.
+pub fn place(
     world: &mut World,
     p: IVec3,
-    buffer: &mut u32,
-    capacity: u32,
-    limit: u32,
-    direction: WaterDirection,
-) -> Result<Commit<u32>, Failure> {
-    admit(world, p)?;
-    if *buffer > capacity || !matches!(world.get(p), BlockId::Air | BlockId::Water) {
-        return Err(Failure::Rejected);
-    }
-    let exact = environment::State::enabled(world.generator_version);
-    let before = world.water_microlitres(p);
-    let cell_capacity = if exact {
-        world.environment.water_capacity_ul(p)
+    expected: BlockId,
+    replacement: BlockId,
+    survival_slot: Option<usize>,
+    blocks: &mut HashSet<IVec3>,
+    chunks: &mut HashSet<IVec3>,
+) -> Result<(), Failure> {
+    let supply = if let Some(slot) = survival_slot {
+        let item = super::inventory::Item::Block(
+            super::inventory::Item::canonical_block(replacement).ok_or(Failure::Rejected)?,
+        );
+        if !world
+            .inventory
+            .hotbar
+            .get(slot)
+            .and_then(|stack| *stack)
+            .is_some_and(|stack| stack.item == item && stack.count > 0)
+        {
+            return Err(Failure::Rejected);
+        }
+        Some((slot, item))
     } else {
-        engine_core::environment::cell_volume(world.voxel_scale)
+        None
     };
-    let available = match direction {
-        WaterDirection::IntoBuffer => (before / WATER_UNIT_UL).min(u64::from(capacity - *buffer)),
-        WaterDirection::IntoWorld => {
-            ((cell_capacity.saturating_sub(before)) / WATER_UNIT_UL).min(u64::from(*buffer))
-        }
-    };
-    let mut amount = available.min(u64::from(limit)) as u32;
-    let packet =
-        (engine_core::environment::cell_volume(world.voxel_scale) / 8 / WATER_UNIT_UL) as u32;
-    if !exact {
-        amount -= amount % packet;
+    let commit = replace(world, p, expected, replacement)?;
+    commit.publish(world, blocks, chunks);
+    if let Some((slot, item)) = supply {
+        let consumed = world.inventory.consume_from_hotbar(slot, item);
+        debug_assert!(consumed);
+        world.sync_from_inventory();
     }
-    if amount == 0 {
-        return Err(Failure::NoChange);
-    }
-    let delta = u64::from(amount) * WATER_UNIT_UL;
-    let after = match direction {
-        WaterDirection::IntoBuffer => before - delta,
-        WaterDirection::IntoWorld => before + delta,
-    };
-    if exact {
-        if !world.set_water_microlitres(p, after) {
-            return Err(Failure::Deferred);
-        }
-    } else {
-        world.set_water_volume(p, (after / (u64::from(packet) * WATER_UNIT_UL)) as u8);
-        if world.water_microlitres(p) != after {
-            return Err(Failure::Deferred);
-        }
-    }
-    // Admission above guarantees these operations cannot overflow or underflow.
-    match direction {
-        WaterDirection::IntoBuffer => *buffer += amount,
-        WaterDirection::IntoWorld => *buffer -= amount,
-    }
-    Ok(Commit {
-        position: p,
-        revision: world.revision(),
-        value: amount,
-    })
+    Ok(())
 }
+
+mod water;
+pub use water::{WaterDirection, exchange_water};

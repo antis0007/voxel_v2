@@ -3847,36 +3847,12 @@ fn main() -> Result<()> {
                                                 if !world.get(cell).is_empty() && !world.get(cell).is_liquid() {
                                                     continue;
                                                 }
-                                                if survival_hand {
-                                                    let Some(canon) = world::inventory::Item::canonical_block(place_block) else {
-                                                        continue;
-                                                    };
-                                                    let item = world::inventory::Item::Block(canon);
-                                                    if world.inventory.count_item(item) == 0 {
-                                                        continue;
-                                                    }
-                                                    world.set(cell, place_block);
-                                                    if world.get(cell) == place_block {
-                                                        let _ = world
-                                                            .inventory
-                                                            .consume_from_hotbar(creative.selected_slot, item);
-                                                        world.sync_from_inventory();
-                                                    } else {
-                                                        world.expedition.say("Cannot place here: clear the space or open a water outlet.");
-                                                        continue;
-                                                    }
-                                                } else {
-                                                    world.set(cell, place_block);
-                                                    if world.get(cell) != place_block {
-                                                        world.expedition.say("Cannot place here: clear the space or open a water outlet.");
-                                                        continue;
-                                                    }
+                                                if world::effects::place(world, cell, previous_block, place_block,
+                                                    survival_hand.then_some(creative.selected_slot),
+                                                    &mut dirty_blocks, &mut dirty_chunks).is_err() {
+                                                    world.expedition.say("Placement blocked");
+                                                    continue;
                                                 }
-                                                dirty_blocks.insert(cell);
-                                                mark_chunk_and_neighbors_dirty(
-                                                    &mut dirty_chunks,
-                                                    cell,
-                                                );
                                             }
                                         }
                                         if !emitted_tool_burst && world.get(cell) != previous_block {
