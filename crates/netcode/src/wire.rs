@@ -63,6 +63,14 @@ impl<'a> Reader<'a> {
     pub fn i32(&mut self) -> Result<i32, WireError> {
         i32::try_from(self.i64()?).map_err(|_| WireError("varint out of range"))
     }
+
+    /// The next `n` raw bytes.
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8], WireError> {
+        let end = self.at.checked_add(n).filter(|&e| e <= self.bytes.len()).ok_or(WireError("short payload"))?;
+        let slice = &self.bytes[self.at..end];
+        self.at = end;
+        Ok(slice)
+    }
 }
 
 #[cfg(test)]
@@ -92,5 +100,9 @@ mod tests {
         let mut big = Vec::new();
         put_u64(&mut big, u64::from(u32::MAX) + 1);
         assert!(Reader::new(&big).u32().is_err());
+        let mut r = Reader::new(&[1, 2, 3]);
+        assert_eq!(r.take(2), Ok(&[1, 2][..]));
+        assert!(r.take(2).is_err() && r.take(usize::MAX).is_err());
+        assert_eq!(r.take(1), Ok(&[3][..]));
     }
 }
