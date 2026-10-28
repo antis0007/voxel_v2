@@ -186,7 +186,7 @@ fn circle(out: &mut Vec<[Vec3; 2]>, center: Vec3, r: f32, axis: usize) {
         ]);
     }
 }
-fn contour(cells: &[IVec3]) -> Vec<[Vec3; 2]> {
+pub(super) fn contour(cells: &[IVec3]) -> Vec<[Vec3; 2]> {
     let occupied: HashSet<_> = cells.iter().copied().collect();
     let mut edges: HashMap<(IVec3, usize), u8> = HashMap::new();
     for &p in cells {

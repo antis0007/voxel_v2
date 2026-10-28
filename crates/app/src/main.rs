@@ -1571,6 +1571,7 @@ fn main() -> Result<()> {
     // Shown a frame after the request so the notice is not in the image.
     let mut screenshot_notice: Option<String> = None;
     let mut creative = CreativeState::default();
+    let mut blueprints = creative::blueprint::BlueprintTool::default();
     player.selected_block = creative.selected_block();
     let mut render_debug_view = benchmark_config.debug_view;
     let mut atmosphere_mode = AtmosphereMode::default();
@@ -1872,6 +1873,13 @@ fn main() -> Result<()> {
                                     }
                             }
                             Some(BindAction::Minimap) if fresh_press => egui_ui::map::toggle_minimap(),
+                            Some(BindAction::Blueprints) if fresh_press && !creative.show_palette => {
+                                let open = !creative.show_blueprints; creative.close_panels(); creative.show_blueprints = open; input.clear();
+                                sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
+                            }
+                            Some(bound @ (BindAction::BlueprintCorner | BindAction::BlueprintCopy | BindAction::BlueprintCut
+                                | BindAction::BlueprintPaste | BindAction::BlueprintRotate | BindAction::BlueprintMirror | BindAction::BlueprintUndo))
+                                if fresh_press && grabbed && !creative.any_ui_open() => blueprints.press(bound),
                             Some(BindAction::RangeDown | BindAction::RangeUp)
                                 if fresh_press && grabbed && !creative.any_ui_open() => {
                                 creative.adjust_range(if action == Some(BindAction::RangeUp) { 1 } else { -1 });
@@ -2986,6 +2994,7 @@ fn main() -> Result<()> {
                                 &mut creative,
                                 pending_tool_action.take(),
                             );
+                            egui_ui::blueprints::draw(&egui_ui.ctx, &mut creative.show_blueprints, &mut blueprints);
                             if let Some(w) = world.as_mut() {
                                 w.inventory = egui_ui.survival.clone();
                                 w.sync_from_inventory();
@@ -3682,6 +3691,22 @@ fn main() -> Result<()> {
                                         build_outline_vertices(center, preview.color, 0.003/world.voxel_scale.meters());
                                     outline.extend(center_lines);
                                 }
+                                if egui_ui.show_hud && !creative.any_ui_open() {
+                                    blueprints.overlay(creative.tool, eye, 0.003/world.voxel_scale.meters(), &mut outline);
+                                }
+                                // Pastes share the tool edit path, so they wait for residency like a brush stroke.
+                                blueprints.frame(world, &mut creative, raycast_target, false, &mut world::blueprint::Sink {
+                                    prepare: &mut |w: &mut World, p| fluid_sim.prepare_tool_edit(w, p),
+                                    blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
+                                }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
+                                if egui_ui.show_hud && !creative.any_ui_open() {
+                                    blueprints.overlay(creative.tool, eye, 0.003/world.voxel_scale.meters(), &mut outline);
+                                }
+                                // Pastes share the tool edit path, so they wait for residency like a brush stroke.
+                                blueprints.frame(world, &mut creative, raycast_target, false, &mut world::blueprint::Sink {
+                                    prepare: &mut |w: &mut World, p| fluid_sim.prepare_tool_edit(w, p),
+                                    blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
+                                }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
 
                                 let survival_hand = creative.tool == creative::ToolKind::Hand
                                     && !player.flying

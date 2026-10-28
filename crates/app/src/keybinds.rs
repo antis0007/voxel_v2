@@ -46,6 +46,8 @@ actions!(
     ToolArea, ToolExplosive, RangeDown, RangeUp, Inventory, CreativePanel, WandAtelier,
     QuickSelect, Map, Waypoint, Minimap, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
     Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9, HotbarPrev, HotbarNext,
+    BlueprintCorner, BlueprintCopy, BlueprintCut, BlueprintPaste, BlueprintRotate, BlueprintMirror,
+    BlueprintUndo, Blueprints,
 );
 
 /// Actions `Input` tracks per frame; only these accept mouse buttons.

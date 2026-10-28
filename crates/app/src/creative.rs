@@ -112,6 +112,7 @@ pub struct CreativeState {
     pub show_quick_select: bool,
     pub show_wand_atelier: bool,
     pub show_world_map: bool,
+    pub show_blueprints: bool,
     pub tool: ToolKind,
     pub brush_shape: BrushShape,
     pub brush_radius: i32,
@@ -148,6 +149,7 @@ impl Default for CreativeState {
             show_quick_select: false,
             show_wand_atelier: false,
             show_world_map: false,
+            show_blueprints: false,
             tool: ToolKind::Hand,
             brush_shape: BrushShape::Cube,
             brush_radius: 0,
@@ -166,6 +168,7 @@ impl Default for CreativeState {
 
 // Largest supported 8 m brush at 0.25 m: 65^3 cells. Never truncate a stroke.
 const MAX_TOOL_CELLS: usize = 524288;
+pub mod blueprint;
 mod mode_gate;
 mod preview;
 #[derive(Clone, Debug)]
@@ -329,6 +332,7 @@ impl CreativeState {
         self.show_quick_select = false;
         self.show_wand_atelier = false;
         self.show_world_map = false;
+        self.show_blueprints = false;
     }
     pub fn cancel_edits(&mut self) {
         self.pending = None;
@@ -395,6 +399,7 @@ impl CreativeState {
             || self.show_material_editor
             || self.show_wand_atelier
             || self.show_world_map
+            || self.show_blueprints
     }
 
     pub fn reach_distance_blocks(&self, voxel_scale: VoxelScalePreset) -> f32 {

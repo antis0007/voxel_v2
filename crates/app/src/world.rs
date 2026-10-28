@@ -9,6 +9,7 @@ pub mod activity;
 pub mod adventure;
 mod collision;
 pub mod bed;
+pub mod blueprint;
 pub mod expedition;
 pub mod workshop;
 pub mod environment;
