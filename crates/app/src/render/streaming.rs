@@ -1099,7 +1099,12 @@ fn spawn_mesh_workers(
                         };
                         let lod_invariant = plan.lod_invariant();
                         drop(plan);
-                        let connectivity = crate::mesh::ChunkConnectivity::compute(&job.chunk, &job.cancelled);
+                        // The flood fill feeds only cave culling; skip it while culling is off.
+                        let connectivity = if occlusion::enabled() {
+                            crate::mesh::ChunkConnectivity::compute(&job.chunk, &job.cancelled)
+                        } else {
+                            Some(crate::mesh::ChunkConnectivity::ALL_OPEN)
+                        };
                         drop(job.chunk);
                         if job.cancelled.load(Ordering::Relaxed) {
                             return None;
