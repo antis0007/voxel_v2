@@ -174,15 +174,57 @@ fn farming_tills_with_a_dig_tool_and_prunes_broken_plots() {
 
 #[test]
 fn farming_wild_seeds_scale_with_cell_volume() {
-    let rate = |scale| {
-        let w = World::with_seed(WorldType::Superflat, scale, 157);
-        (0..4000).filter(|&i| wild_seed(&w, IVec3::new(i, 3, -i), B::RedCap).is_some()).count()
+    let (_, red) = table::by_seed(B::RedCap).expect("row");
+    let rate = |scale: VoxelScalePreset| {
+        (0..4000).filter(|&i| wild_roll(157, scale.meters(), IVec3::new(i, 3, -i), red)).count()
     };
     let whole = rate(VoxelScalePreset::OneMeter);
     assert!((1600..2400).contains(&whole), "{whole}");
     assert!(rate(VoxelScalePreset::QuarterMeter) < 100);
-    let w = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 157);
-    assert_eq!(wild_seed(&w, IVec3::ZERO, B::Stone), None);
+    let mut w = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 157);
+    assert_eq!(wild_seed(&mut w, IVec3::ZERO, B::Stone), None);
+}
+
+fn lucky_cell(w: &World, crop: &table::Crop) -> IVec3 {
+    (0..32).map(|x| IVec3::new(x, CELL.y, CELL.z))
+        .find(|&p| wild_roll(w.seed, w.voxel_scale.meters(), p, crop))
+        .expect("a winning roll in 32 cells")
+}
+
+#[test]
+fn farming_placed_wild_blocks_never_pay_a_seed() {
+    let mut w = bed_world(VoxelScalePreset::OneMeter);
+    let (_, red) = table::by_seed(B::RedCap).expect("row");
+    let p = lucky_cell(&w, red);
+    assert_ne!(crate::world::sample_block(&w.sample_config(), p), B::RedCap, "the generator left this cell empty");
+    let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+    w.inventory.hotbar[0] = Some(ItemStack::new(Item::Block(B::RedCap), 8));
+    for round in 1..=4 {
+        assert!(w.inventory.remove_item(Item::Block(B::RedCap), 1));
+        put(&mut w, p, B::RedCap, 0);
+        assert!(super::super::expedition::harvest(&mut w, p, &mut blocks, &mut chunks));
+        assert_eq!(w.get(p), B::Air);
+        assert_eq!(w.inventory.count_item(Item::Block(B::RedCap)), 8 - round, "round {round} paid a seed");
+    }
+    assert!(w.farming.wild_paid.is_empty());
+}
+
+#[test]
+fn farming_a_generated_wild_cell_pays_once() {
+    let w = bed_world(VoxelScalePreset::OneMeter);
+    let (_, red) = table::by_seed(B::RedCap).expect("row");
+    let p = lucky_cell(&w, red);
+    let mut state = State::default();
+    let generated = || B::RedCap;
+    assert_eq!(wild_pay(&mut state, w.seed, 1.0, p, B::RedCap, generated), Some(Item::Block(B::RedCap)));
+    for _ in 0..4 {
+        assert_eq!(wild_pay(&mut state, w.seed, 1.0, p, B::RedCap, generated), None, "put back and broken again");
+    }
+    assert_eq!(wild_pay(&mut state, w.seed, 1.0, p, B::RedCap, || B::Air), None);
+    let mut world = w;
+    world.farming = state;
+    let (back, _) = sidecar::decode(&sidecar::encode(&world)).expect("decodes");
+    assert_eq!(back.wild_paid, world.farming.wild_paid, "paid cells survive a reload");
 }
 
 #[test]

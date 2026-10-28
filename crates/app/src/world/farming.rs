@@ -3,7 +3,7 @@
 use super::{BlockId as B, World, chunk_coord_from_world_block as chunk_of, effects, inventory::{Item, ItemStack}};
 use engine_core::Budget;
 use glam::{IVec3, Vec3};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 pub(crate) mod sidecar;
 mod stage;
 pub mod table;
@@ -12,6 +12,8 @@ mod tests;
 
 pub use stage::{Conditions, Plot};
 pub const MAX_PLOTS: usize = 4096;
+/// Wild cells remembered as paid; past this no wild cell pays a seed.
+pub const MAX_WILD_PAID: usize = 65_536;
 const PLOTS_PER_STEP: usize = 32;
 const ROLLS_PER_SERVICE: u32 = 512;
 const WATER_RADIUS: i32 = 4;
@@ -27,6 +29,8 @@ pub struct State {
     /// Fixed steps counted by `tick`; plot ages and herd timers read it.
     pub clock: u64,
     pub(crate) plots: BTreeMap<Key, Plot>,
+    /// Generated crop cells that already paid a wild seed; a block put back there pays nothing.
+    pub(crate) wild_paid: BTreeSet<Key>,
     cursor: Option<Key>,
 }
 
@@ -240,8 +244,27 @@ pub fn inspect(world: &mut World, p: IVec3) -> bool {
 }
 
 /// A seed from a broken wild crop block, rolled per cell and scaled by cell volume.
-pub fn wild_seed(world: &World, p: IVec3, block: B) -> Option<Item> {
+/// Only the generator's own block pays, once per cell, so placed blocks never do.
+pub fn wild_seed(world: &mut World, p: IVec3, block: B) -> Option<Item> {
+    let cfg = world.sample_config();
+    let metres = world.voxel_scale.meters();
+    wild_pay(&mut world.farming, world.seed, metres, p, block, || super::sample_block(&cfg, p))
+}
+
+/// `generated` is the block worldgen put at `p`; it is sampled only for a winning roll.
+fn wild_pay(state: &mut State, seed: u32, metres: f32, p: IVec3, block: B, generated: impl FnOnce() -> B) -> Option<Item> {
     let (_, crop) = table::by_seed(block)?;
-    let threshold = (crop.wild_seed_per_mille as f32 * world.voxel_scale.meters().powi(3)).round().max(1.0) as u32;
-    (stage::roll(world.seed, p, 0x5eed) % 1000 < threshold).then_some(Item::Block(block))
+    let pays = wild_roll(seed, metres, p, crop)
+        && state.wild_paid.len() < MAX_WILD_PAID
+        && !state.wild_paid.contains(&key(p))
+        && generated() == block;
+    pays.then(|| {
+        state.wild_paid.insert(key(p));
+        Item::Block(block)
+    })
+}
+
+fn wild_roll(seed: u32, metres: f32, p: IVec3, crop: &table::Crop) -> bool {
+    let threshold = (crop.wild_seed_per_mille as f32 * metres.powi(3)).round().max(1.0) as u32;
+    stage::roll(seed, p, 0x5eed) % 1000 < threshold
 }

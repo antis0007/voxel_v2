@@ -1,6 +1,6 @@
-//! Checksummed farming file beside a world: clock, plots and the tended herd.
+//! Checksummed farming file beside a world: clock, plots, the tended herd and paid wild cells.
 //! A sidecar keeps the save format unchanged; a world without one has no plots.
-use super::{Key, MAX_PLOTS, Plot, State, table};
+use super::{Key, MAX_PLOTS, MAX_WILD_PAID, Plot, State, table};
 use crate::world::World;
 use anyhow::{Context, Result, ensure};
 use std::path::Path;
@@ -57,6 +57,13 @@ pub fn encode(world: &World) -> Vec<u8> {
     let herd = herd_bytes(world);
     out.extend_from_slice(&(herd.len() as u32).to_le_bytes());
     out.extend_from_slice(&herd);
+    let paid: Vec<_> = f.wild_paid.iter().take(MAX_WILD_PAID).collect();
+    out.extend_from_slice(&(paid.len() as u32).to_le_bytes());
+    for k in paid {
+        for v in [k.0, k.1, k.2] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
     let sum = hash(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     out
@@ -82,6 +89,16 @@ pub fn decode(bytes: &[u8]) -> Result<(State, &[u8])> {
     }
     let len = r.u32()? as usize;
     let herd = r.take(len)?;
+    // Files written before paid wild cells were recorded end here.
+    if r.at < r.bytes.len() {
+        let count = r.u32()? as usize;
+        ensure!(count <= MAX_WILD_PAID, "Too many paid wild cells");
+        for _ in 0..count {
+            let k: Key = (r.u32()? as i32, r.u32()? as i32, r.u32()? as i32);
+            ensure!([k.0, k.1, k.2].iter().all(|v| v.abs() < COORD_LIMIT), "Wild cell outside the world");
+            state.wild_paid.insert(k);
+        }
+    }
     ensure!(r.at == r.bytes.len(), "Trailing bytes in farming file");
     Ok((state, herd))
 }
