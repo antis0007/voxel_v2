@@ -33,6 +33,7 @@ mod generation_cache;
 pub mod landscape;
 pub mod ecology;
 pub mod drainage;
+pub mod geo;
 pub mod lakes;
 pub mod river_ice;
 pub mod lore;
@@ -927,6 +928,9 @@ impl Profiles for CachedProfiles {
         bush_profile_for_cell(cfg, cell_x, cell_z)
     }
     fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32> {
+        if geo::active(cfg) {
+            return geo::ground(cfg, cfg.world_x(x), cfg.world_z(z), cfg.voxel_meters()).water_m;
+        }
         let inherited = valley::river_top(cfg, cfg.world_x(x), cfg.world_z(z));
         let regional = drainage::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
         let lake = lakes::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
@@ -1220,6 +1224,11 @@ pub fn sample_block_with(
     }
 
     let depth = column.height - p.y;
+    if geo::active(cfg)
+        && let Some(block) = geo::subsurface(cfg, cfg.world_x(p.x), cfg.world_z(p.z), depth as f32 * cfg.voxel_meters())
+    {
+        return block;
+    }
     // Generator 15 lets rocky, shingle and mud shores keep their own surface.
     let sandy_shore = cfg.generator_version < 15
         || matches!(

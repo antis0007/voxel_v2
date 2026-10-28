@@ -23,6 +23,7 @@ mod icons_spells;
 mod inventory;
 mod look_at;
 mod loading_screen;
+mod planet_loading;
 mod main_menu;
 pub(crate) mod menu_capture;
 mod orbital;
@@ -1863,6 +1864,11 @@ impl EguiUi {
 
     pub fn build_loading_ui(&mut self, loading: &LoadingUiState) {
         loading_screen::draw(&self.ctx, loading);
+    }
+
+    /// Loading screen for a planet whose terrain solve is still running.
+    pub fn build_planet_loading_ui(&mut self, entry: &engine_worldgen::geo::Entry) {
+        planet_loading::draw(&self.ctx, entry);
     }
 
     pub fn show_title_screen(&mut self) {

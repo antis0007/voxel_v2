@@ -1,4 +1,4 @@
-//! Versioned metre-space climate, overlapped erosion regions and biome strata.
+﻿//! Versioned metre-space climate, overlapped erosion regions and biome strata.
 //! Region borders blend the same four deterministic tiles on both sides. Results
 //! never depend on chunk size, worker order, or voxel resolution.
 use super::{
@@ -447,7 +447,7 @@ fn sample_tectonics_uncached(wx: f32, wz: f32, seed: u32, zoom: f32, landward: b
 
 /// Rotated, domain-warped Musgrave Ridged Multifractal for authentic alpine massifs.
 /// Returns `(primary_spine, lateral_spur_chutes)`:
-/// - `primary_spine`: sharp pyramidal horns and knife-edge arêtes where each finer octave
+/// - `primary_spine`: sharp pyramidal horns and knife-edge arÃªtes where each finer octave
 ///   is weighted by the previous octave's crest, keeping valley floors broad and passable.
 /// - `lateral_spur_chutes`: branching dendritic spurs separated by incised couloir chutes.
 fn mountain_ridged_multifractal(
@@ -548,7 +548,7 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32
     // Asymmetric cuesta/thrust profile: steeper scarp toward the plate suture, longer dip slope behind.
     let fold_asymmetry =
         0.52 + 0.48 * (tect.fold_wave + 0.28 * (tect.fold_wave * 2.0).sin()).clamp(-1.0, 1.0);
-    let arête_profile = primary_spine.powf(1.28) * (0.68 + 0.32 * spur_ridge);
+    let arÃªte_profile = primary_spine.powf(1.28) * (0.68 + 0.32 * spur_ridge);
     let pyramidal_horn = smoothstep(0.55, 0.92, primary_spine) * smoothstep(0.45, 0.88, spur_ridge);
     let massif_drive = (tect.orogeny * 1.25 + mountain_mask * craton_t * 0.88).clamp(0.0, 1.65);
 
@@ -564,11 +564,11 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32
     let mut orogenic_uplift = piedmont_apron
         + massif_drive
             * (0.58 + 0.42 * fold_asymmetry)
-            * (arête_profile * cordillera_scale
+            * (arÃªte_profile * cordillera_scale
                 + pyramidal_horn * if version >= 15 { 48.0 } else { 34.0 });
 
     // Glacial cirque & U-shaped valley scouring: scoops concave amphitheaters out of
-    // mid-to-upper flanks while leaving knife-edge arêtes and horns standing tall above them.
+    // mid-to-upper flanks while leaving knife-edge arÃªtes and horns standing tall above them.
     let flank_zone =
         smoothstep(32.0, 78.0, orogenic_uplift) * (1.0 - smoothstep(0.76, 0.95, primary_spine));
     let glacial_scour = cirque_bowl * flank_zone * 22.0;
@@ -712,6 +712,10 @@ pub(super) fn pre_drainage_preview_top(cfg: &WorldSampleConfig, wx: f32, wz: f32
 fn preview_shaped(
     cfg: &WorldSampleConfig, wx: f32, wz: f32, footprint: f32, detail_footprint: f32,
 ) -> (f32, f32, f32, f32) {
+    if super::geo::active(cfg) {
+        let g = super::geo::ground(cfg, wx, wz, footprint.max(detail_footprint));
+        return (g.top_m - cfg.voxel_meters(), g.slope, g.temperature, g.moisture);
+    }
     let probe = footprint.clamp(8.0, 96.0);
     let height_at = |px: f32, pz: f32| {
         base_height(
@@ -890,6 +894,10 @@ fn bilinear(field: &[f32], x: f32, z: f32) -> f32 {
 pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
     let wx = cfg.world_x(x);
     let wz = cfg.world_z(z);
+    if super::geo::active(cfg) {
+        let g = super::geo::ground(cfg, wx, wz, cfg.voxel_meters());
+        return classify_landscape(cfg, wx, wz, g.top_m - cfg.voxel_meters(), g.slope, g.temperature, g.moisture, g.sediment);
+    }
     let tx = (wx / REGION).floor() as i32;
     let tz = (wz / REGION).floor() as i32;
     let fx = smoothstep(0.0, 1.0, (wx / REGION).fract().rem_euclid(1.0));
@@ -924,8 +932,12 @@ fn classify_landscape(
     cfg: &WorldSampleConfig, wx: f32, wz: f32, h: f32, slope: f32,
     temperature: f32, moisture: f32, sediment: f32,
 ) -> Landscape {
-    let drainage = super::drainage::sample(cfg, wx, wz);
-    let h = if cfg.generator_version >= super::drainage::RIVER_FIT_GENERATOR {
+    // The planet solve carves its own rivers and lakes into `h`.
+    let geo = super::geo::active(cfg);
+    let drainage = if geo { Default::default() } else { super::drainage::sample(cfg, wx, wz) };
+    let h = if geo {
+        h
+    } else if cfg.generator_version >= super::drainage::RIVER_FIT_GENERATOR {
         // Fitted channels give the ground top directly: a carve ceiling and a
         // bank floor that keeps water from standing above dry ground.
         // Lakes join the same way; ceilings combine by minimum, floors by maximum.
@@ -1178,7 +1190,7 @@ fn apply_macro_shaping(
         let c_eff = 0.5 + (c - 0.5) * shore_detail;
         let exposed = smoothstep(0.12, 0.75, slope).max(smoothstep(48.0, 105.0, h));
         let rib = (1.0 - (a * 2.0 - 1.0).abs()).powi(3);
-        // Rotated secondary arête rib & incised couloir chute detail for high mountains:
+        // Rotated secondary arÃªte rib & incised couloir chute detail for high mountains:
         let rx = wx * 0.80 - wz * 0.60;
         let rz = wx * 0.60 + wz * 0.80;
         let a_rot = value_noise2(rx / 18.0, rz / 18.0, cfg.seed.wrapping_add(9233));
@@ -1412,7 +1424,10 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         ) {
             if cfg.generator_version >= 7 {
                 let cold = 1.0 - smoothstep(0.08, 0.52, s.temperature);
-                let snowline = if cfg.generator_version >= 9 {
+                // The planet solve's temperature already includes altitude.
+                let snowline = if super::geo::active(cfg) {
+                    1.0 - smoothstep(0.17, 0.33, s.temperature)
+                } else if cfg.generator_version >= 9 {
                     smoothstep(104.0, 158.0, s.height)
                 } else {
                     smoothstep(138.0, 205.0, s.height)

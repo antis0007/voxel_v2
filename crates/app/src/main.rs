@@ -1452,7 +1452,9 @@ fn main() -> Result<()> {
     let benchmark_config = parse_benchmark_config();
     if let Some(value)=std::env::args().find_map(|arg|arg.strip_prefix("--benchmark-generator-version=").map(str::to_owned)) {
         let version=value.parse::<u32>()?;
-        anyhow::ensure!(benchmark_config.enabled && (1..=world::CURRENT_GENERATOR_VERSION).contains(&version),"unsupported benchmark generator version {version}");
+        // The dormant planet solve is reviewable before it becomes the default.
+        let reviewable = (1..=world::CURRENT_GENERATOR_VERSION).contains(&version) || version == engine_worldgen::geo::GEO_GENERATOR;
+        anyhow::ensure!(benchmark_config.enabled && reviewable,"unsupported benchmark generator version {version}");
         BENCHMARK_GENERATOR_VERSION.store(version,std::sync::atomic::Ordering::Relaxed);
         println!("[benchmark] generator_version={version} current_default={}",world::CURRENT_GENERATOR_VERSION);
     }
@@ -3004,7 +3006,13 @@ fn main() -> Result<()> {
                                 w.inventory = egui_ui.survival.clone();
                                 w.sync_from_inventory();
                             }
-                            if spawning {
+                            let solving = world.as_ref().map(|w| w.sample_config()).filter(engine_worldgen::geo::active).map(|c| {
+                                engine_worldgen::geo::prewarm(c.seed);
+                                engine_worldgen::geo::entry(c.seed)
+                            }).filter(|e| !e.ready());
+                            if let Some(entry) = solving.filter(|_| spawning) {
+                                egui_ui.build_planet_loading_ui(&entry);
+                            } else if spawning {
                                 egui_ui.build_loading_ui(&LoadingUiState {
                                     title: "Loading world".into(),
                                     progress_01: (spawn_progress.1 > 0).then(|| spawn_progress.0 as f32 / spawn_progress.1 as f32),

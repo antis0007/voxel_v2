@@ -54,10 +54,12 @@ below current), `uncommitted` (in the shared tree or a worktree only),
 | 67 | Abandoned Anchor districts, industrial materials, dock machines (`ruins::VERSION`), was 55 | anchor-ruins d013536b | dormant, renumber pending |
 | 68 | Underground 3D biome cells (`docs/plans/2026-10-25-underground-biomes.md`), was 55 | none | planned |
 | 69 | Surface site kind picked by the region's biome (`sites::kind::BIOME_SITES_GENERATOR`) | sites-enum | dormant |
+| 70 | Teaching site stair base only where the ground reaches it (`habitats_region::STAIR_GROUND_GENERATOR`) | habitat-stair-ground | dormant |
+| 71 | Planet terrain from a drainage solve: plate uplift, stream-power erosion, climate, rivers, permafrost (`geo::GEO_GENERATOR`, ADR 0038) | growth-xmb shared tree | dormant |
 
 ## Reserved
 
-70 onward is free. Rows 54 to 65 belong to the peer session that holds the
+72 onward is free. Rows 54 to 65 belong to the peer session that holds the
 shared tree's uncommitted worldgen edits; when that work commits, replace
 "uncommitted" with the commit hash. If it lands under different numbers, the
 rows above move with it and 66 to 68 stay as claimed.
