@@ -316,7 +316,9 @@ fn save(bindings: &Bindings) -> Result<()> {
         fs::create_dir_all(dir)?;
     }
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-    fs::write(&temp, bindings.to_user()?)?;
-    fs::rename(temp, path)?;
-    Ok(())
+    let written = fs::write(&temp, bindings.to_user()?).and_then(|()| fs::rename(&temp, &path));
+    if written.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    Ok(written?)
 }
