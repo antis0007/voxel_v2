@@ -44,7 +44,16 @@ pub(super) struct QualityProxies {
     columns: HashMap<(i32,i32),Column>,
     pub(super) coords: HashSet<IVec3>,
     previous_water: Option<Arc<crate::world::WaterSnapshot>>,
+    /// `ChunkCache::quality_sync_inputs` after the last visible-set rebuild.
+    sync_key: Option<QualitySyncInputs>,
 }
+
+/// What the membership sync's visible-set rebuild reads that can change
+/// without a rebuild of its own: quality membership and admission, the mesh
+/// set (installs, replacements and removals bump the revision), and the dirty,
+/// pending and water-dirty state that gates admission.
+type QualitySyncInputs = (u64, u64, usize, usize, usize);
+
 impl QualityProxies {
     pub(super) fn columns(&self) -> impl Iterator<Item=(i32,i32)> + '_ {self.columns.keys().copied()}
     pub(super) fn desired_columns(&self) -> impl Iterator<Item=((i32,i32),&[IVec3])> + '_ {
@@ -112,7 +121,22 @@ impl ChunkCache {
         self.edit_proxies.set_quality_sources(self.quality_proxies.coords.clone(),
             self.quality_proxies.columns().collect(), self.quality_proxies.admitted_columns());
         streamer.invalidate_changed_sources(snapshot,self);
-        self.rebuild_visible_sets();
+        // The rebuild walks every visible chunk. Skip it while none of its
+        // inputs moved; other changes to the visible sets rebuild or flag
+        // publication themselves.
+        if self.publication_dirty || self.quality_proxies.sync_key != Some(self.quality_sync_inputs()) {
+            self.rebuild_visible_sets();
+            self.quality_proxies.sync_key = Some(self.quality_sync_inputs());
+        }
+    }
+    fn quality_sync_inputs(&self) -> QualitySyncInputs {
+        use std::hash::{Hash, Hasher};
+        let mut columns:Vec<_>=self.quality_proxies.columns.iter().map(|(&q,c)|(q,c.admitted,&c.members)).collect();
+        columns.sort_unstable_by_key(|c|c.0);
+        let mut hasher=std::collections::hash_map::DefaultHasher::new();
+        columns.hash(&mut hasher);
+        (hasher.finish(), self.gpu_mesh_revision, self.dirty_meshes.len(), self.pending_gpu.len(),
+            self.edit_proxies.water_dirty.len())
     }
     /// Call after current dirty/halo invalidation, using the same immutable
     /// snapshot as source-only meshing. Recommendations contain no authority.
@@ -206,8 +230,8 @@ impl ChunkCache {
             self.quality_proxies.columns.remove(&key);
         }
         // A same-LOD dirty replacement can complete without changing the mesh
-        // set, so freshness is rechecked every policy tick: the membership sync
-        // rebuilds the visible sets, which always republishes columns.
+        // set. It still bumps gpu_mesh_revision, so the membership sync
+        // rebuilds the visible sets and republishes the column.
         self.sync_quality_membership(snapshot,streamer);
         // Once the canonical parent owns a retired column, release only its
         // exclusively quality resources. Ordinary/edit/handoff owners win.

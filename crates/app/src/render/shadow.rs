@@ -749,7 +749,7 @@ impl ShadowRenderer {
             self.draw_slots[i].extend(self.draw_lists[i].iter().map(|&c| slot_of(c)));
             if self.multidraw {
                 let coords = self.draw_lists[i].iter().copied();
-                self.indirect[i].prepare(device, queue, cache, coords, slot_of);
+                self.indirect[i].prepare_grouped(device, queue, cache, coords, slot_of);
             }
         }
     }

@@ -53,6 +53,11 @@ pub(in crate::render) fn split_runs(pages: &[u32]) -> Vec<(u32, u32, u32)> {
     runs
 }
 
+/// Stable sort by page: one run per page, list order kept within each page.
+fn group_by_page<T>(draws: &mut [(u32, T)]) {
+    draws.sort_by_key(|&(page, _)| page);
+}
+
 /// One draw list's indirect argument buffer.
 #[derive(Default)]
 pub(in crate::render) struct IndirectDraws {
@@ -72,11 +77,38 @@ impl IndirectDraws {
         queue: &wgpu::Queue,
         cache: &ChunkCache,
         coords: impl Iterator<Item = IVec3>,
-        mut slot_of: impl FnMut(IVec3) -> u32,
+        slot_of: impl FnMut(IVec3) -> u32,
     ) -> (usize, usize) {
-        let mut pages = Vec::new();
+        self.prepare_ordered(device, queue, cache, coords, slot_of, false)
+    }
+
+    /// `prepare`, but one run per arena page, keeping list order within a page.
+    ///
+    /// Neighbouring chunks rarely share a page, so a list in spatial order
+    /// splits into about one run (and one vertex/index rebind) per draw. For
+    /// depth-only passes the lost cross-page order costs less than the rebinds.
+    pub(in crate::render) fn prepare_grouped(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cache: &ChunkCache,
+        coords: impl Iterator<Item = IVec3>,
+        slot_of: impl FnMut(IVec3) -> u32,
+    ) -> (usize, usize) {
+        self.prepare_ordered(device, queue, cache, coords, slot_of, true)
+    }
+
+    fn prepare_ordered(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cache: &ChunkCache,
+        coords: impl Iterator<Item = IVec3>,
+        mut slot_of: impl FnMut(IVec3) -> u32,
+        group_pages: bool,
+    ) -> (usize, usize) {
+        let mut draws = Vec::new();
         let mut indices = 0usize;
-        let mut bytes = Vec::new();
         for coord in coords {
             let Some(slice) = cache.draw_slice(coord) else { continue };
             let args = wgpu::util::DrawIndexedIndirectArgs {
@@ -87,8 +119,15 @@ impl IndirectDraws {
                 first_instance: slot_of(coord),
             };
             indices += args.index_count as usize;
+            draws.push((slice.page, args));
+        }
+        if group_pages {
+            group_by_page(&mut draws);
+        }
+        let pages: Vec<u32> = draws.iter().map(|&(page, _)| page).collect();
+        let mut bytes = Vec::with_capacity(draws.len() * ARGS_BYTES as usize);
+        for (_, args) in &draws {
             bytes.extend_from_slice(args.as_bytes());
-            pages.push(slice.page);
         }
         self.runs = split_runs(&pages)
             .into_iter()
@@ -126,7 +165,19 @@ impl IndirectDraws {
 
 #[cfg(test)]
 mod tests {
-    use super::split_runs;
+    use super::{group_by_page, split_runs};
+
+    #[test]
+    fn grouping_issues_one_run_per_page_and_keeps_order_within_a_page() {
+        // Spatial order alternating across three pages: one run per draw.
+        let mut draws: Vec<(u32, usize)> = [2, 0, 1, 0, 2, 1, 0].into_iter().zip(0..).collect();
+        let pages: Vec<u32> = draws.iter().map(|d| d.0).collect();
+        assert_eq!(split_runs(&pages).len(), 7);
+        group_by_page(&mut draws);
+        let pages: Vec<u32> = draws.iter().map(|d| d.0).collect();
+        assert_eq!(split_runs(&pages), vec![(0, 0, 3), (1, 3, 2), (2, 5, 2)]);
+        assert_eq!(draws.iter().map(|d| d.1).collect::<Vec<_>>(), vec![1, 3, 6, 2, 5, 0, 4]);
+    }
 
     #[test]
     fn indirect_runs_split_on_page_change() {

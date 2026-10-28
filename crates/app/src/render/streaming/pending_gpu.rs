@@ -11,6 +11,9 @@ impl PendingGpuLedger {
         self.0.lock().unwrap_or_else(|e|e.into_inner()).iter()
             .filter(|(q,_)|coords.contains(*q)).map(|(_,bytes)|*bytes).sum()
     }
+    pub(super) fn len(&self) -> usize {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
     pub(super) fn contains(&self, coord: &IVec3) -> bool {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).contains_key(coord)
     }
