@@ -88,9 +88,7 @@ impl MapState {
         let Some(root) = self.world.clone().filter(|r| r.is_dir()) else { return };
         if self.writer.as_ref().is_some_and(|w| !w.is_finished()) {
             if !background {
-                if let Some(w) = self.writer.take() {
-                    let _ = w.join();
-                }
+                self.join_writer();
             } else {
                 return;
             }
@@ -111,7 +109,15 @@ impl MapState {
         }
     }
 
+    fn join_writer(&mut self) {
+        if let Some(w) = self.writer.take() {
+            let _ = w.join();
+        }
+    }
+
     fn open_world(&mut self, root: &Arc<PathBuf>, voxel_m: f32) {
+        // A background write may still be renaming this world's tile file into place.
+        self.join_writer();
         if self.waypoints_unsaved {
             self.save_waypoints();
         }
@@ -174,6 +180,19 @@ pub(crate) fn absorb<'a>(
             s.tiles.evict_far(tile, tiles::MAX_TILES);
         }
     });
+}
+
+/// Waits for the background tile write, then writes unsaved tiles and waypoints now.
+pub fn flush() {
+    let mut guard = state();
+    let Some(s) = guard.as_mut() else { return };
+    s.join_writer();
+    if s.tiles.unsaved {
+        s.save_tiles(false);
+    }
+    if s.waypoints_unsaved {
+        s.save_waypoints();
+    }
 }
 
 /// Opens or closes the full-screen world map; opening closes other panels.
@@ -273,5 +292,15 @@ mod tests {
             assert_eq!(s.tiles.len(), 0);
             assert_eq!(s.voxel_m, 0.5);
         });
+        // A world that exists on disk: `flush` writes its tiles without waiting for the timer.
+        let third = Arc::new(std::env::temp_dir().join(format!("voxel-map-test-flush-{}", std::process::id())));
+        std::fs::create_dir_all(third.as_path()).unwrap();
+        note_chunk(IVec3::new(-3, 0, 5));
+        absorb(&third, 1.0, |c| (c == chunk.chunk).then_some(&chunk), Budget::UNBOUNDED);
+        flush();
+        let saved = sidecar::read(&third.join(sidecar::TILE_FILE), sidecar::decode_tiles);
+        std::fs::remove_dir_all(third.as_path()).unwrap();
+        assert_eq!(saved.map(|t| t.len()), Some(1), "flushed tiles reach disk");
+        with(|s| assert!(!s.tiles.unsaved && s.writer.is_none()));
     }
 }

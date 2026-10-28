@@ -123,6 +123,8 @@ impl SaveService {
         }
     }
     pub fn request(&mut self, manual: bool) {
+        // Requested saves include quitting; map tiles otherwise wait for their own timer.
+        crate::egui_ui::map::flush();
         self.retry_capture = Instant::now();
         self.pending = true;
         self.manual |= manual;
