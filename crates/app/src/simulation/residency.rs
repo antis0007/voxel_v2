@@ -305,6 +305,17 @@ impl Residency {
         }
         self.request(world, c)
     }
+    /// [`Self::request_for`] for fair-lane work: it may not take the last half of
+    /// the slots, so sources near the player never queue behind distant backlog.
+    pub fn request_distant(&mut self, world: &World, c: IVec3, owner: IVec3) -> bool {
+        if self.pending.len() >= CAPACITY / 2
+            && !world.chunks.contains_key(&c)
+            && !self.entries.contains_key(&c)
+        {
+            return false;
+        }
+        self.request_for(world, c, owner)
+    }
     pub fn request_for(&mut self, world: &World, c: IVec3, owner: IVec3) -> bool {
         let ready = self.request(world, c);
         if !ready && self.pending.contains_key(&c) {

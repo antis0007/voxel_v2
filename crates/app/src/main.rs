@@ -3994,7 +3994,7 @@ fn main() -> Result<()> {
                                     world.revision(),
                                     &mut chunk_cache,
                                 );
-                                for (coord,mask) in chunk_cache.take_simulation_seeds() {world.activity.merge(coord,&mask);}
+                                for (coord,mask) in chunk_cache.take_simulation_seeds() {fluid_sim.seed(world,player.pos.floor().as_ivec3(),coord,mask);}
                                 let resident_upload_start = Instant::now();
                                 chunk_streamer.upload_finished(
                                     gpu,
@@ -4208,7 +4208,7 @@ fn main() -> Result<()> {
                                 let proxy_keys=chunk_cache.update_edit_proxies(&snapshot,&dirty_chunks,world.revision(),gpu.horizon_published_revision());
                                 if !proxy_keys.is_empty() { chunk_streamer.push_pending(proxy_keys,chunk_cache.center_chunk); }
                                 chunk_streamer.enqueue_missing(gpu, &snapshot, world.revision(), &mut chunk_cache);
-                                for (coord,mask) in chunk_cache.take_simulation_seeds() {world.activity.merge(coord,&mask);}
+                                for (coord,mask) in chunk_cache.take_simulation_seeds() {fluid_sim.seed(world,player.pos.floor().as_ivec3(),coord,mask);}
                                 chunk_streamer.upload_finished(
                                     gpu,
                                     &snapshot,
@@ -4626,8 +4626,8 @@ fn main() -> Result<()> {
                                                 sample.chunk.queued_mesh_bytes as f64/1048576.0,sample.chunk.cpu_evictions,sample.chunk.gpu_evictions,gpu.horizon_ready(),physics_enabled,
                                                 sample.chunk.gpu_budget_bytes/1048576,render::gpu_residency_limit_mib()==0);
                                             let physics = fluid_sim.stats();
-                                            println!("[simulation-profile] active={} inflight={} pending={} stepped={} updates={} source_mib={:.2} source_failed={} writeback_pressure={} recovering={}",
-                                                physics.active_chunks, physics.inflight_chunks, physics.pending_updates,
+                                            println!("[simulation-profile] active={} dormant={} inflight={} pending={} stepped={} updates={} source_mib={:.2} source_failed={} writeback_pressure={} recovering={}",
+                                                physics.active_chunks, fluid_sim.dormant_chunks(), physics.inflight_chunks, physics.pending_updates,
                                                 physics.simulated_chunks_last_step, physics.applied_updates_last_step,
                                                 physics.source_bytes as f64/1048576.0, physics.source_failed,
                                                 physics.writeback_pressure, physics.recovering);

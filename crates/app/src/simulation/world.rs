@@ -39,6 +39,14 @@ const RIGID_BUDGET: Duration = Duration::from_micros(600);
 // stops one tick from monopolising a frame. The old 768 cap starved wet areas:
 // a dam break with ~850 active cells flowed at a third of its intended speed.
 const MAX_CELLS: usize = 8192;
+// Generated cave floors hold hundreds of thousands of unsettled water cells per
+// view. Seeding them all at load filled the queue faster than sources could be
+// regenerated, so a player's own edit waited tens of seconds behind them.
+// Seeds farther than this (in chunks) wait until the player comes near. Cave
+// floors lie two to three chunks under the surface, so the vertical reach is short.
+const SEED_RADIUS: i32 = 4;
+const SEED_DEPTH: i32 = 1;
+const MAX_DORMANT: usize = 8192;
 struct Recovery {
     rx: mpsc::Receiver<Option<IVec3>>,
     generation: u64,
@@ -64,6 +72,10 @@ pub struct WorldSimulation {
     touched: HashSet<IVec3>,
     // Reused per-chunk snapshot of pending cells; avoids a fresh allocation each tick.
     batch: Vec<IVec3>,
+    // Load-time seeds outside `SEED_RADIUS`, merged when the player approaches.
+    // Runtime only: a reload re-seeds from the streamed chunks.
+    dormant: crate::fast_hash::FastMap<IVec3, Box<Mask>>,
+    seed_center: Option<IVec3>,
     pub status: Option<String>,
 }
 impl WorldSimulation {
@@ -108,7 +120,50 @@ impl WorldSimulation {
             visited: HashSet::with_capacity(MAX_CELLS),
             touched: HashSet::with_capacity(128),
             batch: Vec::with_capacity(256),
+            dormant: Default::default(),
+            seed_center: None,
         }
+    }
+    /// Wakes a streamed chunk's candidate cells now if near `player`, else later.
+    pub fn seed(&mut self, world: &mut World, player: IVec3, c: IVec3, mask: Box<Mask>) {
+        let center = chunk_coord_from_world_block(player);
+        if within_seed_radius(center, c) {
+            world.activity.merge(c, &mask);
+            return;
+        }
+        if let Some(held) = self.dormant.get_mut(&c) {
+            for (a, b) in held.iter_mut().zip(mask.iter()) {
+                *a |= b;
+            }
+            return;
+        }
+        if self.dormant.len() >= MAX_DORMANT {
+            // Forget the farthest; its water stays still until an edit wakes it.
+            let far = self.dormant.keys().copied().max_by_key(|k| (*k - center).abs().max_element());
+            match far {
+                Some(far) if (far - center).abs().max_element() > (c - center).abs().max_element() => {
+                    self.dormant.remove(&far);
+                }
+                _ => return,
+            }
+        }
+        self.dormant.insert(c, mask);
+    }
+    fn wake_dormant(&mut self, world: &mut World, center: IVec3) {
+        if self.seed_center == Some(center) || self.dormant.is_empty() {
+            self.seed_center = Some(center);
+            return;
+        }
+        self.seed_center = Some(center);
+        let near: Vec<IVec3> = self.dormant.keys().copied().filter(|&c| within_seed_radius(center, c)).collect();
+        for c in near {
+            if let Some(mask) = self.dormant.remove(&c) {
+                world.activity.merge(c, &mask);
+            }
+        }
+    }
+    pub fn dormant_chunks(&self) -> usize {
+        self.dormant.len()
     }
     pub fn reset_for_world(&mut self, scale: VoxelScalePreset) {
         self.player_tick = Default::default();
@@ -127,6 +182,8 @@ impl WorldSimulation {
         self.near_center = None;
         self.next_recovery = Instant::now();
         self.status = None;
+        self.dormant.clear();
+        self.seed_center = None;
     }
     /// Block until every requested chunk has been generated and queued. Used
     /// by headless runs so a tick never depends on worker timing.
@@ -265,6 +322,7 @@ impl WorldSimulation {
         for c in self.sources.completed() {
             self.queue_ready(world, c);
         }
+        self.wake_dormant(world, chunk_coord_from_world_block(player.pos.floor().as_ivec3()));
         world.activity.promote();
         let waiting_for_writeback = self.recover(world);
         if !waiting_for_writeback {
@@ -374,7 +432,12 @@ impl WorldSimulation {
                         continue;
                     }
                     // Admit the central source before consuming work bits.
-                    if !self.sources.request_for(world, c, c) {
+                    let admitted = if preferred.is_some() {
+                        self.sources.request_for(world, c, c)
+                    } else {
+                        self.sources.request_distant(world, c, c)
+                    };
+                    if !admitted {
                         continue;
                     }
                     // Snapshot the chunk's whole pending set before stepping any of
@@ -427,6 +490,11 @@ impl WorldSimulation {
         self.stats.source_failed = self.sources.error.is_some();
         self.stats.writeback_pressure = self.sources.memory_pressure || waiting_for_writeback;
     }
+}
+
+fn within_seed_radius(center: IVec3, c: IVec3) -> bool {
+    let d = (c - center).abs();
+    d.x <= SEED_RADIUS && d.z <= SEED_RADIUS && d.y <= SEED_DEPTH
 }
 
 /// Runs on terrain workers using the complete voxel halo. Settled ocean water
@@ -497,3 +565,7 @@ pub(crate) fn discover(chunk: &GeneratedChunk) -> Option<Box<Mask>> {
     }
     mask
 }
+
+#[cfg(test)]
+#[path = "seed_tests.rs"]
+mod seed_tests;
