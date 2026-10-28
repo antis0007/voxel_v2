@@ -1,0 +1,90 @@
+// Survival mining: break seconds = hardness (assets/materials.ron) x seconds_per_hardness / speed.
+// A tool of the wrong class mines at speed x wrong_class_factor, never below the hand, and
+// harvests like the hand. A block above the tool's tier takes under_tier_factor times longer
+// and drops nothing. `kit` lists the item each workbench bore upgrade (expedition tool tier
+// 1, 2) mines as when the held item has no row. Blocks without a rule are Dig, tier 0.
+// `cargo test mining_ron_round_trips` checks the format.
+(
+    seconds_per_hardness: 1.5,
+    min_seconds: 0.1,
+    hand_speed: 1.0,
+    wrong_class_factor: 0.35,
+    under_tier_factor: 5.0,
+    kit: [
+        Tool(1),
+        Tool(2),
+    ],
+    tools: [
+        (
+            item: Weapon(1),
+            class: Cut,
+            tier: 1,
+            speed: 2.0,
+        ),
+        (
+            item: Tool(1),
+            class: Dig,
+            tier: 2,
+            speed: 4.0,
+        ),
+        (
+            item: Weapon(2),
+            class: Cut,
+            tier: 3,
+            speed: 3.0,
+        ),
+        (
+            item: Weapon(3),
+            class: Cut,
+            tier: 3,
+            speed: 3.0,
+        ),
+        (
+            item: Weapon(4),
+            class: Cut,
+            tier: 3,
+            speed: 3.0,
+        ),
+        (
+            item: Weapon(5),
+            class: Dig,
+            tier: 3,
+            speed: 3.0,
+        ),
+        (
+            item: Tool(2),
+            class: Dig,
+            tier: 4,
+            speed: 6.0,
+        ),
+    ],
+    blocks: [
+        (
+            class: Dig,
+            tier: 2,
+            blocks: [
+                IronOre,
+                Crystal,
+            ],
+        ),
+        (
+            class: Cut,
+            tier: 0,
+            blocks: [
+                Log,
+                Planks,
+                Workbench,
+                Bookcase,
+                Leaves,
+                PineLeaves,
+                Bush,
+                GroveMoss,
+                MushroomStem,
+                GlowCap,
+                RedCap,
+                AmberCap,
+                UmberCap,
+            ],
+        ),
+    ],
+)

@@ -3157,6 +3157,7 @@ impl EguiUi {
                                 stroke,
                             );
                         });
+                    tool_hud::draw_break_progress(&self.ctx, &self.tool_feedback);
                     // With a wand, the world-space rig draws the arm, fist and
                     // shaft whatever tool is selected. This overlay uses its own
                     // projection, so drawing it too put a second glove and tool

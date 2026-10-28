@@ -17,6 +17,7 @@ pub mod factory;
 pub mod habitats;
 pub mod interaction;
 pub mod inventory;
+pub mod mining;
 pub mod recipe_index;
 pub mod mood;
 pub mod orbital;

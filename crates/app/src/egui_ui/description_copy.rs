@@ -9,6 +9,9 @@ pub(super) fn item(ui: &mut egui::Ui, item: crate::world::inventory::Item) {
     if !stats.is_empty() {
         ui.label(RichText::new(stats).size(11.0).color(presentation::PAPER));
     }
+    for line in crate::world::mining::stat_lines(item) {
+        ui.label(RichText::new(line).size(11.0).color(presentation::PAPER));
+    }
     show(ui, item.description_entry(), &item.cost_line(), expanded);
     if expanded {
         ui.label(RichText::new(item.category()).small().color(presentation::MUTED));

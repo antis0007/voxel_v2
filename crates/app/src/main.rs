@@ -1609,6 +1609,7 @@ fn main() -> Result<()> {
     let mut break_was_down = false;
     let mut place_repeat_timer = 0.0f32;
     let mut break_repeat_timer = 0.0f32;
+    let mut mining_progress = world::mining::Progress::default();
     let mut pending_tool_action: Option<egui_ui::ToolUseAction> = None;
     let mut perf_tracker = PerfTracker::default();
     let mut perf_snapshot = PerfSnapshot::default();
@@ -3704,6 +3705,21 @@ fn main() -> Result<()> {
                                         }
                                     }
                                 }
+                                let mining_tool = survival_hand.then(|| world::mining::tool_for(
+                                    world.inventory.hotbar[creative.selected_slot].map(|s| s.item),
+                                    world.expedition.tool_tier,
+                                ));
+                                egui_ui.tool_feedback.break_progress = None;
+                                egui_ui.tool_feedback.break_requires = None;
+                                if let Some(tool) = mining_tool.filter(|_| !active_input.alt_down) {
+                                    let target = hit.map(|(cell, _)| (cell, world.get(cell)));
+                                    let held = (active_input.break_block || active_input.break_pressed)
+                                        && can_act && !melee_consumed;
+                                    let mined = target.map(|(_, block)| world::mining::survival_break(block, tool));
+                                    break_edit = mining_progress.tick(target, held, mined.map_or(0.0, |m| m.seconds), gameplay_dt);
+                                    egui_ui.tool_feedback.break_progress = mining_progress.fraction();
+                                    egui_ui.tool_feedback.break_requires = mined.filter(|m| !m.drops).map(|m| m.required_tier);
+                                }
 
                                 if let Some((edit_mode, targets)) = creative::edit_blocks(
                                     &creative,
@@ -3770,7 +3786,7 @@ fn main() -> Result<()> {
                                                 }
                                                 if spell_blast {world::expedition::spell_blast(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
                                                 else if explosive_edit {world::expedition::blast_harvest(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
-                                                else {world::expedition::harvest(world,cell,&mut dirty_blocks,&mut dirty_chunks);}
+                                                else {world::mining::harvest(world,cell,mining_tool,&mut dirty_blocks,&mut dirty_chunks);}
                                                 dirty_blocks.insert(cell);
                                                 mark_chunk_and_neighbors_dirty(
                                                     &mut dirty_chunks,

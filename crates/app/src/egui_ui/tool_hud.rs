@@ -11,6 +11,10 @@ pub struct Feedback {
     pub air_placement: bool,
     pub total_cells: usize,
     pub visible_cells: usize,
+    /// Survival break held on the aimed cell, 0..1.
+    pub break_progress: Option<f32>,
+    /// Tier the aimed cell needs when the held tool is below it.
+    pub break_requires: Option<u8>,
 }
 
 impl Feedback {
@@ -152,5 +156,35 @@ pub fn draw(ctx: &egui::Context, tool: &CreativeState, feedback: &Feedback, top:
                 FontId::proportional(10.0),
                 color,
             );
+        });
+}
+
+/// Break progress bar under the crosshair, shown only while a survival break is held.
+pub fn draw_break_progress(ctx: &egui::Context, feedback: &Feedback) {
+    let Some(progress) = feedback.break_progress else { return };
+    egui::Area::new("break_progress".into())
+        .anchor(Align2::CENTER_CENTER, [0.0, 26.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(64.0, 18.0), egui::Sense::hover());
+            let p = ui.painter();
+            let bar = egui::Rect::from_min_size(rect.left_top(), vec2(rect.width(), 4.0));
+            let color = if feedback.break_requires.is_some() {
+                presentation::AMBER
+            } else {
+                presentation::PAPER
+            };
+            p.rect_filled(bar, 1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 140));
+            let filled = egui::Rect::from_min_size(bar.min, vec2(bar.width() * progress, bar.height()));
+            p.rect_filled(filled, 1.0, color);
+            if let Some(tier) = feedback.break_requires {
+                p.text(
+                    pos2(rect.center().x, bar.bottom() + 2.0),
+                    Align2::CENTER_TOP,
+                    format!("Requires: Tier {tier}"),
+                    FontId::proportional(10.0),
+                    color,
+                );
+            }
         });
 }
