@@ -368,58 +368,134 @@ pub struct PickupNotice {
     pub overflow: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CraftingRecipe {
     pub name: &'static str,
     pub output: ItemStack,
+    /// Grid rows of `key` characters, `' '` for an empty cell. Empty for
+    /// shapeless rows, which match by summed counts anywhere in the grid.
+    pub pattern: &'static [&'static str],
+    pub key: &'static [(char, Item)],
+    /// One craft's total inputs. Derived from the pattern for shaped rows.
     pub ingredients: &'static [(Item, u32)],
     pub description: &'static str,
 }
 
+/// A shaped recipe laid out on the 3 × 3 grid, anchored top left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shape {
+    pub width: usize,
+    pub height: usize,
+    pub cells: [Option<Item>; CRAFT_SLOTS],
+}
+
 impl CraftingRecipe {
-    /// Machine kits, multiblock bricks and anything with more than four
-    /// ingredient stacks need the 3 × 3 grid of a workbench.
+    pub fn shaped(&self) -> bool {
+        !self.pattern.is_empty()
+    }
+
+    pub fn shape(&self) -> Option<Shape> {
+        if !self.shaped() {
+            return None;
+        }
+        let mut cells = [None; CRAFT_SLOTS];
+        for (r, row) in self.pattern.iter().enumerate().take(3) {
+            for (c, ch) in row.chars().enumerate().take(3) {
+                cells[r * 3 + c] = self.key.iter().find(|(k, _)| *k == ch).map(|&(_, item)| item);
+            }
+        }
+        let width = self.pattern.iter().map(|row| row.chars().count()).max().unwrap_or(0);
+        Some(Shape { width, height: self.pattern.len(), cells })
+    }
+
+    /// Wider or taller than 2 × 2, machine kits, and rows of the bench table
+    /// need the 3 × 3 grid of a workbench.
     pub fn needs_bench(&self) -> bool {
+        if let Some(shape) = self.shape() {
+            return shape.width > 2 || shape.height > 2 || RECIPES.bench.contains(self);
+        }
         let machine = matches!(self.output.item, Item::Block(b) if factory::Kind::from_block(b).is_some());
         let slots: u32 = self.ingredients.iter().map(|&(item, n)| n.div_ceil(item.max_stack())).sum();
-        machine || self.ingredients.len() > 4 || slots > 4
+        machine || self.ingredients.len() > 4 || slots > 4 || RECIPES.bench.contains(self)
     }
 }
 
 /// Owned form of a recipe as it sits in `assets/recipes.ron`. Converted once
 /// into the `'static` `CraftingRecipe` rows the game uses.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct RecipeRow {
     name: String,
     output: ItemStack,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pattern: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    key: Vec<(char, Item)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ingredients: Vec<(Item, u32)>,
     description: String,
 }
 
 impl From<RecipeRow> for CraftingRecipe {
     fn from(row: RecipeRow) -> Self {
+        let mut ingredients = row.ingredients;
+        if !row.pattern.is_empty() {
+            for ch in row.pattern.iter().flat_map(|r| r.chars()).filter(|&ch| ch != ' ') {
+                let Some(&(_, item)) = row.key.iter().find(|(k, _)| *k == ch) else {
+                    panic!("assets/recipes.ron: {}: pattern key '{ch}' is not defined", row.name);
+                };
+                match ingredients.iter_mut().find(|(i, _)| *i == item) {
+                    Some(entry) => entry.1 += 1,
+                    None => ingredients.push((item, 1)),
+                }
+            }
+        }
+        let pattern: Vec<&'static str> =
+            row.pattern.into_iter().map(|r| &*Box::leak(r.into_boxed_str())).collect();
         CraftingRecipe {
             name: Box::leak(row.name.into_boxed_str()),
             output: row.output,
-            ingredients: Box::leak(row.ingredients.into_boxed_slice()),
+            pattern: Box::leak(pattern.into_boxed_slice()),
+            key: Box::leak(row.key.into_boxed_slice()),
+            ingredients: Box::leak(ingredients.into_boxed_slice()),
             description: Box::leak(row.description.into_boxed_str()),
         }
     }
 }
 
+impl From<&CraftingRecipe> for RecipeRow {
+    fn from(recipe: &CraftingRecipe) -> Self {
+        RecipeRow {
+            name: recipe.name.into(),
+            output: recipe.output,
+            pattern: recipe.pattern.iter().map(|r| (*r).into()).collect(),
+            key: recipe.key.to_vec(),
+            ingredients: if recipe.shaped() { Vec::new() } else { recipe.ingredients.to_vec() },
+            description: recipe.description.into(),
+        }
+    }
+}
+
 /// Hand, workbench and crystal-tech recipes from `assets/recipes.ron`.
-#[derive(Debug, PartialEq, serde::Serialize)]
+#[derive(Debug, PartialEq)]
 struct RecipeTables {
     hand: Vec<CraftingRecipe>,
     bench: Vec<CraftingRecipe>,
     crystal_tech: Vec<CraftingRecipe>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct RecipeTableRows {
     hand: Vec<RecipeRow>,
     bench: Vec<RecipeRow>,
     crystal_tech: Vec<RecipeRow>,
+}
+
+impl RecipeTables {
+    #[cfg(test)]
+    fn rows(&self) -> RecipeTableRows {
+        let rows = |v: &[CraftingRecipe]| v.iter().map(RecipeRow::from).collect();
+        RecipeTableRows { hand: rows(&self.hand), bench: rows(&self.bench), crystal_tech: rows(&self.crystal_tech) }
+    }
 }
 
 const RECIPES_RON: &str = include_str!("../../../../assets/recipes.ron");
@@ -452,6 +528,8 @@ pub fn all_recipes() -> &'static [CraftingRecipe] {
                     item: Item::Block(kind.block()),
                     count: kind.yield_count(),
                 },
+                pattern: &[],
+                key: &[],
                 ingredients: Box::leak(ingredients.into_boxed_slice()),
                 description: "Machine assembly. Right-click to place on the metre grid.",
             });
@@ -1454,7 +1532,14 @@ impl SurvivalInventory {
 
     /// Evaluates the crafting grid and returns the matching recipe and how many
     /// batches it can produce. Away from a workbench only hand recipes match.
+    /// Shaped rows are tried first, so a pattern wins over a shapeless kit
+    /// that happens to use the same items.
     pub fn matching_grid_recipe(&self, bench: bool) -> Option<(&'static CraftingRecipe, u32)> {
+        let usable = |r: &&CraftingRecipe| bench || !r.needs_bench();
+        let shaped = all_recipes().iter().filter(|r| r.shaped()).filter(usable);
+        if let Some(found) = shaped.into_iter().find_map(|r| self.shaped_batches(r).map(|b| (r, b))) {
+            return Some(found);
+        }
         let mut present: Vec<(Item, u32)> = Vec::new();
         for stack in self.craft_grid.iter().flatten() {
             if let Some(entry) = present.iter_mut().find(|(i, _)| *i == stack.item) {
@@ -1467,7 +1552,7 @@ impl SurvivalInventory {
             return None;
         }
         for recipe in all_recipes() {
-            if recipe.ingredients.len() != present.len() || (!bench && recipe.needs_bench()) {
+            if recipe.shaped() || recipe.ingredients.len() != present.len() || (!bench && recipe.needs_bench()) {
                 continue;
             }
             let mut batches = u32::MAX;
@@ -1498,8 +1583,19 @@ impl SurvivalInventory {
         let (recipe, _) = self.matching_grid_recipe(bench)?;
         let out = recipe.output;
         let max_stack = self.stack_limit(out.item);
-        // Deduct ingredients from craft_grid.
-        for &(req_item, req_count) in recipe.ingredients {
+        // A shaped craft takes one item from every occupied cell per batch.
+        if recipe.shaped() {
+            for slot in &mut self.craft_grid {
+                if let Some(stack) = slot {
+                    stack.count -= batches_to_craft;
+                    if stack.count == 0 {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+        let summed = if recipe.shaped() { &[][..] } else { recipe.ingredients };
+        for &(req_item, req_count) in summed {
             let mut needed = req_count * batches_to_craft;
             for slot in &mut self.craft_grid {
                 if needed == 0 {
@@ -1543,9 +1639,10 @@ impl SurvivalInventory {
         Some(produced)
     }
 
-    /// Stages 1 batch of `recipe` from the player's inventory into the crafting
-    /// grid (the 2 × 2 corner away from a bench, all nine slots at one).
-    /// Returns `true` if all ingredients were available and staged.
+    /// Stages `recipe` from the player's inventory into the crafting grid (the
+    /// 2 × 2 corner away from a bench, all nine slots at one). Staging the
+    /// recipe already in the grid adds one more batch, as the vanilla recipe
+    /// book does. Returns `true` if the ingredients were available and staged.
     pub fn stage_recipe_into_grid(&mut self, recipe: &CraftingRecipe, bench: bool) -> bool {
         let mut staged = self.clone();
         if !staged.stage_recipe_in_place(recipe, bench) { return false; }
@@ -1557,11 +1654,10 @@ impl SurvivalInventory {
         if recipe.needs_bench() && !bench {
             return false;
         }
-        let usable: &[usize] = if bench {
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8]
-        } else {
-            &HAND_GRID
-        };
+        let staged = self
+            .matching_grid_recipe(bench)
+            .filter(|(r, _)| *r == recipe)
+            .map_or(0, |(_, batches)| batches);
         // First return any existing craft_grid items to pack/hotbar if they fit.
         for i in 0..CRAFT_SLOTS {
             if let Some(stack) = self.craft_grid[i]
@@ -1582,39 +1678,7 @@ impl SurvivalInventory {
             }
         }
 
-        // Check if player owns all ingredients for 1 batch (or if already staged in grid).
-        if !recipe
-            .ingredients
-            .iter()
-            .all(|&(item, count)| self.count_item(item) >= count)
-        {
-            return false;
-        }
-
-        // Pull ingredients into grid slots: one stack per slot, so a recipe
-        // reads like the Minecraft pattern it stands for.
-        let mut free = usable.iter().copied();
-        for &(item, count) in recipe.ingredients {
-            if !self.remove_item(item, count) {
-                return false;
-            }
-            let spread = if recipe.ingredients.len() == 1 && count == 4 {
-                4
-            } else {
-                1
-            };
-            let per = count / spread;
-            for k in 0..spread {
-                let n = if k + 1 == spread { count - per * (spread - 1) } else { per };
-                match free.next() {
-                    Some(slot) => self.craft_grid[slot] = Some(ItemStack { item, count: n }),
-                    None => {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
+        [staged + 1, staged.max(1)].into_iter().any(|batches| self.place_recipe(recipe, bench, batches))
     }
 
     #[cfg(test)]
@@ -2051,7 +2115,7 @@ mod recipe_table {
     /// header), so the file is the single source of truth.
     #[test]
     fn recipes_ron_round_trips() {
-        let text = ron::ser::to_string_pretty(&*RECIPES, ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
+        let text = ron::ser::to_string_pretty(&RECIPES.rows(), ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
         let file = RECIPES_RON.replace('\r', "");
         let body = match file.find("\n(\n") {
             Some(i) => &file[i + 1..],
@@ -2073,8 +2137,8 @@ mod recipe_table {
     #[test]
     #[ignore = "writes assets/recipes.ron"]
     fn dump_recipes_ron() {
-        let header = RECIPES_RON.split("(").next().unwrap_or("");
-        let text = ron::ser::to_string_pretty(&*RECIPES, ron::ser::PrettyConfig::new()).unwrap();
+        let header = RECIPES_RON.find("\n(").map_or("", |i| &RECIPES_RON[..=i]);
+        let text = ron::ser::to_string_pretty(&RECIPES.rows(), ron::ser::PrettyConfig::new()).unwrap();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/recipes.ron");
         std::fs::write(path, format!("{header}{text}")).unwrap();
     }

@@ -1,5 +1,7 @@
 // Crafting recipes: hand (no station), workbench, and crystal-tech. Edit here, not in Rust.
 // Items are inventory::Item variants; `cargo test recipes_ron_round_trips` checks the format.
+// Shaped rows: `pattern` rows of `key` characters, space for an empty cell, one item per cell.
+// Shapeless rows list `ingredients` and match by summed counts anywhere in the grid.
 (
     hand: [
         (
@@ -8,8 +10,11 @@
                 item: Block(Planks),
                 count: 4,
             ),
-            ingredients: [
-                (Block(Log), 1),
+            pattern: [
+                "L",
+            ],
+            key: [
+                ('L', Block(Log)),
             ],
             description: "Split timber logs into sturdy building planks.",
         ),
@@ -19,8 +24,12 @@
                 item: Block(Workbench),
                 count: 1,
             ),
-            ingredients: [
-                (Block(Planks), 4),
+            pattern: [
+                "PP",
+                "PP",
+            ],
+            key: [
+                ('P', Block(Planks)),
             ],
             description: "2×2 plank bench. Place and press F to assemble machines and bores.",
         ),
@@ -30,9 +39,13 @@
                 item: Block(Bed),
                 count: 1,
             ),
-            ingredients: [
-                (Block(Planks), 3),
-                (Resource(4), 3),
+            pattern: [
+                "FFF",
+                "PPP",
+            ],
+            key: [
+                ('F', Resource(4)),
+                ('P', Block(Planks)),
             ],
             description: "Sleep through the night. Waking sets the respawn point here.",
         ),
@@ -42,9 +55,13 @@
                 item: Block(Torch),
                 count: 4,
             ),
-            ingredients: [
-                (Block(Planks), 1),
-                (Resource(3), 1),
+            pattern: [
+                "C",
+                "P",
+            ],
+            key: [
+                ('C', Resource(3)),
+                ('P', Block(Planks)),
             ],
             description: "Wall or floor torch crafted from planks and coal.",
         ),
@@ -54,9 +71,13 @@
                 item: Block(Torch),
                 count: 4,
             ),
-            ingredients: [
-                (Block(Planks), 1),
-                (Resource(4), 1),
+            pattern: [
+                "F",
+                "P",
+            ],
+            key: [
+                ('F', Resource(4)),
+                ('P', Block(Planks)),
             ],
             description: "Wall or floor torch fuelled by luminous mushroom fibre.",
         ),
@@ -66,9 +87,13 @@
                 item: Block(Torch),
                 count: 4,
             ),
-            ingredients: [
-                (Block(Log), 1),
-                (Resource(3), 1),
+            pattern: [
+                "C",
+                "L",
+            ],
+            key: [
+                ('C', Resource(3)),
+                ('L', Block(Log)),
             ],
             description: "Field torch split directly from raw timber and coal.",
         ),
@@ -78,8 +103,12 @@
                 item: Block(StoneBricks),
                 count: 4,
             ),
-            ingredients: [
-                (Block(Stone), 4),
+            pattern: [
+                "SS",
+                "SS",
+            ],
+            key: [
+                ('S', Block(Stone)),
             ],
             description: "Dress four stone blocks into fitted masonry.",
         ),
@@ -89,8 +118,11 @@
                 item: Block(Cobblestone),
                 count: 2,
             ),
-            ingredients: [
-                (Block(Stone), 2),
+            pattern: [
+                "SS",
+            ],
+            key: [
+                ('S', Block(Stone)),
             ],
             description: "Knap rough stone into high-grip cobblestone.",
         ),
@@ -100,8 +132,12 @@
                 item: Block(Smelter),
                 count: 1,
             ),
-            ingredients: [
-                (Block(Cobblestone), 4),
+            pattern: [
+                "cc",
+                "cc",
+            ],
+            key: [
+                ('c', Block(Cobblestone)),
             ],
             description: "Field smelter. Place and press F to smelt ores with coal.",
         ),
@@ -111,8 +147,12 @@
                 item: Block(Sandstone),
                 count: 2,
             ),
-            ingredients: [
-                (Block(Sand), 4),
+            pattern: [
+                "ss",
+                "ss",
+            ],
+            key: [
+                ('s', Block(Sand)),
             ],
             description: "Compact loose sand into load-bearing sandstone.",
         ),
@@ -122,9 +162,12 @@
                 item: Block(MirageBrick),
                 count: 4,
             ),
-            ingredients: [
-                (Block(StoneBricks), 2),
-                (Block(Crystal), 1),
+            pattern: [
+                "BXB",
+            ],
+            key: [
+                ('B', Block(StoneBricks)),
+                ('X', Block(Crystal)),
             ],
             description: "Illusion masonry. Looks like stone bricks; you walk straight through it.",
         ),
@@ -134,9 +177,12 @@
                 item: Block(StarGlass),
                 count: 2,
             ),
-            ingredients: [
-                (Block(Crystal), 1),
-                (Block(Basalt), 2),
+            pattern: [
+                "KXK",
+            ],
+            key: [
+                ('K', Block(Basalt)),
+                ('X', Block(Crystal)),
             ],
             description: "Dark glass with a captive night sky. Glitters under its own light.",
         ),
@@ -146,9 +192,12 @@
                 item: Food(FungalRation),
                 count: 2,
             ),
-            ingredients: [
-                (Resource(13), 1),
-                (Resource(4), 1),
+            pattern: [
+                "MF",
+            ],
+            key: [
+                ('M', Resource(13)),
+                ('F', Resource(4)),
             ],
             description: "Restores +38 hunger and +8 health per ration.",
         ),
@@ -158,9 +207,13 @@
                 item: Food(RoastedCap),
                 count: 2,
             ),
-            ingredients: [
-                (Block(RedCap), 1),
-                (Resource(3), 1),
+            pattern: [
+                "R",
+                "C",
+            ],
+            key: [
+                ('R', Block(RedCap)),
+                ('C', Resource(3)),
             ],
             description: "Roast ember mushroom caps over coal (+24 hunger, +4 health).",
         ),
@@ -170,9 +223,13 @@
                 item: Food(CookedMutton),
                 count: 1,
             ),
-            ingredients: [
-                (Food(RawMutton), 1),
-                (Resource(3), 1),
+            pattern: [
+                "M",
+                "C",
+            ],
+            key: [
+                ('M', Food(RawMutton)),
+                ('C', Resource(3)),
             ],
             description: "Mutton cooked over coal.",
         ),
@@ -182,9 +239,12 @@
                 item: Food(Trailcake),
                 count: 2,
             ),
-            ingredients: [
-                (Block(GlowCap), 1),
-                (Resource(13), 1),
+            pattern: [
+                "GM",
+            ],
+            key: [
+                ('G', Block(GlowCap)),
+                ('M', Resource(13)),
             ],
             description: "Travel ration made from luminous caps and fungal biomass (+32 hunger).",
         ),
@@ -194,9 +254,14 @@
                 item: Weapon(1),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 2),
-                (Resource(4), 1),
+            pattern: [
+                "U",
+                "U",
+                "F",
+            ],
+            key: [
+                ('U', Resource(6)),
+                ('F', Resource(4)),
             ],
             description: "Balanced melee blade (22 base damage).",
         ),
@@ -206,10 +271,15 @@
                 item: Weapon(5),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 3),
-                (Resource(16), 1),
-                (Resource(17), 1),
+            pattern: [
+                "EEE",
+                " A ",
+                " N ",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('A', Resource(17)),
+                ('N', Resource(16)),
             ],
             description: "Heavy impact weapon. Third strike launches loose rigid assemblies.",
         ),
@@ -219,9 +289,12 @@
                 item: Block(RigidCore),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 2),
-                (Resource(16), 1),
+            pattern: [
+                "ENE",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('N', Resource(16)),
             ],
             description: "Place beside planks or logs. The connected frame becomes a physical assembly.",
         ),
@@ -231,9 +304,12 @@
                 item: Armor(Head, Copper),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 2),
-                (Resource(4), 1),
+            pattern: [
+                "UFU",
+            ],
+            key: [
+                ('U', Resource(6)),
+                ('F', Resource(4)),
             ],
             description: "Head protection (+8% damage reduction).",
         ),
@@ -243,8 +319,12 @@
                 item: Armor(Chest, Copper),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 4),
+            pattern: [
+                "U U",
+                "U U",
+            ],
+            key: [
+                ('U', Resource(6)),
             ],
             description: "Chest protection (+8% damage reduction).",
         ),
@@ -254,8 +334,11 @@
                 item: Armor(Legs, Copper),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 3),
+            pattern: [
+                "UUU",
+            ],
+            key: [
+                ('U', Resource(6)),
             ],
             description: "Leg protection (+8% damage reduction).",
         ),
@@ -265,8 +348,11 @@
                 item: Armor(Feet, Copper),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 2),
+            pattern: [
+                "U U",
+            ],
+            key: [
+                ('U', Resource(6)),
             ],
             description: "Footwear protection (+8% damage reduction).",
         ),
@@ -276,10 +362,14 @@
                 item: Armor(Head, Lumen),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 2),
-                (Resource(5), 1),
-                (Resource(4), 2),
+            pattern: [
+                "UXU",
+                "F F",
+            ],
+            key: [
+                ('U', Resource(6)),
+                ('X', Resource(5)),
+                ('F', Resource(4)),
             ],
             description: "Head armor (+12% reduction) with built-in underground lantern beam.",
         ),
@@ -289,9 +379,12 @@
                 item: Armor(Head, Steel),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 2),
-                (Resource(4), 1),
+            pattern: [
+                "EFE",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('F', Resource(4)),
             ],
             description: "Heavy head armor (+14% damage reduction).",
         ),
@@ -301,8 +394,12 @@
                 item: Armor(Chest, Steel),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 4),
+            pattern: [
+                "E E",
+                "E E",
+            ],
+            key: [
+                ('E', Resource(15)),
             ],
             description: "Heavy chest armor (+14% damage reduction).",
         ),
@@ -312,8 +409,11 @@
                 item: Armor(Legs, Steel),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 3),
+            pattern: [
+                "EEE",
+            ],
+            key: [
+                ('E', Resource(15)),
             ],
             description: "Heavy leg armor (+14% damage reduction).",
         ),
@@ -323,8 +423,11 @@
                 item: Armor(Feet, Steel),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 2),
+            pattern: [
+                "E E",
+            ],
+            key: [
+                ('E', Resource(15)),
             ],
             description: "Heavy boots (+14% damage reduction).",
         ),
@@ -334,9 +437,14 @@
                 item: Weapon(2),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 2),
-                (Resource(16), 1),
+            pattern: [
+                "E",
+                "E",
+                "N",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('N', Resource(16)),
             ],
             description: "Heavy steel blade (32 base damage).",
         ),
@@ -348,8 +456,12 @@
                 item: Resource(13),
                 count: 1,
             ),
-            ingredients: [
-                (Block(Leaves), 4),
+            pattern: [
+                "VV",
+                "VV",
+            ],
+            key: [
+                ('V', Block(Leaves)),
             ],
             description: "Pack leaves into biomass.",
         ),
@@ -359,8 +471,12 @@
                 item: Resource(13),
                 count: 1,
             ),
-            ingredients: [
-                (Block(PineLeaves), 4),
+            pattern: [
+                "VV",
+                "VV",
+            ],
+            key: [
+                ('V', Block(PineLeaves)),
             ],
             description: "Pack pine needles into biomass.",
         ),
@@ -370,8 +486,11 @@
                 item: Resource(13),
                 count: 1,
             ),
-            ingredients: [
-                (Block(Planks), 2),
+            pattern: [
+                "PP",
+            ],
+            key: [
+                ('P', Block(Planks)),
             ],
             description: "Chip offcuts into biomass.",
         ),
@@ -381,9 +500,13 @@
                 item: Block(CokeOvenBrick),
                 count: 4,
             ),
-            ingredients: [
-                (Block(Clay), 2),
-                (Block(Sand), 2),
+            pattern: [
+                "Ys",
+                "sY",
+            ],
+            key: [
+                ('Y', Block(Clay)),
+                ('s', Block(Sand)),
             ],
             description: "Fired clay and sand. 26 bricks around a coke oven door form the oven.",
         ),
@@ -393,10 +516,14 @@
                 item: Block(BlastBrick),
                 count: 4,
             ),
-            ingredients: [
-                (Block(StoneBricks), 2),
-                (Block(Clay), 1),
-                (Resource(19), 1),
+            pattern: [
+                "BY",
+                "kB",
+            ],
+            key: [
+                ('B', Block(StoneBricks)),
+                ('Y', Block(Clay)),
+                ('k', Resource(19)),
             ],
             description: "Coke-bonded refractory. 35 bricks around a tuyere form a blast furnace.",
         ),
@@ -408,8 +535,11 @@
                 item: Block(Crystal),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(5), 1),
+            pattern: [
+                "X",
+            ],
+            key: [
+                ('X', Resource(5)),
             ],
             description: "Re-form mined crystal for building, mirage masonry or star glass. Mining returns the same crystal quantity.",
         ),
@@ -419,8 +549,12 @@
                 item: Block(CopperBlock),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(6), 4),
+            pattern: [
+                "UU",
+                "UU",
+            ],
+            key: [
+                ('U', Resource(6)),
             ],
             description: "Reflective copper building block for workshops and machine halls.",
         ),
@@ -430,10 +564,15 @@
                 item: Block(StarGlass),
                 count: 4,
             ),
-            ingredients: [
-                (Resource(5), 2),
-                (Block(Sand), 4),
-                (Resource(18), 1),
+            pattern: [
+                "sXs",
+                "sWs",
+                " X ",
+            ],
+            key: [
+                ('s', Block(Sand)),
+                ('X', Resource(5)),
+                ('W', Resource(18)),
             ],
             description: "Essence-infused crystal glass. A later alternative to the basalt recipe, with a captive starfield and polished finish.",
         ),
@@ -443,11 +582,15 @@
                 item: Block(MithrilBlock),
                 count: 1,
             ),
-            ingredients: [
-                (Resource(15), 2),
-                (Resource(5), 2),
-                (Resource(18), 1),
-                (Resource(17), 1),
+            pattern: [
+                "XWX",
+                "EAE",
+            ],
+            key: [
+                ('X', Resource(5)),
+                ('W', Resource(18)),
+                ('E', Resource(15)),
+                ('A', Resource(17)),
             ],
             description: "Infuse steel with crystal, essence and an arcane core. Hard pale-blue building metal with a restrained travelling sheen.",
         ),
