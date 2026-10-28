@@ -3699,14 +3699,6 @@ fn main() -> Result<()> {
                                     prepare: &mut |w: &mut World, p| fluid_sim.prepare_tool_edit(w, p),
                                     blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
                                 }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
-                                if egui_ui.show_hud && !creative.any_ui_open() {
-                                    blueprints.overlay(creative.tool, eye, 0.003/world.voxel_scale.meters(), &mut outline);
-                                }
-                                // Pastes share the tool edit path, so they wait for residency like a brush stroke.
-                                blueprints.frame(world, &mut creative, raycast_target, false, &mut world::blueprint::Sink {
-                                    prepare: &mut |w: &mut World, p| fluid_sim.prepare_tool_edit(w, p),
-                                    blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
-                                }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
 
                                 let survival_hand = creative.tool == creative::ToolKind::Hand
                                     && !player.flying
