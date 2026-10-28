@@ -44,6 +44,42 @@ fn inputs_arrive_just_ahead_of_the_server_over_broadband() {
 }
 
 #[test]
+fn a_lockstep_client_trails_the_newest_frame_and_rarely_stalls() {
+    let mut down = Link::new(Impairment::BROADBAND, 7);
+    let mut clock = TickClock::new(HZ);
+    // Each message repeats the frames before it, so holding tick T means holding all below.
+    let mut newest: Option<u64> = None;
+    let (mut samples, mut stalls, mut trail) = (0, 0, Vec::new());
+    let mut last = 0;
+    for now in (0..12_000_000u64).step_by(1_000) {
+        if now % TICK_US < 1_000 {
+            down.send(now, (now / TICK_US).to_le_bytes().to_vec());
+        }
+        while let Some(p) = down.poll(now) {
+            let tick = u64::from_le_bytes(p[..8].try_into().unwrap());
+            clock.observe(tick, now + SKEW_US);
+            newest = newest.max(Some(tick));
+        }
+        if now % 10_000 == 0
+            && let Some(t) = clock.behind(now + SKEW_US, 5.0)
+        {
+            assert!(t >= last, "stepped back {last} -> {t}");
+            last = t;
+            if now > 3_000_000 {
+                samples += 1;
+                match newest {
+                    Some(n) if n >= t => trail.push(n - t),
+                    _ => stalls += 1,
+                }
+            }
+        }
+    }
+    assert!(stalls * 100 <= samples, "{stalls} of {samples} stalled");
+    // A 43 ms cushion over 10 ms of jitter: about one tick behind, never more than three.
+    assert!(trail.iter().all(|&d| d <= 3), "max trail {:?}", trail.iter().max());
+}
+
+#[test]
 fn a_route_change_is_slewed_without_steps_backward() {
     let mut clock = TickClock::new(HZ);
     let mut stamps = Vec::new();

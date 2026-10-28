@@ -6,7 +6,8 @@
 //! covers both directions. Drift
 //! is corrected by running the local clock up to 3% fast or slow instead of
 //! jumping, so motion never hitches; only an error past `SNAP_TICKS` jumps.
-//! Times are passed in as microseconds.
+//! A lockstep client paces the other way, behind the newest frame it can hold.
+//! One clock serves one of the two roles. Times are passed in as microseconds.
 
 /// Ticks of error past which the clock jumps instead of slewing.
 pub const SNAP_TICKS: f64 = 30.0;
@@ -41,8 +42,20 @@ impl TickClock {
     /// The tick to stamp inputs with at `now_us`, given round trip and jitter.
     /// `None` until a server tick has been seen.
     pub fn advance(&mut self, now_us: u64, rtt_ms: f32, jitter_ms: f32) -> Option<u64> {
-        let offset = self.offset_us?;
         let lead_us = f64::from(rtt_ms) * 1_000.0 + f64::from(jitter_ms) * 2_000.0 + self.tick_us;
+        self.track(now_us, lead_us)
+    }
+
+    /// The newest server tick to step at `now_us`, trailing by a jitter cushion.
+    /// A frame sent on the fastest path seen arrives by then even when it comes
+    /// one tick late, carried by the next message. `None` until a tick is seen.
+    pub fn behind(&mut self, now_us: u64, jitter_ms: f32) -> Option<u64> {
+        let lead_us = -(f64::from(jitter_ms) * 2_000.0 + self.tick_us);
+        self.track(now_us, lead_us)
+    }
+
+    fn track(&mut self, now_us: u64, lead_us: f64) -> Option<u64> {
+        let offset = self.offset_us?;
         let target = (now_us as f64 - offset + lead_us) / self.tick_us;
         let elapsed = now_us.saturating_sub(self.last_us) as f64 / self.tick_us;
         self.last_us = now_us;
