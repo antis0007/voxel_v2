@@ -8,6 +8,7 @@ mod chip_fab;
 mod chip_panel;
 mod chip_report;
 mod chip_tools;
+mod debug_overlay;
 mod controls;
 #[cfg(test)]
 mod text_rules;
@@ -1725,6 +1726,8 @@ pub struct EguiUi {
     hovered_quick_brush_shape: Option<BrushShape>,
     hovered_quick_area_shape: Option<AreaFootprintShape>,
     show_debug_performance_panel: bool,
+    /// Full diagnostics window, opened from the pause screen.
+    show_perf_details: bool,
     pause_page: front_end::PausePage,
 }
 
@@ -1812,7 +1815,9 @@ impl EguiUi {
             hovered_quick_tool: None,
             hovered_quick_brush_shape: None,
             hovered_quick_area_shape: None,
-            show_debug_performance_panel: false,
+            // Review captures open the F3 readout without a key press.
+            show_debug_performance_panel: std::env::var_os("VOXEL_REVIEW_F3").is_some(),
+            show_perf_details: false,
             pause_page: front_end::PausePage::default(),
         }
     }
@@ -2532,33 +2537,35 @@ impl EguiUi {
             14.0
         };
 
-        egui::Area::new("debug_perf_launcher".into())
-            .anchor(Align2::RIGHT_TOP, [-14.0, launcher_y])
-            .show(&self.ctx, |ui| {
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_premultiplied(18, 22, 30, 232))
-                    .stroke(egui::Stroke::new(
-                        1.0,
-                        if self.show_debug_performance_panel {
-                            Color32::from_rgb(96, 164, 255)
-                        } else {
-                            Color32::from_rgba_premultiplied(255, 255, 255, 28)
-                        },
-                    ))
-                    .corner_radius(egui::CornerRadius::same(0))
-                    .inner_margin(egui::Margin::symmetric(10, 6))
-                    .show(ui, |ui| {
-                        let button = ui.selectable_label(
-                            self.show_debug_performance_panel,
-                            RichText::new("Performance").strong(),
-                        );
-                        if button.clicked() {
-                            self.show_debug_performance_panel = !self.show_debug_performance_panel;
-                        }
-                    });
-            });
+        if matches!(mode, UiMode::Paused) {
+            egui::Area::new("debug_perf_launcher".into())
+                .anchor(Align2::RIGHT_TOP, [-14.0, launcher_y])
+                .show(&self.ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(Color32::from_rgba_premultiplied(18, 22, 30, 232))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            if self.show_perf_details {
+                                Color32::from_rgb(96, 164, 255)
+                            } else {
+                                Color32::from_rgba_premultiplied(255, 255, 255, 28)
+                            },
+                        ))
+                        .corner_radius(egui::CornerRadius::same(0))
+                        .inner_margin(egui::Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            let button = ui.selectable_label(
+                                self.show_perf_details,
+                                RichText::new("Performance").strong(),
+                            );
+                            if button.clicked() {
+                                self.show_perf_details = !self.show_perf_details;
+                            }
+                        });
+                });
+        }
 
-        if self.show_debug_performance_panel {
+        if self.show_perf_details {
             let content_rect = self.ctx.content_rect();
             let default_pos = egui::pos2(
                 (content_rect.right() - 472.0).max(content_rect.left() + 12.0),
@@ -2575,7 +2582,7 @@ impl EguiUi {
                 .movable(true)
                 .collapsible(true)
                 .vscroll(true)
-                .open(&mut self.show_debug_performance_panel)
+                .open(&mut self.show_perf_details)
                 .show(&self.ctx, |ui| {
                     Self::build_performance_ui(ui, perf);
                 });
@@ -2666,7 +2673,11 @@ impl EguiUi {
             }
             subtitles::draw(&self.ctx, frame_dt);
             // Below the F3 readout when it is open, else flush with the corner.
-            let minimap_top = if self.show_debug_performance_panel { 104.0 } else { 12.0 };
+            let minimap_top = if self.show_debug_performance_panel {
+                debug_overlay::right_bottom(&self.ctx).map_or(200.0, |bottom| bottom + 8.0)
+            } else {
+                12.0
+            };
             map::pump(
                 &self.ctx,
                 player.pos,
@@ -2677,29 +2688,23 @@ impl EguiUi {
             if self.show_hud {
                 let mut status_rect = None;
                 if self.show_debug_performance_panel {
-                    let status = egui::Area::new("play_status".into())
-                        .anchor(Align2::LEFT_TOP, [16.0, 16.0])
-                        .interactable(false)
-                        .show(&self.ctx, |ui| {
-                            presentation::hud_frame().show(ui, |ui| {
-                                if self.show_debug_performance_panel {
-                                    ui.label(
-                                        RichText::new(self.biome_label)
-                                            .size(14.0)
-                                            .color(Color32::from_rgb(230, 235, 216)),
-                                    );
-                                    ui.small(format!("{time_label}  ·  {:.0} m", self.elevation_m));
-                                }
-                                ui.small(creative_state.cursor_summary());
-                                if creative_state.pending_cells() > 0 {
-                                    ui.small(format!(
-                                        "{} cells queued",
-                                        creative_state.pending_cells()
-                                    ));
-                                }
-                            });
-                        });
-                    status_rect = Some(status.response.rect);
+                    status_rect = Some(debug_overlay::draw(
+                        &self.ctx,
+                        &debug_overlay::Readout {
+                            fps,
+                            perf,
+                            pos: player.pos,
+                            yaw: player.yaw,
+                            scale_label: physics_state.voxel_scale.label(),
+                            biome: self.biome_label,
+                            elevation_m: self.elevation_m,
+                            time_label: &time_label,
+                            environment_lag: self.environment_lag,
+                            cave_culled: crate::render::occlusion::last_culled(),
+                            cursor: creative_state.cursor_summary(),
+                            pending_cells: creative_state.pending_cells(),
+                        },
+                    ));
                 }
                 front_end::journey_hud(&self.ctx, self.expedition.as_ref(), status_rect);
                 if let Some((title, _line, since)) = self.sky_notice {
@@ -2873,29 +2878,6 @@ impl EguiUi {
                             },
                         );
                     }
-                }
-                if self.show_debug_performance_panel {
-                    egui::Area::new("debug_readout".into())
-                        .anchor(Align2::RIGHT_TOP, [-16.0, 16.0])
-                        .interactable(false)
-                        .show(&self.ctx, |ui| {
-                            presentation::hud_frame().show(ui, |ui| {
-                                ui.monospace(format!("{fps} FPS  |  {:.1} ms", perf.frame_ms_avg));
-                                if self.environment_lag > 1 {
-                                    ui.colored_label(presentation::DANGER,
-                                        format!("Environment {} s behind", self.environment_lag));
-                                }
-                                ui.monospace(format!(
-                                    "XYZ  {:.1}  {:.1}  {:.1}",
-                                    player.pos.x, player.pos.y, player.pos.z
-                                ));
-                                ui.monospace(format!("Cave-culled  {} chunks", crate::render::occlusion::last_culled()));
-                                ui.small(format!(
-                                    "{time_label}  |  {}  |  F3 to hide",
-                                    physics_state.voxel_scale.label()
-                                ));
-                            });
-                        });
                 }
             }
             if !creative_state.show_palette && (self.show_hud || creative_state.any_ui_open()) {
