@@ -123,6 +123,28 @@ fn a_silent_peer_is_cut_off_and_host_memory_stays_bounded() {
 }
 
 #[test]
+fn a_seal_beyond_any_frame_window_cannot_pin_the_client() {
+    let mut c = LockstepClient::<u32>::new(CFG, 1, 0);
+    let poison = |resync| HostMsg { sealed_until: u64::MAX, input_ack: 0, resync, frames: Vec::new() };
+    c.receive(poison(false));
+    assert_eq!(c.status(), ClientStatus::Trailing(0), "an out-of-reach seal is ignored");
+    c.receive(poison(true));
+    assert_eq!(c.status(), ClientStatus::NeedsResync);
+    let mut host = LockstepHost::<u32>::new(CFG, 0);
+    host.add_peer(1, 0).unwrap();
+    for _ in 0..10 {
+        host.advance();
+    }
+    let from = host.next_tick();
+    host.resynced(1, from).unwrap();
+    c.resync(from);
+    host.advance();
+    relay(&host, 1, &mut c);
+    assert!(matches!(c.status(), ClientStatus::Trailing(_)), "{:?}", c.status());
+    assert_eq!(c.release().map(|f| f.tick), Some(from));
+}
+
+#[test]
 fn a_late_joiner_starts_from_the_checkpoint_tick() {
     let mut host = LockstepHost::<u32>::new(CFG, 0);
     for _ in 0..50 {

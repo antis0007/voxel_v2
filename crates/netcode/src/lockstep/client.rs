@@ -81,9 +81,13 @@ impl<T: Clone> LockstepClient<T> {
             self.outbox.pop_front();
             self.outbox_first = self.outbox_first.wrapping_add(1);
         }
-        self.sealed_until = self.sealed_until.max(msg.sealed_until);
-        self.cut_off |= msg.resync && msg.sealed_until > self.resync_seal;
         let slots = (self.config.resync_lag + self.config.input_delay) as usize;
+        // A seal past every frame the host could have sent would pin the client in resync.
+        let reach = self.next_step.saturating_add(slots as u64 + self.config.frames_per_message as u64);
+        if msg.sealed_until <= reach {
+            self.sealed_until = self.sealed_until.max(msg.sealed_until);
+        }
+        self.cut_off |= msg.resync && msg.sealed_until > self.resync_seal;
         for frame in msg.frames {
             let Some(i) = frame.tick.checked_sub(self.next_step).map(|i| i as usize) else { continue };
             if i >= slots {
@@ -125,7 +129,7 @@ impl<T: Clone> LockstepClient<T> {
     pub fn resync(&mut self, from_tick: u64) {
         self.next_step = from_tick;
         self.window.clear();
-        self.sealed_until = self.sealed_until.max(from_tick);
+        self.sealed_until = from_tick;
         self.cut_off = false;
         self.resync_seal = from_tick + self.config.input_delay;
     }
