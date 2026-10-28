@@ -171,16 +171,18 @@ pub struct DiskChunk {
     pub chunk: Arc<ChunkData>,
     pub water: Arc<HashMap<IVec3, u8>>,
 }
-type ReadCache = VecDeque<(IVec3, u64, DiskChunk)>;
 #[derive(Clone)]
 pub struct RegionView {
     pub root: Arc<PathBuf>,
     pub records: Arc<RegionIndex>,
-    cache: Arc<Mutex<ReadCache>>,
+    cache: Arc<read_cache::SharedCache>,
     error: Arc<Mutex<Option<String>>>,
     store: Arc<maintenance::Store>,
 }
+#[cfg(test)]
+mod backlog_tests;
 mod maintenance;
+mod read_cache;
 pub(super) use maintenance::CheckpointEdits;
 pub(super) use maintenance::ReclaimStats;
 pub(super) fn checkpoint_id() -> u64 {
@@ -392,18 +394,10 @@ impl RegionView {
         let Some(record) = self.records.get(&coord) else {
             return Ok(None);
         };
-        {
-            let mut cache = self.cache.lock().unwrap();
-            if let Some(i) = cache
-                .iter()
-                .position(|(c, v, _)| *c == coord && *v == record.version)
-            {
-                let value = cache.remove(i).unwrap();
-                let result = value.2.clone();
-                cache.push_back(value);
-                return Ok(Some(result));
-            }
-        }
+        let _claim = match self.cache.lookup(coord, record.version) {
+            read_cache::Lookup::Hit(data) => return Ok(Some(data)),
+            read_cache::Lookup::Claimed(claim) => claim,
+        };
         let result = (|| -> Result<DiskChunk> {
             ensure!(record.len as usize <= MAX_RECORD, "Oversized region record");
             let mut file = fs::File::open(region_path(&self.root, coord, record.generation))?;
@@ -421,17 +415,12 @@ impl RegionView {
         })();
         match result {
             Ok(data) => {
-                let mut cache = self.cache.lock().unwrap();
-                let limit = (edited_budget_mib() * 1024 * 1024 / 8).max(1024 * 1024);
-                while !cache.is_empty()
-                    && (cache.len() >= 16
-                        || cache.iter().map(|(_, _, d)| disk_bytes(d)).sum::<usize>()
-                            + disk_bytes(&data)
-                            > limit)
-                {
-                    cache.pop_front();
-                }
-                cache.push_back((coord, record.version, data.clone()));
+                self.cache.lock().insert(
+                    coord,
+                    record.version,
+                    data.clone(),
+                    read_cache::byte_limit(),
+                );
                 Ok(Some(data))
             }
             Err(e) => {
@@ -448,7 +437,17 @@ struct WriteJob {
     coord: IVec3,
     version: u64,
     chunk: Arc<ChunkData>,
-    water: HashMap<IVec3, u8>,
+    /// Shared handles to the live per-chunk maps; the worker copies the cells.
+    water: Arc<super::WaterSnapshot>,
+}
+impl WriteJob {
+    fn water_cells(&self) -> HashMap<IVec3, u8> {
+        let min = self.coord * CHUNK_SIZE;
+        self.water
+            .in_box(min, min + IVec3::splat(CHUNK_SIZE))
+            .map(|(&p, &v)| (p, v))
+            .collect()
+    }
 }
 enum Command {
     Write(WriteJob),
@@ -479,6 +478,23 @@ pub struct RegionStream {
     force_writeback: bool,
     simulation_writeback: bool,
     restart_after: Instant,
+    /// Worldgen chunks made resident for an edit, not yet stored or dirty.
+    pub(super) generated: HashSet<IVec3>,
+    /// Consecutive failed writebacks; drives backoff and the status line.
+    write_failures: u32,
+    write_retry_after: Instant,
+    backlog_reported: bool,
+    #[cfg(test)]
+    dirty_ceiling_override: Option<usize>,
+}
+/// Delay before the next writeback after `failures` consecutive failures.
+fn write_backoff(failures: u32) -> Duration {
+    Duration::from_secs(2u64 << failures.saturating_sub(1).min(5))
+}
+/// Dirty chunks cannot be evicted, so new chunks stop becoming resident for
+/// edits past four resident budgets (256 MiB by default) of unwritten data.
+fn dirty_ceiling_chunks() -> usize {
+    (edited_budget_mib() * 4 * 1024 * 1024 / (VOXELS * 2 + 1024)).max(64)
 }
 fn io_worker(view: &RegionView) -> (mpsc::SyncSender<Command>, mpsc::Receiver<Completion>) {
     let (tx, commands) = mpsc::sync_channel::<Command>(IO_CAPACITY);
@@ -554,7 +570,8 @@ fn write_record_inner(
     job: &WriteJob,
     sync: bool,
 ) -> Result<Record> {
-    let bytes = encode(job.coord, job.version, &job.chunk, &job.water);
+    let water = job.water_cells();
+    let bytes = encode(job.coord, job.version, &job.chunk, &water);
     let _gate = store.writer.lock().unwrap_or_else(|e| e.into_inner());
     store.ensure_owner(root)?;
     ensure!(
@@ -578,7 +595,7 @@ fn write_record_inner(
         checksum: checksum(&bytes),
         version: job.version,
         resident_bytes: (chunk_bytes(&job.chunk)
-            + job.water.capacity() * (std::mem::size_of::<(IVec3, u8)>() + 1) * 2)
+            + water.capacity() * (std::mem::size_of::<(IVec3, u8)>() + 1) * 2)
             as u32,
     })
 }
@@ -634,6 +651,12 @@ impl RegionStream {
             force_writeback: false,
             simulation_writeback: false,
             restart_after: Instant::now(),
+            generated: HashSet::new(),
+            write_failures: 0,
+            write_retry_after: Instant::now(),
+            backlog_reported: false,
+            #[cfg(test)]
+            dirty_ceiling_override: None,
         }
     }
     pub fn mark_dirty(&mut self, c: IVec3) {
@@ -646,6 +669,17 @@ impl RegionStream {
     }
     pub fn pending(&self) -> usize {
         self.pending.len() + self.reading.len()
+    }
+    fn dirty_ceiling(&self) -> usize {
+        #[cfg(test)]
+        if let Some(limit) = self.dirty_ceiling_override {
+            return limit;
+        }
+        dirty_ceiling_chunks()
+    }
+    /// Whether unwritten edits have reached the hard ceiling.
+    pub fn backlog_full(&self) -> bool {
+        self.dirty.len() >= self.dirty_ceiling()
     }
 }
 impl World {
@@ -714,11 +748,14 @@ impl World {
     }
     pub fn region_status(&self) -> String {
         format!(
-            "Edited chunks: {} resident / {} stored; {} I/O pending; {} dirty; cache {:.1} / {} MiB; reclaimed {:.1} MiB{}",
+            "Edited chunks: {} resident / {} stored; {} I/O pending; {} / {} dirty{}; {} failed writes; cache {:.1} / {} MiB; reclaimed {:.1} MiB{}",
             self.chunks.len(),
             self.regions.view.records.len(),
             self.regions.pending(),
             self.regions.dirty.len(),
+            self.regions.dirty_ceiling(),
+            if self.regions.backlog_full() { ", new edit chunks refused" } else { "" },
+            self.regions.write_failures,
             self.edited_resident_bytes() as f64 / 1048576.0,
             edited_budget_mib(),
             self.regions.view.reclaimed_bytes() as f64 / 1048576.0,
@@ -754,11 +791,27 @@ impl World {
         if self.chunks.contains_key(&c) {
             return Ok(());
         }
+        // Refusing a new chunk keeps every existing unwritten edit resident
+        // while memory stays bounded; edits to resident chunks still commit.
+        if self.regions.backlog_full() {
+            let message = format!(
+                "Edit backlog full: {} unwritten chunks, {} failed writes",
+                self.regions.dirty.len(),
+                self.regions.write_failures
+            );
+            if !self.regions.backlog_reported {
+                self.regions.backlog_reported = true;
+                eprintln!("[regions] {message}");
+            }
+            anyhow::bail!(message);
+        }
+        self.regions.backlog_reported = false;
         if let Some(data) = self.regions.view.load(c)? {
             self.install_disk_chunk(c, data);
         } else {
             self.chunks
                 .insert(c, Arc::new(engine_worldgen::generate(&self.sample_config(), c)));
+            self.regions.generated.insert(c);
             self.invalidate_snapshot_at(c);
         }
         Ok(())
@@ -798,13 +851,19 @@ impl World {
                             } else {
                                 self.regions.modified.insert(c, Instant::now());
                             }
+                            self.regions.write_failures = 0;
                             self.invalidate_snapshot_at(c);
                         }
                         Err(e) => {
-                            self.regions
-                                .view
-                                .report(format!("Region write failed: {e:#}"));
+                            self.regions.write_failures = self.regions.write_failures.saturating_add(1);
+                            let backoff = write_backoff(self.regions.write_failures);
+                            self.regions.view.report(format!(
+                                "Region write failed ({} in a row, retry in {} s): {e:#}",
+                                self.regions.write_failures,
+                                backoff.as_secs()
+                            ));
                             self.regions.retry_after = Instant::now() + Duration::from_secs(2);
+                            self.regions.write_retry_after = Instant::now() + backoff;
                         }
                     }
                 }
@@ -834,7 +893,9 @@ impl World {
             }
         }
         let simulation_pressure = std::mem::take(&mut self.regions.simulation_writeback);
-        if Instant::now() >= self.regions.retry_after {
+        if Instant::now() >= self.regions.retry_after
+            && Instant::now() >= self.regions.write_retry_after
+        {
             let pressure = self.regions.force_writeback
                 || simulation_pressure
                 || self.edited_resident_bytes() > edited_budget_mib() * 1024 * 1024;
@@ -864,15 +925,7 @@ impl World {
                     dirty.push((c, v));
                 }
             }
-            let selected: HashSet<_> = dirty.iter().map(|(c, _)| *c).collect();
-            let mut water_by_chunk: HashMap<IVec3, HashMap<IVec3, u8>> = HashMap::new();
-            if !selected.is_empty() {
-                for &c in &selected {
-                    if let Some(water) = self.water_levels.chunk(c) {
-                        water_by_chunk.insert(c, water.iter().map(|(&p, &v)| (p, v)).collect());
-                    }
-                }
-            }
+            let water = Arc::new(self.water_levels.snapshot(dirty.iter().map(|(c, _)| *c)));
             for (c, v) in dirty {
                 if self.regions.pending() >= IO_CAPACITY {
                     break;
@@ -880,12 +933,11 @@ impl World {
                 let Some(chunk) = self.chunks.get(&c).cloned() else {
                     continue;
                 };
-                let water = water_by_chunk.remove(&c).unwrap_or_default();
                 match self.regions.tx.try_send(Command::Write(WriteJob {
                     coord: c,
                     version: v,
                     chunk,
-                    water,
+                    water: Arc::clone(&water),
                 })) {
                     Ok(()) => {
                         self.regions.pending.insert(c, v);

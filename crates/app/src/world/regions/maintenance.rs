@@ -237,13 +237,15 @@ impl World {
     /// Pin only dirty arrays, never a second full resident world. Fluid entries
     /// are partitioned once instead of scanning the global map for every chunk.
     pub fn capture_edits(&mut self) -> Result<Option<CheckpointEdits>> {
-        let untracked: Vec<_> = self
-            .chunks
-            .keys()
+        // Generated chunks are the only resident chunks that can be neither
+        // stored nor dirty, so the capture never walks the whole resident set.
+        let untracked: Vec<_> = std::mem::take(&mut self.regions.generated)
+            .into_iter()
             .filter(|c| {
-                !self.regions.view.records.contains_key(c) && !self.regions.dirty.contains_key(c)
+                self.chunks.contains_key(c)
+                    && !self.regions.view.records.contains_key(c)
+                    && !self.regions.dirty.contains_key(c)
             })
-            .copied()
             .collect();
         for c in untracked {
             self.regions.mark_dirty(c);
@@ -274,13 +276,8 @@ impl World {
             return Ok(None);
         }
         self.regions.force_writeback = false;
-        let mut water: HashMap<IVec3, HashMap<IVec3, u8>> = HashMap::new();
-        for &c in self.regions.dirty.keys() {
-            if let Some(values) = self.water_levels.chunk(c) {
-                water.insert(c, values.iter().map(|(&p, &v)| (p, v)).collect());
-            }
-        }
-
+        // Chunk-map handles only; the save worker copies the cells.
+        let water = Arc::new(self.water_levels.snapshot(self.regions.dirty.keys().copied()));
         let jobs = self
             .regions
             .dirty
@@ -294,7 +291,7 @@ impl World {
                         .get(&coord)
                         .cloned()
                         .context("Dirty edited chunk is not resident")?,
-                    water: water.remove(&coord).unwrap_or_default(),
+                    water: Arc::clone(&water),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
