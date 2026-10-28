@@ -635,6 +635,11 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             root.is_dir() || records.is_empty(),
             "World regions directory is missing"
         );
+        // A damaged rules sidecar must not block opening the world it sits in.
+        world.rules = super::rules::Rules::load(&root).unwrap_or_else(|e| {
+            eprintln!("[rules] Using default rules: {e:#}");
+            super::rules::Rules::default()
+        });
         world.regions = super::regions::RegionStream::open(root, records);
         world.regions.view.ensure_owner()?;
         background::validate_extents(&world.regions.view)?;

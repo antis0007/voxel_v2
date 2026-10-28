@@ -39,6 +39,11 @@ pub fn gameplay(
     }
     hook(Hook::BeforePlayer, world, player, input);
     if move_player {
+        if !world.rules.mode.flight() {
+            // A cleared double-tap window can never toggle flight on.
+            player.flying = false;
+            player.jump_tap_timer = 0.0;
+        }
         update_player(player, input, world, STEP_SECONDS);
     }
     let actions = hook(Hook::BeforeAdventure, world, player, input);
@@ -75,7 +80,7 @@ pub fn finish(
     if settle {
         sim.settle(world);
     }
-    if advance_day && sim.authority_error.is_none() {
+    if advance_day && world.rules.daylight_cycle && sim.authority_error.is_none() {
         day.advance(STEP_SECONDS);
     }
 }

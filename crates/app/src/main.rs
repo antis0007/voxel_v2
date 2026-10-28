@@ -1806,7 +1806,7 @@ fn main() -> Result<()> {
                                 };
                             }
                             Some(BindAction::CreativePanel) if fresh_press => {
-                                let open = !creative.show_panel; creative.close_panels(); creative.show_panel = open; input.clear(); player.jump_tap_timer = 0.0;
+                                creative.toggle_creative_panel(); input.clear(); player.jump_tap_timer = 0.0;
                                 sync_creative_ui_cursor(
                                     window,
                                     &mut grabbed,
@@ -1852,7 +1852,7 @@ fn main() -> Result<()> {
                                 );
                             }
                             Some(BindAction::QuickSelect) if fresh_press && !creative.show_palette => {
-                                let open = !creative.show_quick_select; creative.close_panels(); creative.show_quick_select = open; input.clear(); player.jump_tap_timer = 0.0;
+                                creative.toggle_quick_select(); input.clear(); player.jump_tap_timer = 0.0;
                                 sync_creative_ui_cursor(
                                     window,
                                     &mut grabbed,
@@ -1880,19 +1880,19 @@ fn main() -> Result<()> {
                                 creative.tool = creative::ToolKind::Hand;
                             }
                             Some(BindAction::ToolBrush) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::Brush;
+                                creative.choose_tool(creative::ToolKind::Brush);
                             }
                             Some(BindAction::ToolBuilders) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::BuildersWand;
+                                creative.choose_tool(creative::ToolKind::BuildersWand);
                             }
                             Some(BindAction::ToolDestructor) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::DestructorWand;
+                                creative.choose_tool(creative::ToolKind::DestructorWand);
                             }
                             Some(BindAction::ToolArea) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::AreaTool;
+                                creative.choose_tool(creative::ToolKind::AreaTool);
                             }
                             Some(BindAction::ToolExplosive) if fresh_press && !creative.any_ui_open() => {
-                                creative.tool = creative::ToolKind::ExplosiveWand;
+                                creative.choose_tool(creative::ToolKind::ExplosiveWand);
                             }
                             Some(BindAction::HotbarPrev | BindAction::HotbarNext)
                                 if fresh_press && grabbed && !creative.any_ui_open() => {
@@ -2927,6 +2927,8 @@ fn main() -> Result<()> {
                                 atmosphere_mode,
                             };
                             egui_ui.region_status = world.as_ref().map(World::region_status);
+                            egui_ui.world_rules = world.as_ref().map_or_else(Default::default, |w| w.rules);
+                            creative.set_locked(!egui_ui.world_rules.mode.creative_tools());
                             if let Some(w) = world.as_mut() {
                                 let mut drops = std::mem::take(&mut w.inventory.dropped);
                                 let scale = w.voxel_scale.meters();
@@ -3078,7 +3080,7 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 UiAction::GiveItem(item,count) => {
-                                    if let Some(w) = world.as_mut() {
+                                    if let Some(w) = world.as_mut().filter(|_| creative.catalogue_open()) {
                                         let limit = w.inventory.stack_limit(item);
                                         let stack = world::inventory::ItemStack::new(
                                             item,
@@ -3144,6 +3146,7 @@ fn main() -> Result<()> {
                                 }
                                 UiAction::SaveWorld => { saves.request(true); }
                                 UiAction::OpenWorld(id)=>library.open(id),
+                                UiAction::SetRules(rules)=>if let Some(w)=world.as_mut(){w.set_rules(rules);},
                                 UiAction::RefreshWorlds=>library.refresh(),
                                 UiAction::RenameWorld {id,name}=>library.rename(id,name),
                                 UiAction::FavoriteWorld {id,favorite}=>library.favorite(id,favorite),
@@ -3153,6 +3156,7 @@ fn main() -> Result<()> {
                                     world_type,
                                     voxel_scale,
                                     seed,
+                                    mode: game_mode,
                                 } => {
                                     reset_gameplay_input(
                                         &mut input,
@@ -3185,6 +3189,7 @@ fn main() -> Result<()> {
                                         &mut last,
                                         &mut last_safe_player_pos,
                                     );
+                                    if let Some(w)=world.as_mut(){w.set_rules(world::rules::Rules::new_world(game_mode));}
                                     if reference
                                         && let Some(w)=world.as_mut() {
                                             reference_environment::install(w);
@@ -3705,7 +3710,8 @@ fn main() -> Result<()> {
                                         }
                                     }
                                 }
-                                let mining_tool = survival_hand.then(|| world::mining::tool_for(
+                                // Creative worlds keep the instant break; Survival mines over time.
+                                let mining_tool = (survival_hand && creative.locked()).then(|| world::mining::tool_for(
                                     world.inventory.hotbar[creative.selected_slot].map(|s| s.item),
                                     world.expedition.tool_tier,
                                 ));

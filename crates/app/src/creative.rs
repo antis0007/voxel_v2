@@ -123,6 +123,8 @@ pub struct CreativeState {
     pub selected_slot: usize,
     pub palette_search: String,
     hotbar: [BlockId; HOTBAR_SLOTS],
+    /// Set from the world's game mode; see `mode_gate`.
+    locked: bool,
 }
 
 impl Default for CreativeState {
@@ -157,12 +159,14 @@ impl Default for CreativeState {
             selected_slot: 0,
             palette_search: String::new(),
             hotbar,
+            locked: false,
         }
     }
 }
 
 // Largest supported 8 m brush at 0.25 m: 65^3 cells. Never truncate a stroke.
 const MAX_TOOL_CELLS: usize = 524288;
+mod mode_gate;
 mod preview;
 #[derive(Clone, Debug)]
 struct EditStroke {

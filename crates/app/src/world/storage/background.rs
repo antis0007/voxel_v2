@@ -36,6 +36,7 @@ struct Job {
     header: Vec<u8>,
     footer: Vec<u8>,
     activity: super::super::activity::Snapshot,
+    rules: super::super::rules::Rules,
     manual: bool,
     id: u64,
 }
@@ -222,6 +223,7 @@ impl SaveService {
                 header,
                 footer,
                 activity: w.activity.snapshot(),
+                rules: w.rules,
                 manual: self.manual,
                 id: id(),
             }))
@@ -280,6 +282,7 @@ fn persist(job: Job) -> Result<Completed> {
     let bytes = manifest(job.header, &view, &footer, job.id)?;
     let commits = view.root.join("checkpoints");
     fs::create_dir_all(&commits)?;
+    job.rules.save(&view.root)?;
     let commit = commits.join(format!("commit-{:020}.vxw", job.id));
     write_atomic(&commit, &bytes, job.id)?;
     let slot = if job.manual {

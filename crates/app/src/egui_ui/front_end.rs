@@ -63,6 +63,7 @@ pub(super) fn home(
             render,
             owner.persistence_status.as_deref(),
             &mut owner.new_world_name,
+            &mut owner.new_world_mode,
             owner.library_loading,
         ),
         HomePage::Preferences => {
@@ -399,6 +400,7 @@ fn new_world(
     render: &mut RenderUiState,
     status: Option<&str>,
     name: &mut String,
+    mode: &mut crate::world::rules::GameMode,
     loading: bool,
 ) -> UiAction {
     let mut result = UiAction::None;
@@ -436,9 +438,15 @@ fn new_world(
                             ui.add(egui::DragValue::new(seed).range(0..=u32::MAX).speed(1.0));
                             if ui.small_button("Shuffle").clicked(){*seed=next_seed(*seed);}
                         });
+                        ui.add_space(6.0);caption(ui,"GAME MODE");
+                        ui.horizontal_wrapped(|ui| {
+                            for choice in crate::world::rules::GameMode::ALL {
+                                if tab(ui,choice.label(),*mode==choice).on_hover_text(choice.hint()).clicked(){*mode=choice;}
+                            }
+                        });
                         ui.add_space(12.0);
                         ui.add_enabled_ui(!loading && !name.trim().is_empty(),|ui| {
-                            if action(ui,"Create world",true).clicked(){*result=UiAction::StartWorld {name:name.trim().to_owned(),reference:false,world_type:*world,voxel_scale:*scale,seed:*seed};}
+                            if action(ui,"Create world",true).clicked(){*result=UiAction::StartWorld {name:name.trim().to_owned(),reference:false,world_type:*world,voxel_scale:*scale,seed:*seed,mode:*mode};}
                         });
                         if let Some(status)=status {ui.label(RichText::new(status).small().color(MUTED));}
                         ui.collapsing("Display & terrain quality",|ui|settings::graphics_settings(ui,render,scale.meters()));
@@ -676,6 +684,7 @@ pub(super) fn pause(
                                 "World",
                                 "",
                             );
+                            super::world_rules::draw(ui, owner.world_rules, &mut result);
                             settings::environment_settings(ui, time, physics, &mut result);
                         }
                     });

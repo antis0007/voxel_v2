@@ -126,7 +126,9 @@ pub(super) fn import_world(id: &str) -> Result<()> {
             let name = entry.file_name();
             let p = entry.path();
             if entry.file_type()?.is_file()
-                && (p.extension().is_some_and(|e| e == "vxr") || name == "world.meta")
+                && (p.extension().is_some_and(|e| e == "vxr")
+                    || name == "world.meta"
+                    || name == super::super::rules::FILE)
             {
                 copy_writable(&p, &temporary.join(&name))?;
             } else if name == "checkpoints" && entry.file_type()?.is_dir() {

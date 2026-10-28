@@ -44,6 +44,7 @@ mod wand_xmb;
 mod wands;
 mod wand_icon;
 mod world_browser;
+mod world_rules;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use glam::Vec3Swizzles;
 use glam::{IVec3, Mat4, Quat, Vec3};
@@ -82,7 +83,10 @@ pub enum UiAction {
         world_type: WorldType,
         voxel_scale: VoxelScalePreset,
         seed: u32,
+        mode: crate::world::rules::GameMode,
     },
+    /// Replaces the open world's rules; the world folder keeps them.
+    SetRules(crate::world::rules::Rules),
     SetWeatherPreset(crate::world::WeatherPreset),
     RandomizeWeather,
     Resume,
@@ -1703,6 +1707,9 @@ pub struct EguiUi {
     /// Sky event banner: (title, line, egui time it appeared).
     pub sky_notice: Option<(&'static str, &'static str, f64)>,
     pub region_status: Option<String>,
+    /// Rules of the open world, mirrored from the world each frame.
+    pub world_rules: crate::world::rules::Rules,
+    pub new_world_mode: crate::world::rules::GameMode,
     pub region_error: Option<String>,
     pub ctx: egui::Context,
     state: egui_winit::State,
@@ -1789,6 +1796,8 @@ impl EguiUi {
             quality_notice: None,
             sky_notice: None,
             region_status: None,
+            world_rules: Default::default(),
+            new_world_mode: crate::world::rules::GameMode::Survival,
             region_error: None,
             ctx,
             state,

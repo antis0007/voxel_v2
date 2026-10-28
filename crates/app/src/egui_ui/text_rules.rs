@@ -14,6 +14,7 @@ const CHECKED: &[&str] = &[
     "crates/app/src/egui_ui/map/minimap.rs",
     "crates/app/src/egui_ui/map/panel.rs",
     "crates/app/src/egui_ui/map/waypoints.rs",
+    "crates/app/src/egui_ui/world_rules.rs",
     "crates/app/src/world/factory/chips.rs",
     "crates/app/src/world/factory/chips/actions.rs",
     "crates/app/src/world/factory/overview.rs",

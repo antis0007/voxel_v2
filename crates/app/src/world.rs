@@ -22,6 +22,7 @@ pub mod recipe_index;
 pub mod mood;
 pub mod orbital;
 pub mod regions;
+pub mod rules;
 mod sample_cache;
 pub mod storage;
 pub(crate) mod trace;
@@ -1227,6 +1228,8 @@ pub struct World {
     pub undercrown: undercrown::State,
     pub factory: factory::Factory,
     pub expedition: expedition::Expedition,
+    /// Loaded from and saved to the `rules::FILE` sidecar in `regions.root`.
+    pub rules: rules::Rules,
     pub regions: regions::RegionStream,
     pub water_levels: water::WaterLevels,
     /// Runtime-only surface ripples. Not saved; rebuilt from impacts.
@@ -1264,6 +1267,7 @@ impl World {
                 inv
             },
             regions,
+            rules: rules::Rules::default(),
             expedition: expedition::Expedition::default(),
             factory: factory::Factory::default(),
             adventure: adventure::Adventure::default(),
