@@ -40,7 +40,7 @@ fn get(cfg: &WorldSampleConfig, p: IVec3) -> B {
 
 /// A synthetic complex: any family, seed and modifier, anywhere.
 fn synthetic(family: Family, seed: u32, modifier: SiteModifier) -> Shrine {
-    Shrine { family, center: Vec3::ZERO, turn: 0, voxel: 1.0, seed, modifier }
+    Shrine { family, center: Vec3::ZERO, turn: 0, voxel: 1.0, seed, modifier, ossuary: false }
 }
 
 #[test]

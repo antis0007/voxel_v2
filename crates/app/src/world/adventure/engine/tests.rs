@@ -82,12 +82,12 @@ fn a_committed_swing_keeps_its_direction() {
     e.cooldown = 0.0;
     let mut feet = e.pos + Vec3::new(0.0, 0.0, -2.5);
     let (mut shots, mut sounds, mut budget) = (Vec::new(), Vec::new(), 64usize);
-    tick(&mut e, &mut world, feet, feet + Vec3::Y * 1.6, 0.01, &mut shots, &mut sounds, &mut budget);
+    tick(&mut e, &mut world, feet, feet + Vec3::Y * 1.6, 0.01, &mut shots, &mut sounds, &mut Vec::new(), &mut budget);
     assert_eq!(e.engine.run.as_ref().map(|r| r.kind), Some(Action::Swing));
     let committed = e.lunge;
     feet += Vec3::new(2.5, 0.0, 0.0);
     for _ in 0..40 {
-        tick(&mut e, &mut world, feet, feet + Vec3::Y * 1.6, 0.01, &mut shots, &mut sounds, &mut budget);
+        tick(&mut e, &mut world, feet, feet + Vec3::Y * 1.6, 0.01, &mut shots, &mut sounds, &mut Vec::new(), &mut budget);
     }
     assert_eq!(e.lunge, committed);
 }

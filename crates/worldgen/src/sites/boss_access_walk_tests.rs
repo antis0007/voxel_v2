@@ -6,7 +6,7 @@ use std::collections::{HashSet, VecDeque};
 const FAMILIES: [Family; 4] = [Family::Foundry, Family::Toll, Family::Archive, Family::Hart];
 
 pub(super) fn synthetic(family: Family, seed: u32, modifier: SiteModifier) -> Shrine {
-    Shrine { family, center: Vec3::ZERO, turn: 0, voxel: 1.0, seed, modifier }
+    Shrine { family, center: Vec3::ZERO, turn: 0, voxel: 1.0, seed, modifier, ossuary: false }
 }
 
 // ---- Walker over the plan's 1 m local grid. -------------------------------

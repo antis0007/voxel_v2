@@ -9,14 +9,14 @@ use crate::sites::modifiers::SiteModifier;
 use engine_core::hash::hash_u32;
 
 /// The whole complex for one site.
-pub(super) fn build(f: Family, seed: u32, modifier: SiteModifier) -> Plan {
+pub(super) fn build(f: Family, seed: u32, modifier: SiteModifier, ossuary: bool) -> Plan {
     let mirrored = seed & 1 == 1;
     let mut b = Builder::new(modifier);
     approach::mechanisms(&mut b, f, seed);
     approach::treasure_fixtures(&mut b, f, mirrored);
     b.mirror = mirrored;
     match f {
-        Family::Foundry => foundry(&mut b, seed),
+        Family::Foundry => if ossuary { burial_works(&mut b, seed) } else { foundry(&mut b, seed) },
         Family::Toll => toll(&mut b, seed),
         Family::Archive => archive(&mut b, seed),
         Family::Hart => hart(&mut b, seed),
@@ -104,6 +104,32 @@ fn foundry(b: &mut Builder, seed: u32) {
     b.put([8, 9, 0, 1, 12, 26], B::Lava);
     pillars(b, seed, &[(-7, 15), (5, 15), (-7, 19), (5, 19), (-7, 23), (5, 23)], 1, top, B::BlastBrick);
     hall(b, B::BlastBrick, B::StoneBricks, top);
+}
+
+/// Burial works: weak partitions demonstrate excavation; basalt buttresses
+/// survive it. The side aisles remain open for the service approach.
+fn burial_works(b: &mut Builder, seed: u32) {
+    galleries(b, seed, B::StoneBricks);
+    b.dress = false;
+    // Interrupted burial galleries: narrow walls can be baited into new passages.
+    for w in [15, 22] {
+        for (a,z) in [(-7,-2),(2,7)] {
+            b.put([a,z,1,3,w,w+1], B::WeatheredBricks);
+        }
+    }
+    // Known breaking-strength contrast, present in every version-59 layout.
+    for (u,w) in [(-6,18),(5,18)] {
+        b.put([u,u+2,1,4,w,w+2], B::Basalt);
+        b.put([u,u+2,4,5,w,w+2], B::CarvedStone);
+    }
+    // Existing cut profile and displaced sarcophagi at the approach.
+    for (u,w) in [(-8,13),(7,24)] {
+        b.put([u,u+1,1,2,w,w+2], B::TombStone);
+    }
+    b.put([-2,2,0,1,11,27], B::Limestone);
+    b.put([-11,-9,1,2,22,24], B::Torch);
+    b.put([9,10,1,2,13,14], B::Torch);
+    hall(b, B::StoneBricks, B::StoneBricks, 9);
 }
 
 /// Last Tollkeeper: a stone causeway down the middle with parapet cover lines,

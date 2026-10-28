@@ -1,4 +1,4 @@
-//! The Unfinished Engine keeps manufacturing while it fights. Every module is
+//! The Ossuary Engine keeps manufacturing while it fights. Every module is
 //! paid from finite stock bins and must ride the service arm from the cradle to
 //! the mount; a heavy hit in transit knocks it loose as a real, usable item.
 use super::*;
@@ -36,6 +36,12 @@ pub(super) struct State {
     pub transfer: Option<(Module, f32)>,
     pub loose: Option<(Module, Vec3)>,
     pub stock: u32,
+    pub loading_damage: f32,
+    pub traction_damage: f32,
+    pub jam: f32,
+    pub cut_cells: u32,
+    pub cargo: Vec<ItemStack>,
+    pub secured: bool,
     last_health: f32,
     initialized: bool,
     pub stolen: u32,
@@ -75,22 +81,33 @@ impl Module {
 
 pub(super) fn action_name(e: &Enemy) -> Option<&'static str> {
     let s = &e.engine;
-    if let Some(r) = &s.run {
-        return Some(match (r.kind, r.phase()) {
+    Some(if s.secured {
+        "Secured"
+    } else if s.loading_damage >= DRIVE_HEALTH && s.traction_damage >= DRIVE_HEALTH {
+        "Drives Disabled"
+    } else if s.jam > 0.0 {
+        "Frost Stalled"
+    } else if let Some(r) = &s.run {
+        match (r.kind, r.phase()) {
             (_, Phase::Recover) => "Recovering",
-            (Action::Swing, _) => "Cutter sweep — step out of the arc",
-            (Action::Shove, _) => "Ram — sidestep",
-            (Action::Volley, _) => "Launcher volley — take cover",
-        });
-    }
-    Some(if s.transfer.is_some() {
-        "Installing a module — strike the arm"
+            (Action::Swing, Phase::Prepare) => "Arm Tension",
+            (Action::Swing, _) => "Arm Sweep",
+            (Action::Shove, Phase::Prepare) => "Bracing",
+            (Action::Shove, _) => "Cutting",
+            (Action::Volley, _) => "Discharging",
+        }
+    } else if s.loading_damage >= DRIVE_HEALTH {
+        "Loading Disabled"
+    } else if s.traction_damage >= DRIVE_HEALTH {
+        "Traction Disabled"
+    } else if s.transfer.is_some() {
+        "Transferring"
     } else if s.loose.is_some() {
-        "Recovering a dropped module"
+        "Reclaiming"
     } else if s.building.is_some() {
-        "Assembling the next module"
+        "Assembling"
     } else {
-        "Fighting with what it has"
+        "Repositioning"
     })
 }
 
@@ -107,7 +124,10 @@ const CRADLE: Vec3 = Vec3::new(0.0, 1.5, 1.05);
 const MOUNT: Vec3 = Vec3::new(0.95, 1.3, -0.55);
 /// Where the arm holds a module at transfer progress `t`: a visible arc over the shoulder.
 fn arm(e: &Enemy, t: f32) -> Vec3 {
-    local(e, CRADLE.lerp(MOUNT, t) + Vec3::Y * (t * std::f32::consts::PI).sin() * 0.9)
+    local(
+        e,
+        CRADLE.lerp(MOUNT, t) + Vec3::Y * (t * std::f32::consts::PI).sin() * 0.9,
+    )
 }
 
 /// Frontal hits glance off an installed brace except while it commits an attack.
@@ -115,10 +135,16 @@ pub(super) fn guarded(e: &Enemy, incoming: Vec3) -> bool {
     e.kind == KIND
         && e.engine.installed == Some(Module::Brace)
         && incoming.normalize_or_zero().dot(facing(e)) < -0.35
-        && e.engine.run.as_ref().is_none_or(|r| r.phase() == Phase::Prepare)
+        && e.engine
+            .run
+            .as_ref()
+            .is_none_or(|r| r.phase() == Phase::Prepare)
 }
 
 fn move_ground(e: &mut Enemy, world: &World, direction: Vec3, distance: f32) {
+    if e.engine.traction_damage >= DRIVE_HEALTH {
+        return;
+    }
     let steps = (distance / 0.1).ceil().max(1.0) as u32;
     for _ in 0..steps {
         let q = e.pos + direction * distance / steps as f32;
@@ -156,6 +182,16 @@ fn choose(e: &Enemy, distance: f32) -> Option<Module> {
 
 /// Production, transfer, knock-loose and pickup. Runs whether or not it attacks.
 fn manufacture(e: &mut Enemy, world: &mut World, feet: Vec3, dt: f32, sounds: &mut Vec<Sound>) {
+    if e.engine.loading_damage >= DRIVE_HEALTH
+        || e.engine.jam > 0.0
+        || e.engine
+            .run
+            .as_ref()
+            .is_some_and(|r| r.kind == Action::Swing)
+    {
+        e.engine.last_health = e.health;
+        return;
+    }
     let enraged = e.health < e.max_health() * 0.5;
     let taken = e.engine.last_health - e.health;
     e.engine.last_health = e.health;
@@ -167,7 +203,9 @@ fn manufacture(e: &mut Enemy, world: &mut World, feet: Vec3, dt: f32, sounds: &m
             e.engine.knocked += 1;
             e.stagger = e.stagger.max(0.4);
             sound(sounds, Cue::Clang, Some(at), 0.9);
-            world.expedition.say("The module tears free of the service arm. Grab it before the Engine does.");
+            world
+                .expedition
+                .say("The module tears free of the service arm. Grab it before the Engine does.");
         } else if t + dt / TRANSFER_SECONDS >= 1.0 {
             // A replaced tool goes back into the bins as scrap, never as a free item.
             if e.engine.installed.replace(module).is_some() {
@@ -185,9 +223,16 @@ fn manufacture(e: &mut Enemy, world: &mut World, feet: Vec3, dt: f32, sounds: &m
     {
         let (inserted, _) = world.inventory.try_insert(ItemStack::new(module.item(), 1));
         if inserted == 1 {
+            if let Item::Block(b) = module.item()
+                && let Some(kind) = Kind::from_block(b)
+            {
+                world.factory.kits[kind as usize] = world.inventory.count_item(module.item());
+            }
             e.engine.loose = None;
             e.engine.stolen += 1;
-            world.expedition.say(format!("Salvaged the Engine's {}.", module.label()));
+            world
+                .expedition
+                .say(format!("Salvaged the Engine's {}.", module.label()));
             sound(sounds, Cue::Treasure, Some(at), 0.8);
         }
     }
@@ -217,6 +262,7 @@ pub(super) fn tick(
     dt: f32,
     shots: &mut Vec<Projectile>,
     sounds: &mut Vec<Sound>,
+    dirty: &mut Vec<IVec3>,
     navigation_budget: &mut usize,
 ) -> (f32, Vec3) {
     if !e.engine.initialized {
@@ -228,6 +274,11 @@ pub(super) fn tick(
         e.engine.last_health = e.health;
     }
     navigation::gravity(e, world, dt);
+    e.engine.jam = (e.engine.jam - dt).max(0.0);
+    if e.engine.jam > 0.0 || e.engine.secured {
+        e.tell = 0.0;
+        return (0.0, Vec3::ZERO);
+    }
     // Disengaging pauses the fight; it never heals or refunds the bins.
     if (feet - e.home).length() > 48.0 {
         e.engine.run = None;
@@ -238,11 +289,23 @@ pub(super) fn tick(
     manufacture(e, world, feet, dt, sounds);
     let mut damage = 0.0;
     if let Some(mut run) = e.engine.run.take() {
-        if e.stagger > 0.3 && run.phase() == Phase::Prepare {
+        if (e.stagger > 0.3 && run.phase() == Phase::Prepare)
+            || (matches!(run.phase(), Phase::Prepare | Phase::Active)
+                && run.kind == Action::Swing
+                && e.engine.loading_damage >= DRIVE_HEALTH)
+            || (matches!(run.phase(), Phase::Prepare | Phase::Active)
+                && run.kind == Action::Shove
+                && e.engine.traction_damage >= DRIVE_HEALTH)
+        {
             run.interrupt();
         }
+        let previous_time = run.elapsed;
         let release = run.advance(dt);
-        e.tell = if run.phase() == Phase::Prepare { run.prepare - run.elapsed } else { 0.0 };
+        e.tell = if run.phase() == Phase::Prepare {
+            run.prepare - run.elapsed
+        } else {
+            0.0
+        };
         if release && run.kind == Action::Volley && e.engine.stock > 0 && shots.len() <= 90 {
             e.engine.stock -= 1;
             let aim = (e.aim - e.center()).normalize_or_zero();
@@ -256,7 +319,10 @@ pub(super) fn tick(
                     payload_mods: Default::default(),
                     spell: 0,
                     life: 3.0,
-                    mods: wands::ShotMods { damage_mul: 1.2, ..Default::default() },
+                    mods: wands::ShotMods {
+                        damage_mul: 1.2,
+                        ..Default::default()
+                    },
                     bore_budget: 0,
                     trail_timer: 0.0,
                     splashed: false,
@@ -267,29 +333,36 @@ pub(super) fn tick(
         if release {
             sound(sounds, Cue::ForgeSlam, Some(e.center()), 0.8);
         }
-        if run.phase() == Phase::Active {
+        let active_dt =
+            (run.elapsed.min(run.prepare + run.active) - previous_time.max(run.prepare)).max(0.0);
+        if active_dt > 0.0 {
             if run.kind == Action::Shove {
-                move_ground(e, world, e.lunge, dt * 3.0);
+                cut_advance(e, world, active_dt, dirty);
             }
             let d = flat(feet - e.pos);
             let contact = match run.kind {
                 Action::Swing => {
                     let progress = ((run.elapsed - run.prepare) / run.active).clamp(0.0, 1.0);
-                    let previous = ((run.elapsed - dt - run.prepare) / run.active).clamp(0.0, 1.0);
+                    let previous = ((previous_time - run.prepare) / run.active).clamp(0.0, 1.0);
                     let n = d.normalize_or_zero();
                     let angle = e.lunge.cross(n).y.atan2(e.lunge.dot(n));
-                    d.length() < 3.6
+                    (1.5..3.6).contains(&d.length())
                         && angle >= -1.6 + previous * 3.2 - 0.2
                         && angle <= -1.6 + progress * 3.2 + 0.2
                 }
                 Action::Shove => {
                     let along = d.dot(e.lunge);
-                    along > 0.0 && along < 2.4 && d.cross(e.lunge).y.abs() < 0.9
+                    along > 0.0 && along < 2.4 && d.cross(e.lunge).y.abs() < 1.15
                 }
                 Action::Volley => false,
             };
-            if !run.hit && contact && (feet.y - e.pos.y).abs() < 2.1 && line(world, e.center(), eye) {
-                damage = if run.kind == Action::Swing { 22.0 } else { 12.0 };
+            if !run.hit && contact && (feet.y - e.pos.y).abs() < 2.1 && line(world, e.center(), eye)
+            {
+                damage = if run.kind == Action::Swing {
+                    22.0
+                } else {
+                    12.0
+                };
                 run.hit = true;
             }
         }
@@ -306,6 +379,8 @@ pub(super) fn tick(
     }
     // An unclaimed part is worth fetching when the player is not standing on it.
     if let Some((_, at)) = e.engine.loose
+        && e.engine.loading_damage < DRIVE_HEALTH
+        && e.engine.traction_damage < DRIVE_HEALTH
         && flat(feet - at).length() > 3.0
     {
         if flat(at - e.pos).length() < 1.3 {
@@ -314,39 +389,75 @@ pub(super) fn tick(
             e.engine.building = Some((module, 0.6));
             e.cooldown = 0.8;
         } else {
-            let direction = e.navigation.heading(world, e.pos, at, KIND, dt, e.slot, navigation_budget);
+            let direction =
+                e.navigation
+                    .heading(world, e.pos, at, KIND, dt, e.slot, navigation_budget);
             move_ground(e, world, direction, dt * 1.6);
             e.yaw = (-direction.x).atan2(-direction.z);
         }
         return (0.0, Vec3::ZERO);
     }
     let distance = flat(feet - e.pos).length();
-    if !e.visible || distance > 26.0 {
+    if (!e.visible && e.alert <= 0.0) || distance > 26.0 {
         return (0.0, Vec3::ZERO);
     }
-    let direction = flat(feet - e.pos).normalize_or_zero();
+    let target = if e.visible { feet } else { e.last_seen };
+    let direction = flat(target - e.pos).normalize_or_zero();
+    let yaw = (-direction.x).atan2(-direction.z);
+    let turn = (yaw - e.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    // The scoop covers a broad arc: demanding exact facing here lets a
+    // circling target suppress every attack by keeping the carriage turning.
+    let alignment = if distance < 4.0 && e.engine.loading_damage < DRIVE_HEALTH {
+        0.85
+    } else {
+        0.25
+    };
+    if turn.abs() > alignment && e.engine.traction_damage < DRIVE_HEALTH {
+        e.yaw += turn.clamp(-dt * 0.85, dt * 0.85);
+        return (0.0, Vec3::ZERO);
+    }
     let installed = e.engine.installed;
-    let kind = if distance < 3.4 && installed == Some(Module::Cutter) {
+    let kind = if distance < 4.0
+        && e.engine.loading_damage < DRIVE_HEALTH
+        && e.engine.transfer.is_none()
+    {
         Action::Swing
-    } else if distance < 2.6 {
+    } else if distance < 13.0
+        && e.engine.traction_damage < DRIVE_HEALTH
+        && e.engine.cut_cells < CUT_CAPACITY
+    {
         Action::Shove
-    } else if distance > 6.0 && installed == Some(Module::Launcher) && e.engine.stock > 0 {
+    } else if distance > 6.0
+        && installed == Some(Module::Launcher)
+        && e.engine.stock > 0
+        && e.engine.loading_damage < DRIVE_HEALTH
+    {
         Action::Volley
     } else {
         if e.pos.distance(e.home) < 24.0 {
-            let heading = e.navigation.heading(world, e.pos, feet, KIND, dt, e.slot, navigation_budget);
-            move_ground(e, world, heading, dt * if installed == Some(Module::Brace) { 0.8 } else { 1.2 });
+            let heading =
+                e.navigation
+                    .heading(world, e.pos, feet, KIND, dt, e.slot, navigation_budget);
+            move_ground(
+                e,
+                world,
+                heading,
+                dt * if installed == Some(Module::Brace) {
+                    0.8
+                } else {
+                    1.2
+                },
+            );
         }
-        e.yaw = (-direction.x).atan2(-direction.z);
         return (0.0, Vec3::ZERO);
     };
     // Direction is fixed here: the committed attack never tracks a sidestep.
-    e.lunge = direction;
-    e.yaw = (-direction.x).atan2(-direction.z);
+    e.lunge = facing(e);
     e.aim = eye;
     let (prepare, active, recover) = match kind {
-        Action::Swing => (0.9, 0.45, 1.0),
-        Action::Shove => (0.7, 0.3, 0.9),
+        Action::Swing => (1.15, 0.8, 1.25),
+        Action::Shove => (1.4, 2.2, 1.5),
         Action::Volley => (1.1, 0.1, 1.0),
     };
     e.attacks = e.attacks.wrapping_add(1);
@@ -356,6 +467,14 @@ pub(super) fn tick(
     (0.0, Vec3::ZERO)
 }
 
+mod mechanisms;
+pub mod review;
+use mechanisms::{CUT_CAPACITY, DRIVE_HEALTH, cut_advance};
+pub(super) use mechanisms::{
+    component_hit, focus, hit, melee_point, release_cargo, release_hardware, secure,
+};
+mod save;
+pub(super) use save::{Saved, restore, snapshot};
 mod model;
 pub(super) use model::model;
 

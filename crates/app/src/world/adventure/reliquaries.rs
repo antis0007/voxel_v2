@@ -219,6 +219,10 @@ impl Adventure {
             && let Some(focus) = self.station_focus(world, eye, forward) {
                 self.relic_focus = Some(focus);
             }
+        if let Some(ray) = direction
+            && let Some(prompt) = self.enemies.iter().find_map(|e| engine::focus(e, world, eye, ray)) {
+            self.relic_focus = Some(prompt);
+        }
 
         let mut closest_boss = None;
         let mut closest_boss_distance_squared = BOSS_VIEW_RANGE * BOSS_VIEW_RANGE;
@@ -295,6 +299,10 @@ impl Adventure {
         let Some(forward) = unit_direction(forward) else {
             return false;
         };
+        if let Some(i) = self.enemies.iter().position(|e| engine::focus(e, world, eye, forward).is_some()) {
+            engine::secure(&mut self.enemies[i], world);
+            return true;
+        }
         if self.interact_station(world, eye, forward) {
             return true;
         }
@@ -420,6 +428,13 @@ impl Adventure {
                 self.enemies.push(enemy);
                 return true;
             }
+        if kind == engine::KIND && let Some(saved) = self.engines.get(&relic.site) {
+            let mut enemy = Enemy::new(relic.site, 3, kind, relic.pos, 0);
+            engine::restore(&mut enemy, saved);
+            // Never move a trapped or blocked saved machine to a fresh spawn.
+            self.enemies.push(enemy);
+            return true;
+        }
         for i in 0..24 {
             let a = i as f32 * 2.4;
             let p = relic.pos + Vec3::new(a.cos(), 0.0, a.sin()) * (4.0 + (i / 8) as f32);
@@ -429,7 +444,7 @@ impl Adventure {
                     && factory::solid_point(world, q - Vec3::Y * 0.2)
                     && free(world, q, kind)
                 {
-                    let menace = if kind == tollkeeper::KIND { 0 } else if kind == 8 {
+                    let menace = if kind == tollkeeper::KIND || kind == engine::KIND { 0 } else if kind == 8 {
                         (relic
                             .site
                             .x

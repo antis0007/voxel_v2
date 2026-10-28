@@ -46,9 +46,10 @@ pub struct Shrine {
     /// Variant seed: mirroring, damage, heights, bridges.
     seed: u32,
     pub modifier: SiteModifier,
+    ossuary: bool,
 }
 
-type PlanKey = (Family, u32, SiteModifier);
+type PlanKey = (Family, u32, SiteModifier, bool);
 
 thread_local! {
     static PLANS: RefCell<(Option<PlanKey>, Option<Rc<Plan>>, FastMap<PlanKey, Rc<Plan>>)> =
@@ -77,7 +78,7 @@ impl Shrine {
     }
 
     fn with_plan<T>(&self, f: impl FnOnce(&Plan) -> T) -> T {
-        let key = (self.family, self.seed, self.modifier);
+        let key = (self.family, self.seed, self.modifier, self.ossuary);
         let plan = PLANS.with(|c| {
             let mut c = c.borrow_mut();
             if c.0 == Some(key)
@@ -91,7 +92,7 @@ impl Shrine {
                     if c.2.len() >= 64 {
                         c.2.clear();
                     }
-                    let p = Rc::new(arenas::build(self.family, self.seed, self.modifier));
+                    let p = Rc::new(arenas::build(self.family, self.seed, self.modifier, self.ossuary));
                     c.2.insert(key, p.clone());
                     p
                 }
@@ -217,6 +218,7 @@ pub fn site_shrine(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Shrine> 
             voxel: v,
             seed: variant(cfg, rx, rz, 0x5a17),
             modifier: modifiers::site_modifier(cfg, (rx, rz)),
+            ossuary: cfg.generator_version >= 59,
         })
     })
 }
@@ -241,6 +243,7 @@ pub fn cavern_shrine(cfg: &WorldSampleConfig, gx: i32, gz: i32) -> Option<Shrine
             voxel: cfg.voxel_meters(),
             seed: variant(cfg, gx, gz, 0xca7e),
             modifier: modifiers::site_modifier(cfg, (gx, gz)),
+            ossuary: false,
         })
     })
 }
@@ -299,3 +302,9 @@ mod tests;
 #[cfg(test)]
 #[path = "boss_access_walk_tests.rs"]
 mod walk_tests;
+
+/// Disposable review uses the same sampler and canonical arena as new worlds.
+pub fn ossuary_review(voxel: f32) -> Shrine {
+    Shrine { family: Family::Foundry, center: Vec3::ZERO, turn: 0, voxel,
+        seed: 0, modifier: SiteModifier::None, ossuary: true }
+}

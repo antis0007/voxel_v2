@@ -15,7 +15,7 @@ pub fn name(kind: u32) -> &'static str {
     match kind {
         matron::KIND => "The Orchard Matron",
         tollkeeper::KIND => "The Last Tollkeeper",
-        engine::KIND => "The Unfinished Engine",
+        engine::KIND => "The Ossuary Engine",
         glassweaver::KIND => "The Glassweaver",
         _ => "The Prism Hart",
     }
@@ -33,9 +33,9 @@ pub(super) fn variant_title(kind: u32, variant: usize) -> &'static str {
         "The Orchard Matron — Mire",
     ];
     const ENGINE: [&str; 3] = [
-        "The Unfinished Engine — Foundry",
-        "The Unfinished Engine — Bastion",
-        "The Unfinished Engine — Siege",
+        "The Ossuary Engine — Foundry",
+        "The Ossuary Engine — Bastion",
+        "The Ossuary Engine — Siege",
     ];
     const GLASS: [&str; 3] = [
         "The Glassweaver — Prismatic",
@@ -100,7 +100,7 @@ pub(super) fn tick(
 ) -> (f32, Vec3) {
     match e.kind {
         matron::KIND => matron::tick(e, world, feet, eye, dt, shots, sounds, navigation_budget),
-        engine::KIND => engine::tick(e, world, feet, eye, dt, shots, sounds, navigation_budget),
+        engine::KIND => engine::tick(e, world, feet, eye, dt, shots, sounds, dirty, navigation_budget),
         tollkeeper::KIND => tollkeeper::tick(e, world, feet, eye, dt, sounds, dirty),
         glassweaver::KIND => glassweaver::tick(e, world, feet, eye, dt, shots, sounds, navigation_budget),
         _ => hart::tick(e, world, feet, eye, dt, shots, hazards, sounds, dirty),

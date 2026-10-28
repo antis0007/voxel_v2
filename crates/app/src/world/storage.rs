@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV37";
+const MAGIC: &[u8; 8] = b"VXWSAV38";
 #[cfg(test)]
 #[path = "storage/environment_tests.rs"]
 mod environment_tests;
@@ -41,7 +41,8 @@ mod wildlife_tests;
 /// Version 35 retains lab stock, manufacturing batches and powered wafer clocks.
 /// Version 36 persists production orders and their bounded sand feed bins.
 /// Version 37 appends passive wildlife identities, health and positions.
-pub(crate) const SAVE_VERSION: u8 = 37;
+/// Version 38 adds persistent Ossuary Engine mechanisms, stock and salvage.
+pub(crate) const SAVE_VERSION: u8 = 38;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -237,6 +238,7 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
         world.adventure.encode_spell_log(&mut bytes);
     }
     if save_version >= 23 { world.adventure.encode_boss_series(&mut bytes); }
+    if save_version >= 38 { world.adventure.encode_engines(&mut bytes); }
     if save_version >= 29 { world.adventure.encode_wand_bank(&mut bytes); }
     if save_version >= 17 {
         world.undercrown.encode(&mut bytes);
@@ -555,6 +557,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                     super::adventure::Adventure::decode_spell_log(&mut || input.u32())?;
             }
             if version >= 23 { world.adventure.decode_boss_series(&mut || input.u32())?; }
+            if version >= 38 { world.adventure.decode_engines(&mut || input.u32())?; }
             // Before 29 the single wand lives only in the working copy; the first
             // tick mints it into the bank and the inventory.
             if version >= 29 { world.adventure.decode_wand_bank(&mut || input.u32())?; }

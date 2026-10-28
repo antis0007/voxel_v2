@@ -107,6 +107,7 @@ enum StartupState {
 #[derive(Clone, Copy, Debug)]
 struct BenchmarkConfig {
     tollkeeper_review: bool,
+    ossuary_review: bool,
     hart_review: Option<(u8, u8)>,
     sandbox_review: bool,
     water_review: bool,
@@ -171,6 +172,7 @@ impl Default for BenchmarkConfig {
     fn default() -> Self {
         Self {
             tollkeeper_review: false,
+            ossuary_review: false,
             hart_review: None,
             torch_review: false,
             reference_review: false,
@@ -267,6 +269,14 @@ fn parse_benchmark_config() -> BenchmarkConfig {
         if arg == "--benchmark-adaptive-clouds" {
             config.enabled = true;
             config.adaptive_clouds = true;
+            continue;
+        }
+        if arg == "--benchmark-ossuary-review" {
+            config.ossuary_review=true;
+            config.enabled=true;
+            config.world_type=WorldType::Superflat;
+            config.view_distance_chunks=Some(4);
+            config.duration_seconds=32.0;
             continue;
         }
         if arg == "--benchmark-tollkeeper-review" {
@@ -596,6 +606,7 @@ fn benchmark_motion_active(benchmark: Option<&BenchmarkState>) -> bool {
     benchmark.is_some_and(|state| {
         state.auto_started
             && !state.config.tollkeeper_review
+            && !state.config.ossuary_review
             && (state.config.torch_review
                 || (state.config.hart_review.is_some() && std::env::var_os("VOXEL_HART_ORBIT").is_some())
                 || state.config.terrain_camera.is_some()
@@ -2432,6 +2443,13 @@ fn main() -> Result<()> {
                                             chunk_streamer.reset();
                                             chunk_streamer.queue_needed_visible(&chunk_cache,center);
                                         }
+                                    if benchmark_state.config.ossuary_review && let Some(w)=world.as_mut() {
+                                        world::adventure::install_ossuary_review(w,&mut player);
+                                        let center=chunk_coord_from_world_block(player.pos.floor().as_ivec3());
+                                        let snapshot=w.snapshot_near(center,4);
+                                        chunk_cache.reset_with_snapshot(center,&snapshot);
+                                        chunk_streamer.reset();chunk_streamer.queue_needed_visible(&chunk_cache,center);
+                                    }
                                     if benchmark_state.config.tollkeeper_review
                                         && let Some(w)=world.as_mut() {
                                             world::adventure::install_tollkeeper_review(w,&mut player);
@@ -3371,6 +3389,7 @@ fn main() -> Result<()> {
                                             simulation::fixed::Hook::BeforePlayer => {
                                                 if !benchmark_camera_active {
                                         world::adventure::enemy_review_input(world,player,active_input);
+                                        if benchmark.as_ref().is_some_and(|b|b.config.ossuary_review) {world::adventure::ossuary_review_input(world,player,active_input);}
                                         if let Some(review) = workshop_review.as_mut() {
                                             review.input(world, player, active_input);
                                         }
@@ -3424,13 +3443,15 @@ fn main() -> Result<()> {
 
                                 let hart_review_cast = benchmark.as_ref().is_some_and(|b| b.config.hart_review.is_some()) && world::adventure::hart_review_cast(world, player);
                                 let tollkeeper_review_cast=benchmark.as_ref().is_some_and(|b|b.config.tollkeeper_review) && world::adventure::tollkeeper_review_cast(world,player);
+                                let ossuary_review_cast=benchmark.as_ref().is_some_and(|b|b.config.ossuary_review) && world::adventure::ossuary_review_cast(world);
+                                let ossuary_review_auto=benchmark.as_ref().is_some_and(|b|b.config.ossuary_review) && world::adventure::ossuary_review_automatic();
                                 let enemy_review_cast=world::adventure::enemy_review_casting(world);
-                                can_act=(grabbed || workshop_review.is_some() || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning;
+                                can_act=(grabbed || workshop_review.is_some() || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || ossuary_review_auto || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning;
                                 if !can_act {world.adventure.cancel_cast_input();}
                                 combat_audio.set_active(matches!(mode,AppMode::Playing) && (focused || workshop_review.is_some() || wand_review.as_ref().is_some_and(|r|r.automatic)) && !spawning);
                                 world.adventure.hand_slot = creative.selected_slot;
                                                 simulation::fixed::Actions {
-                                                    cast: (active_input.cast_spell || active_input.cast_pressed || enemy_review_cast || hart_review_cast || tollkeeper_review_cast) && can_act,
+                                                    cast: (active_input.cast_spell || active_input.cast_pressed || enemy_review_cast || hart_review_cast || tollkeeper_review_cast || ossuary_review_cast) && can_act,
                                                     cycle: active_input.cycle_spell && can_act,
                                                     melee: break_edit && can_act && creative.tool == creative::ToolKind::Hand,
                                                 }
@@ -3459,6 +3480,10 @@ fn main() -> Result<()> {
                                 input.cycle_spell=false;
                                 if benchmark.as_ref().is_some_and(|b| b.config.hart_review.is_some()) {
                                     world::adventure::observe_hart_review(world);
+                                }
+                                if benchmark.as_ref().is_some_and(|b|b.config.ossuary_review) {
+                                    world::adventure::observe_ossuary_review(world);
+                                    world::adventure::ossuary_review_checkpoint(world,&mut player,&mut day_night,&mut saves);
                                 }
                                 if benchmark.as_ref().is_some_and(|b|b.config.tollkeeper_review) {world::adventure::observe_tollkeeper_review(world);}
                                 if benchmark.as_ref().is_some_and(|b|b.config.tollkeeper_review) {

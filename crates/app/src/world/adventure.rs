@@ -17,6 +17,7 @@ mod bosses;
 mod action;
 mod matron;
 mod engine;
+pub use engine::review::{install as install_ossuary_review, observe as observe_ossuary_review, input as ossuary_review_input, casting as ossuary_review_cast, automatic as ossuary_review_automatic, checkpoint as ossuary_review_checkpoint};
 mod glassweaver;
 mod boss_look;
 mod tollkeeper;
@@ -681,6 +682,7 @@ pub struct Adventure {
     farm_mastery: usize,
     farm_shots_restored: bool,
     tollkeepers: HashMap<IVec3, tollkeeper::Saved>,
+    engines: HashMap<IVec3, engine::Saved>,
     pub companion: Option<growth::Companion>,
     cast_cd: f32,
     queued_cast: bool,
@@ -769,6 +771,7 @@ impl Default for Adventure {
             farm_mastery: 0,
             farm_shots_restored: false,
             tollkeepers: HashMap::new(),
+            engines: HashMap::new(),
             companion: None,
             cast_cd: 0.0,
             queued_cast: false,
@@ -789,6 +792,8 @@ fn free(world: &World, pos: Vec3, kind: u32) -> bool {
     let s = world.voxel_scale.meters();
     let (h, width) = if kind==matron::KIND {
         (2.5,1.1)
+    } else if kind == engine::KIND {
+        (1.9, 0.95)
     } else if kind == 8 {
         (2.9, 1.0)
     } else if is_boss(kind) {
@@ -1224,7 +1229,8 @@ impl Adventure {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, e)| {
-                    let to_enemy = e.center() - eye;
+                    let target = if e.kind == engine::KIND { engine::melee_point(e, eye, forward) } else { e.center() };
+                    let to_enemy = target - eye;
                     let aim_distance = to_enemy.dot(forward);
                     let off_aim = (to_enemy - forward * aim_distance).length();
                     let reach = MELEE_REACH
@@ -1240,7 +1246,7 @@ impl Adventure {
                         && aim_distance > 0.0
                         && aim_distance < reach
                         && off_aim < sweep
-                        && line(world, eye, e.center()))
+                        && line(world, eye, target))
                     .then_some((i, aim_distance))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -1282,6 +1288,10 @@ impl Adventure {
                     e.health -= damage * if e.encounter.exposed > 0.0 { 1.25 } else { 1.0 }
                         * if shield { 0.35 } else if e.kind == 8 { hart::damage_taken(e) } else { 1.0 };
                     if e.kind == tollkeeper::KIND { tollkeeper::pressure(e, damage); }
+                    if e.kind == engine::KIND {
+                        let point = engine::melee_point(e, eye, forward);
+                        engine::component_hit(e, point, damage, self.weapon == 4);
+                    }
                     if let Some(element) = tinkering::edge(self.tool_head) {
                         let affixes = e.affixes;
                         let reaction = e.status.apply(element, affixes);
@@ -2022,7 +2032,8 @@ impl Adventure {
                 } else if let Some(e) = self.enemies.iter_mut().find(|e| {
                     e.health > 0.0
                         && e.slot + 1 != shot.mods.pierced
-                        && if e.kind == 8 { hart::hit(e, shot.pos, if shot.mods.orbit { 0.24 } else { 0.0 }) } else { (e.center() - shot.pos).length()
+                        && if e.kind == engine::KIND { engine::hit(e, shot.pos, if shot.mods.orbit { 0.24 } else { 0.0 }) }
+                        else if e.kind == 8 { hart::hit(e, shot.pos, if shot.mods.orbit { 0.24 } else { 0.0 }) } else { (e.center() - shot.pos).length()
                             < if tall(e.kind) { 0.8 } else { 0.58 }
                                 + if shot.mods.orbit { 0.24 } else { 0.0 } }
                 }) {
@@ -2079,6 +2090,9 @@ impl Adventure {
                         reaction_fx = Some((e.center(), element, reaction.name));
                     }
                     e.hurt(dealt);
+                    if e.kind == engine::KIND {
+                        engine::component_hit(e, shot.pos, dealt, matches!(shot.spell, 2 | 13));
+                    }
                     if shot.mods.mana_leech {
                         self.mana = (self.mana + wands::card_rules::MANA_LEECH).min(100.0 + rank as f32 * 15.0);
                     }
@@ -2399,6 +2413,12 @@ impl Adventure {
             }
             let mask = self.records.entry(e.site).or_default();
             if *mask & (1 << e.slot) == 0 {
+                if e.kind == engine::KIND {
+                    engine::release_hardware(e);
+                    engine::release_cargo(e, world);
+                    self.engines.remove(&e.site);
+                    if !e.engine.cargo.is_empty() { self.engines.insert(e.site,engine::snapshot(e)); }
+                }
                 if e.kind == tollkeeper::KIND {
                     tollkeeper::release_stock(e, world);
                     self.tollkeepers.remove(&e.site);
@@ -2443,7 +2463,9 @@ impl Adventure {
                         .say("Steel sword recovered from the warden. Equip it in Gear.");
                 }
                 if is_boss(e.kind) {
-                    world.expedition.say("Guardian defeated. F  Claim relic at the reliquary");
+                    world.expedition.say(if e.kind == engine::KIND && e.engine.secured {
+                        "Engine secured. F - Claim relic at the reliquary"
+                    } else { "Guardian defeated. F  Claim relic at the reliquary" });
                 }
                 if let Some(recipe) = e.encounter.recipe {
                     for &(item, amount) in encounters::RECIPES[recipe].loot {
@@ -2492,8 +2514,12 @@ impl Adventure {
                 rank_name(self.rank())
             ));
         }
+        self.drain_engine_salvage(world);
         self.wildlife.remember(&self.enemies);
         for e in &self.enemies {
+            if e.kind == engine::KIND && e.health > 0.0 && ((e.pos-feet).length() >= 90.0 || e.pos.y <= -256.0) {
+                self.engines.insert(e.site, engine::snapshot(e));
+            }
             if let Some(id) = e.habitat {
                 // A volatile chain reaction may kill after the main death pass.
                 // Settle it before saving the resident, never encode dead health.
