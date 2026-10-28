@@ -4425,8 +4425,8 @@ fn main() -> Result<()> {
                             }
                             if benchmark_config.enabled || spawning || world.is_none() || !focused {
                                 quality_governor.reset_trend();
-                            } else if let Some(mut step) = quality_governor.frame(
-                                display_frame_dt * 1000.0,
+                            } else if let Some(mut step) = quality_governor.gpu_frame(
+                                gpu.last_render_stats(),
                                 display_frame_dt,
                                 matches!(mode, AppMode::Playing),
                             ) {

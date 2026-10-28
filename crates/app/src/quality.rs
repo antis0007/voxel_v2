@@ -2,7 +2,8 @@
 //! start gently after a graphics-driver reset.
 //!
 //! Nobody on a struggling GPU goes hunting through menus. The governor watches a
-//! smoothed frame time while playing and, after several slow seconds, turns down
+//! measured GPU time while playing (the frame time when the adapter has no GPU
+//! timestamps, as on many integrated GPUs) and, after several slow seconds, turns down
 //! one setting at a time, cheapest visual loss first, with a pause between steps
 //! so each one can take effect. It never turns anything back up on its own: a
 //! setting that came back would just bring the slowdown with it. The player can
@@ -20,6 +21,10 @@ const SETTLE_S: f32 = 8.0;
 const HITCH_MS: f32 = 250.0;
 /// Smoothing time constant, seconds.
 const SMOOTHING_S: f32 = 1.5;
+/// Without GPU timestamps, a frame whose CPU share (the interval minus the time
+/// spent waiting for the GPU in acquire and present) exceeds this is CPU-bound,
+/// and lowering GPU settings would not speed it up.
+const CPU_BOUND_MS: f32 = SLOW_MS * 0.75;
 /// Far horizon range after the horizon step, metres.
 const SHORT_HORIZON_M: u32 = 12_288;
 /// Longest a spawned world waits behind the loader for its first distant
@@ -29,6 +34,10 @@ const HORIZON_WAIT_S: f32 = 6.0;
 static HORIZON_WAIT_SINCE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 static AUTO: AtomicBool = AtomicBool::new(true);
+
+#[cfg(test)]
+#[path = "quality/outdoor_tests.rs"]
+mod outdoor_tests;
 
 pub fn auto_enabled() -> bool {
     AUTO.load(Ordering::Relaxed)
@@ -146,6 +155,8 @@ pub struct Governor {
     slow_for: f32,
     settle: f32,
     next: usize,
+    /// Last renderer frame fed through the timestamp-free path.
+    last_frame_id: u64,
 }
 
 impl Governor {
@@ -187,6 +198,44 @@ impl Governor {
         let step = Step::ORDER.get(self.next).copied()?;
         self.next += 1;
         Some(step)
+    }
+
+    /// Adapt from fresh GPU measurements of the current configuration, or from
+    /// GPU-bound frame times when the adapter has no timestamps.
+    pub fn gpu_frame(&mut self, stats: crate::render::RenderFrameStats, dt_s: f32, playing: bool) -> Option<Step> {
+        if !stats.gpu_timestamps_supported {
+            return self.untimed_frame(stats, dt_s, playing);
+        }
+        if stats.gpu_sample_count == 0 { return None; }
+        if stats.gpu_sample_config_id != stats.config_id
+            || stats.frame_id.saturating_sub(stats.gpu_sample_frame_id) > 8
+            || stats.gpu_pass_total_ms <= 0.0
+        {
+            self.slow_for = 0.0;
+            return None;
+        }
+        // CPU streaming stalls cannot be cured by blurring the world.
+        self.frame(stats.gpu_pass_total_ms, dt_s.min(0.1), playing)
+    }
+
+    /// Frame-time fallback. `stats` belong to the previous render, which falls
+    /// inside the interval `dt_s`. A frame counts only when the CPU's share fits
+    /// `CPU_BOUND_MS`: then the slowness was spent waiting on the GPU, and CPU
+    /// streaming stalls, which show up as CPU time, still never blur the world.
+    fn untimed_frame(&mut self, stats: crate::render::RenderFrameStats, dt_s: f32, playing: bool) -> Option<Step> {
+        if stats.frame_id == self.last_frame_id {
+            // No new render since the last call: nothing measured.
+            return None;
+        }
+        self.last_frame_id = stats.frame_id;
+        let frame_ms = dt_s * 1000.0;
+        let gpu_wait_ms = stats.surface_acquire_ms.max(0.0) + stats.present_ms.max(0.0);
+        if !frame_ms.is_finite() || frame_ms - gpu_wait_ms > CPU_BOUND_MS {
+            // Left out of the trend rather than resetting it, so an occasional
+            // streaming spike does not restart a GPU-bound slow stretch.
+            return None;
+        }
+        self.frame(frame_ms, dt_s.min(0.1), playing)
     }
 
     /// The next step at once, when the one just returned changed nothing.
