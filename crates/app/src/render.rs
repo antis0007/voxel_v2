@@ -23,6 +23,7 @@ pub use streaming::indirect_draws::set_enabled as set_multidraw_enabled;
 
 mod atmosphere;
 mod sky_probe;
+mod posed_assets;
 pub mod atmosphere_config;
 pub mod atmosphere_params;
 pub mod cloud_governor;
@@ -1260,6 +1261,7 @@ pub struct Gpu {
     world_pipeline: wgpu::RenderPipeline,
     horizon: horizon::Horizon,
     scene_stream: Option<DynamicVertexBuffer>,
+    posed_assets: Option<posed_assets::PosedAssets>,
     scene_vertices: usize,
     line_pipeline: wgpu::RenderPipeline,
     line_invert_pipeline: wgpu::RenderPipeline,
@@ -1718,6 +1720,7 @@ impl GpuBootstrap {
             })
             .await?;
         streaming::indirect_draws::set_supported(&adapter, device.features());
+        crate::mesh::models::posed::set_enabled(true);
 
         let device_lost = install_device_loss_signal(&device);
         let caps = surface.get_capabilities(&adapter);
@@ -3126,6 +3129,7 @@ impl GpuPendingInit {
                     world_pipeline: self.world_pipeline.take().unwrap(),
                     horizon: horizon::Horizon::default(),
                     scene_stream: None,
+                    posed_assets: None,
                     scene_vertices: 0,
                     line_pipeline: self.line_pipeline.take().unwrap(),
                     line_invert_pipeline: self.line_invert_pipeline.take().unwrap(),
@@ -3187,6 +3191,10 @@ impl Gpu {
 
     pub fn upload_scene(&mut self, vertices: &[Vertex3]) {
         self.scene_vertices = vertices.len();
+        let posed = self.posed_assets.get_or_insert_with(|| posed_assets::PosedAssets::new(&self.device));
+        crate::mesh::models::posed::with_frame(|placements, pool, generation| {
+            posed.upload(&self.device, &self.queue, placements, pool, generation)
+        });
         if vertices.is_empty() {
             return;
         }
@@ -4566,6 +4574,7 @@ impl Gpu {
 
         let terrain_start = Instant::now();
         self.atmosphere.record_sky_probe(&mut encoder, &self.camera_bind_group, &self.lighting_bind_group);
+        if let Some(posed) = &self.posed_assets { posed.record(&mut encoder); }
         let scene_view = &self.postprocess.scene;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -4677,6 +4686,11 @@ impl Gpu {
                         pass.draw(0..self.scene_vertices as u32, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                         frame_stats.terrain_draw_calls += 1;
                     }
+                if let Some((posed, count)) = self.posed_assets.as_ref().and_then(|p| p.vertices()) {
+                    pass.set_vertex_buffer(0, posed);
+                    pass.draw(0..count, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
+                    frame_stats.terrain_draw_calls += 1;
+                }
                 frame_stats.terrain_indices = terrain_indices;
             }
         }

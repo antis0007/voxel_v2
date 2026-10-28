@@ -21,6 +21,7 @@ mod wand_pose;
 mod wand_checks;
 mod hart;
 mod orbital;
+pub mod posed;
 pub use hart::HartPose;
 
 /// Vertex-coloured moving geometry, never a terrain/biome material (family 0).
@@ -417,6 +418,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         if recycled.capacity() == 0 { recycled.reserve(65536); }
         Model::with_vertices(scale, recycled)
     });
+    posed::begin_frame();
     orbital::build(&mut mesh, world, day, viewer, pixel_angle);
 
     let mut nodes: Vec<_> = world
@@ -1962,6 +1964,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         let kind=vertex.surface[2]-CAMERA_RELATIVE_FLAG;
         if kind==54.0 || kind==55.0 { vertex.ao_strength=2.0+player.viewmodel.sky; }
     }
+    posed::end_frame();
     mesh.vertices
 }
 

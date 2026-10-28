@@ -1,6 +1,7 @@
 //! Upper-atmosphere anchorages and rigid, locally textured orbital parts.
 //! These are distant scene models, not enterable voxel habitats.
 use super::{Model, Class, Quat, Vec3};
+use super::super::posed;
 use crate::world::DayNightCycle;
 
 pub(super) fn part(mesh: &mut Model, at: Vec3, size: Vec3, rotation: Quat,
@@ -56,16 +57,31 @@ pub(super) fn anchorage(mesh: &mut Model, at: Vec3, axis: Vec3, class: Class, ke
     // The ring rotates about the keel bearing. No camera-relative pose.
     let spin=(day.time_of_day() as f64*std::f64::consts::TAU*8.0).rem_euclid(std::f64::consts::TAU) as f32;
     let ring_rotation=align*Quat::from_rotation_y(spin);
-    let scale=mesh.scale;
-    mesh.vertices.reserve(cached.fixed.len()+cached.ring.len());
-    for (source, rotation) in [(&cached.fixed, align), (&cached.ring, ring_rotation)] {
-        mesh.vertices.extend(source.iter().map(|v| {
-            let mut out=*v;
-            out.pos=((at+rotation*Vec3::from_array(v.pos))/scale).to_array();
-            out.normal=(rotation*Vec3::from_array(v.normal)).to_array();
-            out
-        }));
+    // A GPU-posed copy skips the surface pass `orbital::build` runs over the
+    // vertices it appended, so it bakes the one its class receives there:
+    // Conservatory crowns the long-range family, other crowns the near fade.
+    // `posed_scene_matches_cpu_scene` holds the two paths equal.
+    let baked=posed::recording();
+    let long_range=matches!(class,Class::Conservatory);
+    for (part, source, rotation) in [(0, &cached.fixed, align), (1, &cached.ring, ring_rotation)] {
+        let asset=posed::key(&[u32::from(class_tag(class)), key, part, u32::from(baked)]);
+        let range=posed::intern(asset, || if baked { bake_caller_pass(source, long_range) } else { source.clone() });
+        posed::place(mesh, range, rotation, at);
     }
+}
+
+fn bake_caller_pass(source: &[crate::mesh::Vertex3], long_range: bool) -> Vec<crate::mesh::Vertex3> {
+    let mut local = Model::with_vertices(1.0, source.to_vec());
+    if long_range {
+        super::megastructures::long_range_since(&mut local, 0);
+    } else {
+        for vertex in &mut local.vertices {
+            if vertex.surface[2] != 62.0 && vertex.surface[2] != 63.0 && vertex.surface[1] != 3.0 {
+                vertex.surface[1] = 2.0;
+            }
+        }
+    }
+    local.vertices
 }
 
 /// Builds the anchorage around the origin with no spin or heading. Returns the

@@ -19,7 +19,7 @@ const SHADER_INPUTS: &[(&str,&str)] = shader_inputs![
     "shaders/cloud_temporal.wgsl", "shaders/cloud_weather_sampling.wgsl", "shaders/outline_shader.wgsl",
     "shaders/shadow_shader.wgsl", "shaders/ui_shader.wgsl", "shaders/postprocess.wgsl",
     "shaders/present.wgsl", "shaders/color_shared.wgsl", "shaders/weather_clip_shared.wgsl", "fluid_compute.wgsl", "shaders/indirect_shared.wgsl",
-    "shaders/indirect_composite.wgsl", "shaders/indirect_gather.wgsl",
+    "shaders/indirect_composite.wgsl", "shaders/indirect_gather.wgsl", "shaders/posed_assets.wgsl",
 ];
 
 #[allow(dead_code)] // Called only by the build-script crate, never by rendering.
@@ -67,6 +67,12 @@ const CLOUD_SHADER_BODY: &str = include_str!("shaders/cloud_shader.wgsl");
 const CLOUD_COMPOSITE_SHADER_BODY: &str = include_str!("shaders/cloud_composite.wgsl");
 const SKY_SHADER_BODY: &str = include_str!("shaders/sky_shader.wgsl");
 const SKY_PROBE_BODY: &str = include_str!("shaders/sky_probe.wgsl");
+const POSED_ASSETS_BODY: &str = include_str!("shaders/posed_assets.wgsl");
+
+/// Poses resident rigid scene assets (`render/posed_assets.rs`).
+pub(crate) fn posed_assets_shader_source() -> String {
+    POSED_ASSETS_BODY.to_owned()
+}
 const CLOUD_TEMPORAL_SHADER_BODY: &str = include_str!("shaders/cloud_temporal.wgsl");
 const CLOUD_WEATHER_SAMPLING_WGSL: &str = include_str!("shaders/cloud_weather_sampling.wgsl");
 const WEATHER_CLIP_WGSL: &str = include_str!("shaders/weather_clip_shared.wgsl");
