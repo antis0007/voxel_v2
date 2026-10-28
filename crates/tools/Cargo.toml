@@ -1,0 +1,16 @@
+# Part-based tools: part kinds and tool schemas, tool materials, trait rules
+# keyed on material properties, assembly stat aggregation, levelling and repair.
+# Pure data and functions loaded from assets/tools/*.ron; no save integration yet.
+[package]
+name = "engine_tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine_core = { path = "../core" }
+engine_content = { path = "../content" }
+serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12.2"
+
+[lints]
+workspace = true

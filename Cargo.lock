@@ -877,6 +877,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_tools"
+version = "0.1.0"
+dependencies = [
+ "engine_content",
+ "engine_core",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "engine_voxel"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,101 @@
+// Trait rules: a predicate over tool material properties and the effect it grants.
+// Rules name properties, never materials, so a new alloy row gets its traits automatically.
+// Predicates: Gt(prop, limit), Lt(prop, limit), Flag(flag), Not(p), All([..]), Any([..]).
+// Stacking: Once (any part), PerPart (one stack per part), HeadOnly (head-role parts only).
+// `cargo test -p engine_tools tool_traits_ron_round_trips` checks the format.
+[
+    (
+        effect: Conductive,
+        display_name: "Conductive",
+        when: Gt(Conductivity, 0.6),
+        stacking: Once,
+    ),
+    (
+        effect: InsulatedGrip,
+        display_name: "Insulated grip",
+        when: Lt(Conductivity, 0.1),
+        stacking: Once,
+    ),
+    (
+        effect: FlammableHandle,
+        display_name: "Flammable",
+        when: Gt(Flammability, 0.5),
+        stacking: PerPart,
+    ),
+    (
+        effect: SelfRepair,
+        display_name: "Self-repair",
+        when: Flag(Living),
+        stacking: PerPart,
+    ),
+    (
+        effect: Jagged,
+        display_name: "Jagged",
+        when: Flag(Crystalline),
+        stacking: HeadOnly,
+    ),
+    (
+        effect: Magnetic,
+        display_name: "Magnetic",
+        when: Flag(Magnetic),
+        stacking: Once,
+    ),
+    (
+        effect: Buoyant,
+        display_name: "Buoyant",
+        when: Lt(Density, 1.0),
+        stacking: Once,
+    ),
+    (
+        effect: LavaProof,
+        display_name: "Lava-proof",
+        when: All([
+            Lt(Flammability, 0.05),
+            Gt(Hardness, 6.5),
+            Gt(MiningLevel, 2.5),
+        ]),
+        stacking: Once,
+    ),
+    (
+        effect: Heavy,
+        display_name: "Heavy",
+        when: Gt(Density, 8.0),
+        stacking: PerPart,
+    ),
+    (
+        effect: Brittle,
+        display_name: "Brittle",
+        when: All([
+            Gt(Hardness, 7.0),
+            Lt(Durability, 200.0),
+        ]),
+        stacking: HeadOnly,
+    ),
+    (
+        effect: Lightweight,
+        display_name: "Lightweight",
+        when: All([
+            Lt(Density, 2.0),
+            Not(Flag(Living)),
+        ]),
+        stacking: Once,
+    ),
+    (
+        effect: Tempered,
+        display_name: "Tempered",
+        when: All([
+            Gt(Durability, 500.0),
+            Gt(Hardness, 5.0),
+        ]),
+        stacking: HeadOnly,
+    ),
+    (
+        effect: Bouncy,
+        display_name: "Bouncy",
+        when: All([
+            Flag(Living),
+            Lt(Hardness, 1.0),
+        ]),
+        stacking: Once,
+    ),
+]

@@ -1,0 +1,571 @@
+// Part kinds, tool schemas and the progression curve. Edit here, not in Rust.
+// A schema lists its parts in assembly order with stat weights; `mining_level: true`
+// marks parts whose material level counts, `handle: true` parts whose handle modifier
+// multiplies durability. Each level adds one modifier slot to `modifier_slots`.
+// `cargo test -p engine_tools tool_parts_ron_round_trips` checks the format.
+(
+    part_kinds: [
+        (
+            id: "head",
+            display_name: "Head",
+            role: Head,
+            material_cost: 2,
+        ),
+        (
+            id: "blade",
+            display_name: "Blade",
+            role: Head,
+            material_cost: 2,
+        ),
+        (
+            id: "bow_limb",
+            display_name: "Bow limb",
+            role: Head,
+            material_cost: 2,
+        ),
+        (
+            id: "binding",
+            display_name: "Binding",
+            role: Binding,
+            material_cost: 1,
+        ),
+        (
+            id: "tough_binding",
+            display_name: "Tough binding",
+            role: Binding,
+            material_cost: 2,
+        ),
+        (
+            id: "guard",
+            display_name: "Guard",
+            role: Binding,
+            material_cost: 1,
+        ),
+        (
+            id: "handle",
+            display_name: "Handle",
+            role: Handle,
+            material_cost: 1,
+        ),
+        (
+            id: "tool_rod",
+            display_name: "Tool rod",
+            role: Handle,
+            material_cost: 2,
+        ),
+        (
+            id: "large_plate",
+            display_name: "Large plate",
+            role: Reinforcement,
+            material_cost: 3,
+        ),
+        (
+            id: "bowstring",
+            display_name: "Bowstring",
+            role: String,
+            material_cost: 1,
+        ),
+    ],
+    schemas: [
+        (
+            id: "pickaxe",
+            display_name: "Pickaxe",
+            parts: [
+                (
+                    kind: "head",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 1.0,
+                        attack: 1.0,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "binding",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "handle",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 3,
+        ),
+        (
+            id: "hammer",
+            display_name: "Hammer",
+            parts: [
+                (
+                    kind: "head",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.8,
+                        attack: 1.2,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.1,
+                        attack: 0.25,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.1,
+                        attack: 0.25,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tool_rod",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "axe",
+            display_name: "Axe",
+            parts: [
+                (
+                    kind: "head",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 1.0,
+                        attack: 1.2,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "binding",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "handle",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 3,
+        ),
+        (
+            id: "shovel",
+            display_name: "Shovel",
+            parts: [
+                (
+                    kind: "head",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 1.1,
+                        attack: 0.8,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "binding",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "handle",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 3,
+        ),
+        (
+            id: "excavator",
+            display_name: "Excavator",
+            parts: [
+                (
+                    kind: "head",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.9,
+                        attack: 0.8,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.1,
+                        attack: 0.2,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tough_binding",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tool_rod",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "scythe",
+            display_name: "Scythe",
+            parts: [
+                (
+                    kind: "head",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.7,
+                        attack: 1.0,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.1,
+                        attack: 0.3,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tough_binding",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tool_rod",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "sword",
+            display_name: "Sword",
+            parts: [
+                (
+                    kind: "blade",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.5,
+                        attack: 1.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "guard",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.25,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "handle",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 3,
+        ),
+        (
+            id: "dagger",
+            display_name: "Dagger",
+            parts: [
+                (
+                    kind: "blade",
+                    weights: (
+                        durability: 0.8,
+                        mining_speed: 0.6,
+                        attack: 0.7,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "guard",
+                    weights: (
+                        durability: 0.2,
+                        mining_speed: 0.0,
+                        attack: 0.1,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "handle",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "broadsword",
+            display_name: "Broadsword",
+            parts: [
+                (
+                    kind: "blade",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.4,
+                        attack: 1.2,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.0,
+                        attack: 0.5,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tough_binding",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.0,
+                        attack: 0.25,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tool_rod",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "cleaver",
+            display_name: "Cleaver",
+            parts: [
+                (
+                    kind: "blade",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.3,
+                        attack: 1.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.0,
+                        attack: 0.5,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 0.5,
+                        mining_speed: 0.0,
+                        attack: 0.5,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "tool_rod",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "shortbow",
+            display_name: "Shortbow",
+            parts: [
+                (
+                    kind: "bow_limb",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.0,
+                        attack: 0.8,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "bowstring",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.3,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "binding",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+            ],
+            modifier_slots: 2,
+        ),
+        (
+            id: "longbow",
+            display_name: "Longbow",
+            parts: [
+                (
+                    kind: "bow_limb",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.0,
+                        attack: 0.8,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "bow_limb",
+                    weights: (
+                        durability: 1.0,
+                        mining_speed: 0.0,
+                        attack: 0.8,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "bowstring",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.4,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+            ],
+            modifier_slots: 3,
+        ),
+    ],
+    progression: (
+        base_xp: 100,
+        step_xp: 50,
+        max_level: 10,
+        repair_per_unit: 0.5,
+    ),
+)
