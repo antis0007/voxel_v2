@@ -165,6 +165,18 @@
             description: "Roast ember mushroom caps over coal (+24 hunger, +4 health).",
         ),
         (
+            name: "Cooked Mutton",
+            output: (
+                item: Food(CookedMutton),
+                count: 1,
+            ),
+            ingredients: [
+                (Food(RawMutton), 1),
+                (Resource(3), 1),
+            ],
+            description: "Mutton cooked over coal.",
+        ),
+        (
             name: "Spore trailcake",
             output: (
                 item: Food(Trailcake),

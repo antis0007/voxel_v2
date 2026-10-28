@@ -3,6 +3,7 @@
 use super::{BlockId, expedition, factory};
 mod crafting;
 mod descriptions;
+pub mod food;
 pub mod resources;
 pub mod sorting;
 pub use crafting::CraftBlocker;
@@ -93,40 +94,27 @@ pub enum FoodKind {
     FungalRation = 0,
     RoastedCap = 1,
     Trailcake = 2,
+    RawMutton = 3,
+    CookedMutton = 4,
 }
 
 impl FoodKind {
+    pub const ALL: [Self; 5] = [Self::FungalRation, Self::RoastedCap, Self::Trailcake, Self::RawMutton, Self::CookedMutton];
+
     pub fn from_u8(raw: u8) -> Option<Self> {
-        match raw {
-            0 => Some(Self::FungalRation),
-            1 => Some(Self::RoastedCap),
-            2 => Some(Self::Trailcake),
-            _ => None,
-        }
+        Self::ALL.get(raw as usize).copied()
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Self::FungalRation => "Fungal ration",
-            Self::RoastedCap => "Roasted mushroom",
-            Self::Trailcake => "Spore trailcake",
-        }
+        food::get(self).map_or("Food", |f| f.name.as_str())
     }
 
     pub fn hunger_restore(self) -> f32 {
-        match self {
-            Self::FungalRation => 38.0,
-            Self::RoastedCap => 24.0,
-            Self::Trailcake => 32.0,
-        }
+        food::get(self).map_or(0.0, |f| f.hunger)
     }
 
     pub fn health_restore(self) -> f32 {
-        match self {
-            Self::FungalRation => 8.0,
-            Self::RoastedCap => 4.0,
-            Self::Trailcake => 6.0,
-        }
+        food::get(self).map_or(0.0, |f| f.health)
     }
 }
 

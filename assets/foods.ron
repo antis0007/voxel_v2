@@ -1,0 +1,34 @@
+// Food rows: one per inventory::FoodKind. `hunger` and `health` are added when eaten (hunger caps at 100).
+// `cargo test foods_ron_round_trips` checks the format.
+[
+    (
+        kind: FungalRation,
+        name: "Fungal ration",
+        hunger: 38.0,
+        health: 8.0,
+    ),
+    (
+        kind: RoastedCap,
+        name: "Roasted mushroom",
+        hunger: 24.0,
+        health: 4.0,
+    ),
+    (
+        kind: Trailcake,
+        name: "Spore trailcake",
+        hunger: 32.0,
+        health: 6.0,
+    ),
+    (
+        kind: RawMutton,
+        name: "Raw Mutton",
+        hunger: 12.0,
+        health: 0.0,
+    ),
+    (
+        kind: CookedMutton,
+        name: "Cooked Mutton",
+        hunger: 36.0,
+        health: 6.0,
+    ),
+]

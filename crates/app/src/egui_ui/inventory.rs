@@ -50,11 +50,7 @@ fn creative_items() -> &'static [Item] {
         for tool in 1..=2 {
             items.push(Item::Tool(tool));
         }
-        for food in [
-            crate::world::inventory::FoodKind::FungalRation,
-            crate::world::inventory::FoodKind::RoastedCap,
-            crate::world::inventory::FoodKind::Trailcake,
-        ] {
+        for food in crate::world::inventory::FoodKind::ALL {
             items.push(Item::Food(food));
         }
         items
