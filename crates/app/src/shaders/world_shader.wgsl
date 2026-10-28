@@ -2889,6 +2889,13 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let linear_depth = dot(relative_pos, cam.camera_forward.xyz);
 
     let debug_mode = i32(render_debug_view());
+    if debug_mode == 32 {
+        // Texture-free massing diagnostic, fixed broad light and geometric
+        // normals. Deliberately independent of materials and scene lighting.
+        let key = max(dot(geometric_normal, normalize(vec3<f32>(0.4, 0.8, -0.3))), 0.0);
+        let clay = (0.22 + 0.42 * key) * (0.75 + 0.25 * terrain_vertex_ao(in.ao_strength));
+        return debug_surface_output(vec4<f32>(vec3<f32>(clay), 1.0));
+    }
     if debug_mode == 31 {
         // Optical depth in metres, linear grayscale: white = 32 m.
         // Non-water is black; use the same ownership as the beauty pass.
