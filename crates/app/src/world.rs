@@ -15,6 +15,7 @@ pub mod workshop;
 pub mod environment;
 pub(crate) mod effects;
 pub mod factory;
+pub mod farming;
 pub mod habitats;
 pub mod interaction;
 pub mod inventory;
@@ -1221,6 +1222,8 @@ pub struct World {
     /// Exact, tick-labelled view used only by the isolated headless CA option.
     pub(crate) ca_view: Option<Arc<crate::simulation::cpu_region::Snapshot>>,
     pub habitats: habitats::State,
+    /// Loaded from and saved to the `farming::sidecar::FILE` sidecar in `regions.root`.
+    pub farming: farming::State,
     pub orbital: orbital::State,
     pub inventory: inventory::SurvivalInventory,
     pub sandbox: crate::simulation::sandbox::Sandbox,
@@ -1261,6 +1264,7 @@ impl World {
         let mut world = Self {
             ca_view: None,
             habitats: habitats::State::default(),
+            farming: farming::State::default(),
             orbital: orbital::State::default(),
             inventory: {
                 let mut inv = inventory::SurvivalInventory::default();

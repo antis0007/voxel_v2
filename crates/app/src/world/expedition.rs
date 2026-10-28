@@ -397,6 +397,7 @@ pub fn harvest(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if let Some(done) = super::farming::harvest(world, p, blocks, chunks) { return done; }
     if super::factory::dismantle(world, p, blocks, chunks) {
         world.reconcile_legacy_to_inventory();
         return true;
@@ -467,6 +468,9 @@ pub fn harvest(
         return false;
     };
     commit.publish(world, blocks, chunks);
+    if let Some(seed) = super::farming::wild_seed(world, p, block) {
+        give_or_drop(world, p, seed, 1);
+    }
     if let Some(i) = resource(block) {
         if world.adventure.sounds.len() < 64 {
             world.adventure.sounds.push(crate::audio::Event {
@@ -687,6 +691,9 @@ pub fn interact(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
+    if super::farming::inspect(world, p) {
+        return;
+    }
     let b = world.get(p);
     if super::factory::Kind::from_block(b).is_some() {
         let anchor = super::factory::anchor(p, super::factory::step(world));

@@ -1,0 +1,39 @@
+// Planted crops. `crop` is the mature block and the seed item; `sprout` holds the cell while it grows.
+// Every `roll_ticks` (120 per second) a positional roll below the per-mille chance advances one stage.
+// Light is max(torch light, 15 under open sky) at the crop cell. Water within 4 cells uses `wet_per_mille`.
+// `wild_seed_per_mille` is the seed chance per cubic metre of the wild block broken.
+// `cargo test crops_ron_round_trips` checks the format.
+[
+    (
+        crop: RedCap,
+        sprout: MushroomStem,
+        soil: [
+            FungalSoil,
+        ],
+        light_min: 6,
+        light_max: 15,
+        stages: 4,
+        roll_ticks: 2400,
+        dry_per_mille: 125,
+        wet_per_mille: 250,
+        yield_min: 2,
+        yield_max: 3,
+        wild_seed_per_mille: 500,
+    ),
+    (
+        crop: GlowCap,
+        sprout: MushroomStem,
+        soil: [
+            FungalSoil,
+        ],
+        light_min: 0,
+        light_max: 7,
+        stages: 4,
+        roll_ticks: 2400,
+        dry_per_mille: 125,
+        wet_per_mille: 250,
+        yield_min: 2,
+        yield_max: 3,
+        wild_seed_per_mille: 500,
+    ),
+]

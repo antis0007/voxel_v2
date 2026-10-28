@@ -2779,6 +2779,7 @@ pub fn tick(
     if super::habitats::review::paused() {return false;}
     let feet = player.pos * world.voxel_scale.meters();
     super::habitats::tick(world, feet, dt.clamp(0.0, 0.1));
+    super::farming::tick(world, engine_core::Budget::UNBOUNDED);
     let old_rank = world.adventure.rank();
     world.adventure.farm_mastery = world.habitats.mastered.count_ones() as usize;
     if world.adventure.rank() > old_rank {

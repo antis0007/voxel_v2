@@ -37,6 +37,7 @@ struct Job {
     footer: Vec<u8>,
     activity: super::super::activity::Snapshot,
     rules: super::super::rules::Rules,
+    farming: Vec<u8>,
     manual: bool,
     id: u64,
 }
@@ -224,6 +225,7 @@ impl SaveService {
                 footer,
                 activity: w.activity.snapshot(),
                 rules: w.rules,
+                farming: super::super::farming::sidecar::encode(w),
                 manual: self.manual,
                 id: id(),
             }))
@@ -283,6 +285,7 @@ fn persist(job: Job) -> Result<Completed> {
     let commits = view.root.join("checkpoints");
     fs::create_dir_all(&commits)?;
     job.rules.save(&view.root)?;
+    super::super::farming::sidecar::save(&view.root, &job.farming)?;
     let commit = commits.join(format!("commit-{:020}.vxw", job.id));
     write_atomic(&commit, &bytes, job.id)?;
     let slot = if job.manual {

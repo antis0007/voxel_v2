@@ -3700,6 +3700,11 @@ fn main() -> Result<()> {
                                     blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
                                 }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
 
+                                if place_edit && can_act
+                                    && creative.tool == creative::ToolKind::Hand
+                                    && world::farming::interact(world,hit,eye*world.voxel_scale.meters(),forward,creative.selected_slot,&mut dirty_blocks,&mut dirty_chunks) {
+                                    place_edit=false;
+                                }
                                 let survival_hand = creative.tool == creative::ToolKind::Hand
                                     && !player.flying
                                     && !creative.show_panel;
