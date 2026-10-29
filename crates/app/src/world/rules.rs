@@ -23,22 +23,43 @@ pub enum GameMode {
     /// Worlds from before rules existed load here so their tools stay.
     #[default]
     Creative,
+    /// Noclip flight with no interaction; mobs never see the player.
+    Spectator,
+    /// Survival without breaking or placing blocks.
+    Adventure,
 }
 
 impl GameMode {
+    /// Modes offered for a new world. Spectator and Adventure come from `/gamemode`.
     pub const ALL: [Self; 2] = [Self::Survival, Self::Creative];
+    pub const EVERY: [Self; 4] = [Self::Survival, Self::Creative, Self::Spectator, Self::Adventure];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Survival => "Survival",
             Self::Creative => "Creative",
+            Self::Spectator => "Spectator",
+            Self::Adventure => "Adventure",
         }
+    }
+
+    /// Accepts the label, its first letter or the classic number, any case.
+    pub fn parse(word: &str) -> Option<Self> {
+        Some(match word.to_ascii_lowercase().as_str() {
+            "survival" | "s" | "0" => Self::Survival,
+            "creative" | "c" | "1" => Self::Creative,
+            "adventure" | "a" | "2" => Self::Adventure,
+            "spectator" | "sp" | "3" => Self::Spectator,
+            _ => return None,
+        })
     }
 
     pub fn hint(self) -> &'static str {
         match self {
             Self::Survival => "Creative Tools: Off · Flight: Off",
             Self::Creative => "Creative Tools: On · Flight: On",
+            Self::Spectator => "Interaction: Off · Flight: Noclip",
+            Self::Adventure => "Block Edits: Off",
         }
     }
 
@@ -48,13 +69,29 @@ impl GameMode {
     }
 
     pub fn flight(self) -> bool {
-        self == Self::Creative
+        matches!(self, Self::Creative | Self::Spectator)
+    }
+
+    /// Casting, melee, use and block edits.
+    pub fn interacts(self) -> bool {
+        self != Self::Spectator
+    }
+
+    pub fn edits_blocks(self) -> bool {
+        matches!(self, Self::Survival | Self::Creative)
+    }
+
+    /// Hostile sight checks and environmental harm reach the player.
+    pub fn visible_to_mobs(self) -> bool {
+        self != Self::Spectator
     }
 
     fn code(self) -> u8 {
         match self {
             Self::Survival => 0,
             Self::Creative => 1,
+            Self::Spectator => 2,
+            Self::Adventure => 3,
         }
     }
 
@@ -62,6 +99,8 @@ impl GameMode {
         Ok(match code {
             0 => Self::Survival,
             1 => Self::Creative,
+            2 => Self::Spectator,
+            3 => Self::Adventure,
             _ => bail!("Unknown game mode {code}"),
         })
     }
@@ -82,6 +121,9 @@ pub struct Rules {
     pub pvp: bool,
     /// Only the owner edits blocks within this horizontal radius of the world spawn.
     pub spawn_protection_m: u16,
+    /// Horizontal radius around x 0, z 0 that players stay inside; 0 is off.
+    /// Session-only: the sidecar never stores it, so a reload clears it.
+    pub border_m: u32,
 }
 
 impl Default for Rules {
@@ -93,6 +135,7 @@ impl Default for Rules {
             daylight_cycle: true,
             pvp: true,
             spawn_protection_m: 0,
+            border_m: 0,
         }
     }
 }
@@ -107,6 +150,22 @@ impl Rules {
     pub fn protects(&self, spawn_m: glam::Vec3, feet_m: glam::Vec3) -> bool {
         let r = f32::from(self.spawn_protection_m);
         r > 0.0 && glam::Vec2::new(feet_m.x - spawn_m.x, feet_m.z - spawn_m.z).length_squared() < r * r
+    }
+
+    /// Metres from `feet_m` to the border, or `None` with no border.
+    pub fn border_distance(&self, feet_m: glam::Vec3) -> Option<f32> {
+        (self.border_m > 0).then(|| self.border_m as f32 - glam::Vec2::new(feet_m.x, feet_m.z).length())
+    }
+
+    /// `feet_m` pulled back inside the border, or `None` when already inside.
+    pub fn border_clamp(&self, feet_m: glam::Vec3) -> Option<glam::Vec3> {
+        let r = self.border_m as f32;
+        let flat = glam::Vec2::new(feet_m.x, feet_m.z);
+        if self.border_m == 0 || flat.length_squared() <= r * r {
+            return None;
+        }
+        let inside = flat.normalize_or_zero() * r;
+        Some(glam::Vec3::new(inside.x, feet_m.y, inside.y))
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -148,6 +207,7 @@ impl Rules {
             daylight_cycle: flags & DAYLIGHT_CYCLE != 0,
             pvp: flags & PVP != 0,
             spawn_protection_m,
+            border_m: 0,
         })
     }
 

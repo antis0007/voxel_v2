@@ -1555,7 +1555,9 @@ impl Adventure {
             let distance = d.length();
             if e.sight <= 0.0 {
                 e.sight = 0.12 + (e.slot % 4) as f32 * 0.025;
-                e.visible = distance < modifiers::sight_range(self.site_modifier) && line(world, e.center(), eye);
+                e.visible = world.rules.mode.visible_to_mobs()
+                    && distance < modifiers::sight_range(self.site_modifier)
+                    && line(world, e.center(), eye);
                 if e.visible {
                     e.last_seen = feet;
                     e.alert = 4.0;
@@ -1775,7 +1777,7 @@ impl Adventure {
             e.gait += (moving - e.gait) * (1.0 - (-dt * 16.0).exp());
         }
         self.tick_hazards(world, feet, eye, dt);
-        if incoming > 0.0 {
+        if incoming > 0.0 && world.rules.mode.visible_to_mobs() {
             self.damage(incoming * (1.0 - armor_reduction), incoming_direction);
         }
         let shots = std::mem::take(&mut self.projectiles);

@@ -15,7 +15,37 @@ fn every_rule_flipped() -> Rules {
         daylight_cycle: false,
         pvp: false,
         spawn_protection_m: 48,
+        border_m: 0,
     }
+}
+
+#[test]
+fn appended_modes_round_trip_and_old_codes_keep_their_meaning() {
+    for mode in GameMode::EVERY {
+        let rules = Rules::new_world(mode);
+        assert_eq!(Rules::decode(&rules.encode()).unwrap(), rules);
+        assert_eq!(GameMode::parse(mode.label()), Some(mode));
+    }
+    assert_eq!(Rules::new_world(GameMode::Survival).encode()[8], 0);
+    assert_eq!(Rules::new_world(GameMode::Creative).encode()[8], 1);
+    assert!(!GameMode::Spectator.interacts() && !GameMode::Spectator.visible_to_mobs());
+    assert!(GameMode::Spectator.flight() && !GameMode::Spectator.creative_tools());
+    assert!(GameMode::Adventure.interacts() && !GameMode::Adventure.edits_blocks() && !GameMode::Adventure.flight());
+    assert_eq!(GameMode::parse("SPECTATOR"), Some(GameMode::Spectator));
+    assert_eq!(GameMode::parse("hardcore"), None);
+}
+
+#[test]
+fn border_is_session_only_and_clamps_horizontally() {
+    let rules = Rules { border_m: 100, ..Rules::default() };
+    assert_eq!(Rules::decode(&rules.encode()).unwrap().border_m, 0);
+    let inside = glam::Vec3::new(60.0, 70.0, 0.0);
+    assert_eq!(rules.border_clamp(inside), None);
+    assert!((rules.border_distance(inside).unwrap() - 40.0).abs() < 1e-4);
+    let out = rules.border_clamp(glam::Vec3::new(0.0, 12.0, -250.0)).unwrap();
+    assert!((out - glam::Vec3::new(0.0, 12.0, -100.0)).length() < 1e-4, "{out}");
+    assert_eq!(Rules::default().border_clamp(glam::Vec3::splat(1e6)), None);
+    assert_eq!(Rules::default().border_distance(glam::Vec3::ZERO), None);
 }
 
 #[test]
@@ -103,4 +133,22 @@ fn survival_world_never_toggles_flight() {
         }
         assert_eq!(flew, mode.flight(), "{mode:?}");
     }
+}
+
+#[test]
+fn spectator_flies_through_walls_and_border_holds_players() {
+    use crate::simulation::fixed;
+    let mut w = crate::world::World::new(crate::world::WorldType::Superflat, engine_core::VoxelScalePreset::OneMeter);
+    w.rules.mode = GameMode::Spectator;
+    let mut p = crate::player::Player::new();
+    p.pos = w.suggested_spawn();
+    let mut input = crate::player::Input::default();
+    fixed::gameplay(&mut w, &mut p, &mut input, true, |_, _, _, _| fixed::Actions::default());
+    assert!(p.flying && matches!(p.fly_mode, crate::player::FlyMode::Noclip));
+
+    w.rules = Rules { border_m: 8, ..Rules::default() };
+    p.pos = glam::Vec3::new(40.0, p.pos.y, 0.0);
+    p.precise_pos = p.pos.as_dvec3();
+    fixed::gameplay(&mut w, &mut p, &mut input, true, |_, _, _, _| fixed::Actions::default());
+    assert!(glam::Vec2::new(p.pos.x, p.pos.z).length() <= 8.0 + 1e-3, "{}", p.pos);
 }

@@ -62,6 +62,9 @@ use crate::player::{FlyMode, Player};
 use crate::render::{AtmosphereMode, RenderDebugView, RenderDistanceSettings};
 use crate::world::{BlockId, CloudControls, WorldType};
 
+/// The world border state line shows within this many metres of it.
+const BORDER_NOTICE_M: f32 = 16.0;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
     Loading,
@@ -2738,6 +2741,22 @@ impl EguiUi {
                     } else {
                         self.sky_notice = None;
                     }
+                }
+                if let Some(left) = self
+                    .world_rules
+                    .border_distance(player.pos * physics_state.voxel_scale.meters())
+                    .filter(|d| *d < BORDER_NOTICE_M)
+                {
+                    egui::Area::new("world_border".into())
+                        .anchor(Align2::CENTER_TOP, [0.0, 34.0])
+                        .interactable(false)
+                        .show(&self.ctx, |ui| {
+                            ui.label(
+                                RichText::new(format!("World Border · {:.0} m", left.max(0.0)))
+                                    .size(13.0)
+                                    .color(presentation::AMBER),
+                            );
+                        });
                 }
                 if self.ctx.input(|i| i.modifiers.alt)
                     && !creative_state.any_ui_open() && !self.show_debug_performance_panel

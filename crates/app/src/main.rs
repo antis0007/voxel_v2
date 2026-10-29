@@ -1454,6 +1454,8 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
 fn main() -> Result<()> {
     env_logger::init();
     crash_log::install();
+    // Before any recipe read: the tables are built once on first use.
+    world::inventory::datapack::install(&world::storage::save_directory());
 
     if let Some(path) = std::env::args().find_map(|arg| arg.strip_prefix("--capture-menu=").map(str::to_owned)) {
         return pollster::block_on(egui_ui::menu_capture::run(std::path::Path::new(&path)));
@@ -3452,7 +3454,8 @@ fn main() -> Result<()> {
                                 let ossuary_review_cast=benchmark.as_ref().is_some_and(|b|b.config.ossuary_review) && world::adventure::ossuary_review_cast(world);
                                 let ossuary_review_auto=benchmark.as_ref().is_some_and(|b|b.config.ossuary_review) && world::adventure::ossuary_review_automatic();
                                 let enemy_review_cast=world::adventure::enemy_review_casting(world);
-                                can_act=(grabbed || workshop_review.is_some() || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || ossuary_review_auto || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning;
+                                can_act=(grabbed || workshop_review.is_some() || world::adventure::enemy_review_automated() || hart_review_cast || tollkeeper_review_cast || ossuary_review_auto || wand_review.as_ref().is_some_and(|r|r.automatic)) && !creative.any_ui_open() && !spawning
+                                    && world.rules.mode.interacts();
                                 if !can_act {world.adventure.cancel_cast_input();}
                                 combat_audio.set_active(matches!(mode,AppMode::Playing) && (focused || workshop_review.is_some() || wand_review.as_ref().is_some_and(|r|r.automatic)) && !spawning);
                                 world.adventure.hand_slot = creative.selected_slot;
@@ -3794,8 +3797,11 @@ fn main() -> Result<()> {
                                         }
                                     }
                                 }
+                                // Adventure keeps use and combat but never edits blocks.
+                                let edits_blocks = world.rules.mode.edits_blocks();
+                                if !edits_blocks { place_edit = false; }
                                 // Creative worlds keep the instant break; Survival mines over time.
-                                let mining_tool = (survival_hand && creative.locked()).then(|| world::mining::tool_for(
+                                let mining_tool = (survival_hand && creative.locked() && edits_blocks).then(|| world::mining::tool_for(
                                     world.inventory.hotbar[creative.selected_slot].map(|s| s.item),
                                     world.expedition.tool_tier,
                                 ));
@@ -3810,6 +3816,7 @@ fn main() -> Result<()> {
                                     egui_ui.tool_feedback.break_progress = mining_progress.fraction();
                                     egui_ui.tool_feedback.break_requires = mined.filter(|m| !m.drops).map(|m| m.required_tier);
                                 }
+                                if !edits_blocks { break_edit = false; }
 
                                 if let Some((edit_mode, targets)) = creative::edit_blocks(
                                     &creative,

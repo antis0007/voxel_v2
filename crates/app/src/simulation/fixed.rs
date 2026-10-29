@@ -44,7 +44,18 @@ pub fn gameplay(
             player.flying = false;
             player.jump_tap_timer = 0.0;
         }
+        if !world.rules.mode.interacts() {
+            player.flying = true;
+            player.fly_mode = crate::player::FlyMode::Noclip;
+        }
         update_player(player, input, world, STEP_SECONDS);
+        let scale = world.voxel_scale.meters();
+        if let Some(feet_m) = world.rules.border_clamp(player.pos * scale) {
+            player.pos = feet_m / scale;
+            player.precise_pos = player.pos.as_dvec3();
+            player.vel.x = 0.0;
+            player.vel.z = 0.0;
+        }
     }
     let actions = hook(Hook::BeforeAdventure, world, player, input);
     let consumed = legacy

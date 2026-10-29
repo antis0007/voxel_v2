@@ -2,6 +2,7 @@
 //! 27-slot backpack, 4 equipment slots, 2×2 hand-crafting grid, and lossless transfers.
 use super::{BlockId, expedition, factory};
 mod crafting;
+pub mod datapack;
 mod descriptions;
 pub mod food;
 pub mod resources;
@@ -502,8 +503,10 @@ impl RecipeTables {
 
 const RECIPES_RON: &str = include_str!("../../../../assets/recipes.ron");
 static RECIPES: std::sync::LazyLock<RecipeTables> = std::sync::LazyLock::new(|| {
-    let rows: RecipeTableRows =
-        ron::from_str(RECIPES_RON).unwrap_or_else(|error| panic!("assets/recipes.ron: {error}"));
+    let rows: RecipeTableRows = match datapack::take_recipes() {
+        Some(rows) => rows,
+        None => ron::from_str(RECIPES_RON).unwrap_or_else(|error| panic!("assets/recipes.ron: {error}")),
+    };
     let convert = |v: Vec<RecipeRow>| v.into_iter().map(CraftingRecipe::from).collect();
     RecipeTables { hand: convert(rows.hand), bench: convert(rows.bench), crystal_tech: convert(rows.crystal_tech) }
 });
