@@ -6,6 +6,8 @@ const LADDERS: [B; 4] = [B::Ladder, B::LadderSouth, B::LadderWest, B::LadderEast
 const VINES: [B; 4] = [B::Vines, B::VinesSouth, B::VinesWest, B::VinesEast];
 /// Supporting wall per orientation index, matching the wall torches.
 const SUPPORT: [IVec3; 4] = [IVec3::Z, IVec3::NEG_Z, IVec3::X, IVec3::NEG_X];
+/// Snow layer height as a share of its cell.
+const SNOW_DEPTH: f32 = 0.1875;
 
 fn family(b: B) -> Option<&'static [B; 4]> {
     if LADDERS.contains(&b) {
@@ -23,7 +25,7 @@ pub fn is_climbable(b: B) -> bool {
 }
 
 pub fn is_thin(b: B) -> bool {
-    is_climbable(b) || b == B::Sapling
+    is_climbable(b) || b == B::Sapling || b == B::SnowLayer
 }
 
 /// Offset from the cell to the wall a ladder or vine hangs on.
@@ -74,6 +76,8 @@ pub fn boxes(b: B, p: IVec3) -> Vec<(Vec3, Vec3)> {
             (Vec3::new(0.25, 0.45, 0.44), Vec3::new(0.75, 0.85, 0.56)),
             (Vec3::new(0.44, 0.45, 0.25), Vec3::new(0.56, 0.85, 0.75)),
         ]
+    } else if b == B::SnowLayer {
+        vec![(Vec3::ZERO, Vec3::new(1.0, SNOW_DEPTH, 1.0))]
     } else {
         return Vec::new();
     };

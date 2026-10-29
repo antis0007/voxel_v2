@@ -76,6 +76,7 @@ pub fn finish(
     advance_day: bool,
 ) {
     world.sandbox.climate.sync(world.sample_config(), day.time_of_day(), day.cloud_controls().coverage);
+    super::storms::tick(world, player, day, budget);
     sim.update(world, player, STEP_SECONDS, blocks, chunks, budget);
     if settle {
         sim.settle(world);

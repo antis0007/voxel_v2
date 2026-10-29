@@ -8,6 +8,7 @@ pub(crate) mod cpu_region;
 pub(crate) mod residency;
 mod rigid;
 pub(crate) mod sandbox;
+pub(crate) mod storms;
 mod thermal;
 mod world;
 pub use world::WorldSimulation;

@@ -317,6 +317,7 @@ block_ids! {
     DressedStone,
     OakDoor, OakDoorOpen, OakDoorUpper, OakDoorUpperOpen, OakDoorZ, OakDoorZOpen, OakDoorZUpper, OakDoorZUpperOpen, OakTrapdoor, OakTrapdoorOpen, OakTrapdoorZ, OakTrapdoorZOpen, OakTrapdoorTop, OakTrapdoorTopOpen, OakTrapdoorZTop, OakTrapdoorZTopOpen, Lever, LeverOn,
     Ladder, LadderSouth, LadderWest, LadderEast, Vines, VinesSouth, VinesWest, VinesEast, Sapling,
+    SnowLayer,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -437,7 +438,7 @@ impl BlockId {
             Self::Ladder | Self::LadderSouth | Self::LadderWest | Self::LadderEast => 11,
             Self::SnowGrass => 7,
             Self::Water => 8,
-            Self::Ice => 9,
+            Self::Ice | Self::SnowLayer => 9,
             Self::Lava => 10,
             Self::Planks | Self::Bed => 11,
             Self::Bookcase => 45,

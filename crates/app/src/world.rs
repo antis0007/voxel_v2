@@ -828,6 +828,8 @@ pub struct DayNightCycle {
     day_index: u32,
     weather_seed: u32,
     cloud_controls: CloudControls,
+    /// Lightning flash and the last weather step; runtime only, never saved.
+    pub(crate) storm: crate::simulation::storms::Pulse,
 }
 
 impl Default for DayNightCycle {
@@ -843,6 +845,7 @@ impl Default for DayNightCycle {
             cloud_controls: sanitize_cloud_controls(cloud_controls_from_weather(
                 weather_profile_for_day(0, weather_seed),
             )),
+            storm: Default::default(),
         }
     }
 }
@@ -860,6 +863,7 @@ impl DayNightCycle {
             cloud_controls: sanitize_cloud_controls(cloud_controls_from_weather(
                 weather_profile_for_day(0, weather_seed),
             )),
+            storm: Default::default(),
         }
     }
 
@@ -1090,6 +1094,7 @@ impl DayNightCycle {
             self.cloud_controls,
         )
         .with_mood(self.weather_seed, self.day_index, self.time_of_day)
+        .with_flash(self.storm.flash())
     }
 
     /// Review hook: jump to a calendar day (season, sky event, weather bucket).

@@ -142,7 +142,7 @@ impl Item {
     pub fn canonical_block(block: BlockId) -> Option<BlockId> {
         if block == BlockId::Air
             || block.is_liquid()
-            || matches!(block, BlockId::Fire | BlockId::Smoke | BlockId::Steam)
+            || matches!(block, BlockId::Fire | BlockId::Smoke | BlockId::Steam | BlockId::SnowLayer)
         {
             return None;
         }
