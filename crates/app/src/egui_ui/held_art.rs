@@ -37,6 +37,8 @@ pub(crate) fn art(item: Item) -> Art {
         Item::Weapon(tier) => Art::Icon(Icon::Sword(tier as u32)),
         Item::Armor(slot, tier) => Art::Icon(Icon::Armor(slot as u8, tier as u8)),
         Item::Tool(1 | 2) => Art::Icon(Icon::Bore),
+        Item::Tool(9) => Art::Icon(Icon::Boat),
+        Item::Tool(10) => Art::Icon(Icon::Rod),
         Item::Tool(t) => Art::Icon(Icon::Wand(t)),
         Item::Wand { look, .. } => Art::Wand(look),
     }

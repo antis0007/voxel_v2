@@ -22,6 +22,8 @@ pub enum Icon {
     Sword(u32),
     Armor(u8, u8),
     Food(u8),
+    Boat,
+    Rod,
 }
 /// Glyph rows and accent colour of an icon.
 pub(super) fn rows(icon: Icon) -> (&'static [&'static str], C) {
@@ -92,6 +94,34 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
                 " 3133333133",
                 " 32     23 ",
                 " 33     33 ",
+            ][..],
+            C::from_rgb(150, 109, 73),
+        ),
+        Icon::Boat => (
+            &[
+                "            ",
+                "            ",
+                " 3        3 ",
+                " 33      33 ",
+                " 3233333323 ",
+                " 3222222223 ",
+                "  32222223  ",
+                "   333333   ",
+            ][..],
+            C::from_rgb(150, 109, 73),
+        ),
+        Icon::Rod => (
+            &[
+                "         33 ",
+                "        323 ",
+                "       323 4",
+                "      323  4",
+                "     323   4",
+                "    323    4",
+                "   323     4",
+                "  323      4",
+                " 323      44",
+                " 33         ",
             ][..],
             C::from_rgb(150, 109, 73),
         ),

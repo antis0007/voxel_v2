@@ -3,6 +3,7 @@ mod adventure;
 pub mod blueprints;
 pub mod block_page;
 mod station_page;
+pub mod trade_page;
 mod chip_art;
 mod chip_canvas;
 mod chip_editor;

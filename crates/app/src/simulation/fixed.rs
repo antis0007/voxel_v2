@@ -38,7 +38,8 @@ pub fn gameplay(
         world.factory.tick(STEP_SECONDS, size);
     }
     hook(Hook::BeforePlayer, world, player, input);
-    if move_player {
+    let riding = legacy && world::travel::step(world, player, input, move_player, STEP_SECONDS);
+    if move_player && !riding {
         if !world.rules.mode.flight() {
             // A cleared double-tap window can never toggle flight on.
             player.flying = false;

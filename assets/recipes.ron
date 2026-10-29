@@ -716,6 +716,38 @@
             ],
             description: "Heavy steel blade (32 base damage).",
         ),
+        (
+            name: "Boat",
+            output: (
+                item: Tool(9),
+                count: 1,
+            ),
+            pattern: [
+                "P P",
+                "PPP",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "Floats on open water. Sneak to step out.",
+        ),
+        (
+            name: "Fishing rod",
+            output: (
+                item: Tool(10),
+                count: 1,
+            ),
+            pattern: [
+                "  P",
+                " PF",
+                "P F",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('F', Resource(4)),
+            ],
+            description: "Cast into water; reel in on a bite.",
+        ),
     ],
     bench: [
         (

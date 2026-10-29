@@ -104,4 +104,12 @@
             ),
         ],
     ),
+    (
+        kind: RawFish,
+        name: "Raw Fish",
+        hunger: 10.0,
+        health: 1.0,
+        saturation: 4.0,
+        effects: [],
+    ),
 ]

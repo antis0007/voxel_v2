@@ -11,6 +11,7 @@ impl Item {
             Self::Weapon(5) => "kinetic_maul",
             Self::Armor(EquipSlot::Head, ArmorTier::Lumen) => "lumen_helm",
             Self::Tool(1 | 2) => "bore",
+            Self::Tool(9 | 10) => return None,
             Self::Tool(_) => "legacy_focus",
             Self::Wand { .. } => "wand",
             // Standard blocks, food and components earn no prose by default.

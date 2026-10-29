@@ -101,10 +101,11 @@ pub enum FoodKind {
     SpeedPotion = 6,
     StrengthPotion = 7,
     FireResistancePotion = 8,
+    RawFish = 9,
 }
 
 impl FoodKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::FungalRation,
         Self::RoastedCap,
         Self::Trailcake,
@@ -114,11 +115,12 @@ impl FoodKind {
         Self::SpeedPotion,
         Self::StrengthPotion,
         Self::FireResistancePotion,
+        Self::RawFish,
     ];
 
     /// Drunk for its effects; restores no hunger and ignores the well-fed check.
     pub fn is_potion(self) -> bool {
-        self as u8 >= Self::RegenerationPotion as u8
+        matches!(self, Self::RegenerationPotion | Self::SpeedPotion | Self::StrengthPotion | Self::FireResistancePotion)
     }
 
     pub fn from_u8(raw: u8) -> Option<Self> {
@@ -237,6 +239,8 @@ impl Item {
             Self::Tool(2) => "Resonant bore",
             Self::Tool(3) => "Lumen wand",
             Self::Tool(4) => "Frost wand",
+            Self::Tool(9) => "Boat",
+            Self::Tool(10) => "Fishing rod",
             Self::Tool(_) => "Resonant wand",
             Self::Wand { look, .. } if look & 1 << 11 != 0 => "Crafted wand",
             Self::Wand { look, .. } => match look & 3 {
@@ -266,6 +270,8 @@ impl Item {
                 EquipSlot::Feet => "Equipment · Feet",
             },
             Self::Tool(1 | 2) => "Excavation tool",
+            Self::Tool(9) => "Vehicle",
+            Self::Tool(10) => "Fishing tool",
             Self::Tool(_) => "Arcane focus",
             Self::Wand { .. } => "Wand",
         }
@@ -345,7 +351,7 @@ impl Item {
             }
             6 => {
                 ensure!(
-                    (1..=5).contains(&payload),
+                    (1..=5).contains(&payload) || matches!(payload, 9 | 10),
                     "Invalid tool item in survival inventory"
                 );
                 Self::Tool(payload as u8)

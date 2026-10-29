@@ -39,6 +39,7 @@ struct Job {
     rules: super::super::rules::Rules,
     farming: Vec<u8>,
     blocks: Vec<u8>,
+    travel: Vec<u8>,
     progression: Vec<u8>,
     manual: bool,
     id: u64,
@@ -231,6 +232,7 @@ impl SaveService {
                 rules: w.rules,
                 farming: super::super::farming::sidecar::encode(w),
                 blocks: super::super::block_data::sidecar::encode(&w.block_data),
+                travel: super::super::travel::sidecar::encode(&w.travel),
                 progression: super::super::progression::sidecar::encode(&w.progression, &w.inventory),
                 manual: self.manual,
                 id: id(),
@@ -293,6 +295,7 @@ fn persist(job: Job) -> Result<Completed> {
     job.rules.save(&view.root)?;
     super::super::farming::sidecar::save(&view.root, &job.farming)?;
     super::super::block_data::sidecar::save(&view.root, &job.blocks)?;
+    super::super::travel::sidecar::save(&view.root, &job.travel)?;
     super::super::progression::sidecar::save(&view.root, &job.progression)?;
     let commit = commits.join(format!("commit-{:020}.vxw", job.id));
     write_atomic(&commit, &bytes, job.id)?;

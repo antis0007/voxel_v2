@@ -3041,7 +3041,7 @@ fn main() -> Result<()> {
                             if let Some(w) = world.as_mut() {
                                 w.inventory = egui_ui.survival.clone();
                                 w.sync_from_inventory();
-                                let was_open = creative.block_page.is_some();
+                                let was_open = creative.block_page.is_some() || creative.trade_page.is_some();
                                 let eye = player.eye(w.voxel_scale);
                                 let view_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
@@ -3050,7 +3050,9 @@ fn main() -> Result<()> {
                                     4096.0,
                                 ) * Mat4::look_to_rh(eye, player.forward_dir(), Vec3::Y);
                                 egui_ui::block_page::draw(&egui_ui.ctx, &mut creative.block_page, w, eye, view_proj);
-                                if (creative.block_page.is_some() && grabbed) || (was_open && creative.block_page.is_none()) {
+                                egui_ui::trade_page::draw(&egui_ui.ctx, &mut creative.trade_page, w, eye * w.voxel_scale.meters());
+                                let open = creative.block_page.is_some() || creative.trade_page.is_some();
+                                if (open && grabbed) || (was_open && !open) {
                                     sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
                                 }
                             }
@@ -3802,6 +3804,20 @@ fn main() -> Result<()> {
                                     && creative.tool == creative::ToolKind::Hand
                                     && hit.is_some_and(|(cell,_)|world::fittings::interact(world,cell,&player,&mut dirty_blocks,&mut dirty_chunks)) {
                                     place_edit=false;
+                                }
+                                if place_edit && can_act && creative.tool == creative::ToolKind::Hand {
+                                    match world::travel::interact(world, eye * world.voxel_scale.meters(), forward, creative.selected_slot) {
+                                        world::travel::Use::None => {}
+                                        world::travel::Use::Taken => place_edit = false,
+                                        world::travel::Use::OpenTrade(id) => {
+                                            creative.close_panels();
+                                            creative.trade_page = Some(id);
+                                            input.clear();
+                                            place_edit = false;
+                                            break_edit = false;
+                                            release_mouse(window, &mut grabbed);
+                                        }
+                                    }
                                 }
                                 if place_edit && can_act
                                     && creative.tool == creative::ToolKind::Hand

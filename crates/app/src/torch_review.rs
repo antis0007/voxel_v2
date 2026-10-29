@@ -500,6 +500,16 @@ pub fn apply_survival_phase(
                 egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("station_inputs"), inputs));
             }
         }
+        13 | 14 => {
+            // Phase 13: a villager and a floating boat in view; phase 14: the villager's trade page.
+            creative.show_palette = false;
+            creative.block_page = None;
+            player.pitch = if phase == 13 { -0.5 } else { -0.15 };
+            travel_scene(world);
+            if phase == 14 && creative.trade_page.is_none() {
+                creative.trade_page = Some(0);
+            }
+        }
         _ => {
             creative.show_palette = false;
         }
@@ -549,6 +559,21 @@ fn station_row(world: &mut World, at: IVec3) {
     world.progression.wear.reconcile(&world.inventory);
     let _ = world.progression.wear.spend(&mut world.inventory, crate::world::progression::Slot::Hotbar(0), 180);
     world.progression.xp = 160;
+}
+
+fn travel_scene(world: &mut World) {
+    let n = (1.0 / world.voxel_scale.meters()) as i32;
+    if world.get(IVec3::new(0, 100 * n - 1, 0)) != BlockId::Water {
+        // The front row gives way to a villager on the left and a floor pool on the right.
+        let mut edits: Vec<_> = (-3 * n..3 * n).map(|x| (IVec3::new(x, 100 * n, 0), BlockId::Air)).collect();
+        edits.extend((0..3 * n).flat_map(|x| (0..2 * n).map(move |z| (IVec3::new(x, 100 * n - 1, z), BlockId::Water))));
+        world.set_many(&edits);
+        world.adventure.dirty_voxels.extend(edits.iter().map(|&(p, _)| p));
+    }
+    crate::world::adventure::wildlife::vehicle::review_scene(world, Vec3::new(-1.5, 100.02, 0.5), Vec3::new(1.5, 99.88, 1.0));
+    for _ in 0..8 {
+        world.inventory.try_insert(crate::world::inventory::ItemStack::new(crate::world::inventory::Item::Resource(13), 64));
+    }
 }
 
 /// A row of assemblies on the survival room's floor, one per health state:

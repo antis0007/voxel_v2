@@ -39,7 +39,7 @@ pub(crate) struct Herd {
     next: u32,
 }
 
-fn member_id(e: &Enemy) -> Option<u32> {
+pub(super) fn member_id(e: &Enemy) -> Option<u32> {
     (passive(e.kind) && e.site.z == SITE_Z && e.slot == SLOT).then_some(e.site.x as u32)
 }
 
@@ -263,6 +263,7 @@ fn roll(e: &Enemy, index: usize) -> u32 {
 
 /// Drops a dead grazer's RON loot once; young drop nothing. Forgets a herd member.
 pub(in crate::world::adventure) fn fall(state: &mut State, world: &mut World, e: &Enemy) {
+    super::vehicle::fell(world, e);
     if let Some(id) = member_id(e) {
         state.herd.members.remove(&id);
     }

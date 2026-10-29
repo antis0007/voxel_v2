@@ -10,6 +10,7 @@ mod model;
 mod persistence;
 #[cfg(test)]
 mod tests;
+pub(crate) mod vehicle;
 pub(crate) use husbandry::{Herd, feed, service as husbandry};
 pub(super) use husbandry::fall;
 pub(super) const SHEEP: u32 = 16;
@@ -35,7 +36,7 @@ pub(crate) struct State {
     /// Persisted in the farming sidecar, not the save body.
     pub(crate) herd: Herd,
 }
-pub(super) fn passive(kind: u32) -> bool { matches!(kind, SHEEP | GOAT) }
+pub(super) fn passive(kind: u32) -> bool { matches!(kind, SHEEP | GOAT | vehicle::VILLAGER | vehicle::BOAT) }
 fn id(e: &Enemy) -> Id { (e.site.x, e.site.y, e.slot) }
 impl Resident {
     fn actor(&self, id: Id) -> Enemy {
@@ -125,10 +126,11 @@ fn supported(world: &World, p: Vec3, depth: f32) -> bool {
 }
 
 pub(super) fn tick(e: &mut Enemy, world: &World, feet: Vec3, time: f32, dt: f32) {
+    if vehicle::tick(e, world, dt) { return; }
     e.visible = false;
     e.tell = 0.0;
     e.slow = (e.slow - dt).max(0.0);
-    let danger = feet.distance_squared(e.pos) < 4.0 * 4.0 || e.flash > 0.0;
+    let danger = (feet.distance_squared(e.pos) < 4.0 * 4.0 && e.kind != vehicle::VILLAGER) || e.flash > 0.0;
     e.alert = if danger { 4.0 } else { (e.alert - dt).max(0.0) };
     let phase = time + (engine_core::hash::hash_u32(e.site.x as u32 ^ e.site.y as u32) % 100) as f32;
     let grazing = e.alert <= 0.0 && phase.rem_euclid(14.0) < 7.0;
@@ -183,7 +185,9 @@ pub(super) fn tick(e: &mut Enemy, world: &World, feet: Vec3, time: f32, dt: f32)
     e.stagger = (e.stagger - dt).max(0.0);
 }
 
-pub(super) use model::draw;
+pub(super) fn draw(e: &Enemy, m: &mut crate::mesh::models::Model, time: f32) {
+    if !vehicle::draw(e, m, time) { model::draw(e, m, time); }
+}
 
 pub(super) fn observe_review(world: &World) {
     use std::sync::atomic::{AtomicU32, Ordering};

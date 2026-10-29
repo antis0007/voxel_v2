@@ -131,6 +131,7 @@ pub(super) fn import_world(id: &str) -> Result<()> {
                     || name == super::super::rules::FILE
                     || name == super::super::farming::sidecar::FILE
                     || name == super::super::block_data::sidecar::FILE
+                    || name == super::super::travel::sidecar::FILE
                     || name == super::super::progression::sidecar::FILE)
             {
                 copy_writable(&p, &temporary.join(&name))?;

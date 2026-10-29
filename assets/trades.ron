@@ -1,0 +1,132 @@
+// Villager trades: one page per villager (villager i offers page i % pages).
+// `give` stacks are taken for the `get` stack; `uses` per row restock each in-game day.
+// Edit here, not in Rust. `cargo test trades_ron_round_trips` checks the format.
+[
+    [
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 16,
+                ),
+            ],
+            get: (
+                item: Food(Trailcake),
+                count: 2,
+            ),
+            uses: 8,
+        ),
+        (
+            give: [
+                (
+                    item: Food(RawMutton),
+                    count: 2,
+                ),
+            ],
+            get: (
+                item: Resource(6),
+                count: 1,
+            ),
+            uses: 6,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(18),
+                    count: 4,
+                ),
+            ],
+            get: (
+                item: Resource(5),
+                count: 1,
+            ),
+            uses: 4,
+        ),
+    ],
+    [
+        (
+            give: [
+                (
+                    item: Resource(3),
+                    count: 8,
+                ),
+            ],
+            get: (
+                item: Resource(8),
+                count: 2,
+            ),
+            uses: 6,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(8),
+                    count: 3,
+                ),
+            ],
+            get: (
+                item: Tool(10),
+                count: 1,
+            ),
+            uses: 2,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(5),
+                    count: 1,
+                ),
+            ],
+            get: (
+                item: Resource(4),
+                count: 4,
+            ),
+            uses: 8,
+        ),
+    ],
+    [
+        (
+            give: [
+                (
+                    item: Food(RawFish),
+                    count: 6,
+                ),
+            ],
+            get: (
+                item: Resource(6),
+                count: 2,
+            ),
+            uses: 8,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(14),
+                    count: 2,
+                ),
+                (
+                    item: Block(Planks),
+                    count: 1,
+                ),
+            ],
+            get: (
+                item: Weapon(1),
+                count: 1,
+            ),
+            uses: 1,
+        ),
+        (
+            give: [
+                (
+                    item: Block(Cobblestone),
+                    count: 12,
+                ),
+            ],
+            get: (
+                item: Block(Torch),
+                count: 8,
+            ),
+            uses: 6,
+        ),
+    ],
+]

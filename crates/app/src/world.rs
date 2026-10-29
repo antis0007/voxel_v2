@@ -11,6 +11,7 @@ mod collision;
 pub mod bed;
 pub mod block_data;
 pub mod stations;
+pub mod travel;
 pub mod blueprint;
 pub mod expedition;
 pub mod workshop;
@@ -1235,6 +1236,8 @@ pub struct World {
     pub farming: farming::State,
     /// Loaded from and saved to the `block_data::sidecar::FILE` sidecar in `regions.root`.
     pub block_data: block_data::State,
+    /// Loaded from and saved to the `travel::sidecar::FILE` sidecar in `regions.root`.
+    pub travel: travel::State,
     /// Loaded from and saved to the `progression::sidecar::FILE` sidecar in `regions.root`.
     pub progression: progression::State,
     pub orbital: orbital::State,
@@ -1279,6 +1282,7 @@ impl World {
             habitats: habitats::State::default(),
             farming: farming::State::default(),
             block_data: block_data::State::default(),
+            travel: travel::State::default(),
             progression: progression::State::default(),
             orbital: orbital::State::default(),
             inventory: {

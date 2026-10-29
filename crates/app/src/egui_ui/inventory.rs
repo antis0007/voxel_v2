@@ -47,7 +47,7 @@ fn creative_items() -> &'static [Item] {
         }
         items.push(Item::Armor(EquipSlot::Head, ArmorTier::Lumen));
         // Wands are real items with their own decks now; only the bores remain tools.
-        for tool in 1..=2 {
+        for tool in [1, 2, 9, 10] {
             items.push(Item::Tool(tool));
         }
         for food in crate::world::inventory::FoodKind::ALL {

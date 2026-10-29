@@ -1,0 +1,29 @@
+// Fishing catches: one row is rolled per bite, weighted by `weight`.
+// Edit here, not in Rust. `cargo test fishing_ron_round_trips` checks the format.
+[
+    (
+        item: Food(RawFish),
+        count: 1,
+        weight: 60,
+    ),
+    (
+        item: Resource(13),
+        count: 2,
+        weight: 15,
+    ),
+    (
+        item: Resource(4),
+        count: 1,
+        weight: 12,
+    ),
+    (
+        item: Block(Bush),
+        count: 1,
+        weight: 8,
+    ),
+    (
+        item: Resource(5),
+        count: 1,
+        weight: 5,
+    ),
+]
