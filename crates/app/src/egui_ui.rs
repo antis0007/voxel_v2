@@ -35,6 +35,7 @@ pub mod map;
 pub(crate) mod magic_style;
 pub(crate) mod pixel_art;
 mod presentation;
+pub(crate) mod progression_hud;
 mod sigils;
 pub mod subtitles;
 mod production;
@@ -1542,6 +1543,7 @@ fn draw_hotbar_slot_button(
                 egui::vec2(icon_size, icon_size),
             );
             inventory::draw_item_icon(painter, icon_rect, stack.item);
+            progression_hud::wear_bar(painter, frame_rect, crate::world::inventory::SlotAddr::Hotbar(slot));
             if stack.count > 1 {
                 let count_str = format!("{}", stack.count);
                 let font = egui::FontId::monospace(11.0);
@@ -2941,10 +2943,16 @@ impl EguiUi {
                                 _ => None,
                             }
                         });
+                    let hotbar_rect = if creative_state.locked() {
+                        progression_hud::effects(&self.ctx);
+                        progression_hud::xp_bar(&self.ctx, hotbar.response.rect)
+                    } else {
+                        hotbar.response.rect
+                    };
                     let vitals = adventure::hud(
                         &self.ctx,
                         &self.adventure,
-                        hotbar.response.rect,
+                        hotbar_rect,
                         player.yaw,
                         self.survival.eat_timer,
                         self.survival.armor_points(),

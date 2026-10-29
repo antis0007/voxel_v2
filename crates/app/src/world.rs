@@ -25,6 +25,7 @@ pub mod mining;
 pub mod recipe_index;
 pub mod mood;
 pub mod orbital;
+pub mod progression;
 pub mod regions;
 pub mod rules;
 mod sample_cache;
@@ -1233,6 +1234,8 @@ pub struct World {
     pub farming: farming::State,
     /// Loaded from and saved to the `block_data::sidecar::FILE` sidecar in `regions.root`.
     pub block_data: block_data::State,
+    /// Loaded from and saved to the `progression::sidecar::FILE` sidecar in `regions.root`.
+    pub progression: progression::State,
     pub orbital: orbital::State,
     pub inventory: inventory::SurvivalInventory,
     pub sandbox: crate::simulation::sandbox::Sandbox,
@@ -1275,6 +1278,7 @@ impl World {
             habitats: habitats::State::default(),
             farming: farming::State::default(),
             block_data: block_data::State::default(),
+            progression: progression::State::default(),
             orbital: orbital::State::default(),
             inventory: {
                 let mut inv = inventory::SurvivalInventory::default();
@@ -1483,6 +1487,7 @@ impl World {
         }
         self.adventure.hunger = (self.adventure.hunger + food.hunger_restore()).min(100.0);
         self.adventure.health = (self.adventure.health + food.health_restore()).min(max_hp);
+        self.progression.eat(food, self.adventure.hunger);
         self.inventory.eat_timer = 1.35;
         self.sync_from_inventory();
         self.expedition.message = format!(

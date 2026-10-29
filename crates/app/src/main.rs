@@ -3019,6 +3019,7 @@ fn main() -> Result<()> {
                                 egui_ui.survival = w.inventory.clone();
                                 egui_ui.survival_eat_timer = w.inventory.eat_timer;
                                 egui_ui.survival_armor_points = w.inventory.armor_points();
+                                egui_ui::progression_hud::publish(&egui_ui.ctx, w.progression.view(&w.inventory));
                             }
                             egui_ui.region_error = world.as_ref().and_then(|w|w.regions.view.error()).or_else(||chunk_streamer.upload_error().map(str::to_owned));
                             let action = egui_ui.build_ui(

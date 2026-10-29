@@ -130,7 +130,8 @@ pub(super) fn import_world(id: &str) -> Result<()> {
                     || name == "world.meta"
                     || name == super::super::rules::FILE
                     || name == super::super::farming::sidecar::FILE
-                    || name == super::super::block_data::sidecar::FILE)
+                    || name == super::super::block_data::sidecar::FILE
+                    || name == super::super::progression::sidecar::FILE)
             {
                 copy_writable(&p, &temporary.join(&name))?;
             } else if name == "checkpoints" && entry.file_type()?.is_dir() {

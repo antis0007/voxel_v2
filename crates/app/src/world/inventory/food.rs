@@ -7,6 +7,11 @@ pub struct Food {
     pub name: String,
     pub hunger: f32,
     pub health: f32,
+    /// Hidden buffer that drains before hunger, capped by hunger after eating.
+    #[serde(default)]
+    pub saturation: f32,
+    #[serde(default)]
+    pub effects: Vec<crate::world::progression::effects::Grant>,
 }
 
 const FOODS_RON: &str = include_str!("../../../../../assets/foods.ron");

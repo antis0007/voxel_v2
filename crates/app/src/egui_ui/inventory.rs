@@ -299,7 +299,7 @@ fn draw_player_preview(
     });
 }
 
-fn show_item_tooltip(resp: &egui::Response, stack: ItemStack, inv: &SurvivalInventory) {
+fn show_item_tooltip(resp: &egui::Response, stack: ItemStack, inv: &SurvivalInventory, addr: SlotAddr) {
     resp.clone().on_hover_ui(|ui| {
         ui.set_max_width(230.0);
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
@@ -314,6 +314,7 @@ fn show_item_tooltip(resp: &egui::Response, stack: ItemStack, inv: &SurvivalInve
             }
         });
         descriptions::details(ui, stack.item);
+        super::progression_hud::durability_line(ui, addr);
         if let Some((before, after)) = inv.armor_comparison(stack.item) {
             let delta = (after - before) * 100.0;
             ui.label(RichText::new(format!("Equipped defence: {:.0}% → {:.0}% ({delta:+.0}%)", before*100.0, after*100.0))
@@ -460,7 +461,8 @@ fn draw_survival_slot(
                 );
             }
         }
-        show_item_tooltip(&response, stack, inv);
+        super::progression_hud::wear_bar(painter, rect, addr);
+        show_item_tooltip(&response, stack, inv, addr);
     } else if let SlotAddr::Equipment(i) = addr
         && let Some(eq) = EquipSlot::from_index(i) {
             draw_equipment_silhouette(painter, rect, eq);

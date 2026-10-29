@@ -1,4 +1,5 @@
 // Food rows: one per inventory::FoodKind. `hunger` and `health` are added when eaten (hunger caps at 100).
+// `saturation` drains before hunger and never exceeds it; `effects` start when eaten.
 // `cargo test foods_ron_round_trips` checks the format.
 [
     (
@@ -6,29 +7,45 @@
         name: "Fungal ration",
         hunger: 38.0,
         health: 8.0,
+        saturation: 30.0,
+        effects: [],
     ),
     (
         kind: RoastedCap,
         name: "Roasted mushroom",
         hunger: 24.0,
         health: 4.0,
+        saturation: 14.0,
+        effects: [],
     ),
     (
         kind: Trailcake,
         name: "Spore trailcake",
         hunger: 32.0,
         health: 6.0,
+        saturation: 24.0,
+        effects: [
+            (
+                kind: Regeneration,
+                seconds: 5.0,
+                level: 1,
+            ),
+        ],
     ),
     (
         kind: RawMutton,
         name: "Raw Mutton",
         hunger: 12.0,
         health: 0.0,
+        saturation: 6.0,
+        effects: [],
     ),
     (
         kind: CookedMutton,
         name: "Cooked Mutton",
         hunger: 36.0,
         health: 6.0,
+        saturation: 48.0,
+        effects: [],
     ),
 ]

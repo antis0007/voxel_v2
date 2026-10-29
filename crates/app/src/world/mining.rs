@@ -187,7 +187,11 @@ pub fn harvest(
             .map(|commit| commit.publish(world, blocks, chunks))
             .is_ok();
     }
-    super::expedition::harvest(world, p, blocks, chunks)
+    let changed = super::expedition::harvest(world, p, blocks, chunks);
+    if changed && tool.is_some() && world.get(p) != block {
+        super::progression::on_harvest(world, block);
+    }
+    changed
 }
 
 /// Tooltip stat lines for an item with a tool row.

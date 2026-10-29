@@ -586,7 +586,8 @@ fn update_player_local(
         sprint_speed
     } else {
         walk_speed
-    }) * terrain_speed;
+    }) * terrain_speed
+        * world.progression.effects.speed_factor();
 
     let mut wish = Vec3::ZERO;
     if input.forward {

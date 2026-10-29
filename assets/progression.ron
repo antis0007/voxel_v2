@@ -1,0 +1,83 @@
+// Player progression. `durability`: uses before a tool or weapon breaks (one per block mined
+// or strike landed). `armor`: hits each worn piece absorbs, per tier. `mined_xp`: experience
+// for breaking a block with a harvesting tool. `cargo test progression_ron_round_trips` checks the format.
+(
+    durability: [
+        (
+            item: Tool(1),
+            max: 300,
+        ),
+        (
+            item: Tool(2),
+            max: 900,
+        ),
+        (
+            item: Tool(6),
+            max: 59,
+        ),
+        (
+            item: Tool(7),
+            max: 131,
+        ),
+        (
+            item: Tool(8),
+            max: 250,
+        ),
+        (
+            item: Weapon(1),
+            max: 200,
+        ),
+        (
+            item: Weapon(2),
+            max: 400,
+        ),
+        (
+            item: Weapon(3),
+            max: 600,
+        ),
+        (
+            item: Weapon(4),
+            max: 600,
+        ),
+        (
+            item: Weapon(5),
+            max: 800,
+        ),
+    ],
+    armor: [
+        (
+            tier: Copper,
+            max: 120,
+        ),
+        (
+            tier: Steel,
+            max: 240,
+        ),
+        (
+            tier: Lumen,
+            max: 200,
+        ),
+    ],
+    mined_xp: [
+        (
+            block: CoalOre,
+            xp: 1,
+        ),
+        (
+            block: CopperOre,
+            xp: 1,
+        ),
+        (
+            block: TinOre,
+            xp: 1,
+        ),
+        (
+            block: IronOre,
+            xp: 2,
+        ),
+        (
+            block: Crystal,
+            xp: 3,
+        ),
+    ],
+)

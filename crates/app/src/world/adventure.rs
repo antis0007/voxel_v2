@@ -693,7 +693,7 @@ pub struct Adventure {
     hurt: f32,
     damage_direction: Vec3,
     damage_amount: f32,
-    hit: f32,
+    pub(crate) hit: f32,
     combo: u32,
     combo_time: f32,
 }
@@ -1165,7 +1165,7 @@ impl Adventure {
         let armor_reduction = world.inventory.armor_reduction();
         let sprinting = player.sprinting && player.vel.length_squared() > 0.25;
         let drain = hunger::drain_per_second(self.hunger_mode, sprinting, player.flying);
-        self.hunger = (self.hunger - dt * drain).max(0.0);
+        self.hunger = (self.hunger - world.progression.absorb_drain(dt * drain)).max(0.0);
         if self.hunger >= 75.0 && self.health < self.max_health() && self.hurt <= 0.0 {
             self.health = (self.health + dt * 0.36).min(self.max_health());
         } else if self.hunger <= 0.0 && !player.flying {
@@ -1284,7 +1284,8 @@ impl Adventure {
                         + if self.tool_mods & 16 != 0 { 4.0 } else { 0.0 })
                         * tinkering::head_multiplier(self.tool_head)
                         * (1.0 + self.resonance.stacks(0) * 0.08)
-                        * if self.tool_mods & 1 != 0 { 1.08 } else { 1.0 };
+                        * if self.tool_mods & 1 != 0 { 1.08 } else { 1.0 }
+                        * world.progression.effects.melee_factor();
                     e.health -= damage * if e.encounter.exposed > 0.0 { 1.25 } else { 1.0 }
                         * if shield { 0.35 } else if e.kind == 8 { hart::damage_taken(e) } else { 1.0 };
                     if e.kind == tollkeeper::KIND { tollkeeper::pressure(e, damage); }
@@ -2426,6 +2427,7 @@ impl Adventure {
                     self.tollkeepers.remove(&e.site);
                 }
                 *mask |= 1 << e.slot;
+                world.progression.pending_xp += super::progression::xp::for_kill(e.menace, is_boss(e.kind));
                 resonance_kills.push(e.center());
                 world.habitats.release(e.pos, 0, if is_boss(e.kind) { 80 } else { 8 });
                 if e.affixes.has(status::Affix::Volatile) {
@@ -2877,6 +2879,7 @@ pub fn tick(
     enemy_review::after(world, player);
     world.reconcile_legacy_to_inventory();
     world.sync_from_inventory();
+    super::progression::step(world, dt);
     consumed
 }
 
