@@ -34,6 +34,14 @@ pub fn collides_world_local(world: &World, min: Vec3, max: Vec3, origin: IVec3) 
                     if engine_content::fittings::state(world.get(cell)).is_some()
                         && !engine_content::fittings::boxes(world.get(cell),cell,world.voxel_scale.meters()).iter().any(|&(a,b)|
                             min.cmplt(b-origin.as_vec3()).all() && max.cmpgt(a-origin.as_vec3()).all()) { continue; }
+                    let block = world.get(cell);
+                    if engine_content::shaped::is_shaped(block) {
+                        let links = engine_content::shaped::links(block, cell, |q| world.get(q));
+                        let hit = engine_content::shaped::boxes(block, cell, links).iter().any(|&(a, b)| {
+                            min.cmplt(b - origin.as_vec3()).all() && max.cmpgt(a - origin.as_vec3()).all()
+                        });
+                        if !hit { continue; }
+                    }
                     if let Some(bounds) =
                         super::factory::conduit_bounds(world, origin + IVec3::new(x, y, z))
                         && !bounds.iter().any(|&(a, b)| {

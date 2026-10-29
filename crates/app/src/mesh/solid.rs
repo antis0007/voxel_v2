@@ -303,7 +303,12 @@ impl SolidPlan {
     pub fn build(&self, chunk: &GeneratedChunk, mut mesh: ChunkMesh, lod: u8) -> ChunkMesh {
         for &(p,b) in &self.fittings {
             if engine_content::thin::is_thin(b) {
-                for (lo,hi) in engine_content::thin::boxes(b,p) {
+                let boxes = if engine_content::shaped::is_fence(b) {
+                    engine_content::shaped::boxes(b, p, engine_content::shaped::links(b, p, |q| chunk.get_world(q)))
+                } else {
+                    engine_content::thin::boxes(b, p)
+                };
+                for (lo,hi) in boxes {
                     push_box(&mut mesh,lo,hi,b.color(p),b.surface());
                 }
                 continue;

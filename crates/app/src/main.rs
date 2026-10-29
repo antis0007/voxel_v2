@@ -1164,8 +1164,10 @@ fn rescue_from_void(world: &mut World, player: &mut Player, last_safe: glam::Vec
     true
 }
 
-fn resolve_placement_block(selected: BlockId, support_normal: glam::IVec3) -> Option<BlockId> {
-    if engine_content::thin::is_climbable(selected) {
+fn resolve_placement_block(selected: BlockId, support_normal: glam::IVec3, forward: glam::IVec3) -> Option<BlockId> {
+    if engine_content::shaped::is_shaped(selected) {
+        engine_content::shaped::placed(selected, support_normal, forward)
+    } else if engine_content::thin::is_climbable(selected) {
         engine_content::thin::attach(selected, support_normal)
     } else if selected.is_torch() {
         BlockId::torch_from_attachment(support_normal)
@@ -3038,6 +3040,18 @@ fn main() -> Result<()> {
                             if let Some(w) = world.as_mut() {
                                 w.inventory = egui_ui.survival.clone();
                                 w.sync_from_inventory();
+                                let was_open = creative.block_page.is_some();
+                                let eye = player.eye(w.voxel_scale);
+                                let view_proj = Mat4::perspective_rh(
+                                    view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
+                                    gpu.aspect_ratio(),
+                                    0.05,
+                                    4096.0,
+                                ) * Mat4::look_to_rh(eye, player.forward_dir(), Vec3::Y);
+                                egui_ui::block_page::draw(&egui_ui.ctx, &mut creative.block_page, w, eye, view_proj);
+                                if (creative.block_page.is_some() && grabbed) || (was_open && creative.block_page.is_none()) {
+                                    sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
+                                }
                             }
                             let solving = world.as_ref().map(|w| w.sample_config()).filter(engine_worldgen::geo::active).map(|c| {
                                 engine_worldgen::geo::prewarm(c.seed);
@@ -3578,6 +3592,24 @@ fn main() -> Result<()> {
                                 egui_ui.tool_feedback.out_of_range = hit.is_none() && sight.is_some();
                                 egui_ui.tool_feedback.air_placement = hit.is_none() && active_input.alt_down
                                     && creative.tool == creative::ToolKind::Hand;
+                                // Right-click opens a written block or chest; a held torch lights TNT.
+                                if place_edit && can_act && !active_input.sneak && creative.tool == creative::ToolKind::Hand
+                                    && let Some((cell, _)) = hit {
+                                    let target = world.get(cell);
+                                    let torch = world.inventory.hotbar[creative.selected_slot].map(|s| s.item)
+                                        == Some(world::inventory::Item::Block(BlockId::Torch))
+                                        || creative.selected_block() == BlockId::Torch;
+                                    if world::block_data::opens_page(target) {
+                                        creative.close_panels();
+                                        creative.block_page = Some(cell);
+                                        input.clear();
+                                        place_edit = false;
+                                        break_edit = false;
+                                        release_mouse(window, &mut grabbed);
+                                    } else if target == BlockId::Tnt && torch && world::block_data::tnt::ignite(world, cell) {
+                                        place_edit = false;
+                                    }
+                                }
                                 if input.interact {
                                     if grabbed && !creative.any_ui_open() && !spawning {
                                         if active_input.sneak
@@ -3611,7 +3643,12 @@ fn main() -> Result<()> {
                                             } else if let Some((cell,_))=hit {
                                             if (cell.as_vec3()-eye).length()*world.voxel_scale.meters()<=6.0 {
                                                 let target = world.get(cell);
-                                                if target == BlockId::Bed {
+                                                if world::block_data::opens_page(target) {
+                                                    creative.close_panels();
+                                                    creative.block_page = Some(cell);
+                                                    input.clear();
+                                                    release_mouse(window, &mut grabbed);
+                                                } else if target == BlockId::Bed {
                                                     let feet = (cell.as_vec3() + Vec3::new(0.5, 0.0, 0.5)) * world.voxel_scale.meters();
                                                     let message = match world::bed::sleep(&mut day_night, &mut world.adventure.respawn_point, feet) {
                                                         Ok(true) => "Slept through the night. Morning came the next day.",
@@ -3841,7 +3878,8 @@ fn main() -> Result<()> {
                                         None
                                     } else {
                                         hit.and_then(|(cell, prev)| {
-                                            resolve_placement_block(active_block, prev - cell)
+                                            resolve_placement_block(active_block, prev - cell,
+                                                engine_content::shaped::horizontal_axis(player.forward_dir()))
                                         })
                                         .or(Some(active_block))
                                     };
@@ -3918,6 +3956,9 @@ fn main() -> Result<()> {
                                                     &mut dirty_blocks, &mut dirty_chunks).is_err() {
                                                     world.expedition.say("Placement blocked");
                                                     continue;
+                                                }
+                                                if engine_content::shaped::text_limits(place_block).is_some() {
+                                                    creative.block_page = Some(cell);
                                                 }
                                             }
                                         }

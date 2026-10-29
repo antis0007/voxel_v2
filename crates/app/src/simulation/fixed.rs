@@ -88,6 +88,10 @@ pub fn finish(
 ) {
     world.sandbox.climate.sync(world.sample_config(), day.time_of_day(), day.cloud_controls().coverage);
     super::storms::tick(world, player, day, budget);
+    if world.ca_view.is_none() {
+        let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
+        world::block_data::tnt::tick(world, eye, blocks, chunks, budget);
+    }
     sim.update(world, player, STEP_SECONDS, blocks, chunks, budget);
     if settle {
         sim.settle(world);

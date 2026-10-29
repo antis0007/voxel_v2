@@ -70,6 +70,209 @@
             description: "Hangs on a wall. Climbable.",
         ),
         (
+            name: "Sign",
+            output: (
+                item: Block(SignPost),
+                count: 3,
+            ),
+            pattern: [
+                "PPP",
+                "PPP",
+                " F ",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('F', Resource(4)),
+            ],
+            description: "Floor or wall. 4 lines of 16 characters.",
+        ),
+        (
+            name: "Chest",
+            output: (
+                item: Block(Chest),
+                count: 1,
+            ),
+            pattern: [
+                "PPP",
+                "P P",
+                "PPP",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "27 slots.",
+        ),
+        (
+            name: "Lectern",
+            output: (
+                item: Block(Lectern),
+                count: 1,
+            ),
+            pattern: [
+                "SSS",
+                " K ",
+                " S ",
+            ],
+            key: [
+                ('S', Block(PlankSlab)),
+                ('K', Block(Bookcase)),
+            ],
+            description: "12 lines of 24 characters.",
+        ),
+        (
+            name: "TNT",
+            output: (
+                item: Block(Tnt),
+                count: 1,
+            ),
+            pattern: [
+                "CSC",
+                "SCS",
+                "CSC",
+            ],
+            key: [
+                ('C', Resource(3)),
+                ('S', Block(Sand)),
+            ],
+            description: "Fuse 4 s. Lit by fire or a torch.",
+        ),
+        (
+            name: "Oak stairs",
+            output: (
+                item: Block(PlankStairs),
+                count: 4,
+            ),
+            pattern: [
+                "M  ",
+                "MM ",
+                "MMM",
+            ],
+            key: [
+                ('M', Block(Planks)),
+            ],
+            description: "Half-step climb.",
+        ),
+        (
+            name: "Oak slab",
+            output: (
+                item: Block(PlankSlab),
+                count: 6,
+            ),
+            pattern: [
+                "MMM",
+            ],
+            key: [
+                ('M', Block(Planks)),
+            ],
+            description: "Half height.",
+        ),
+        (
+            name: "Oak fence",
+            output: (
+                item: Block(PlankFence),
+                count: 3,
+            ),
+            pattern: [
+                "MFM",
+                "MFM",
+            ],
+            key: [
+                ('M', Block(Planks)),
+                ('F', Resource(4)),
+            ],
+            description: "Joins fences and solid walls.",
+        ),
+        (
+            name: "Stone brick stairs",
+            output: (
+                item: Block(BrickStairs),
+                count: 4,
+            ),
+            pattern: [
+                "M  ",
+                "MM ",
+                "MMM",
+            ],
+            key: [
+                ('M', Block(StoneBricks)),
+            ],
+            description: "Half-step climb.",
+        ),
+        (
+            name: "Stone brick slab",
+            output: (
+                item: Block(BrickSlab),
+                count: 6,
+            ),
+            pattern: [
+                "MMM",
+            ],
+            key: [
+                ('M', Block(StoneBricks)),
+            ],
+            description: "Half height.",
+        ),
+        (
+            name: "Stone brick wall",
+            output: (
+                item: Block(BrickFence),
+                count: 6,
+            ),
+            pattern: [
+                "MMM",
+                "MMM",
+            ],
+            key: [
+                ('M', Block(StoneBricks)),
+            ],
+            description: "Joins walls and solid blocks.",
+        ),
+        (
+            name: "Cobblestone stairs",
+            output: (
+                item: Block(CobbleStairs),
+                count: 4,
+            ),
+            pattern: [
+                "M  ",
+                "MM ",
+                "MMM",
+            ],
+            key: [
+                ('M', Block(Cobblestone)),
+            ],
+            description: "Half-step climb.",
+        ),
+        (
+            name: "Cobblestone slab",
+            output: (
+                item: Block(CobbleSlab),
+                count: 6,
+            ),
+            pattern: [
+                "MMM",
+            ],
+            key: [
+                ('M', Block(Cobblestone)),
+            ],
+            description: "Half height.",
+        ),
+        (
+            name: "Cobblestone wall",
+            output: (
+                item: Block(CobbleFence),
+                count: 6,
+            ),
+            pattern: [
+                "MMM",
+                "MMM",
+            ],
+            key: [
+                ('M', Block(Cobblestone)),
+            ],
+            description: "Joins walls and solid blocks.",
+        ),
+        (
             name: "Oak planks",
             output: (
                 item: Block(Planks),

@@ -113,6 +113,8 @@ pub struct CreativeState {
     pub show_wand_atelier: bool,
     pub show_world_map: bool,
     pub show_blueprints: bool,
+    /// Sign, lectern or chest whose page is open.
+    pub block_page: Option<IVec3>,
     pub tool: ToolKind,
     pub brush_shape: BrushShape,
     pub brush_radius: i32,
@@ -150,6 +152,7 @@ impl Default for CreativeState {
             show_wand_atelier: false,
             show_world_map: false,
             show_blueprints: false,
+            block_page: None,
             tool: ToolKind::Hand,
             brush_shape: BrushShape::Cube,
             brush_radius: 0,
@@ -333,6 +336,7 @@ impl CreativeState {
         self.show_wand_atelier = false;
         self.show_world_map = false;
         self.show_blueprints = false;
+        self.block_page = None;
     }
     pub fn cancel_edits(&mut self) {
         self.pending = None;
@@ -400,6 +404,7 @@ impl CreativeState {
             || self.show_wand_atelier
             || self.show_world_map
             || self.show_blueprints
+            || self.block_page.is_some()
     }
 
     pub fn reach_distance_blocks(&self, voxel_scale: VoxelScalePreset) -> f32 {

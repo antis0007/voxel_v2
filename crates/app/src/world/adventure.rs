@@ -2615,6 +2615,15 @@ impl Adventure {
     pub fn take_terrain_blast(&mut self) -> Option<(Vec3, f32)> {
         self.terrain_blasts.pop_front()
     }
+    /// Explosion at `centre` in metres: feedback, enemy damage, falloff damage to the player at `eye`.
+    pub(crate) fn blast_damage(&mut self, centre: Vec3, radius: f32, eye: Vec3) {
+        self.blast_feedback(centre, radius, Vec3::Y, [1.0, 0.55, 0.2]);
+        let reach = radius * 2.0;
+        let d = (eye - centre).length();
+        if d < reach {
+            self.damage(36.0 * (1.0 - d / reach), eye - centre);
+        }
+    }
     /// Dynamic point lights (position, radius, color, strength) for active spells, projectiles,
     /// black holes, plasma crosses, and sanctum altars.
     pub fn spell_lights(&self) -> Vec<(Vec3, f32, [f32; 3], f32)> {

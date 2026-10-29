@@ -654,6 +654,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             super::rules::Rules::default()
         });
         super::farming::sidecar::load(&mut world, &root);
+        super::block_data::sidecar::load(&mut world.block_data, &root);
         world.regions = super::regions::RegionStream::open(root, records);
         world.regions.view.ensure_owner()?;
         background::validate_extents(&world.regions.view)?;

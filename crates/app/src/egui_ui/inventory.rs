@@ -130,7 +130,7 @@ fn draw_creative_item_card(ui: &mut egui::Ui, size: [f32; 2], item: Item) -> egu
     response
 }
 
-pub(super) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: Item) {
+pub(crate) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: Item) {
     match super::held_art::art(item) {
         super::held_art::Art::Block(block) => draw_voxel_icon(painter, rect, block),
         super::held_art::Art::Icon(icon) => icons::paint(painter, rect, icon),

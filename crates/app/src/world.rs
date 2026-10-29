@@ -9,6 +9,7 @@ pub mod activity;
 pub mod adventure;
 mod collision;
 pub mod bed;
+pub mod block_data;
 pub mod blueprint;
 pub mod expedition;
 pub mod workshop;
@@ -1230,6 +1231,8 @@ pub struct World {
     pub habitats: habitats::State,
     /// Loaded from and saved to the `farming::sidecar::FILE` sidecar in `regions.root`.
     pub farming: farming::State,
+    /// Loaded from and saved to the `block_data::sidecar::FILE` sidecar in `regions.root`.
+    pub block_data: block_data::State,
     pub orbital: orbital::State,
     pub inventory: inventory::SurvivalInventory,
     pub sandbox: crate::simulation::sandbox::Sandbox,
@@ -1271,6 +1274,7 @@ impl World {
             ca_view: None,
             habitats: habitats::State::default(),
             farming: farming::State::default(),
+            block_data: block_data::State::default(),
             orbital: orbital::State::default(),
             inventory: {
                 let mut inv = inventory::SurvivalInventory::default();
@@ -1981,6 +1985,8 @@ impl World {
                     chunk_mut.torches.remove(&p);
                 }
             }
+            let metres = self.voxel_scale.meters();
+            self.block_data.on_replaced(p, current, id, &mut self.inventory.dropped, metres);
 
             if phase_change {
                 if id == BlockId::Water {

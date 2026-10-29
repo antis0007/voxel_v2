@@ -25,7 +25,7 @@ pub fn is_climbable(b: B) -> bool {
 }
 
 pub fn is_thin(b: B) -> bool {
-    is_climbable(b) || b == B::Sapling || b == B::SnowLayer
+    is_climbable(b) || b == B::Sapling || b == B::SnowLayer || crate::shaped::is_shaped(b)
 }
 
 /// Offset from the cell to the wall a ladder or vine hangs on.
@@ -79,7 +79,8 @@ pub fn boxes(b: B, p: IVec3) -> Vec<(Vec3, Vec3)> {
     } else if b == B::SnowLayer {
         vec![(Vec3::ZERO, Vec3::new(1.0, SNOW_DEPTH, 1.0))]
     } else {
-        return Vec::new();
+        // Fences report every rail so callers can bound their box count.
+        return crate::shaped::boxes(b, p, 0b1111);
     };
     let support = support_offset(b).unwrap_or(IVec3::Z);
     let base = p.as_vec3();
@@ -93,7 +94,7 @@ pub fn boxes(b: B, p: IVec3) -> Vec<(Vec3, Vec3)> {
 }
 
 /// Rotates a point authored against a +Z wall onto the wall at `support`.
-fn turn(v: Vec3, support: IVec3) -> Vec3 {
+pub(crate) fn turn(v: Vec3, support: IVec3) -> Vec3 {
     match (support.x, support.z) {
         (0, -1) => Vec3::new(1.0 - v.x, v.y, 1.0 - v.z),
         (1, _) => Vec3::new(v.z, v.y, v.x),

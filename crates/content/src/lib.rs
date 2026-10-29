@@ -1,5 +1,6 @@
 pub mod fittings;
 pub mod thin;
+pub mod shaped;
 mod size_class;
 pub mod descriptions;
 pub mod environment;
@@ -318,6 +319,9 @@ block_ids! {
     OakDoor, OakDoorOpen, OakDoorUpper, OakDoorUpperOpen, OakDoorZ, OakDoorZOpen, OakDoorZUpper, OakDoorZUpperOpen, OakTrapdoor, OakTrapdoorOpen, OakTrapdoorZ, OakTrapdoorZOpen, OakTrapdoorTop, OakTrapdoorTopOpen, OakTrapdoorZTop, OakTrapdoorZTopOpen, Lever, LeverOn,
     Ladder, LadderSouth, LadderWest, LadderEast, Vines, VinesSouth, VinesWest, VinesEast, Sapling,
     SnowLayer,
+    SignPost, SignPostSouth, SignPostWest, SignPostEast, WallSign, WallSignSouth, WallSignWest, WallSignEast, Chest, Lectern, Tnt,
+    PlankStairs, PlankStairsSouth, PlankStairsWest, PlankStairsEast, BrickStairs, BrickStairsSouth, BrickStairsWest, BrickStairsEast,
+    CobbleStairs, CobbleStairsSouth, CobbleStairsWest, CobbleStairsEast, PlankSlab, BrickSlab, CobbleSlab, PlankFence, BrickFence, CobbleFence,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -422,6 +426,10 @@ impl BlockId {
     pub fn surface(self) -> SurfaceDetail {
         let mut surface = self.material().render.surface;
         surface.material_id = self as u32 + 1;
+        if let Some(base) = shaped::base(self) {
+            surface.texture_kind = base.surface().texture_kind;
+            return surface;
+        }
         surface.texture_kind = match self {
             Self::Fire => 42,
             Self::Smoke => 43,
@@ -440,7 +448,7 @@ impl BlockId {
             Self::Water => 8,
             Self::Ice | Self::SnowLayer => 9,
             Self::Lava => 10,
-            Self::Planks | Self::Bed => 11,
+            Self::Planks | Self::Bed | Self::Tnt => 11,
             Self::Bookcase => 45,
             Self::CarvedStone | Self::GlazedTiles => 12,
             Self::StoneBricks => 12,

@@ -480,10 +480,36 @@ pub fn apply_survival_phase(
             creative.show_palette = true;
             egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), 1u32));
         }
+        10 => {
+            // Phase 10: one of each block-data and partial block in the room, in view.
+            creative.show_palette = false;
+            let n = (1.0 / world.voxel_scale.meters()) as i32;
+            block_row(world, IVec3::new(0, 100 * n, 0));
+        }
         _ => {
             creative.show_palette = false;
         }
     }
+}
+
+fn block_row(world: &mut World, at: IVec3) {
+    use BlockId as B;
+    if world.get(at) == B::SignPostSouth {
+        return;
+    }
+    let front = [B::PlankStairsSouth, B::BrickStairsSouth, B::Chest, B::SignPostSouth, B::Lectern, B::Tnt];
+    let back = [B::PlankSlab, B::PlankFence, B::PlankFence, B::BrickFence, B::CobbleSlab, B::CobbleStairsSouth];
+    let mut edits = Vec::new();
+    for (i, (f, b)) in front.into_iter().zip(back).enumerate() {
+        let x = i as i32 - 3;
+        edits.push((at + IVec3::new(x, 0, 0), f));
+        edits.push((at + IVec3::new(x, 0, -2), b));
+    }
+    world.set_many(&edits);
+    // Review edits bypass the tool path; queue the cells for remeshing.
+    world.adventure.dirty_voxels.extend(edits.iter().map(|&(p, _)| p));
+    let text = ["North gate", "12 m", "", "Copper mine"].map(String::from);
+    crate::world::block_data::set_text(world, at, &text);
 }
 
 /// A row of assemblies on the survival room's floor, one per health state:
