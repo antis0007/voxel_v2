@@ -5,6 +5,7 @@ use engine_core::Budget;
 use glam::{IVec3, Vec3};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 pub(crate) mod sidecar;
+pub mod sapling;
 mod stage;
 pub mod table;
 #[cfg(test)]
@@ -130,6 +131,13 @@ fn service(world: &mut World, k: Key, now: u64, changed: &mut Vec<IVec3>) {
         stage::advance(&mut plot, crop, world.seed, p, now, c, ROLLS_PER_SERVICE);
         world.farming.plots.insert(k, plot);
     }
+    if crop.tree.is_some() {
+        let room = DIRTY_LIMIT.saturating_sub(world.adventure.dirty_voxels.len() + changed.len());
+        if plot.stage >= crop.mature() && block == crop.sprout && sapling::grow(world, p, crop, room, changed) {
+            world.farming.plots.remove(&k);
+        }
+        return;
+    }
     // The visible swap may wait for dirty-list room; the stage never does.
     if plot.stage >= crop.mature() && block == crop.sprout
         && world.adventure.dirty_voxels.len() + changed.len() < DIRTY_LIMIT
@@ -157,7 +165,13 @@ pub fn interact(
     };
     let Some((cell, place)) = hit else { return false };
     let scale = world.voxel_scale.meters();
-    if ((cell.as_vec3() + Vec3::splat(0.5)) * scale).distance(eye_m) > REACH_METRES || place != cell + IVec3::Y {
+    if ((cell.as_vec3() + Vec3::splat(0.5)) * scale).distance(eye_m) > REACH_METRES {
+        return false;
+    }
+    if item == sapling::BIOMASS && world.farming.plots.contains_key(&key(cell)) {
+        return sapling::fertilize(world, cell, slot);
+    }
+    if place != cell + IVec3::Y {
         return false;
     }
     if let Item::Block(seed) = item

@@ -281,6 +281,12 @@ pub fn fell_tree(world: &mut World, removed: IVec3) -> Option<Vec<IVec3>> {
     for (p, item, count) in loot {
         give_or_drop(world, p, item, count);
     }
+    let metres = world.voxel_scale.meters();
+    for &p in &removed_leaves {
+        if let Some(item) = super::farming::sapling::leaf_drop(world.seed, metres, p, B::Leaves) {
+            give_or_drop(world, p, item, 1);
+        }
+    }
 
     let mut touched = removed_leaves;
     let body_possible = logs.len() <= crate::simulation::sandbox::MAX_BODY_VOXELS
@@ -471,6 +477,9 @@ pub fn harvest(
     commit.publish(world, blocks, chunks);
     if let Some(seed) = super::farming::wild_seed(world, p, block) {
         give_or_drop(world, p, seed, 1);
+    }
+    if let Some(item) = super::farming::sapling::leaf_drop(world.seed, world.voxel_scale.meters(), p, block) {
+        give_or_drop(world, p, item, 1);
     }
     if let Some(i) = resource(block) {
         if world.adventure.sounds.len() < 64 {

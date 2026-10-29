@@ -17,6 +17,12 @@ pub(crate) fn art(item: Item) -> Art {
     let block = |b: BlockId| {
         if b.is_torch() {
             Art::Icon(Icon::Torch)
+        } else if engine_content::thin::canonical(b) == Some(BlockId::Ladder) {
+            Art::Icon(Icon::Ladder)
+        } else if engine_content::thin::canonical(b) == Some(BlockId::Vines) {
+            Art::Icon(Icon::Vines)
+        } else if b == BlockId::Sapling {
+            Art::Icon(Icon::Sapling)
         } else if let Some(kind) = crate::world::factory::Kind::from_block(b) {
             Art::Icon(Icon::Machine(kind))
         } else {

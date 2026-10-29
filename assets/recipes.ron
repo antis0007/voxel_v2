@@ -54,6 +54,22 @@
             description: "Switch doors and hatches within three metres.",
         ),
         (
+            name: "Ladder",
+            output: (
+                item: Block(Ladder),
+                count: 3,
+            ),
+            pattern: [
+                "P P",
+                "PPP",
+                "P P",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "Hangs on a wall. Climbable.",
+        ),
+        (
             name: "Oak planks",
             output: (
                 item: Block(Planks),

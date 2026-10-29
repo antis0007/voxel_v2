@@ -1,4 +1,5 @@
 pub mod fittings;
+pub mod thin;
 mod size_class;
 pub mod descriptions;
 pub mod environment;
@@ -315,6 +316,7 @@ block_ids! {
     TimberBeamZ,
     DressedStone,
     OakDoor, OakDoorOpen, OakDoorUpper, OakDoorUpperOpen, OakDoorZ, OakDoorZOpen, OakDoorZUpper, OakDoorZUpperOpen, OakTrapdoor, OakTrapdoorOpen, OakTrapdoorZ, OakTrapdoorZOpen, OakTrapdoorTop, OakTrapdoorTopOpen, OakTrapdoorZTop, OakTrapdoorZTopOpen, Lever, LeverOn,
+    Ladder, LadderSouth, LadderWest, LadderEast, Vines, VinesSouth, VinesWest, VinesEast, Sapling,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
@@ -431,6 +433,8 @@ impl BlockId {
             Self::Sand | Self::Sandstone => 4,
             Self::Log => 5,
             Self::Leaves | Self::Bush | Self::PineLeaves => 6,
+            Self::Vines | Self::VinesSouth | Self::VinesWest | Self::VinesEast | Self::Sapling => 6,
+            Self::Ladder | Self::LadderSouth | Self::LadderWest | Self::LadderEast => 11,
             Self::SnowGrass => 7,
             Self::Water => 8,
             Self::Ice => 9,
@@ -524,7 +528,7 @@ impl BlockId {
 
     pub fn is_ray_pickable(self) -> bool {
         // A mirage is an illusion for the body, not for the pickaxe.
-        self.is_solid() || self.is_torch() || self.is_mirage()
+        self.is_solid() || self.is_torch() || self.is_mirage() || thin::is_thin(self)
     }
 
     pub fn torch_support_offset(self) -> Option<IVec3> {

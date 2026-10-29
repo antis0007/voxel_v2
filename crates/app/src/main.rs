@@ -1165,7 +1165,9 @@ fn rescue_from_void(world: &mut World, player: &mut Player, last_safe: glam::Vec
 }
 
 fn resolve_placement_block(selected: BlockId, support_normal: glam::IVec3) -> Option<BlockId> {
-    if selected.is_torch() {
+    if engine_content::thin::is_climbable(selected) {
+        engine_content::thin::attach(selected, support_normal)
+    } else if selected.is_torch() {
         BlockId::torch_from_attachment(support_normal)
     } else {
         Some(selected)
@@ -1173,7 +1175,10 @@ fn resolve_placement_block(selected: BlockId, support_normal: glam::IVec3) -> Op
 }
 
 fn is_torch_supported(world: &World, pos: glam::IVec3, block: BlockId) -> bool {
-    let Some(offset) = block.torch_support_offset() else {
+    let Some(offset) = block
+        .torch_support_offset()
+        .or_else(|| engine_content::thin::support_offset(block))
+    else {
         return true;
     };
     world.get(pos + offset).is_solid()
@@ -1193,7 +1198,8 @@ fn cleanup_detached_torches(
         origin - glam::IVec3::Z,
     ] {
         let block = world.get(check);
-        if !block.is_torch() || is_torch_supported(world, check, block) {
+        let hangs = block.is_torch() || engine_content::thin::is_climbable(block);
+        if !hangs || is_torch_supported(world, check, block) {
             continue;
         }
         world.set(check, BlockId::Air);
@@ -3892,7 +3898,7 @@ fn main() -> Result<()> {
                                                 if world::factory::place(world,cell,place_block,&player,held,&mut dirty_blocks,&mut dirty_chunks) {
                                                     continue;
                                                 }
-                                                if place_block.is_torch()
+                                                if (place_block.is_torch() || engine_content::thin::is_climbable(place_block))
                                                     && !is_torch_supported(world, cell, place_block)
                                                 {
                                                     continue;

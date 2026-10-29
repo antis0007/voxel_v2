@@ -2,6 +2,7 @@ use glam::{DVec3, IVec3, Vec2, Vec3};
 use winit::keyboard::KeyCode;
 
 pub mod viewmodel;
+mod climb;
 
 use crate::keybinds::{self, Action, Binding};
 
@@ -634,6 +635,10 @@ fn update_player_local(
 
     // Bound long falls in both physical speed and collision traversal work.
     player.vel.y = (player.vel.y - gravity * dt).max(-speed_blocks(world.voxel_scale, 60.0));
+    if climb::touching(world, player.pos, origin, player.scale, player.crouch_t) {
+        let grip = climb::Grip { up: input.jump || input.forward, hold: input.sneak };
+        player.vel.y = climb::vertical(player.vel.y, grip, world.voxel_scale);
+    }
 
     let horiz_delta = Vec3::new(player.vel.x * dt, 0.0, player.vel.z * dt);
     let old_pos = player.pos;

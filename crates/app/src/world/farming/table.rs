@@ -15,6 +15,17 @@ pub struct Crop {
     pub yield_min: u32,
     pub yield_max: u32,
     pub wild_seed_per_mille: u32,
+    /// A mature plot becomes this tree instead of swapping to `crop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<TreeShape>,
+}
+
+/// Trunk and crown of a grown sapling, metres; cells follow the voxel scale.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TreeShape {
+    pub trunk_metres: f32,
+    pub crown_radius_metres: f32,
+    pub crown_half_height_metres: f32,
 }
 
 impl Crop {
@@ -62,7 +73,7 @@ mod crop_table {
             assert!(c.light_min <= c.light_max && c.light_max <= 15, "row {i}");
             assert!(c.dry_per_mille <= 1000 && c.wet_per_mille <= 1000, "row {i}");
             assert!(c.yield_min >= 1 && c.yield_min <= c.yield_max, "row {i}");
-            assert_ne!(c.crop, c.sprout, "row {i}");
+            assert!(c.tree.is_some() || c.crop != c.sprout, "row {i}");
             assert!(CROPS[..i].iter().all(|o| o.crop != c.crop), "row {i} duplicates a seed");
         }
     }

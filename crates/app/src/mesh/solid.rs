@@ -62,6 +62,11 @@ impl SolidPlan {
                         fitting_boxes+=engine_content::fittings::boxes(b,p,chunk.voxel_meters).len();
                         fittings.push((p,b));
                     }
+                    if inside && engine_content::thin::is_thin(b) {
+                        let p=chunk.chunk*CHUNK_SIZE+IVec3::new(x as i32-1,y as i32-1,z as i32-1);
+                        fitting_boxes+=engine_content::thin::boxes(b,p).len();
+                        fittings.push((p,b));
+                    }
                     // Six faces are a conservative bound only for cells carrying partial water.
                     if inside && partial_water && b == BlockId::Water {
                         water_faces += 6;
@@ -72,6 +77,7 @@ impl SolidPlan {
                         && !b.is_torch()
                         && !b.is_model()
                         && engine_content::fittings::state(b).is_none()
+                        && !engine_content::thin::is_thin(b)
                         && (!partial_water || b != BlockId::Water);
                     for axis in 0..3 {
                         if b.is_opaque() {
@@ -296,8 +302,14 @@ impl SolidPlan {
     }
     pub fn build(&self, chunk: &GeneratedChunk, mut mesh: ChunkMesh, lod: u8) -> ChunkMesh {
         for &(p,b) in &self.fittings {
+            if engine_content::thin::is_thin(b) {
+                for (lo,hi) in engine_content::thin::boxes(b,p) {
+                    push_box(&mut mesh,lo,hi,b.color(p),b.surface());
+                }
+                continue;
+            }
             for (lo,hi) in engine_content::fittings::boxes(b,p,chunk.voxel_meters) {
-                let c=(lo+hi)*0.5; let size=hi-lo;
+                let size=hi-lo;
                 let mut surface=BlockId::Planks.surface();
                 surface.material_id=b as u32+1;
                 let fitting=engine_content::fittings::state(b).unwrap();
@@ -306,16 +318,7 @@ impl SolidPlan {
                 let local_top=(hi-engine_content::fittings::anchor(p,engine_content::fittings::step(chunk.voxel_meters)).as_vec3())*chunk.voxel_meters;
                 let color=if latch { [0.64,0.42,0.19] } else if fitting.lever && local_top.y<0.141 { [0.36,0.37,0.34] } else { b.color(p) };
                 if latch { surface.texture_kind=41; surface.roughness=0.46; }
-                for (normal,u,v) in [(glam::Vec3::X,glam::Vec3::Y,glam::Vec3::Z),
-                    (-glam::Vec3::X,glam::Vec3::Z,glam::Vec3::Y),
-                    (glam::Vec3::Y,glam::Vec3::Z,glam::Vec3::X),
-                    (-glam::Vec3::Y,glam::Vec3::X,glam::Vec3::Z),
-                    (glam::Vec3::Z,glam::Vec3::X,glam::Vec3::Y),
-                    (-glam::Vec3::Z,glam::Vec3::Y,glam::Vec3::X)] {
-                    let face=c+normal*size*0.5; let u=u*size*0.5; let v=v*size*0.5;
-                    let quad=[face-u-v,face+u-v,face+u+v,face-u+v].map(|p|p.to_array());
-                    super::push_face(&mut mesh.vertices,&mut mesh.indices,quad,color,normal.to_array(),surface,[1.0;4]);
-                }
+                push_box(&mut mesh,lo,hi,color,surface);
             }
         }
         for p in &self.patches {
@@ -331,5 +334,22 @@ impl SolidPlan {
             super::append_water_mesh(&mut mesh, chunk);
         }
         mesh
+    }
+}
+
+fn push_box(mesh: &mut ChunkMesh, lo: glam::Vec3, hi: glam::Vec3, color: [f32; 3], surface: engine_content::SurfaceDetail) {
+    let c = (lo + hi) * 0.5;
+    let size = hi - lo;
+    for (normal, u, v) in [(glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z),
+        (-glam::Vec3::X, glam::Vec3::Z, glam::Vec3::Y),
+        (glam::Vec3::Y, glam::Vec3::Z, glam::Vec3::X),
+        (-glam::Vec3::Y, glam::Vec3::X, glam::Vec3::Z),
+        (glam::Vec3::Z, glam::Vec3::X, glam::Vec3::Y),
+        (-glam::Vec3::Z, glam::Vec3::Y, glam::Vec3::X)] {
+        let face = c + normal * size * 0.5;
+        let u = u * size * 0.5;
+        let v = v * size * 0.5;
+        let quad = [face - u - v, face + u - v, face + u + v, face - u + v].map(|p| p.to_array());
+        super::push_face(&mut mesh.vertices, &mut mesh.indices, quad, color, normal.to_array(), surface, [1.0; 4]);
     }
 }

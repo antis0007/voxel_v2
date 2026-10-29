@@ -36,4 +36,27 @@
         yield_max: 3,
         wild_seed_per_mille: 500,
     ),
+    (
+        crop: Sapling,
+        sprout: Sapling,
+        soil: [
+            Grass,
+            Dirt,
+            SnowGrass,
+        ],
+        light_min: 8,
+        light_max: 15,
+        stages: 4,
+        roll_ticks: 2400,
+        dry_per_mille: 125,
+        wet_per_mille: 200,
+        yield_min: 1,
+        yield_max: 1,
+        wild_seed_per_mille: 0,
+        tree: Some((
+            trunk_metres: 4.0,
+            crown_radius_metres: 1.5,
+            crown_half_height_metres: 1.25,
+        )),
+    ),
 ]
