@@ -30,6 +30,7 @@ mod loading_screen;
 mod planet_loading;
 mod main_menu;
 mod menu_scene;
+mod schematics;
 pub(crate) mod menu_capture;
 mod orbital;
 mod magic_fx;
