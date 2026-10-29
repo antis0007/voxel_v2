@@ -74,6 +74,7 @@ const ROOM_MIN = vec3<f32>(-7.2, 0.0, -3.8);
 const ROOM_MAX = vec3<f32>(7.1, 5.2, 1.3);
 const SCENE_PIXELS = vec2<f32>(640.0, 360.0);
 fn hash(p: vec3<f32>) -> f32 { return fract(sin(dot(p,vec3(127.1,311.7,74.7))) * 43758.5453); }
+fn breath_glow() -> f32 { return 0.85 + 0.15 * sin(clock.x * 0.9); }
 fn bayer(p: vec2<f32>) -> f32 {
     var m = array<f32, 16>(0.0,8.0,2.0,10.0, 12.0,4.0,14.0,6.0, 3.0,11.0,1.0,9.0, 15.0,7.0,13.0,5.0);
     let i = vec2<i32>(floor(p)) & vec2<i32>(3);
@@ -175,13 +176,17 @@ fn embers(pixel: vec2<f32>, ro: vec3<f32>, rd: vec3<f32>, forward: vec3<f32>, ri
     }
     return glow;
 }
+// Dusk: a warm band at the ridge, teal above it, indigo at the zenith, so the
+// room's warm light and the lit stone read against a dark sky.
 fn sky(rd: vec3<f32>) -> vec3<f32> {
-    var c = mix(vec3(0.075,0.14,0.17),vec3(0.018,0.035,0.08),clamp(rd.y*1.6,0.0,1.0));
+    let h = clamp(rd.y, -0.2, 1.0);
+    var c = mix(vec3(0.17,0.11,0.07), vec3(0.05,0.10,0.13), smoothstep(-0.02, 0.16, h));
+    c = mix(c, vec3(0.012,0.022,0.06), smoothstep(0.16, 0.7, h));
     let ridge = sin(rd.x*18.0)*0.025 + sin(rd.x*41.0)*0.014;
-    if rd.y < ridge + 0.04 { c = vec3(0.055,0.105,0.12); }
-    if rd.y < ridge*0.6 - 0.035 { c = vec3(0.028,0.06,0.065); }
+    if rd.y < ridge + 0.04 { c = vec3(0.035,0.07,0.08); }
+    if rd.y < ridge*0.6 - 0.035 { c = vec3(0.018,0.04,0.045); }
     let clouds = smoothstep(0.71,0.88,sin(rd.x*5.0+clock.x*0.009)*0.22+sin(rd.y*31.0)*0.3+0.5);
-    return c + vec3(0.045,0.05,0.05)*clouds*max(rd.y,0.0);
+    return c + vec3(0.075,0.05,0.035)*clouds*max(rd.y,0.0);
 }
 @fragment fn fs_main(v: Vertex) -> @location(0) vec4<f32> {
     let uv = v.uv;
@@ -237,26 +242,28 @@ fn sky(rd: vec3<f32>) -> vec3<f32> {
             let circuit = step(0.8,fract(panel.x/5.0))*step(0.15,fract(panel.y/9.0));
             emission = vec3(0.396,0.718,0.686)*circuit*0.4;
         }
-        let daylight = max(dot(hit.normal,SUN),0.0)*mix(0.06, 0.60, sunlit(point+hit.normal*0.015));
+        let daylight = max(dot(hit.normal,SUN),0.0)*mix(0.05, 0.72, sunlit(point+hit.normal*0.015));
         let ao = occlusion(point, hit.normal);
         let furnace = FURNACE-point;
         let crystal = CRYSTAL-point;
         let warmth = max(dot(hit.normal,normalize(furnace)),0.0)*4.5/(1.0+dot(furnace,furnace))*flicker;
-        let cool = max(dot(hit.normal,normalize(crystal)),0.0)*2.2/(1.0+dot(crystal,crystal));
-        let lighting = (vec3(0.16,0.21,0.25)*ao)+vec3(0.65,0.78,0.85)*daylight
+        let breath = 0.85 + 0.15 * sin(clock.x * 0.9);
+        let cool = max(dot(hit.normal,normalize(crystal)),0.0)*2.4/(1.0+dot(crystal,crystal))*breath;
+        // Cool sky ambient against a low warm sun: the two lights stay distinct.
+        let lighting = (vec3(0.10,0.15,0.21)*ao)+vec3(0.95,0.74,0.52)*daylight
             + EMBER*warmth*ao + MINT*cool*ao;
         color = srgb_decode(albedo)*lighting + emission*0.55;
         let spec = pow(max(dot(reflect(-SUN,hit.normal),-rd),0.0),24.0);
-        if hit.material == 4u || hit.material == 3u { color += vec3(0.38,0.28,0.13)*spec*daylight; }
-        color = mix(color,vec3(0.05,0.08,0.09),1.0-exp(-hit.distance*0.009));
+        if hit.material == 4u || hit.material == 3u { color += vec3(0.42,0.28,0.12)*spec*daylight; }
+        color = mix(color,vec3(0.03,0.05,0.07),1.0-exp(-hit.distance*0.009));
     }
     // Air: sunlit haze through the window, warm and cool halos around the two lights.
     let jitter = bayer(pixel);
     // Forward scatter: the beam reads as a beam toward the sun, not as grey fog.
     let phase = 0.35 + 1.1 * pow(max(dot(rd, SUN), 0.0), 3.0);
-    color += vec3(0.58,0.66,0.66) * 0.011 * phase * shaft(ro, rd, reach, jitter);
+    color += vec3(0.80,0.62,0.42) * 0.010 * phase * shaft(ro, rd, reach, jitter);
     color += EMBER * 0.055 * flicker * halo(ro, rd, reach, FURNACE);
-    color += MINT * 0.035 * halo(ro, rd, reach, CRYSTAL);
+    color += MINT * 0.035 * breath_glow() * halo(ro, rd, reach, CRYSTAL);
     color += embers(pixel, ro, rd, forward, right, up, reach);
     color = srgb_encode(color);
     // A quiet band keeps type legible without glass UI cards; the host passes

@@ -18,6 +18,18 @@ struct SceneCallback {
     dim: f32,
 }
 
+/// Column placement shared by the title stack and the loading screen: left
+/// edge, width, and the quiet-band edge for `paint` (negative when centred).
+/// Wide windows anchor the column in the room's quiet left band so the bench
+/// and furnace stay visible; narrower windows centre it over an even shade.
+pub(super) fn column(screen: Rect) -> (f32, f32, f32) {
+    let width = (screen.width() - 48.0).clamp(80.0, 408.0);
+    let wide = screen.width() >= 900.0;
+    let left = if wide { (screen.width() * 0.08).max(48.0) } else { (screen.width() - width) * 0.5 };
+    let quiet_edge = if wide { (left + width + 16.0) / screen.width() } else { -1.0 };
+    (screen.left() + left, width, quiet_edge)
+}
+
 /// `quiet_edge` is where the menu column ends as a fraction of `rect` width,
 /// or a negative value for an even shade; `dim` (0..1) darkens for loading.
 pub(super) fn paint(p: &Painter, rect: Rect, quiet_edge: f32, dim: f32) {
