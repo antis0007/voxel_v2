@@ -1,6 +1,7 @@
 // Artificers' instrument room, not a generated destination preview.
 // Material grain uses the world's 20 texel/metre lattice. Linear lighting shares
 // the game's colour transfer functions; copper, ember and crystal use its palette.
+// clock = (seconds, aspect, quiet band right edge in uv or -1 for even shade, dim 0..1).
 @group(0) @binding(0) var<uniform> clock: vec4<f32>;
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> Vertex {
@@ -63,7 +64,21 @@ const BLOCKS = array<Block, 51>(
     Block(vec3(0.68,1.46,-0.5),vec3(0.06,0.05,0.05),5u),
     Block(vec3(3.4,1.53,-0.55),vec3(0.10,0.13,0.10),7u)
 );
+const SUN = vec3<f32>(-0.37139, 0.74278, -0.55709);
+const FURNACE = vec3<f32>(-2.1, 0.7, -0.7);
+const CRYSTAL = vec3<f32>(2.1, 2.3, -0.12);
+const EMBER = vec3<f32>(1.0, 0.31, 0.075);
+const MINT = vec3<f32>(0.18, 0.72, 0.65);
+// Haze is confined to the room so the approach outside stays clear.
+const ROOM_MIN = vec3<f32>(-7.2, 0.0, -3.8);
+const ROOM_MAX = vec3<f32>(7.1, 5.2, 1.3);
+const SCENE_PIXELS = vec2<f32>(640.0, 360.0);
 fn hash(p: vec3<f32>) -> f32 { return fract(sin(dot(p,vec3(127.1,311.7,74.7))) * 43758.5453); }
+fn bayer(p: vec2<f32>) -> f32 {
+    var m = array<f32, 16>(0.0,8.0,2.0,10.0, 12.0,4.0,14.0,6.0, 3.0,11.0,1.0,9.0, 15.0,7.0,13.0,5.0);
+    let i = vec2<i32>(floor(p)) & vec2<i32>(3);
+    return (m[i.x + i.y * 4] + 0.5) / 16.0;
+}
 fn box_hit(ro: vec3<f32>, rd: vec3<f32>, b: Block) -> Hit {
     let inverse = 1.0 / (rd + vec3<f32>(0.000001));
     let a = (b.center - b.extent - ro) * inverse;
@@ -96,6 +111,70 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
     }
     return result;
 }
+fn sunlit(p: vec3<f32>) -> f32 { return select(0.0, 1.0, trace(p, SUN).distance > 40.0); }
+// Three short rays close corners and the undersides of shelves.
+fn occlusion(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    let t = normalize(cross(n, select(vec3(0.0,1.0,0.0), vec3(1.0,0.0,0.0), abs(n.y) > 0.5)));
+    let b = cross(n, t);
+    var open = 0.0;
+    open += select(0.0, 1.0, trace(p + n * 0.02, normalize(n * 0.6 + t)).distance > 0.55);
+    open += select(0.0, 1.0, trace(p + n * 0.02, normalize(n * 0.6 - t * 0.5 + b * 0.87)).distance > 0.55);
+    open += select(0.0, 1.0, trace(p + n * 0.02, normalize(n * 0.6 - t * 0.5 - b * 0.87)).distance > 0.55);
+    return 0.45 + 0.55 * open / 3.0;
+}
+// Sunlit air inside the room, marched in six dithered steps.
+fn shaft(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, jitter: f32) -> f32 {
+    let inverse = 1.0 / (rd + vec3<f32>(0.000001));
+    let a = (ROOM_MIN - ro) * inverse; let z = (ROOM_MAX - ro) * inverse;
+    let start = max(max(max(min(a.x,z.x), min(a.y,z.y)), min(a.z,z.z)), 0.0);
+    let end = min(min(min(max(a.x,z.x), max(a.y,z.y)), max(a.z,z.z)), tmax);
+    if end <= start { return 0.0; }
+    let step = (end - start) / 6.0;
+    var lit = 0.0;
+    for (var i = 0u; i < 6u; i++) {
+        lit += sunlit(ro + rd * (start + (f32(i) + jitter) * step));
+    }
+    return lit * step;
+}
+// In-scattered light from a point source along the ray up to the hit.
+fn halo(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, light: vec3<f32>) -> f32 {
+    let to = light - ro;
+    let tc = dot(to, rd);
+    let h = sqrt(max(dot(to, to) - tc * tc, 0.0004));
+    return (atan((tmax - tc) / h) - atan(-tc / h)) / h;
+}
+fn project(p: vec3<f32>, ro: vec3<f32>, forward: vec3<f32>, right: vec3<f32>, up: vec3<f32>) -> vec2<f32> {
+    let d = p - ro;
+    let s = d / max(dot(d, forward), 0.001);
+    return vec2(0.5) + vec2(dot(s, right), -dot(s, up)) / (0.83 * vec2(clock.y, 1.0));
+}
+// One ember per 0.1 m cell in the plane before the furnace mouth, lit as one
+// scene pixel: a pure function of the cell and a stepped clock.
+fn embers(pixel: vec2<f32>, ro: vec3<f32>, rd: vec3<f32>, forward: vec3<f32>, right: vec3<f32>, up: vec3<f32>, tmax: f32) -> vec3<f32> {
+    let plane = -0.78;
+    let t = (plane - ro.z) / rd.z;
+    if t <= 0.0 || t >= tmax { return vec3(0.0); }
+    let p = ro + rd * t;
+    let tick = floor(clock.x * 10.0) / 10.0;
+    let rise = tick * 0.45;
+    let cell = floor(vec2(p.x, p.y - rise) * 10.0);
+    var glow = vec3(0.0);
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let c = cell + vec2(f32(dx), f32(dy));
+            let seed = hash(vec3(c, 7.0));
+            if seed < 0.93 { continue; }
+            let world = vec3((c + vec2(0.5, 0.5 + hash(vec3(c, 3.0)) * 0.6)) / 10.0 + vec2(0.0, rise), plane);
+            if world.x < -2.65 || world.x > -1.55 || world.y < 0.35 || world.y > 2.7 { continue; }
+            let at = floor(project(world, ro, forward, right, up) * SCENE_PIXELS);
+            if all(at == pixel) {
+                let life = 1.0 - (world.y - 0.35) / 2.35;
+                glow += EMBER * (0.8 + 2.6 * life * life);
+            }
+        }
+    }
+    return glow;
+}
 fn sky(rd: vec3<f32>) -> vec3<f32> {
     var c = mix(vec3(0.075,0.14,0.17),vec3(0.018,0.035,0.08),clamp(rd.y*1.6,0.0,1.0));
     let ridge = sin(rd.x*18.0)*0.025 + sin(rd.x*41.0)*0.014;
@@ -106,15 +185,21 @@ fn sky(rd: vec3<f32>) -> vec3<f32> {
 }
 @fragment fn fs_main(v: Vertex) -> @location(0) vec4<f32> {
     let uv = v.uv;
-    let ro = vec3(7.8,4.4,9.8);
+    let pixel = floor(uv * SCENE_PIXELS);
+    // A slow lateral sway; the camera is still at second zero (reduced motion).
+    let sway = sin(clock.x * 0.07);
+    let ro = vec3(7.8 + sway * 0.25, 4.4 + sway * 0.05, 9.8);
     let forward = normalize(vec3(0.4,1.8,-0.8)-ro);
     let right = normalize(cross(forward,vec3(0.0,1.0,0.0)));
     let up = cross(right,forward);
     let xy = (uv - vec2(0.5)) * vec2(clock.y,-1.0);
     let rd = normalize(forward + (right*xy.x + up*xy.y)*0.83);
     let hit = trace(ro,rd);
+    let flicker = 0.82 + 0.18 * hash(vec3(floor(clock.x * 9.0), 0.0, 1.0));
     var color = sky(rd);
+    var reach = 60.0;
     if hit.material > 0u {
+        reach = hit.distance;
         let point = ro + rd * hit.distance;
         let grain = hash(floor(point*20.0));
         var albedo = vec3(0.31,0.34,0.33);
@@ -137,7 +222,7 @@ fn sky(rd: vec3<f32>) -> vec3<f32> {
             emission = albedo*(0.30+0.24*pow(0.5+0.5*sin(row*0.34-clock.x*0.7),4.0));
         } else if hit.material == 6u {
             albedo = vec3(0.757,0.4,0.192);
-            emission = albedo*(0.7+0.15*sin(clock.x*1.9+floor(point.x*20.0)));
+            emission = albedo*(0.7+0.15*sin(clock.x*1.9+floor(point.x*20.0)))*flicker;
         } else if hit.material == 7u {
             albedo = vec3(0.922,0.882,0.773);
             let ink = step(0.63,fract(point.z*18.0))*step(0.18,fract(point.x*5.0));
@@ -152,24 +237,34 @@ fn sky(rd: vec3<f32>) -> vec3<f32> {
             let circuit = step(0.8,fract(panel.x/5.0))*step(0.15,fract(panel.y/9.0));
             emission = vec3(0.396,0.718,0.686)*circuit*0.4;
         }
-        let sun = normalize(vec3(-0.4,0.8,-0.6));
-        let shadow = trace(point+hit.normal*0.015,sun).distance;
-        let daylight = max(dot(hit.normal,sun),0.0)*select(0.06,0.60,shadow>40.0);
-        let furnace = vec3(-2.1,0.7,-0.7)-point;
-        let crystal = vec3(2.1,2.3,-0.12)-point;
-        let warmth = max(dot(hit.normal,normalize(furnace)),0.0)*4.5/(1.0+dot(furnace,furnace));
+        let daylight = max(dot(hit.normal,SUN),0.0)*mix(0.06, 0.60, sunlit(point+hit.normal*0.015));
+        let ao = occlusion(point, hit.normal);
+        let furnace = FURNACE-point;
+        let crystal = CRYSTAL-point;
+        let warmth = max(dot(hit.normal,normalize(furnace)),0.0)*4.5/(1.0+dot(furnace,furnace))*flicker;
         let cool = max(dot(hit.normal,normalize(crystal)),0.0)*2.2/(1.0+dot(crystal,crystal));
-        let lighting = vec3(0.16,0.21,0.25)+vec3(0.65,0.78,0.85)*daylight
-            + vec3(1.0,0.31,0.075)*warmth + vec3(0.18,0.72,0.65)*cool;
+        let lighting = (vec3(0.16,0.21,0.25)*ao)+vec3(0.65,0.78,0.85)*daylight
+            + EMBER*warmth*ao + MINT*cool*ao;
         color = srgb_decode(albedo)*lighting + emission*0.55;
-        let spec = pow(max(dot(reflect(-sun,hit.normal),-rd),0.0),24.0);
+        let spec = pow(max(dot(reflect(-SUN,hit.normal),-rd),0.0),24.0);
         if hit.material == 4u || hit.material == 3u { color += vec3(0.38,0.28,0.13)*spec*daylight; }
         color = mix(color,vec3(0.05,0.08,0.09),1.0-exp(-hit.distance*0.009));
     }
+    // Air: sunlit haze through the window, warm and cool halos around the two lights.
+    let jitter = bayer(pixel);
+    // Forward scatter: the beam reads as a beam toward the sun, not as grey fog.
+    let phase = 0.35 + 1.1 * pow(max(dot(rd, SUN), 0.0), 3.0);
+    color += vec3(0.58,0.66,0.66) * 0.011 * phase * shaft(ro, rd, reach, jitter);
+    color += EMBER * 0.055 * flicker * halo(ro, rd, reach, FURNACE);
+    color += MINT * 0.035 * halo(ro, rd, reach, CRYSTAL);
+    color += embers(pixel, ro, rd, forward, right, up, reach);
     color = srgb_encode(color);
-    // A reserved quiet left side makes type legible without glass UI cards.
-    let shade = mix(0.18,1.0,smoothstep(0.15,0.62,uv.x));
+    // A quiet band keeps type legible without glass UI cards; the host passes
+    // where the menu column ends, or -1 for an even shade behind a centred stack.
+    var shade = 0.42;
+    if clock.z >= 0.0 { shade = mix(0.16, 1.0, smoothstep(clock.z, clock.z + 0.30, uv.x)); }
     let vignette = 1.0-0.30*dot(uv-vec2(0.5),uv-vec2(0.5));
-    color *= shade*vignette;
+    color *= shade*vignette*(1.0 - 0.65*clock.w);
+    color += (jitter - 0.5) / 255.0;
     return vec4(color,1.0);
 }

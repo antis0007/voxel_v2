@@ -13,6 +13,7 @@ pub(crate) async fn run(root: &Path) -> Result<()> {
         .await?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
+    super::menu_scene::install(&mut renderer, &device, format);
 
     for (label, width, height, seconds, loading) in [
         ("title", 1600, 900, 8.0, false),

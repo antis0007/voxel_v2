@@ -26,6 +26,7 @@ mod look_at;
 mod loading_screen;
 mod planet_loading;
 mod main_menu;
+mod menu_scene;
 pub(crate) mod menu_capture;
 mod orbital;
 mod magic_fx;
@@ -1768,6 +1769,7 @@ impl EguiUi {
             RendererOptions::default(),
         );
         magic_fx::install(&mut renderer, device, surface_format.remove_srgb_suffix());
+        menu_scene::install(&mut renderer, device, surface_format.remove_srgb_suffix());
 
         Self {
             library_entries: std::sync::Arc::default(),

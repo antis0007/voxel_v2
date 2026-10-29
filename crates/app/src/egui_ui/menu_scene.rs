@@ -14,9 +14,13 @@ struct Resources {
 struct SceneCallback {
     seconds: f32,
     aspect: f32,
+    quiet_edge: f32,
+    dim: f32,
 }
 
-pub(super) fn paint(p: &Painter, rect: Rect) {
+/// `quiet_edge` is where the menu column ends as a fraction of `rect` width,
+/// or a negative value for an even shade; `dim` (0..1) darkens for loading.
+pub(super) fn paint(p: &Painter, rect: Rect, quiet_edge: f32, dim: f32) {
     let still = super::magic_fx::reduced(p.ctx());
     let seconds = if still {
         0.0
@@ -28,6 +32,8 @@ pub(super) fn paint(p: &Painter, rect: Rect) {
         SceneCallback {
             seconds,
             aspect: rect.width() / rect.height().max(1.0),
+            quiet_edge,
+            dim: dim.clamp(0.0, 1.0),
         },
     ));
     if !still {
@@ -171,7 +177,7 @@ impl CallbackTrait for SceneCallback {
         queue.write_buffer(
             &r.uniform,
             0,
-            bytemuck::cast_slice(&[self.seconds, self.aspect, 0.0, 0.0]),
+            bytemuck::cast_slice(&[self.seconds, self.aspect, self.quiet_edge, self.dim]),
         );
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Meridian room"),

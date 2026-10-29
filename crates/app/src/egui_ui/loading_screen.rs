@@ -1,4 +1,4 @@
-//! Loading stage and progress, without an animated background.
+//! Loading stage and progress over the dimmed instrument room.
 use super::{LoadingUiState, grimoire, pixel_art};
 use egui::{Align2, FontId, Id, LayerId, Order, Rect, pos2, vec2};
 
@@ -9,6 +9,7 @@ pub(super) fn draw(ctx: &egui::Context, state: &LoadingUiState) {
     }
     let p = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("loading_room")));
     p.rect_filled(r, 0, egui::Color32::from_rgb(20, 24, 27));
+    super::menu_scene::paint(&p, r, -1.0, 0.55);
     let margin = (r.width() * 0.06).clamp(20.0, 72.0);
     let width = (r.width() - margin * 2.0).clamp(1.0, 520.0);
     let title = p.layout(
