@@ -91,6 +91,7 @@ pub fn finish(
     if world.ca_view.is_none() {
         let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
         world::block_data::tnt::tick(world, eye, blocks, chunks, budget);
+        world::stations::brewing::tick(world);
     }
     sim.update(world, player, STEP_SECONDS, blocks, chunks, budget);
     if settle {

@@ -97,10 +97,29 @@ pub enum FoodKind {
     Trailcake = 2,
     RawMutton = 3,
     CookedMutton = 4,
+    RegenerationPotion = 5,
+    SpeedPotion = 6,
+    StrengthPotion = 7,
+    FireResistancePotion = 8,
 }
 
 impl FoodKind {
-    pub const ALL: [Self; 5] = [Self::FungalRation, Self::RoastedCap, Self::Trailcake, Self::RawMutton, Self::CookedMutton];
+    pub const ALL: [Self; 9] = [
+        Self::FungalRation,
+        Self::RoastedCap,
+        Self::Trailcake,
+        Self::RawMutton,
+        Self::CookedMutton,
+        Self::RegenerationPotion,
+        Self::SpeedPotion,
+        Self::StrengthPotion,
+        Self::FireResistancePotion,
+    ];
+
+    /// Drunk for its effects; restores no hunger and ignores the well-fed check.
+    pub fn is_potion(self) -> bool {
+        self as u8 >= Self::RegenerationPotion as u8
+    }
 
     pub fn from_u8(raw: u8) -> Option<Self> {
         Self::ALL.get(raw as usize).copied()
@@ -237,6 +256,7 @@ impl Item {
             Self::Block(_) => "Building block",
             Self::Resource(0..=5 | 13) => "Raw material",
             Self::Resource(_) => "Refined component",
+            Self::Food(f) if f.is_potion() => "Potion",
             Self::Food(_) => "Food",
             Self::Weapon(_) => "Melee weapon",
             Self::Armor(slot, _) => match slot {

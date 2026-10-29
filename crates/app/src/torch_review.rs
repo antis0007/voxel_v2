@@ -486,6 +486,20 @@ pub fn apply_survival_phase(
             let n = (1.0 / world.voxel_scale.meters()) as i32;
             block_row(world, IVec3::new(0, 100 * n, 0));
         }
+        11 | 12 => {
+            // Phases 11 and 12: the stations in the front row, then the brewing and anvil pages.
+            creative.show_palette = false;
+            let n = (1.0 / world.voxel_scale.meters()) as i32;
+            let at = IVec3::new(0, 100 * n, 0);
+            station_row(world, at);
+            let page = at + IVec3::new(if phase == 11 { -2 } else { -3 }, 0, 0);
+            creative.block_page = Some(page);
+            if phase == 12 {
+                use crate::world::inventory::SlotAddr;
+                let inputs = (page, [Some(SlotAddr::Hotbar(0)), Some(SlotAddr::Hotbar(4))]);
+                egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("station_inputs"), inputs));
+            }
+        }
         _ => {
             creative.show_palette = false;
         }
@@ -510,6 +524,31 @@ fn block_row(world: &mut World, at: IVec3) {
     world.adventure.dirty_voxels.extend(edits.iter().map(|&(p, _)| p));
     let text = ["North gate", "12 m", "", "Copper mine"].map(String::from);
     crate::world::block_data::set_text(world, at, &text);
+}
+
+fn station_row(world: &mut World, at: IVec3) {
+    use crate::world::block_data::Stand;
+    use crate::world::inventory::{FoodKind, Item, ItemStack};
+    use BlockId as B;
+    if world.get(at + IVec3::new(-3, 0, 0)) == B::Anvil {
+        return;
+    }
+    let row = [B::Anvil, B::BrewingStand, B::Water, B::Stonecutter, B::Grindstone, B::Air];
+    let edits: Vec<_> = row.into_iter().enumerate().map(|(i, b)| (at + IVec3::new(i as i32 - 3, 0, 0), b)).collect();
+    world.set_many(&edits);
+    world.adventure.dirty_voxels.extend(edits.iter().map(|&(p, _)| p));
+    let stand = Stand {
+        base: Some(ItemStack::new(Item::Resource(18), 3)),
+        modifier: Some(ItemStack::new(Item::Resource(4), 2)),
+        output: Some(ItemStack::new(Item::Food(FoodKind::SpeedPotion), 3)),
+        steps: crate::world::stations::brewing::brew_steps() / 2,
+    };
+    world.block_data.set_stand(at + IVec3::new(-2, 0, 0), stand);
+    // A worn sword in hotbar 0 and steel ingots for the anvil page.
+    world.inventory.hotbar[4] = Some(ItemStack::new(Item::Resource(15), 6));
+    world.progression.wear.reconcile(&world.inventory);
+    let _ = world.progression.wear.spend(&mut world.inventory, crate::world::progression::Slot::Hotbar(0), 180);
+    world.progression.xp = 160;
 }
 
 /// A row of assemblies on the survival room's floor, one per health state:

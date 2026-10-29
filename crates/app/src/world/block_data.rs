@@ -1,10 +1,10 @@
-//! Per-block records: sign and lectern text, chest slots and lit fuses.
+//! Per-block records: sign and lectern text, chest slots, brewing stands and lit fuses.
 //! They persist in `sidecar::FILE`, not the save body, so the save version is unchanged.
 use super::inventory::{DroppedStack, Item, ItemStack, SlotAddr};
 use super::{BlockId, World};
 use engine_content::shaped;
 use glam::{IVec3, Vec3};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub(crate) mod sidecar;
 pub(crate) mod tnt;
@@ -23,6 +23,22 @@ pub type Slots = [Option<ItemStack>; CHEST_SLOTS];
 pub enum Entry {
     Text(Vec<String>),
     Chest(Box<Slots>),
+    Stand(Stand),
+}
+
+/// Brewing stand slots and progress of the current brew in fixed steps.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stand {
+    pub base: Option<ItemStack>,
+    pub modifier: Option<ItemStack>,
+    pub output: Option<ItemStack>,
+    pub steps: u16,
+}
+
+impl Stand {
+    pub fn is_empty(&self) -> bool {
+        self.base.is_none() && self.modifier.is_none() && self.output.is_none() && self.steps == 0
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -32,6 +48,8 @@ pub struct State {
     pub fuses: BTreeMap<Key, u16>,
     /// Cells a detonation still has to clear, with the blast centre; drained under a budget.
     pub(crate) blasts: VecDeque<(IVec3, IVec3)>,
+    /// Keys of `Entry::Stand` records, so the brew tick skips every other record.
+    pub(crate) stands: BTreeSet<Key>,
 }
 
 pub fn key(p: IVec3) -> Key {
@@ -66,15 +84,32 @@ impl State {
         }
     }
 
+    pub fn stand(&self, p: IVec3) -> Stand {
+        match self.entries.get(&key(p)) {
+            Some(Entry::Stand(stand)) => *stand,
+            _ => Stand::default(),
+        }
+    }
+
+    pub(crate) fn set_stand(&mut self, p: IVec3, stand: Stand) {
+        self.put(p, Entry::Stand(stand));
+    }
+
     fn put(&mut self, p: IVec3, entry: Entry) {
         let empty = match &entry {
             Entry::Text(lines) => lines.is_empty(),
             Entry::Chest(slots) => slots.iter().all(Option::is_none),
+            Entry::Stand(stand) => stand.is_empty(),
         };
+        let stand = matches!(entry, Entry::Stand(_));
         if empty {
             self.entries.remove(&key(p));
+            self.stands.remove(&key(p));
         } else if self.entries.len() < MAX_ENTRIES || self.entries.contains_key(&key(p)) {
             self.entries.insert(key(p), entry);
+            if stand {
+                self.stands.insert(key(p));
+            }
         }
     }
 
@@ -84,9 +119,15 @@ impl State {
             tnt::arm(self, p, tnt::FUSE_STEPS);
         }
         let Some(entry) = self.entries.remove(&key(p)) else { return };
-        if let Entry::Chest(slots) = entry {
+        self.stands.remove(&key(p));
+        let spilled: Vec<ItemStack> = match entry {
+            Entry::Chest(slots) => slots.iter().flatten().copied().collect(),
+            Entry::Stand(s) => [s.base, s.modifier, s.output].into_iter().flatten().collect(),
+            Entry::Text(_) => Vec::new(),
+        };
+        if !spilled.is_empty() {
             let centre = (p.as_vec3() + Vec3::splat(0.5)) * metres;
-            for stack in slots.into_iter().flatten() {
+            for stack in spilled {
                 if dropped.len() < DROP_LIMIT {
                     dropped.push(DroppedStack { pos: centre, stack });
                 }
@@ -97,7 +138,7 @@ impl State {
 
 /// Blocks whose use opens a page instead of acting.
 pub fn opens_page(block: BlockId) -> bool {
-    shaped::text_limits(block).is_some() || block == BlockId::Chest
+    shaped::text_limits(block).is_some() || block == BlockId::Chest || shaped::STATIONS.contains(&block)
 }
 
 /// Stores edited text for the sign or lectern at `p`, within that block's limits.

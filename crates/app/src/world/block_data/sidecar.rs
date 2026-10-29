@@ -1,12 +1,13 @@
 //! Checksummed block-data file beside a world. A world without one has no block records.
-use super::{CHEST_SLOTS, Entry, Key, MAX_ENTRIES, State};
+use super::{CHEST_SLOTS, Entry, Key, MAX_ENTRIES, Stand, State};
 use crate::world::inventory::{Item, ItemStack};
 use anyhow::{Context, Result, bail, ensure};
 use std::path::Path;
 
 pub const FILE: &str = "blocks.vxb";
 const MAGIC: &[u8; 7] = b"VXBLOCK";
-const VERSION: u8 = 1;
+/// Version 2 adds brewing stand records; version 1 files still load.
+const VERSION: u8 = 2;
 const COORD_LIMIT: i32 = 1 << 28;
 const MAX_LINES: usize = 16;
 const MAX_LINE_BYTES: usize = 256;
@@ -44,6 +45,26 @@ impl<'a> Reader<'a> {
     }
 }
 
+fn put_stack(out: &mut Vec<u8>, slot: Option<ItemStack>) {
+    let (kind, payload, count) = slot.map_or((0, 0, 0), |s| {
+        let (k, p) = s.item.encode_u32();
+        (k, p, s.count)
+    });
+    for v in [kind, payload, count] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+}
+
+fn read_stack(r: &mut Reader) -> Result<Option<ItemStack>> {
+    let (kind, payload, count) = (r.u32()?, r.u32()?, r.u32()?);
+    if kind == 0 {
+        ensure!(payload == 0 && count == 0, "Invalid empty slot");
+        return Ok(None);
+    }
+    ensure!((1..=MAX_STACK).contains(&count), "Invalid stack");
+    Ok(Some(ItemStack::new(Item::decode_u32(kind, payload)?, count)))
+}
+
 fn put_key(out: &mut Vec<u8>, k: Key) {
     for v in [k.0, k.1, k.2] {
         out.extend_from_slice(&v.to_le_bytes());
@@ -74,14 +95,15 @@ pub fn encode(state: &State) -> Vec<u8> {
             Entry::Chest(slots) => {
                 out.push(2);
                 for slot in slots.iter() {
-                    let (kind, payload, count) = slot.map_or((0, 0, 0), |s| {
-                        let (k, p) = s.item.encode_u32();
-                        (k, p, s.count)
-                    });
-                    for v in [kind, payload, count] {
-                        out.extend_from_slice(&v.to_le_bytes());
-                    }
+                    put_stack(&mut out, *slot);
                 }
+            }
+            Entry::Stand(stand) => {
+                out.push(3);
+                for slot in [stand.base, stand.modifier, stand.output] {
+                    put_stack(&mut out, slot);
+                }
+                out.extend_from_slice(&stand.steps.to_le_bytes());
             }
         }
     }
@@ -97,7 +119,7 @@ pub fn encode(state: &State) -> Vec<u8> {
 
 pub fn decode(bytes: &[u8]) -> Result<State> {
     ensure!(bytes.len() >= 24 && bytes.get(..7) == Some(MAGIC.as_slice()), "Unsupported block file");
-    ensure!(bytes[7] == VERSION, "Unsupported block file version {}", bytes[7]);
+    ensure!((1..=VERSION).contains(&bytes[7]), "Unsupported block file version {}", bytes[7]);
     let end = bytes.len() - 8;
     ensure!(hash(&bytes[..end]) == u64::from_le_bytes(bytes[end..].try_into()?), "Block file checksum mismatch");
     let mut r = Reader { bytes: &bytes[..end], at: 8 };
@@ -121,15 +143,14 @@ pub fn decode(bytes: &[u8]) -> Result<State> {
             2 => {
                 let mut slots = Box::new([None; CHEST_SLOTS]);
                 for slot in slots.iter_mut() {
-                    let (kind, payload, count) = (r.u32()?, r.u32()?, r.u32()?);
-                    if kind == 0 {
-                        ensure!(payload == 0 && count == 0, "Invalid empty chest slot");
-                        continue;
-                    }
-                    ensure!((1..=MAX_STACK).contains(&count), "Invalid chest stack");
-                    *slot = Some(ItemStack::new(Item::decode_u32(kind, payload)?, count));
+                    *slot = read_stack(&mut r)?;
                 }
                 Entry::Chest(slots)
+            }
+            3 if bytes[7] >= 2 => {
+                let (base, modifier, output) = (read_stack(&mut r)?, read_stack(&mut r)?, read_stack(&mut r)?);
+                state.stands.insert(k);
+                Entry::Stand(Stand { base, modifier, output, steps: r.u16()? })
             }
             tag => bail!("Unknown block record {tag}"),
         };

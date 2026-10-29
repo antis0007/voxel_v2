@@ -719,6 +719,71 @@
     ],
     bench: [
         (
+            name: "Anvil",
+            output: (
+                item: Block(Anvil),
+                count: 1,
+            ),
+            pattern: [
+                "EEE",
+                " I ",
+                "III",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('I', Resource(8)),
+            ],
+            description: "Repair and combine. Cost: XP levels.",
+        ),
+        (
+            name: "Brewing stand",
+            output: (
+                item: Block(BrewingStand),
+                count: 1,
+            ),
+            pattern: [
+                " R ",
+                "CCC",
+            ],
+            key: [
+                ('R', Resource(5)),
+                ('C', Block(Cobblestone)),
+            ],
+            description: "Potions. Needs adjacent water.",
+        ),
+        (
+            name: "Stonecutter",
+            output: (
+                item: Block(Stonecutter),
+                count: 1,
+            ),
+            pattern: [
+                " I ",
+                "SSS",
+            ],
+            key: [
+                ('I', Resource(8)),
+                ('S', Block(Stone)),
+            ],
+            description: "Stone shapes, 1 block per cut.",
+        ),
+        (
+            name: "Grindstone",
+            output: (
+                item: Block(Grindstone),
+                count: 1,
+            ),
+            pattern: [
+                "PSP",
+                "P P",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('S', Block(CobbleSlab)),
+            ],
+            description: "Combine and salvage. No XP cost.",
+        ),
+        (
             name: "Mulch leaves",
             output: (
                 item: Resource(13),

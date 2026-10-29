@@ -10,6 +10,7 @@ pub mod adventure;
 mod collision;
 pub mod bed;
 pub mod block_data;
+pub mod stations;
 pub mod blueprint;
 pub mod expedition;
 pub mod workshop;
@@ -1471,7 +1472,7 @@ impl World {
 
     pub fn eat_food(&mut self, food: inventory::FoodKind, preferred_hotbar: Option<usize>) -> bool {
         let max_hp = self.adventure.max_health();
-        if self.adventure.hunger >= 99.5 && self.adventure.health >= max_hp - 0.1 {
+        if !food.is_potion() && self.adventure.hunger >= 99.5 && self.adventure.health >= max_hp - 0.1 {
             self.expedition.message = "Already well-fed.".into();
             self.expedition.message_seconds = 2.0;
             return false;
@@ -1490,12 +1491,11 @@ impl World {
         self.progression.eat(food, self.adventure.hunger);
         self.inventory.eat_timer = 1.35;
         self.sync_from_inventory();
-        self.expedition.message = format!(
-            "Ate {} (+{:.0} hunger, +{:.0} health).",
-            food.name(),
-            food.hunger_restore(),
-            food.health_restore()
-        );
+        self.expedition.message = if food.is_potion() {
+            format!("Drank {}", food.name())
+        } else {
+            format!("Ate {} (+{:.0} hunger, +{:.0} health).", food.name(), food.hunger_restore(), food.health_restore())
+        };
         self.expedition.message_seconds = 2.4;
         true
     }

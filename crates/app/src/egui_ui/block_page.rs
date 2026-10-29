@@ -1,4 +1,4 @@
-//! Sign and lectern text pages, the chest grid, and sign text over the world.
+//! Sign and lectern text pages, the chest grid, station pages, and sign text over the world.
 use super::presentation as style;
 use crate::world::block_data::{self, CHEST_SLOTS};
 use crate::world::inventory::{HOTBAR_SLOTS, ItemStack, PACK_SLOTS, SlotAddr};
@@ -19,7 +19,7 @@ pub fn draw(ctx: &egui::Context, open: &mut Option<IVec3>, world: &mut World, ey
         text_page(ctx, open, world, p, block, limits);
     } else if block == BlockId::Chest {
         chest_page(ctx, open, world, p);
-    } else {
+    } else if !super::station_page::draw(ctx, open, world, p, block) {
         *open = None;
     }
 }
@@ -51,7 +51,7 @@ fn text_page(ctx: &egui::Context, open: &mut Option<IVec3>, world: &mut World, p
     }
 }
 
-fn slot(ui: &mut egui::Ui, stack: Option<ItemStack>) -> egui::Response {
+pub(super) fn slot(ui: &mut egui::Ui, stack: Option<ItemStack>) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(SLOT_PX, SLOT_PX), egui::Sense::click());
     let painter = ui.painter();
     super::icons::frame(painter, rect, response.hovered());
@@ -65,7 +65,7 @@ fn slot(ui: &mut egui::Ui, stack: Option<ItemStack>) -> egui::Response {
     response
 }
 
-fn grid(ui: &mut egui::Ui, name: &str, stacks: &[Option<ItemStack>]) -> Option<usize> {
+pub(super) fn grid(ui: &mut egui::Ui, name: &str, stacks: &[Option<ItemStack>]) -> Option<usize> {
     let mut clicked = None;
     egui::Grid::new(name).spacing(egui::vec2(2.0, 2.0)).show(ui, |ui| {
         for (i, stack) in stacks.iter().enumerate() {

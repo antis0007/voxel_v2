@@ -322,6 +322,7 @@ block_ids! {
     SignPost, SignPostSouth, SignPostWest, SignPostEast, WallSign, WallSignSouth, WallSignWest, WallSignEast, Chest, Lectern, Tnt,
     PlankStairs, PlankStairsSouth, PlankStairsWest, PlankStairsEast, BrickStairs, BrickStairsSouth, BrickStairsWest, BrickStairsEast,
     CobbleStairs, CobbleStairsSouth, CobbleStairsWest, CobbleStairsEast, PlankSlab, BrickSlab, CobbleSlab, PlankFence, BrickFence, CobbleFence,
+    Anvil, BrewingStand, Stonecutter, Grindstone,
 }
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {

@@ -1,0 +1,32 @@
+// Brewing stand rows. A stand next to a water block turns one `base` and one `modifier`
+// into `count` potions (inventory::FoodKind) after `seconds` of fixed steps.
+// Potion effects are the potion's row in foods.ron. `cargo test brewing_ron_round_trips` checks the format.
+(
+    seconds: 20.0,
+    recipes: [
+        (
+            base: Resource(18),
+            modifier: Resource(13),
+            output: RegenerationPotion,
+            count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(4),
+            output: SpeedPotion,
+            count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(5),
+            output: StrengthPotion,
+            count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(3),
+            output: FireResistancePotion,
+            count: 3,
+        ),
+    ],
+)

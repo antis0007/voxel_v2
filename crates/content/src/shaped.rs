@@ -1,4 +1,4 @@
-//! Partial blocks drawn and collided as boxes: stairs, slabs, fences, signs, chest, lectern.
+//! Partial blocks drawn and collided as boxes: stairs, slabs, fences, signs, chest, lectern, stations.
 use crate::BlockId as B;
 use glam::{IVec3, Vec3};
 
@@ -14,6 +14,8 @@ const FAMILIES: [[B; 4]; 5] = [
 ];
 const SLABS: [B; 3] = [B::PlankSlab, B::BrickSlab, B::CobbleSlab];
 const FENCES: [B; 3] = [B::PlankFence, B::BrickFence, B::CobbleFence];
+/// Work stations whose use opens a page: anvil, brewing stand, stonecutter, grindstone.
+pub const STATIONS: [B; 4] = [B::Anvil, B::BrewingStand, B::Stonecutter, B::Grindstone];
 
 fn family(b: B) -> Option<(usize, usize)> {
     FAMILIES
@@ -23,7 +25,7 @@ fn family(b: B) -> Option<(usize, usize)> {
 }
 
 pub fn is_shaped(b: B) -> bool {
-    family(b).is_some() || SLABS.contains(&b) || FENCES.contains(&b) || matches!(b, B::Chest | B::Lectern)
+    family(b).is_some() || SLABS.contains(&b) || FENCES.contains(&b) || matches!(b, B::Chest | B::Lectern) || STATIONS.contains(&b)
 }
 
 pub fn is_sign(b: B) -> bool {
@@ -55,6 +57,9 @@ pub fn facing(b: B) -> Option<IVec3> {
 pub fn base(b: B) -> Option<B> {
     if !is_shaped(b) {
         return None;
+    }
+    if matches!(b, B::Anvil | B::Stonecutter | B::Grindstone) {
+        return Some(B::Stone);
     }
     let material = match family(b) {
         Some((f, _)) => f.saturating_sub(2),
@@ -125,6 +130,21 @@ pub fn boxes(b: B, p: IVec3, links: u8) -> Vec<(Vec3, Vec3)> {
             (v(0.25, 0.0, 0.25), v(0.75, 0.125, 0.75)),
             (v(0.375, 0.125, 0.375), v(0.625, 0.75, 0.625)),
             (v(0.125, 0.75, 0.125), v(0.875, 0.875, 0.875)),
+        ],
+        None if b == B::Anvil => vec![
+            (v(0.125, 0.0, 0.125), v(0.875, 0.25, 0.875)),
+            (v(0.3125, 0.25, 0.25), v(0.6875, 0.625, 0.75)),
+            (v(0.1875, 0.625, 0.0), v(0.8125, 1.0, 1.0)),
+        ],
+        None if b == B::BrewingStand => vec![
+            (v(0.0625, 0.0, 0.0625), v(0.9375, 0.125, 0.9375)),
+            (v(0.4375, 0.125, 0.4375), v(0.5625, 0.875, 0.5625)),
+        ],
+        None if b == B::Stonecutter => vec![(Vec3::ZERO, v(1.0, 0.5625, 1.0))],
+        None if b == B::Grindstone => vec![
+            (v(0.0, 0.0, 0.375), v(0.1875, 0.75, 0.625)),
+            (v(0.8125, 0.0, 0.375), v(1.0, 0.75, 0.625)),
+            (v(0.25, 0.125, 0.125), v(0.75, 1.0, 0.875)),
         ],
         None if is_fence(b) => vec![(v(0.375, 0.0, 0.375), v(0.625, 1.0, 0.625))],
         None => return Vec::new(),
@@ -214,5 +234,8 @@ mod tests {
         assert_eq!(boxes(B::PlankFence, IVec3::ZERO, links).len(), 5);
         assert_eq!(base(B::BrickFence), Some(B::StoneBricks));
         assert_eq!(base(B::Tnt), None);
+        for b in STATIONS {
+            assert!(is_shaped(b) && !boxes(b, IVec3::ZERO, 0).is_empty(), "{b:?}");
+        }
     }
 }

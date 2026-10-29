@@ -48,4 +48,60 @@
         saturation: 48.0,
         effects: [],
     ),
+    (
+        kind: RegenerationPotion,
+        name: "Regeneration potion",
+        hunger: 0.0,
+        health: 0.0,
+        saturation: 0.0,
+        effects: [
+            (
+                kind: Regeneration,
+                seconds: 45.0,
+                level: 1,
+            ),
+        ],
+    ),
+    (
+        kind: SpeedPotion,
+        name: "Speed potion",
+        hunger: 0.0,
+        health: 0.0,
+        saturation: 0.0,
+        effects: [
+            (
+                kind: Speed,
+                seconds: 180.0,
+                level: 1,
+            ),
+        ],
+    ),
+    (
+        kind: StrengthPotion,
+        name: "Strength potion",
+        hunger: 0.0,
+        health: 0.0,
+        saturation: 0.0,
+        effects: [
+            (
+                kind: Strength,
+                seconds: 180.0,
+                level: 1,
+            ),
+        ],
+    ),
+    (
+        kind: FireResistancePotion,
+        name: "Fire resistance potion",
+        hunger: 0.0,
+        health: 0.0,
+        saturation: 0.0,
+        effects: [
+            (
+                kind: FireResistance,
+                seconds: 180.0,
+                level: 1,
+            ),
+        ],
+    ),
 ]

@@ -2,6 +2,7 @@ use egui::{Align2, Color32, RichText};
 mod adventure;
 pub mod blueprints;
 pub mod block_page;
+mod station_page;
 mod chip_art;
 mod chip_canvas;
 mod chip_editor;

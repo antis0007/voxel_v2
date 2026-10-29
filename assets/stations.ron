@@ -1,0 +1,133 @@
+// Anvil, grindstone and stonecutter rows.
+// Anvil repair: each unit of the item's `repair` material restores `repair_per_unit` of its
+// maximum durability and costs `levels_per_unit` XP levels. Combining two of the same item adds
+// both remainders plus a bonus fraction of the maximum: `anvil_combine_bonus` for
+// `anvil_combine_levels` levels, or `grindstone_combine_bonus` for none. Grindstone salvage
+// refunds `count` of `material` scaled by remaining durability, rounded to nearest.
+// Stonecutter: one `input` block becomes `count` of `output`.
+// `cargo test stations_ron_round_trips` checks the format.
+(
+    repair_per_unit: 0.25,
+    levels_per_unit: 1,
+    anvil_combine_bonus: 0.12,
+    anvil_combine_levels: 2,
+    grindstone_combine_bonus: 0.05,
+    repair: [
+        (
+            item: Tool(1),
+            material: Resource(14),
+        ),
+        (
+            item: Tool(2),
+            material: Resource(5),
+        ),
+        (
+            item: Weapon(1),
+            material: Resource(6),
+        ),
+        (
+            item: Weapon(2),
+            material: Resource(15),
+        ),
+        (
+            item: Weapon(3),
+            material: Resource(5),
+        ),
+        (
+            item: Weapon(4),
+            material: Resource(5),
+        ),
+        (
+            item: Weapon(5),
+            material: Resource(15),
+        ),
+    ],
+    armor_repair: [
+        (
+            tier: Copper,
+            material: Resource(6),
+        ),
+        (
+            tier: Steel,
+            material: Resource(15),
+        ),
+        (
+            tier: Lumen,
+            material: Resource(4),
+        ),
+    ],
+    salvage: [
+        (
+            item: Tool(1),
+            material: Resource(14),
+            count: 2,
+        ),
+        (
+            item: Weapon(1),
+            material: Resource(6),
+            count: 1,
+        ),
+        (
+            item: Weapon(2),
+            material: Resource(15),
+            count: 1,
+        ),
+    ],
+    stonecutter: [
+        (
+            input: Block(Stone),
+            output: Block(StoneBricks),
+            count: 1,
+        ),
+        (
+            input: Block(Stone),
+            output: Block(CarvedStone),
+            count: 1,
+        ),
+        (
+            input: Block(Stone),
+            output: Block(BrickSlab),
+            count: 2,
+        ),
+        (
+            input: Block(Stone),
+            output: Block(BrickStairs),
+            count: 1,
+        ),
+        (
+            input: Block(StoneBricks),
+            output: Block(BrickSlab),
+            count: 2,
+        ),
+        (
+            input: Block(StoneBricks),
+            output: Block(BrickStairs),
+            count: 1,
+        ),
+        (
+            input: Block(StoneBricks),
+            output: Block(BrickFence),
+            count: 1,
+        ),
+        (
+            input: Block(StoneBricks),
+            output: Block(CarvedStone),
+            count: 1,
+        ),
+        (
+            input: Block(Cobblestone),
+            output: Block(CobbleSlab),
+            count: 2,
+        ),
+        (
+            input: Block(Cobblestone),
+            output: Block(CobbleStairs),
+            count: 1,
+        ),
+        (
+            input: Block(Cobblestone),
+            output: Block(CobbleFence),
+            count: 1,
+        ),
+    ],
+)
