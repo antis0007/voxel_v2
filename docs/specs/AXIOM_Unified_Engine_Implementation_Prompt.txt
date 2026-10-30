@@ -1,0 +1,709 @@
+AXIOM / MERIDIAN
+UNIFIED NATIVE ENGINE IMPLEMENTATION PROMPT
+Deterministic multiplayer, immediate world interaction, bounded destruction, 3D material physics, fast loading, and safe CPU/GPU operation
+Consolidated 29 October 2026
+
+You are the lead engine and networking engineer working in the existing Axiom/Meridian repository. Implement this specification in the native Windows-first Rust + raw WGPU game. Preserve the no-Bevy architecture. Inspect the actual source, dependency versions, saves, assets, build instructions, and existing work before selecting an implementation. Treat earlier completion claims as claims to verify in the native build.
+
+This is the single controlling prompt for this engine improvement pass. It consolidates the earlier networking/performance and world/physics addenda into one set of contracts and one delivery sequence. The requirements below are self-contained. Existing content briefs remain useful context for art and gameplay, but they are not needed to resolve the technical rules here.
+
+Implement changes, exercise the real game, and report measured results. A design document, isolated benchmark, browser prototype, empty terrain viewer, or replacement engine does not complete this task. If the repository or required hardware is inaccessible, identify that concrete limitation and distinguish proposed work from verified implementation. Continue through work that is available; do not repeatedly stop for permission on routine reversible implementation choices.
+
+1. PRODUCT OUTCOME AND INITIAL AUDIT
+
+Build a responsive standalone alternative to large modded Minecraft packs: editable worlds at several voxel scales; spherical planets; convincing valleys, drainage, caves and ruins; usable cities and orbital infrastructure; scientific factories; combinable magic; cooperative play and PvP; actual physical interactions on each relevant client. Keep inhabitants, exploration, settlement restoration and player construction meaningful while improving the engine beneath them.
+
+The central engineering outcome is a finite, observable operating envelope. Within it, input, simulation, rendering, streaming, persistence and networking keep making progress without accumulating unpaid work. Under excess demand, new expensive work receives a bounded staged plan or explicit admission failure. Already admitted gameplay consequences remain valid. Performance must not depend on deleting material, skipping accepted damage, restoring broken cover, or silently changing one client's physics.
+
+Begin by locating the executable entry points and tracing:
+- Input through tool activation, terrain edits, collision, mesh publication and presentation.
+- Authority validation through accepted events, replication, client installation and persistence.
+- World creation, save reopening, joining, travel and first usable collision.
+- CPU worker queues, ready-product queues, GPU writes/submissions, completion and retirement.
+- Physics domains, body/contact construction, fluid or material code, automation and scripting.
+
+Capture release-build baselines with named hardware, driver/backend, resolution, preset, seed, save, content versions and revision. Reproduce the reported default-preset memory growth/freezing before claiming a cause. Record p50/p95/p99 and worst frame/tick times, memory peaks, queue ages, loading milestones, network traffic and correction behavior. Existing tests are useful evidence only for what they actually exercise.
+
+Preserve user work and save identities. Prefer narrow changes in existing abstractions; introduce a new subsystem only when the current one cannot express a required contract. Use project-native tools and focused tests. Select optimizations by their effect on delivered frame times and usable interaction, not an isolated inner-loop speedup.
+
+Separate three clocks throughout the work: the simulation tick, presentation time, and time until a required region or interaction becomes ready. A 60 Hz reference profile has a 16.67 ms frame/tick interval, but CPU rendering and GPU execution overlap and are not simply additive. Initial limits in this prompt are engineering proposals to measure, not existing Axiom capacities or universal guarantees.
+
+2. ONE CANONICAL WORLD MODEL
+
+2.1 Separate facts, predictions and derived products
+
+Canonical state owns terrain/material, entities, relationships, inventories, cargo, machines, consequential fields, accepted operations and their persistent outcomes. It remains available through CPU/durable representations; GPU readback is not the normal way to discover what exists.
+
+A local predicted branch contains provisional actions and the complete affected physical state needed to evaluate them coherently. It cannot independently grant shared loot, damage or durable ownership.
+
+Derived products include meshes, visibility summaries, lighting, optional visual particles, map presentation and caches. They carry explicit input versions and can be replaced or discarded when stale. A cached product cannot become authoritative merely because it is convenient to query.
+
+Use the existing types where possible. The conceptual keys are:
+- World identity and generation/content manifest.
+- Planet or physical-frame identity, canonical region address and voxel scale.
+- Persistent entity/object identity plus a generation that fences reuse.
+- Persistent (WorldId, ActorId, OperationId) for consequential actions, with stable subeffect identities.
+- Domain identity, epoch, membership revision, frame and confirmed tick.
+- Product identity, input projection versions, prediction generation, device epoch and last-use submission.
+
+Define how an actor obtains unique operation sequences across simultaneous sessions and reconnects. Session/domain epochs fence stale traffic; they do not reset the durable deduplication namespace. Transient addresses, worker indices and GPU handles are never persistent world identities.
+
+2.2 Coordinates, scale and frame changes
+
+Retain canonical spherical ownership and local simulation frames. Use integer region/cell addresses or another explicit precision scheme for large positions, with bounded local arithmetic where required. Define units, rounding, overflow, conversion and origin-shift rules. Preserve orientation and velocity when crossing frames, including rotational terms for moving ships or attachments. Portals and unusual spaces require explicit transforms and accepted transitions; visual warping does not silently change authoritative distance or collision.
+
+Variable voxel resolution is part of material ownership. A finer child representation cannot create a second copy of its parent's mass, inventory or collision. Visual LOD is separate from authoritative voxel scale. Keep shape semantics for partial blocks, apertures, slopes, thin cover, transparent materials and authored mechanisms.
+
+2.3 Applied and durable are distinct
+
+Use clear operation states: Requested, Predicted, Admitted/Scheduled, Applied, Rejected/Corrected and Durable. A transport acknowledgment proves neither gameplay acceptance nor persistence. An applied receipt names operation identity, authoritative order/tick, affected revisions and actual disposition or patch reference. If admission precedes execution, include the scheduled effect tick.
+
+Apply causally atomic changes together: terrain, object births/deaths, cargo, inventory/resource costs and the operation result. Their durable transaction advances coherently under the persistence policy below. Retries of an established operation return its established disposition before fresh gameplay validation. Reusing its identity with different contents is invalid. Persist enough sequence protection and receipts that an expired response cache cannot make an old operation executable again.
+
+Batch journal advancement under a finite persistence budget. Applied feedback may precede durability, with an explicit durable watermark. Never label volatile application success crash-safe. Checkpoints and log compaction preserve a coherent boundary; crash recovery cannot retain loot while restoring the source block, or restore cargo while retaining its salvage. Use the established transaction model for cross-region transfers and keep save migration/versioning explicit.
+
+3. BOUNDED WORK AND RESOURCE OWNERSHIP
+
+3.1 Admission covers the whole operation
+
+Budget time/work, bytes, object counts and oldest age for every stage: requests, retained inputs, workers, scratch, output, ready queues, decoding, collision preparation, upload staging, GPU destination, submissions, callbacks, retirement, replication, checkpoint history and durable writes.
+
+A small queue is insufficient if producers retain unbounded completed outputs outside it, or required work waits forever. Use per-actor/per-region limits and fair global scheduling. Reserve independent progress for simulation, urgent network service, correct local presentation, completion and retirement. Keep large preparation jobs out of render and authoritative tick critical paths.
+
+Foreground installation, allocation, serialization, large destruction and reclamation also need small bounded or resumable execution units. Checking a timer after a giant job is insufficient. Keep synchronous I/O, blocking thread joins, GPU waits and large lock-held operations off the interactive path. An asynchronous producer does not make a large foreground installation cheap.
+
+An admitted effect reserves its supported consequences, including later impacts, contact growth, wake propagation, fluid transfer and required minimal rendering. A physically invalid or unbounded action is split into a declared gameplay operation before activation, or is not admitted. A change to an attack after it has already launched cannot silently erase its promised impact.
+
+3.2 One lifetime for each derived product
+
+Use an explicit lifecycle equivalent to Requested -> Reserved -> Producing -> Ready -> Submitted -> Resident -> Retiring -> Reclaimed. Cancellation selects disposal but does not bypass an in-flight lifetime.
+
+Before production, atomically acquire typed capacities for the conservative peak additional backing, pins, output slots and downstream destination. A failed reservation leaves only a small bounded request descriptor. A worker must not build a large mesh first and discover afterward that no upload or publication capacity exists.
+
+Track backing allocations by unique identity. Moving a buffer between stages transfers ownership; it does not create a second physical allocation. Pinning shared input does not duplicate its bytes. Copying output into staging does create overlap. Reserve the maximum simultaneous additional backing over the remaining lifecycle, rather than summing mutually exclusive stage maxima. Existing old resident resources stay charged once; replacement reservations cover the additional overlap.
+
+Release CPU scratch after its final CPU reader. Keep ready output and destination reservations charged until ownership changes. Retain staging until completion and remapping permit reuse, and resident geometry until its last GPU user finishes. Release unused reservations promptly. Check every error, cancellation, stale result and retry path for exactly one ownership transition.
+
+Variable output needs a conservative bound for the admitted brick/shape class or a bounded count pass over immutable inputs. Use checked writers and explicit extra-credit acquisition before growth. Optional derivation may repartition when it cannot fit; the accepted edit's reserved correct representation must remain available.
+
+3.3 Progress under pressure and cancellation
+
+Avoid hold-and-wait cycles between producers, uploads and reclamation. Workers return execution slots when production completes; they do not occupy scarce threads waiting for the GPU. Retirement requires no large new allocation.
+
+Completion callbacks do only bounded bookkeeping. Their delivery is nonblocking and lossless: reserve notification capacity per admitted submission or coalesce completion into a monotonic watermark scoped to the ordered queue and device epoch. Never block a callback on a queue consumed by the polling thread, and never drop the only notification that releases a resource.
+
+Generation-tag callbacks and handles so an old completion cannot reclaim a newer allocation. Device loss begins an explicit epoch teardown, rather than waiting forever for callbacks that will never arrive. Preserve canonical CPU state, durable outcomes and a listen host's authority through graphics recovery where the platform permits it.
+
+Maintain a presentation-independent completion/polling path while minimized. Stop optional production when appropriate, but let existing submissions and retirement finish. Configure a bounded minimum rendering set before play: essential pipelines/materials/UI plus a correct fallback for the supported edit envelope. This set has real limits on bricks, surface complexity, bytes, work and installation time; it is not a constant-cost representation of arbitrary destruction.
+
+4. SAFE DEFAULT GPU AND CPU MEMORY
+
+4.1 Observe the selected adapter's usable budget
+
+Enable adaptive residency by default. Allocate useful content on demand, preserving headroom. A small scene on a 24 GB GPU should remain a small allocation.
+
+On Windows/D3D12, observe the selected adapter through QueryVideoMemoryInfo and budget-change notifications. Distinguish current process budget, process usage and reservation information. On Vulkan, use per-heap memory-budget telemetry where supported. Several memory types may share one heap. Keep the telemetry bridge narrow; do not accidentally create a second device or bypass WGPU resource ownership. [S01, S02]
+
+On unified-memory hardware, reconcile shared physical backing and total system-RAM pressure. WGPU max_buffer_size is a per-buffer limit, not available VRAM. Allocator reports help distinguish logical data and reserved blocks but do not replace native residency telemetry and may be unavailable. [S03]
+
+4.2 Default admission controller
+
+For each distinct relevant backing pool, let B be the current reported process budget. Start experiments with:
+  H = min(the user's lower per-pool cap, 0.80 * B)
+  S = 0.875 * H
+With no lower user cap, S is 70% and H is 80% of B. These are pressure/admission ceilings, not fill targets. A single user-facing total cap also needs aggregate enforcement across distinct pools; do not grant the same total independently to each pool.
+
+Apply the ceiling to the complete process footprint: presentation/depth targets, textures and mip chains, materials, UI, current geometry, lights/shadows, histories, compute scratch, staging, descriptor/allocator estimates, old/new replacement overlap and pending retirement. Derive optional cache allowance only after essential resources and transition reserves are accounted for.
+
+Reconcile comparable native usage and conservative tracked commitment using a maximum, then include outstanding reservations not yet reflected. Do not add two already-inclusive measurements or subtract process usage twice. Keep logical live bytes, reserved blocks, unused reservations and pending retirement separately observable.
+
+Before allocating, reserve conservative additional peak commitment. Above S, stop speculative growth and trim eligible caches. Above projected H, defer optional admission. A sudden budget contraction requires immediate growth restraint and retirement, not a claim that recalculated percentages already reclaimed memory. Restore quality only after sustained headroom, with hysteresis and cooldowns.
+
+When telemetry is unavailable, begin with a conservative validated total-footprint profile and a modest optional cache ceiling; 256 MiB is an initial optional-cache experiment, not a total-usage guarantee. Do not automatically raise it because previous allocations succeeded. Keep a separate CPU-memory ceiling. If the essential footprint cannot fit, choose a smaller validated profile or enter explicit recovery rather than evicting the ground under the player.
+
+4.3 Reclaim actual backing
+
+Drawing fewer objects or selecting a lower texture mip does not necessarily release allocated memory. Use supported pages or bounded replacements, then retire old backing safely. Ordinary WGPU textures are not automatically sparse virtual textures.
+
+Use a small number of bounded pools appropriate to different lifetimes. Track free ranges, reserved backing, pinned ranges and retirement. Reuse of a free range does not prove memory returned to the OS. Shrink eligible whole blocks when supported. Defragment only after measuring the benefit and reserving copy/overlap costs; do not rewrite mappings still referenced by in-flight work.
+
+4.4 Uploads, WGPU lifetime traps and surface transitions
+
+Budget CPU packing, encoding, staging bytes, GPU copy time and outstanding submissions together. An initial optional-upload experiment can use 4 MiB per presented frame plus a calibrated wall-time token bucket, with in-flight staging limited to min(64 MiB, 5% of H). The wall-time and in-flight limits prevent high presentation rates from multiplying pressure. Critical edit/correction transfers use separately reserved capacity. Split giant transfers into bounded pieces.
+
+Native Queue writes may allocate staging before submission; include unsubmitted writes. A StagingBelt also needs finite backing and correct cancellation. Its documented finish/recall path cannot recover closed chunks from an encoder that is never submitted. For canceled encoded work, perform a valid bounded submission and retire it, or use a verified discard/ownership-reset path that preserves earlier in-flight users. Calling recall repeatedly is not a reclamation strategy. [S04, S05]
+
+Do not treat a dropped Rust handle or destroy request as immediately free GPU memory. Retain accounting until safe reclamation. Avoid a blocking GPU wait each frame. Keep outstanding submissions and versions finite, and reduce optional work when the GPU falls behind. [S04]
+
+Inspect the pinned WGPU release before using MemoryBudgetThresholds or MemoryHints. A resource-creation backstop above the application's ceiling can be tested, but it is not cache eviction; allocation errors and device loss require bounded recovery. Manual allocation hints are not total-memory limits. Do not loop retrying a failed allocation. [S06]
+
+Coalesce resize, render-scale and preset requests to the latest desired configuration. Reserve old/new targets and history overlap before transition. Centralize surface ownership: configure can synchronize with GPU work, zero dimensions are invalid, and an outstanding SurfaceTexture can invalidate reconfiguration. Handle minimization explicitly and keep network/simulation progress independent. A maximum-frame-latency setting is a backend hint, not an application queue limit. [S07]
+
+Reduce optional work in a controlled order: speculative prefetch, obsolete versions, distant detail/textures, optional lighting/shadows/reflections, then validated resolution-dependent detail. Preserve current cover, visible actors and coherent collision. Changes to presentation quality cannot alter deterministic physics or reveal hidden opponents.
+
+5. FAST ENTRY, CONTINUOUS STREAMING AND ATOMIC PUBLICATION
+
+5.1 Measure useful readiness
+
+Measure new-world creation, cold saved-world open, warm open, multiplayer join, long-distance travel and portal/vehicle arrival separately. Mark process start, first visible frame, input enabled, safe local collision, relevant physics ready, initial synchronization complete and surrounding detail settled. First playable means safe, responsive interaction, not an empty frame with unavailable ground.
+
+Persist expensive macrogeography and accepted regional results. Reopening a save must not repeat global erosion or replay the world's full event history. Read indexed regional checkpoints plus a bounded suffix. Keep compaction incremental, crash-safe and compatible with active readers.
+
+Cook assets into versioned access-oriented packages. Support independent bounded decode units, indexed region reads and checksummed cache keys. Avoid huge whole-file decompression for a small required region. Reduce small I/O churn without creating giant uninterruptible jobs. Invalidate caches by manifest and actual relevant inputs, not a global revision that changes on every edit.
+
+Prepare required pipelines before first encounters, using compatible cache APIs where available. Pipeline caches are device/backend/driver-sensitive and optional; retain valid fallback paths. Do not compile all possible variants at startup or block a live frame on the first encountered spell. Evaluate platform-specific loading accelerators only when measurement identifies the I/O bottleneck. [S08]
+
+5.2 Stream by time until interaction
+
+Prioritize approaching ground, possible collision, projectile/contact reach, occupied vehicles and selected destinations before optional distant detail. Use bounded swept motion, acceleration and permitted speeds. Camera visibility alone does not determine physical interest. Cancel obsolete speculative destinations when travel changes.
+
+Define arrival readiness: authoritative terrain revision, required collision, complete physical dependencies, minimum current presentation and applicable network baseline. Prewarm while traveling or during an explicit transit operation. Missing data cannot become empty space, invisible walls or permission to fire through terrain. Ordinary movement should be supported by predictive loading; exceptional readiness failures are explicit and bounded.
+
+For teleportation, docking or a comparable discontinuous arrival, acknowledge the domain epoch, installed baseline/revisions and complete command frontier. Advance that prepared state through bounded ordered events to an agreed activation tick. A busy destination can keep changing; do not require its snapshot to remain unchanged indefinitely. Revalidate membership, frames and dependencies at activation. Failed readiness retains a safe authority-owned pending/origin state under the declared movement/PvP rules, without private barriers or temporary invulnerability.
+
+5.3 One baseline installation protocol
+
+A transfer identifies world/manifest, domain epoch/frame, snapshot tick, covered revisions, hashes and accepted-event cursor. Atomically capture its coherent immutable view and register or pin suffix retention at that cursor before export. This closes the race where an edit is absent from the snapshot and compacted before retention begins.
+
+Build the candidate away from the live interaction path while receiving later events into bounded storage. Apply the ordered suffix to a selected publication frontier; prepare matching collision and correct minimum visuals. Publish causally interacting pages, bodies and fields as one group. Unrelated regions can progress independently.
+
+At publication, atomically recheck epoch and currently installed confirmed frontier. Extend/rebase or discard a stale candidate; a fresh transfer ID does not authorize regression. Re-evaluate pending local actions over the new baseline, excluding operations already included. Fence old transfers and worker results so they cannot restore obsolete terrain.
+
+Delta encodings name their exact baseline. Use a recipient-confirmed installed, usable and retained baseline, rather than the latest state merely sent. Missing dependencies trigger bounded repair or self-contained refresh. Sleeping objects still need their final transition acknowledged or refreshed. [S09]
+
+Bound snapshot copies, copy-on-write amplification, suffix length/age, decode output, replay time and retries. If replay cannot outpace incoming relevant work, obtain a newer coherent checkpoint or smaller genuinely closed initial domain. Avoid endless restart/chase loops. A joining or stalled client cannot pause everybody else.
+
+6. VOXEL PROCESSING AND RENDERING
+
+6.1 Data and edit locality
+
+Keep authoritative pages compact and traversable, using homogeneous states, local palettes or an equivalent proven representation. Keep hot occupancy/material data separate from cold metadata. Use stable pooled identities for entities and contiguous hot arrays where profiling warrants them. Optimize actual cache traffic and allocation, not abstract container fashion.
+
+Make brick dimensions independent of region/save boundaries where useful. Benchmark several supported granularities against real edits, neighbor reads, surface complexity, collision preparation, upload and draw cost. Larger bricks reduce some overhead but amplify rebuild latency and temporary output.
+
+Track input dependencies per derived product. Compute invalidation from the inverse of each product's actual sampling stencil, including cross-brick/LOD dependencies; asymmetric stencils cannot use a casually mirrored radius. A material-only change need not rebuild unrelated topology, while a shape change must invalidate all dependent collision and visibility. Coalesce unscheduled derived requests to the latest required revision. Preserve accepted event history.
+
+6.2 A correct first mesh, useful refinement later
+
+Implement a bounded minimal current representation for ordinary edits, then schedule better meshing only when its expected reuse justifies it. Debounce fast-changing bricks, cancel stale refinements and track refinement survival and amplification. Do not automatically produce both a fast and an expensive mesh for every edit.
+
+Benchmark conventional face culling, run-based/greedy approaches and packed occupancy-mask meshing against the actual material/shape workload. Binary greedy techniques are strong candidates for compatible full-cube geometry, but partial shapes, transparency, lighting seams and material boundaries need explicit handling. Preserve a general path and combine compatible subsets only when end-to-end evidence supports it. Vercidium, binary-greedy-meshing, Luanti and Veloren are implementation references, not transferable performance promises. [S10]
+
+Persistent surface complexity matters after temporary jobs finish. A filled 32-cubed block of identical cubes can merge into six external quads; an isolated alternating occupied/empty checkerboard can expose 98,304 unit faces before boundary/material variations. Bound visible output, bytes, draw work and supported editing footprints. Admitting unlimited checkerboard detail cannot be made cheap by a faster queue. [S11]
+
+Keep gameplay collision independent of a particular greedy triangulation. For smooth density surfaces, use a matching supported seam/transition algorithm; Transvoxel is a reference for its intended surface representation, not a general fix for all block-face LODs. [S12]
+
+6.3 Improve the existing WGPU raster path first
+
+Reduce geometry bytes, CPU draw preparation, state changes and redundant uploads through measured compact quad/vertex formats, material tables, bounded geometry pages and spatial batching. Vertex pulling or packed quads are candidates where they reduce total cost. Balance decoding/vertex work against bandwidth and draw savings.
+
+Use capability-gated indirect drawing or GPU culling with a fallback for supported low-end devices. Avoid normal-frame readback barriers. Prepare bounded draw/dispatch outputs and handle overflow conservatively. GPU meshing is an experiment only after accounting for scratch, uploads, synchronization, feature support and competition with rendering.
+
+Profile GPU depth/visibility, opaque surfaces, transparencies, shadows, lights, postprocessing and compute separately. Limit overdraw and light/cluster lists under the densest admitted scene. Never truncate a light or visibility list in a way that becomes a gameplay error. Use appropriate physical/content limits or a correct fallback.
+
+Hierarchical occlusion needs conservative depth reduction and footprints: conventional depth generally needs farthest-depth/max reduction, reversed depth nearest numeric/min for the corresponding conservative test. Validate the exact comparison, near-plane handling, non-power-of-two coverage and temporal reuse. Camera cuts, removed cover, new geometry and resolution changes invalidate the relevant history. Unknown or stale visibility must render conservatively; an old wall cannot hide an opponent after breaking. [S13]
+
+6.4 A coherent frontier from horizon to walking scale
+
+Select a coverage-preserving cut through the spatial hierarchy using conservative projected error and visibility bounds. Use refine/coarsen hysteresis. If traversal or detail budget runs out, retain a valid current parent representation rather than dropping remaining regions.
+
+Publish a refinement only when required children, explicitly empty children and seams are ready. Cover each region once at the selected level. Any temporary parent/child overlap has a coverage rule, finite duration and reserved memory. Coarsening follows the same rules. Invalidate coarse summaries after destruction so an intact tower cannot return on the horizon.
+
+Preflight neighbor balancing and seam expansion; a single detail request cannot recursively create unlimited jobs. Visual detail cannot change solidity, liquid connectivity, target visibility or projectile permeability. Close gaps, T-junctions and resident/far-field transitions using the same canonical samples and revisions.
+
+Reuse versioned occupancy summaries for empty-space skipping. Stale or unknown summaries count conservatively as occupied until rebuilt. Any cached distance accelerator requires a safe lower bound to actual occupied geometry and invalidation of its complete influence halo, including new solids outside the queried brick. Distance to voxel centers alone is unsafe. [S14]
+
+6.5 Alternative representations are measured branches
+
+Sparse octrees, DAG compression, ray-guided streaming and editable GPU voxel structures offer useful ideas, but each brings traversal, update, material, lighting and memory costs. Teardown-style rendering does not establish suitability for planetary multiscale construction on integrated graphics. Prototype a hybrid only when a measured bottleneck justifies it, with equal visual/interaction workload and a bounded fallback. Do not replace the renderer to avoid fixing its resource lifetimes. [S15]
+
+7. DETERMINISTIC MULTIPLAYER AND LOW-LATENCY TRANSPORT
+
+7.1 One authority, actual simulation on relevant clients
+
+Use one player-hosted listen authority and the same optional community headless executable. The authority owns accepted terrain, damage, inventories, cargo, membership and persistent outcomes. Relevant clients actually step characters, bodies, vehicles, projectiles and meaningful fragments between updates. Transform interpolation alone does not meet this requirement. The host player can share identical authoritative/local solver work when no separate prediction branch is necessary.
+
+Prefer accepted-command replication plus verification for proven exact domains. Baselines, membership changes, authority decisions, boundary inputs and repair still require traffic. Explicit state synchronization handles unsupported exact replication or recovery while retaining real local physical stepping. It does not make an oversized physical workload affordable. Label the active mode in diagnostics; routine pose corrections cannot conceal an unproven claim of determinism.
+
+Developer services should be limited to necessary discovery/authentication and bounded relay functions. Measure relay egress, joining and repair costs. Preserve the working transport unless evidence justifies replacement. Competitive players can choose a neutral community host; hashes and encryption do not make a malicious listen host trustworthy. Peer computation delegation and seamless host migration are optional later work with separate correctness and cost proofs.
+
+7.2 Domains follow causal interaction
+
+The host and exact-mode subscribers must reproduce the same canonical solver domain, including future-affecting internal state. A convenient client subset of a larger host solver is insufficient. Include terrain, supports, contacts, joints, occupants, cargo, controllers, fields and incoming interactions that influence the result.
+
+Prefetch interaction reach, not only visibility. Prepare a merged baseline, capacity and agreed activation tick before previously separate domains exchange two-way contacts, constraints or fluid pressure. One host removes conflicting authority ownership; it does not remove solver-world merge work. Split only after cross-dependencies cease and a coherent new baseline exists. Reserve merge and retained-history peaks.
+
+Fluid/reservoir interfaces need a valid reduced physical model with canonical conserved boundary inputs, or a merged/coupled solve. An arbitrary spatial cut cannot omit incoming forces and still be exact. Private information also needs a deliberate reveal or authority-event boundary; do not expose hidden content merely to equalize client checksums.
+
+7.3 Compatibility, order and checkpoint continuation
+
+Define the compatibility envelope: schemas, content/mod hashes, physics build/features, target/arithmetic assumptions, RNG, construction order, collision generation, coordinate/frame rules, tick/substeps/CCD, coupling and representation transitions. Use independent keyed random streams so an unrelated effect cannot perturb terrain or combat randomness.
+
+Canonicalize insertion/removal, spatial/neighbor order, reductions, collision-derived events and ties. Workers can compute in parallel, but completion timing, camera LOD, local performance and hash-map iteration cannot choose gameplay outcomes. Fixed-point or quantized fields require units, rounding, overflow and error analysis; rounding after divergent branch choices does not restore determinism.
+
+Checkpoint all future-affecting state: bodies, contacts/warm-start caches, joints, controllers, terrain revisions, RNG, fluid/constraint state and relevant numerical caches. Cache schemas and solver rules belong in the compatibility manifest; mutable cache values belong in tick-tagged checkpoints. Test continuation after restore across supported machines and worker counts before reducing state traffic. Existing Rapier or Jolt determinism features require application-level conditions and do not cover external material solvers automatically. [S16]
+
+Use incremental canonical hashes with bounded work, and validate incremental results periodically against a complete canonical calculation. Hashes detect mismatches, not honesty. Hash canonical fields with defined serialization; exclude pointers, padding, GPU state and presentation offsets. Track verification cost and retained snapshot bytes so correctness machinery does not become the bottleneck.
+
+7.4 Accepted history has an explicit frontier
+
+Input envelopes carry live epochs, input sequence, intended tick, continuous controls, persistent action identities and recent acknowledgment information. The authority validates timing/range/resources and orders accepted inputs with stable arbitration. It seals each tick at a declared admission cutoff without waiting for every peer.
+
+Missing continuous axes use a bounded hold followed by neutral input. Missing packets never invent repeated shots, casts or item consumption. Specify late-input behavior and keep speculative client tick separate from confirmed tick. Publish accepted sequence ranges and explicit no-event completeness. A client advances confirmed time only through complete installed and executed history/dependencies; a later watermark cannot fill a gap.
+
+Retain a finite recent input/event window, transmit bounded redundancy and repair remaining gaps selectively. Do not keep appending every unacknowledged operation to every packet. Prolonged gaps cause bounded local prediction or domain recovery, not a wait-for-all simulation barrier.
+
+Use a host-owned, session-declared disconnect-body policy that does not turn disconnection into immediate invulnerability or reverse accepted damage. Reconnect installs current epochs and a coherent baseline. A separately saved offline branch receives a distinct WorldId and cannot automatically merge inventory or factory outcomes into the shared world. Closed listen worlds follow their explicit offline-time policy; if none exists, begin with paused progression rather than replaying unlimited elapsed simulation on reopening.
+
+7.5 Few delivery classes, bounded age
+
+Use four application traffic classes: freshness-sensitive controls; repairable accepted command/event records; reliable control/receipts; and credited bulk snapshots/content. Keep ordered application independent of network arrival order. Coalesce obsolete replaceable unsent controls/presentation data, never accepted consequential history.
+
+Bound bytes and oldest age before enqueueing into transport, while preserving useful bulk progress. Give urgent service a measured allowance. A huge snapshot already queued below the application scheduler cannot be fixed merely by labeling the next shot high priority. Parsing, decompression and installation need their own service budgets.
+
+QUIC datagrams remain congestion controlled and may drop; streams share connection resources. Respect the negotiated/path-dependent maximum datagram size and use bounded reassembly or streams for larger records. In the researched Quinn APIs, send_datagram can evict old unsent datagrams while send_datagram_wait favors waiting older work; stream drop, explicit reset and partial-write cancellation also have distinct behavior. Apply the pinned transport's actual semantics, preserving repair for consequential messages. [S18]
+
+Service network I/O independently of expensive rendering/world jobs. Sample input near its use, drain incoming input before the declared cutoff and send accepted results promptly. Avoid gratuitous frame/tick delays and batch windows. Keep congestion control and pacing intact.
+
+Maintain bounded clock mapping, drift and uncertainty. Adjust scheduling lead and remote display buffering with caps/hysteresis; do not vary canonical timestep, execute ticks twice or skip accepted ticks to chase clocks. After alt-tab or low-FPS periods, resynchronize the input horizon instead of transmitting a stale movement backlog. Excess buffering can add perceived latency even when measured RTT is unchanged. [S17]
+
+An interacting passenger, ship and attached cargo use one physical time basis. Delayed rendered transforms never feed current contacts. Smooth safe presentation residuals separately, with bounds; correction must not ease a collider through a wall or leave removed cover visible. Record authoritative state age as well as transform error.
+
+Observe actual direct/relay routes, loss, jitter and application age. Relayed QUIC over an outer reliable WebSocket/TCP path can retain outer head-of-line delay. Current Iroh path APIs are a reference, not proof of the installed version. Preserve operation identities across route changes and fence stale live epochs after reconnect. [S19]
+
+8. RESPONSIVE MINING, PREDICTION AND COMBAT
+
+8.1 Start promptly and validate real dependencies
+
+Separate authored mining duration from engine latency. Send mining start immediately and show local progress; ordered continue/cancel/target changes follow. The authority validates legitimate progress, reach, equipment, permissions and resource use under bounded tick mapping. It must not grant unlimited historical credit from a client timestamp.
+
+Use bounded swept tool/stroke sampling at the shared action cadence. Reading only the last cursor ray of a render frame can skip intended targets; sampling every render frame without a rate rule can reward higher FPS. A supported continuous stroke carries bounded target generations and dependencies, rather than requiring a receipt round trip per block or a durable transaction per crack particle.
+
+Validate the actual read set. An unrelated change elsewhere in the chunk need not reject a valid action. Conversely, a stale request for stone cannot destroy a replacement machine at the same coordinates. Conditional rebase preserves material generation, tool state, support/occupancy and causal dependencies. Two miners cannot both receive the same original material.
+
+8.2 One coherent predicted branch
+
+Maintain immutable confirmed state plus bounded ordered pending actions. Local selection, collision, minimum visuals and affected physics read the same predicted branch. Subsequent actions see previous local predictions and name dependencies when necessary. Other clients receive accepted outcomes, not another player's speculation as a canonical revision.
+
+For a supported ordinary break, publish the local hole and newly exposed surfaces with the matching query/collision change. Stamp meshes, colliders and summaries with confirmed input versions and prediction generation. Old results cannot restore superseded cover. Reserve bounded patch installation rather than synchronously rebuilding an entire region or GPU world.
+
+If moving through the hole pushes a crate or tensions a rope, recovery restores/replays the relevant branch together, including contacts and constraints. Character-only rollback is insufficient. When complete topology prediction is unavailable, retain immediate provisional tool feedback and schedule the coherent authoritative physical change; do not claim the crack effect is already a simulated collapse.
+
+Bound pending count, bytes, age, footprint, dependency depth, copied terrain pages and actual replay work. A tick-count bound alone does not bound the cost of a giant explosion. On exhaustion, stop expanding shared speculation, keep local UI/presentation responsive and request coherent recovery. Do not rewind the entire planet or let catch-up consume every frame.
+
+8.3 Reconcile without flashes or duplicate consequences
+
+An early receipt does not remove its pending overlay until the corresponding canonical result is installed, or folded atomically into it. Rejection removes/rebases the affected action and dependents over the current confirmed state; it never restores an old whole-chunk snapshot over another player's edits.
+
+Deduplicate authoritative costs, loot, damage and presentation effects with stable operation/subeffect identities. Provisional loot is not spendable shared inventory. Confirmation must not spawn a second item or repeat the same sound. Prediction repair does not undo already committed unrelated transactions.
+
+Declare each multi-cell action atomic or staged/partial. Return its accepted mask or stage results, preserving ordered costs and consequences. Derived mesh requests can collapse to the latest revision; remove/place/remove gameplay cannot be flattened if that loses material transfer, damage or occupancy effects.
+
+8.4 One explicit changing-cover PvP rule
+
+Implement a configurable, session-shared rule and test it. Proposed default: the host assigns hitscan execution tick C, validates ammunition/cooldown and muzzle from authoritative shooter state at C, and validates target-presentation tick V against clock mapping and a finite history window. An initial 150 ms window is a playtest proposal, not an established optimum.
+
+Query targets at V and require the tested ray to pass cover at both V and C. New cover present at C blocks intersecting rays even if absent at V. This does not guarantee protection for a historical target position outside that cover. Historical cover removed after V remains blocking unless a verified accepted removal dependency applies.
+
+For break-then-shot, exempt only the exact original cover revisions removed by an accepted dependency effective by C. Replacement blocks and unrelated removals remain blocking. An allied removal can qualify through a host-issued event disclosed to the shooter with valid causal timing. A rejected predicted break grants no exemption. Send supported ordered chains without another receipt round trip, bounding dependency waiting time and bytes.
+
+If the break fails, an otherwise valid shot follows its blocked-shot rule against actual cover. A pre-activation rejection spends nothing; an activated shot consumes defined costs once. This conservative cover policy can reject some otherwise plausible historical hits and must be playtested as a fairness tradeoff.
+
+Historical queries are read-only. If required history is absent, the host chooses an entire current-state query including targets; missing current dependencies make the action unready. Record mode, effective C/V, exemptions and hit/damage disposition once as an ordered authoritative event. Clients may predict or verify, but cannot select a different canonical fallback because their local caches differ. Exact independent re-derivation instead requires complete historical query inputs in the domain contract.
+
+Finite-speed projectiles spawn from the validated authoritative muzzle/origin at their accepted tick and simulate forward with appropriate continuous collision. Do not repeatedly rewind targets during projectile contacts or fast-forward through missing history. Preserve reserved impacts and stable effect identities.
+
+9. DESTRUCTION THAT CANNOT CREATE UNBOUNDED DEBT
+
+9.1 Preflight, reserve, activate, refine
+
+Use one operation path for tools, spells, explosives and automated excavators:
+Validate identity/permissions/read set; determine affected material and causal dependencies; bound preparation and reserve consequences; prepare required state; accept/order the activation; publish canonical material and collision at that tick; record outcomes; refine derived detail and advance durability under their budgets. Each rendering peer activates its represented revision with coherent minimum presentation. The headless authority does not wait for client GPU readiness; a delayed peer must preserve internally consistent represented state while it advances or recovers.
+
+Account for changed voxels, inverse dependency halos, support connectivity, component enumeration, body/collider creation, contact growth, wakes, navigation, liquids, item ownership, replication and persistent surface complexity. Deleting a few support voxels may detach a large assembly; changed-cell count alone is not the cost.
+
+Use bounded structural groups and incremental/dynamic connectivity where they help. Component discovery, fragment materialization and collider construction still need separate reservations. Define a finite supported fracture model with meaningful pieces and conserved rubble/deposits. One voxel is not automatically one rigid body.
+
+9.2 Consequences remain real
+
+Compound fragments preserve mass, momentum, attachments and recoverable material. Tiny nonconsequential chips can be visual. Settling or merging consequential debris is an authoritative representation transition with valid contact/material state, not deletion of an inconvenient explosion result.
+
+Bound contacts, constraint rows and wake fan-out, not just body count. Existing bodies can converge into a dense pile without a new body being spawned. Reserve supported future interactions, maintain stable identities, and test accumulated piles and adversarial movement. Broad-phase candidates, collider detail, CCD and solver iterations all have costs.
+
+Large operations can be explicitly staged with visible progress and shared activation rules. Bound causal depth and work for chain reactions, magic and propagation before activation. A machine or player cannot enqueue unlimited invisible future edits. Fair scheduling gives ordinary interactions service while previously admitted consequences retain progress.
+
+9.3 Time remains bounded
+
+Give each required queue a service policy, capacity and drain deadline under the supported envelope. Coalesce optional derivation, cancel obsolete work and reduce presentation quality before starving simulation. Fixed timesteps need headroom; an accumulator that repeatedly demands more catch-up than the machine can perform creates the classic update spiral. [S35]
+
+Do not silently skip canonical ticks, delete accepted consequences, vary one client's physical accuracy, or globally wait for the slowest renderer. If supported demand is exceeded, stop new expensive admission and enter the declared recovery/readiness path. An exact-mode client can resynchronize a complete domain; state synchronization cannot repair a host whose physical model itself has unbounded work.
+
+10. COUPLED THREE-DIMENSIONAL MATERIAL PHYSICS
+
+10.1 One owner per material amount
+
+Extend the material-driven interaction of Noita into a 3D coupled system. Noita already combines falling-sand and destructible rigid-body systems; use that as a hybrid precedent rather than describing it as cellular rules alone. [S21]
+
+Use sparse volumetric terrain and bonds; compound rigid assemblies; bounded consequential grain/rubble parcels; constrained or deformable mechanisms; conserved room/pipe/reservoir networks; and one selected bounded active 3D liquid solver. Every relevant client executes the supported gameplay model. Optional spray/smoke reconstruction may vary visually without changing shared outcomes.
+
+Each quantity has one canonical owner: terrain, rigid assembly, parcel, active liquid patch or reservoir. Transfers record source/destination identity and generation, tick, composition, quantity, momentum and thermal state. Derived grid samples and surfaces are not additional owned material.
+
+Use exact bounded quantity units where practical, and explicit numerical tolerances for momentum, angular momentum, heat and solver drift. Distinguish physical dissipation from unexplained loss. Splits inherit parent linear/angular motion; merging accounts for relative kinetic energy and angular momentum. Resampling must preserve supported moments or retain extra state. Cosmetic spray cannot duplicate collectible water.
+
+Phase changes transfer ownership and collision at the agreed tick, accounting for latent heat. Magic adds energy or matter only through explicit game rules. A mined-material-to-inventory modifier changes the transfer destination rather than leaving full debris and a second inventory copy.
+
+10.2 Rigid bodies, constraints and physical magic
+
+Preserve the existing backend if it passes the required tests. Inspect the pinned version before adding a second solver: the researched Rapier guide includes ropes, cloth, volumetric soft bodies, plasticity and tearing. Integrating a second solver introduces real coupling obligations. [S22]
+
+Use hinges and motors for doors/folding panels, tension/bending constraints for ropes, and bounded cages for deformation. Render vertices need not equal physical degrees of freedom. XPBD/compliant constraints and smaller shared substeps are candidates to benchmark for stretch, damping and force estimates, not universal claims of superiority. [S23]
+
+Keep a shared substep/coupling schedule. Validate contact persistence and swept bounds before reusing contacts. Test rotating blades, fast projectiles, thin cover and two moving bodies. Local frame rate must not choose physical quality.
+
+Fold magic uses bounded forces, motor targets or rest-shape changes with resource rules. An occupied panel can jam, bend or tear; it cannot teleport through a person. A magical jackhammer uses a shared bounded impact cadence, immediate local recoil/feedback and single authoritative material/impulse consequences. Keep continuous interaction responsive without turning every rendered spark into a network operation.
+
+10.3 Select one liquid implementation through a coupled pilot
+
+First compare two CPU paths on a tank breach, floating crate, inlet and moving barrier: Salva's documented DFSPH/IISPH plus optional Rapier coupling, and a bounded sparse staggered-grid solver with APIC transport and complete pressure/boundary treatment. Verify actual dependency compatibility and persistence. Deterministic rigid bodies do not automatically make an attached fluid solver deterministic. [S24, S25]
+
+APIC is a particle/grid transfer method, not a complete fluid system. Include free surfaces, pressure, boundaries, viscosity, volume control and conservation. PBF and MPM remain alternative experiments when a demonstrated need justifies them. Choose by coupled quality, sustained memory, replay cost and minimum-hardware performance rather than particle count alone.
+
+Retain conserved fill-level reservoirs and pipe transport for bulk stored liquid, with actual 3D active patches where free flow, sloshing or interaction matters. Continuous visible flow must move canonical material. Build surfaces from current fluid state while preserving meaningful openings and occupancy.
+
+10.4 Patch boundaries and force coupling
+
+Each patch declares sealed, open, inlet/outlet or coupled boundaries. Exiting liquid transfers conserved mass, momentum and heat into another patch or reservoir. An unloaded region is not an invisible wall or drain. Process each shared flux once with opposite contributions.
+
+Shared pressure may require a merged solve or a validated boundary method. Camera movement cannot deactivate an interacting jet, submerged mechanism or load-bearing contact. Representation transitions are authoritative, hysteretic and capacity-reserved. Coarse reservoirs retain volume/level, composition, temperature and applicable transport state; reconstruction must not reset pressure or generate energy.
+
+Assign one owner for fluid/solid traction. Apply equal and opposite impulses with consistent torque. Avoid a second generic buoyancy force when pressure coupling already supplies it. Moving boundaries use the same pose and substep as solid contacts. Test light floating objects particularly carefully, with a fixed supported coupling schedule and residual limits. [S26]
+
+Bound active cells, neighbor storage, pressure scratch, iterations, transfers, reconstruction and checkpoints under the densest supported condition. Do not drop physically required neighbors when a list fills. Use valid conservative capacity bounds, a declared common resampling rule or a supported model limit. Thin cut cells need a tested treatment. A sparse patch spreading into a connected ocean cannot recursively activate an unlimited grid.
+
+10.5 Gas, heat, reactions and scientific machinery
+
+Use conserved room/pipe states, refining to local finite-volume fields where gradients affect gameplay. Track species mass, energy, volume and an explicit pressure relation. Compute edge/intercell fluxes once and apply opposite transfers. Carry transported enthalpy and conduction consistently. Preserve positivity through a valid flux treatment instead of deleting negative mass afterward.
+
+Combustion consumes defined fuel and oxidizer and produces species/heat. Boiling, melting and freezing account for latent heat. Sealed rooms retain pressure through unloading. The chosen low-speed ventilation/steam model does not resolve arbitrary compressible shocks; define a separate bounded blast model or validated local compressible solver for that scope. [S27]
+
+Specify valid cell sizes, flow/source ranges, substeps and iteration/error envelopes. Implicit solving still costs work; arbitrary stiffness cannot be made bounded by adding threads. Shared deterministic adaptation may depend on canonical state and specified arithmetic, never a peer's wall-clock exhaustion.
+
+10.6 GPU placement and physical quality gates
+
+Use CPU-authoritative coupled stepping initially, with asynchronous GPU presentation and nonconsequential effects. GPU gameplay simulation requires its own proven deterministic or explicit state-sync mode, recovery and supported-device performance. The October 2026 Nexus report is useful MPM research, but documents one-way rigid coupling and same-machine determinism; it does not establish the required production envelope. [S28]
+
+Measure mass/energy residuals, density/pressure error, penetration, contact jitter, constraint stretch, neighbor maxima, coupling cost and state age together. Smooth surface interpolation cannot hide unstable contacts or missing forces. The minimum hardware profile must run the complete supported gameplay model alongside WGPU rendering; optional GPU effects are reduced first.
+
+11. DEFAULT PLANET GENERATION AND A WORLD WORTH INHABITING
+
+11.1 Stable global structure, bounded local detail
+
+Make connected relief, drainage and visible erosion part of ordinary generation. Preserve believable valleys, ridges, passes, buildable terraces, coastlines and geological provinces. Local detail must improve those forms, rather than replace them with unrelated noise. Compact planetary scaling is a deliberate gameplay choice with explicit physical units.
+
+Use the canonical spherical graph to establish uplift/subsidence, lithology, continental shelves, basins, structural directions and relevant volcanic/impact history. A bounded climate model supplies runoff and process masks. Airless, icy and wet worlds receive different dominant histories; full mantle or global weather simulation is not a prerequisite.
+
+Resolve connected catchments, terminal seas, retained lakes, closed basins and spill/outlet relationships before regional decoration. Priority-Flood is a useful foundation, but a closed sphere needs explicit base-level seeds and retained-basin rules instead of assuming a rectangular map edge. Preserve intentional craters and wetlands rather than filling every depression. Route flats with stable ties. Accumulate physical contributing area, not simply cell count on an unequal projection. [S29]
+
+Form macrorelief with bounded native processing informed by analytical stream-power erosion. Declare iteration/validation limits and a deterministic coherent fallback. This technique is not a complete sediment/meander model. Retain channel profiles, floodplain and deposit metadata. Coarse-to-fine erosion can add local structure while preserving downstream outlets, divides and shared boundaries. [S30, S31]
+
+Add appropriate glacial, coastal, arid, weathering and deposition histories. Broad glacial troughs, hanging tributaries and overdeepened basins differ from snow-covered river valleys. Coastlines depend on exposure, rock and sediment supply. More advanced geomorphological transport is an optional preprocessing comparison; importing a CUDA, OpenGL or machine-learning research stack is not a default runtime requirement. Revalidate drainage after meaningful elevation changes. [S32]
+
+Use actual spherical edge lengths, areas and tangent transforms. Shared edges/corners have canonical ownership and sample identities. Transform directional fields across faces. Halos support finite local operations but cannot replace the upstream history of a river fed from another region. Test face corners, unequal levels and pole/wrap behavior.
+
+Freeze accepted macrofacts before civilizations, sites and roads depend on them. Refine regional terrain under shared runoff, outlet, valley-floor and continuity constraints. Realize volumetric strata, caves, arches and overhangs with the engine's editable representation; a radial heightfield is only a scaffold. Saved edits and structures remain authoritative across cache rebuilds and generator upgrades.
+
+Perform costly geological aging during world creation or explicit authoring, with resumable stage checkpoints. Streaming materializes local state from accepted records plus edits. Runtime excavation, rain, dams and spells update supported local flow/reservoir state; they do not rerun planetary erosion.
+
+CPU generation still needs controlled arithmetic and ordering. GPU generation needs its own verified compatibility or baked authoritative output; identical WGSL and a seed do not establish cross-device equality. Persist accepted results where recomputation cannot meet the promise. Compare full transfer/synchronization costs when testing compute acceleration. [S33]
+
+11.2 Preserve the reference-driven visual and gameplay direction
+
+Compose locations at landscape, district, building and hand scales. Keep strong ship/structure silhouettes, deliberate negative space, substantial loading/support hardware, human-scale doors/railings, readable maintenance access and inhabited interiors. Pair monumental industrial forms with clear material fields, selective emissions, warm windows, gardens, courtyards and expressive mythic residents. Use original assets and Axiom's own markings; functional color codes also need shape/icon cues.
+
+Geography and history explain cities. Rivers, feasible gradients, resources, crossings and freight routes precede districts. Ruins reflect specific damage, exposure and reoccupation, not a uniform damage filter. Include prosperous inhabited places alongside abandoned megacities. Ordinary streets and useful open ground connect the major towers. A visible reachable terrace, cargo bay or doorway must become a consistent real place as the player approaches.
+
+Retain the four original location families as functional briefs, varied by geography and history:
+- Ternwater Anchorage: coastal channels, rock stacks, inhabited civic districts and a working orbital freight terminal; a restored canal workshop gains storage, trade and visitor value.
+- Rainbreak Shipyard: mountain terraces, a grounded carrier, cranes, repair bays and a connected neighborhood; restoration supports fabrication, salvage, rescue and freight.
+- Ambercut Counterweight Ward: a worked basin with old quarry benches, cargo lifts, viaducts, homes and gardens; player power/bridges/lifts improve real district access and commerce.
+- Hearthglass Foundry: an inhabited machine hall with assembly floor, crane gallery, service trench and courtyard; machines, ventilation and repair work remain understandable at walking scale.
+
+Choose one complete district or shipyard bay as the first integrated location. It must include an approach, working interior, resident activity, useful base improvement, automation, persistent destruction and repair. This is the representative integration scene, not permission to claim every planned region complete.
+
+11.3 Connect freight, exploration and bases to actual state
+
+Radio reports and map markers refer to real consignments, routes, receiving pads and arrival uncertainty. Distinguish forecasts from completed deliveries. Cargo custody follows the same durable ownership ledger through caravans, docks, vehicles and orbital services. Decorative distant traffic cannot duplicate a real shipment or become an inconsistent target.
+
+Space elevators require a compatible body's geometry/orbit and the game's declared engineering or fictional support. Use skyhook/launch/transfer infrastructure where appropriate, with usable destinations and schedules. Preserve megastructure access, repair and destruction without requiring every distant object or pedestrian to be active at full resolution.
+
+Base improvements should create useful storage, fabrication, housing, trade, power, transport or environmental benefits. Inhabitants retain identity and agency. Simulation simplification preserves meaningful commitments and resources. Show distant route occupancy and district silhouettes through summaries derived from the same world; when approached, they resolve into consistent state.
+
+12. AUTOMATION, NPC WORK AND MOD EXECUTION
+
+Keep immutable recipe/material data separate from mutable machine state. Batch compatible operations and use structure-of-arrays or equivalent hot-data organization where profiling supports it. Machines subscribe to relevant changes rather than scanning the entire world every tick.
+
+Dormant progression is valid only until the earliest external event or internal threshold: production completion, resource arrival, power change, capacity exhaustion or environmental change. Split advancement at those boundaries. Verify equivalence against a simple tick-by-tick oracle under interruption and save/load. Nonlinear systems remain on their supported solver when an exact batch rule is unavailable.
+
+Preserve the electrical model boundaries: DC voltage/current balance, modified nodal analysis (MNA) where coupled circuits require it, resistor-capacitor (RC) stored-charge/transient behavior, averaged converter behavior rather than mandatory switching-waveform simulation, and the existing declared AC approximation. Retain physical units, source/load limits and energy accounting. Reuse topology assembly/factorization only while its mathematical inputs remain valid; changed coefficients or nonlinear coupling invalidate the relevant cache. Define deterministic pivot ties, arithmetic, convergence/iteration limits and a reproducible failure state. Digital feedback uses bounded specified event/delta-cycle semantics, so an oscillating circuit cannot monopolize the tick. Document the actual equations and supported scope instead of replacing scientific machines with arbitrary binary states to win a timing test.
+
+Workers emit wake requests; canonical tick/phase/order merges them deterministically and removes duplicate activations while preserving distinct gameplay causes. Subscriptions include entity/dependency generations and field versions. Bound stale scheduled events, dead subscriptions and wake fan-out. Deleting and recreating a power link must not wake an unrelated reused entity. Factorio's published transport work illustrates why concurrent wake order needs explicit deterministic handling. [S34]
+
+NPC planning, caravans and distant society use supported coarse/event models with real identities, destinations and resources. Active nearby actors still participate in physical domains. Do not let route replanning or an incident recursively awaken an entire planetary population. Fairly budget planning and keep cached navigation consistent with accepted topology changes.
+
+Automated tools use the same edit/authority/reservation path as players. No bypass around resource costs, ownership or destruction limits. Keep per-owner fairness so one factory cannot consume all interactive service. Avoid millions of independent timer callbacks for pipes, conveyors, power and fields.
+
+Version content and script APIs. Deterministic gameplay scripts have stable arithmetic/RNG/order and bounded fuel/work quotas; external nondeterministic data enters only as recorded authority input. Enforce quotas before accepted effects exceed their envelope. Mod changes require explicit compatibility and save behavior. Cosmetic scripts cannot mutate shared canonical outcomes.
+
+13. ONE CONTROLLING IMPLEMENTATION SEQUENCE
+
+Deliver in complete native slices. Earlier stages establish the contracts needed by later ones; address a prerequisite earlier when the actual engine requires it. Parallelize independent investigation and isolated changes, but keep one owner for shared authority, persistence and GPU lifetime transitions.
+
+Stage 0 — Audit and baseline.
+Produce the actual subsystem/dependency map and reproducible native captures. Identify the default freeze path and dominant frame/loading/interaction costs. Establish the benchmark scene and event-timeline instrumentation. Gate: evidence identifies where time, bytes and outstanding work reside.
+
+Stage 1 — Safe lifetimes and ordinary edits.
+Implement total-footprint budgets, whole-job reservations, bounded upload/submission/retirement, cancellation, surface recovery and the minimum correct edit representation. Make one ordinary mined/placed cell coherent through material, collision, visible surfaces and stable operation outcome. Gate: default memory stabilizes through travel, edits, minimization and resize; stale work cannot restore the cell.
+
+Stage 2 — Canonical continuation and authority.
+Implement/verify identities, applied/durable separation, coherent checkpoints, complete domains, canonical ordering and replay. Keep existing state synchronization until an exact domain passes continuation tests. Gate: a rigid interaction scene continues identically after restore across supported machines and worker counts, with bounded mismatch recovery.
+
+Stage 3 — Responsive multiplayer and joining.
+Integrate the predicted terrain/physics branch, semantic receipts, dependency chains, low-age traffic classes and atomic baseline/suffix publication. Add the explicit changing-cover combat policy. Gate: two players edit/push the same material while another joins, with correct outcomes under impairment and no unnecessary receipt round trip per block.
+
+Stage 4 — Critical-path world and renderer optimization.
+Apply the measured data, meshing, visibility, asset/pipeline and streaming improvements. Stabilize mixed-scale seams and current distant summaries. Gate: representative native frame tails and readiness improve without increasing queues, hidden memory or correction cost. Keep only optimizations that improve the full workload.
+
+Stage 5 — Coupled materials and physical machinery.
+Compare the selected liquid candidates and deliver one tank/hinge/crate scene with conserved heat/material and two-way forces. Add supported granular settling, ropes, phase changes and physical magic through the same admission and recovery contracts. Gate: physical quality and cross-machine mode are demonstrated under live edits and late join.
+
+Stage 6 — Default world and inhabited integration.
+Deliver one coherent spherical terrain body and one complete original district/bay, with erosion, an ordinary resident routine, rewarding base work, radio/map freight, automation and repairable destruction. Gate: orbit-to-interior continuity and saved edits remain correct while multiplayer activity stresses the engine.
+
+Stage 7 — Supported envelope and release evidence.
+Run the acceptance matrix below, tune conservative defaults on intended minimum hardware, and document actual capacities and limits. Gate: required backlogs drain, memory settles, outcomes remain correct and the observed improvements reproduce. Expand content only within the demonstrated model or after widening and retesting it.
+
+When interrupted, leave reproducible checkpoints and a concise next-action record. Resume from established evidence rather than rebuilding the plan. Do not add multiple competing roadmaps or mark planned later stages as complete.
+
+14. ACCEPTANCE, MEASUREMENT AND COMPLETION REPORT
+
+14.1 Measure stages, tails and total costs
+
+For input, record local monotonic timestamps for sample, enqueue, transport submission, authority receipt/admission/application, client installation and first submitted feedback. Cross-machine one-way measurements require clock alignment and uncertainty; RTT/2 is only a symmetric-path approximation.
+
+Keep authored mining duration separate from eligible-break response. Proposed 60 Hz reference target: ordinary ready local feedback submitted within one frame at p95, with predicted physical activation at the next eligible simulation tick. This is an application target under named dependencies, not a display-to-photon guarantee. Establish measured p99 queue-age/replay limits on actual target hardware.
+
+After baseline capture, adopt explicit significant-improvement goals for the declared problematic fixtures: initially at least 30% lower scene p99 frame time and at least 50% shorter median warm-world time to first safe interaction. Pair relative goals with absolute hardware-specific frame, tick and loading budgets; halving an unusable delay is insufficient. These are unachieved engineering targets, not promises or reasons to alter content/quality between runs. Report any unmet target and the measured remaining bottleneck honestly.
+
+Illustrative timing only: with an already eligible simple break, ready dependencies, 80 ms symmetric RTT and a 60 Hz authority, local feedback can enter the next 0–16.7 ms frame; authority application is around 40–56.7 ms; receipt returns around 80–96.7 ms; a following 60 Hz installation gives roughly 80–113.4 ms. Input hardware, scanout, authored duration, loss and preparation add delay. Prediction does not eliminate learning the authority's decision.
+
+Record CPU simulation/physics/meshing/visibility/encoding, GPU stages and idle gaps, frame/tick p50/p95/p99/worst, first-playable milestones, backlog bytes/work/oldest age, replay copies/time, correction magnitude/frequency, confirmed-state age and durable lag. Use delayed nonblocking GPU timing where supported. Report native and tracked memory, allocator backing, reservations, largest allocations, staging, in-flight versions and retirement. Include all network traffic, redundancy, joins, repair and relay egress. [S36]
+
+14.2 Required workload matrix
+
+World and rendering:
+- Cold/warm save open, new-world generation, joining, repeated teleports and high-speed travel.
+- An inhabited megacity approach, working interior, night lighting, transparency and mixed voxel scales.
+- Edited coarse/fine boundaries, camera turns, empty children, LOD transitions and destroyed horizon landmarks.
+- Solid, thin, checkerboard and mixed-material geometry; burst edits while optimized meshes finish.
+- Resize/minimize/restore, canceled encoded work, budget contraction, allocation failure and device recovery.
+
+Authority and networking:
+- LAN and configured 40/80/160 ms RTT; jitter, 1–5% loss, burst loss, duplication/reordering, asymmetry, upload saturation and forced relay.
+- Two clients pushing one crate, occupied moving vehicles, coupled domains and frame/attachment transitions.
+- Simultaneous last-item pickup, duplicate operations/receipts, identity reuse attempts, stale epochs and reconnect.
+- Missing accepted command ranges despite newer watermarks; short outage and exhausted prediction history.
+- Snapshot capture racing compaction; candidate publication racing newer live edits; late joining during destruction.
+- Accepted/rejected break-then-shot, replacement cover, moving shields/doors, exhausted historical data and finite projectiles.
+- Crash after admission, after application and after durability; no duplicated material or inventory.
+
+Physics and automation:
+- Remove a support under an occupied assembly; split/rejoin structures; pile existing bodies into dense contact.
+- Breach a heated tank with a floating crate and powered hinge; pressure and forces agree.
+- Pour grains onto a belt, settle, reload and excavate; retain quantity and composition.
+- Freeze a channel around a loaded cable, melt it and sever its anchor.
+- Open a pressurized room into active and inactive regions; camera movement cannot erase pressure/outflow.
+- Fast objects crossing newly edited thin cover while fragments rotate.
+- Two transport groups waking one machine; delete/recreate dependencies; interrupt dormant work at thresholds.
+- Restore/replay/late-join these cases across supported architectures and worker counts.
+
+World-generation and gameplay:
+- A cross-boundary river, retained closed basin, glacial region, contrasting coast and inhabited buildable valley.
+- Shared corners, unequal refinement, repeated seeds and saved edits across generator/cache versions.
+- Orbit, aircraft, district, walking and underground inspection of one coherent location.
+- A real radio forecast, map update, cargo arrival, ownership transfer and useful base restoration.
+- Destruction followed by salvage and repair, with ordinary NPC access and alternate player-built routes.
+
+14.3 Pass criteria
+
+Every accepted consequence executes once or follows its explicit recorded disposition. Confirmed frontiers never advance over missing history or regress during publication. Physics, visible current cover and material ownership agree within their declared predicted/confirmed states. Exact modes pass complete continuation; fallback modes are honestly labeled.
+
+Each required queue reaches a stable bound under sustained supported load and drains within its declared recovery deadline after a burst. Oldest age does not keep growing while average throughput looks acceptable. Default memory, backing pools, histories and retirement settle over prolonged travel/destruction. A performance improvement cannot be purchased with missing material, unstable pressure, invisible cover or permanently delayed state.
+
+Use the user's RTX 4090 desktop as one high-end reference if available, while measuring the intended low-memory/integrated profile independently. The Lenovo i3-1005G1/8 GB machine is a useful constrained target only when actually tested; do not infer support from a desktop result. Report unavailable platforms as unverified. An operating envelope is named hardware, content and workload, not a promise of flawless behavior on arbitrary machines.
+
+Compare equivalent interactions with named Minecraft Java and Bedrock builds/configurations, matching hardware, network and distances; separate vanilla and modded results. Bedrock already documents block prediction and movement replay, while Java has its own loading/mesh history. Measure faster response, lower correction rates and better frame/tick tails rather than claiming competitors have no prediction. Richer Axiom-only physics gets its own quality/performance gate. [S20]
+
+14.4 Required final implementation report
+
+Report the concrete changes and native files; why each change addresses the measured problem; before/after distributions under identical fixtures; actual CPU/GPU/RAM/network/relay costs; screenshots/video from the native integrated scene where relevant; meaningful correctness/fault tests; measured operating limits; remaining risks and unverified hardware; and the next incomplete stage.
+
+Do not substitute test counts, a localhost ping, an isolated mesher number or a visually smooth clip for integrated evidence. Stop optional testing once it has resolved the concrete remaining risk. The release gate is a responsive, coherent, bounded native game under its documented workload.
+
+15. PRIMARY REFERENCES AND REUSE RULES
+
+These references were researched for the source briefs as of 29 October 2026. They support specific techniques and API caveats, not Axiom benchmark claims. Inspect the actual pinned dependency and applicable source/license before implementation; version-specific behavior may change. Adapt algorithms narrowly and retain required notices when reusing code. Proposed policies, limits, architecture and gameplay rules in this prompt are Axiom engineering decisions to validate.
+
+[S01] Microsoft: selected-adapter memory budget, process usage and budget changes.
+https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_4/nf-dxgi1_4-idxgiadapter3-queryvideomemoryinfo
+https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_4/ns-dxgi1_4-dxgi_query_video_memory_info
+https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_4/nf-dxgi1_4-idxgiadapter3-registervideomemorybudgetchangenotificationevent
+
+[S02] Khronos: Vulkan per-heap memory-budget estimates.
+https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceMemoryBudgetPropertiesEXT.html
+
+[S03] WGPU: limits, allocator reports and device capabilities.
+https://docs.rs/wgpu/latest/wgpu/struct.Limits.html
+https://docs.rs/wgpu/latest/wgpu/struct.AllocatorReport.html
+https://docs.rs/wgpu/latest/wgpu/struct.Device.html
+
+[S04] WGPU: queue writes, staging, callbacks and resource destruction.
+https://docs.rs/wgpu/latest/wgpu/struct.Queue.html
+https://docs.rs/wgpu/latest/wgpu/struct.Buffer.html
+
+[S05] WGPU: StagingBelt lifecycle, including unsubmitted encoders.
+https://docs.rs/wgpu/latest/wgpu/util/struct.StagingBelt.html
+
+[S06] WGPU: native memory-budget backstops and allocation hints.
+https://docs.rs/wgpu/latest/wgpu/struct.MemoryBudgetThresholds.html
+https://docs.rs/wgpu/latest/wgpu/enum.MemoryHints.html
+
+[S07] WGPU: surface configuration and frame-latency hints.
+https://docs.rs/wgpu/latest/wgpu/struct.Surface.html
+https://docs.rs/wgpu/latest/wgpu/type.SurfaceConfiguration.html
+
+[S08] WGPU pipeline cache; NVIDIA pipeline-state preparation guidance.
+https://docs.rs/wgpu/latest/wgpu/struct.PipelineCache.html
+https://developer.nvidia.com/blog/advanced-api-performance-pipeline-state-objects/
+
+[S09] Glenn Fiedler: Snapshot Compression, acknowledged baselines.
+https://www.gafferongames.com/post/snapshot_compression/
+
+[S10] Original voxel-processing implementations and developer accounts.
+https://vercidium.com/blog/voxel-world-optimisations/
+https://vercidium.com/blog/further-voxel-world-optimisations/
+https://github.com/cgerikj/binary-greedy-meshing
+https://github.com/Inspirateur/binary-greedy-meshing
+https://github.com/luanti-org/luanti/blob/master/src/client/mesh_generator_thread.cpp
+https://docs.veloren.net/veloren_voxygen/mesh/greedy/struct.GreedyConfig.html
+
+[S11] Mikola Lysenko: Meshing in a Minecraft Game; surface complexity and refinement.
+https://0fps.net/2012/06/30/meshing-in-a-minecraft-game/
+
+[S12] Eric Lengyel: Transvoxel algorithm and transition geometry.
+https://transvoxel.org/
+
+[S13] Mike Turitzin: conservative hierarchical depth buffers.
+https://miketuritzin.com/post/hierarchical-depth-buffers/
+
+[S14] John C. Hart: Sphere tracing and conservative distance bounds.
+https://experts.illinois.edu/en/publications/sphere-tracing-a-geometric-method-for-the-antialiased-ray-tracing/
+
+[S15] Sparse voxel rendering/editing and original Teardown developer discussion.
+https://research.nvidia.com/publication/2010-02_efficient-sparse-voxel-octrees
+https://research.chalmers.se/en/publication/182658
+https://research.tudelft.nl/en/publications/interactively-modifying-compressed-sparse-voxel-representations/
+https://research.tudelft.nl/en/publications/editing-compact-voxel-representations-on-the-gpu/
+https://www.icare3d.org/research-cat/publications/gigavoxels-ray-guided-streaming-for-efficient-and-detailed-voxel-rendering.html
+https://blog.voxagon.se/2018/10/17/from-screen-space-to-voxel-space.html
+
+[S16] Physics determinism and complete-state continuation.
+https://rapier.rs/docs/user_guides/rust/determinism/
+https://rapier.rs/docs/user_guides/rust/serialization/
+https://github.com/jrouwe/JoltPhysics/blob/master/Docs/Architecture.md
+https://box2d.org/posts/2024/08/determinism/
+
+[S17] Riot: networking latency and buffering/consistency investigations.
+https://www.riotgames.com/en/news/peeking-valorants-netcode
+https://playvalorant.com/en-us/news/game-updates/valorant-gameplay-consistency-update-2/
+
+[S18] QUIC standards and researched Quinn 0.11.12 behavior.
+https://www.rfc-editor.org/rfc/rfc9221.html
+https://www.rfc-editor.org/rfc/rfc9000.html
+https://docs.rs/quinn/0.11.12/quinn/struct.Connection.html
+https://docs.rs/quinn/0.11.12/quinn/struct.SendStream.html
+
+[S19] Iroh relay architecture, multipath and connection APIs.
+https://www.iroh.computer/blog/iroh-0-91-0-the-last-relay-break
+https://www.iroh.computer/blog/iroh-0-96-0-the-quic-multipaths-to-1-0
+https://docs.rs/iroh/latest/iroh/endpoint/struct.Connection.html
+
+[S20] Mojang: Bedrock prediction/movement guides and versioned Java loading/mesh changes.
+https://mojang.github.io/bedrock-protocol-docs/guides/block-breaking-overview/
+https://mojang.github.io/bedrock-protocol-docs/guides/player-movement-overview/
+https://mojang.github.io/bedrock-protocol-docs/guides/build-action-simulation-rate/
+https://feedback.minecraft.net/hc/en-us/articles/19703470383757-Minecraft-Java-Edition-1-20-2
+https://feedback.minecraft.net/hc/en-us/articles/4415128577293-Minecraft-Java-Edition-1-18
+
+[S21] Nolla Games developer presentation: Noita's hybrid material/rigid-body approach.
+https://www.gdcvault.com/play/1025695/Exploring-the-Tech-and-Design
+
+[S22] Rapier: researched Rust 0.36 soft-body guide.
+https://rapier.rs/docs/user_guides/rust/soft_bodies/
+
+[S23] XPBD and Small Steps in Physics Simulation.
+https://matthias-research.github.io/pages/publications/XPBD.pdf
+https://matthias-research.github.io/pages/publications/smallsteps.pdf
+
+[S24] Salva and the DFSPH authors' publication page.
+https://github.com/dimforge/salva
+https://animation.rwth-aachen.de/publication/054/
+
+[S25] APIC author page; alternative PBF and snow-MPM references.
+https://www.andyselle.com/papers/24/
+https://blog.mmacklin.com/project/pbf/
+https://disneyanimation.com/publications/a-material-point-method-for-snow-simulation/
+
+[S26] Fluid/solid pressure coupling and small-cell treatment references.
+https://www.cs.ubc.ca/labs/imager/tr/2007/Batty_VariationalFluids/
+https://ccse.lbl.gov/Publications/almgren/abcm.aiaa/abstract.html
+
+[S27] NIST FiPy numerical documentation, finite-volume principles; not a runtime dependency.
+https://pages.nist.gov/fipy/en/3.4.5/numerical/index.html
+
+[S28] Dimforge Q3 technical report, 25 October 2026: Nexus capabilities and limitations.
+https://dimforge.com/blog/2026/10/25/dimforge-Q3-technical-report/
+
+[S29] Barnes, Lehman and Mulla: Priority-Flood.
+https://rbarnes.org/sci/2014_depressions.pdf
+
+[S30] Tzathas et al. (2024): Physically-based Analytical Erosion for fast Terrain Generation.
+https://doi.org/10.1111/cgf.15033
+https://www-sop.inria.fr/reves/Basilic/2024/TGSC24/
+
+[S31] Schott et al. (2024): Terrain Amplification using Multi-Scale Erosion.
+https://h-schott.github.io/p/mserosion/
+https://github.com/H-Schott/MultiScaleErosion
+
+[S32] Process-specific landform research and geological references.
+https://researchportal.ip-paris.fr/en/publications/forming-terrains-by-glacial-erosion/
+https://doi.org/10.1145/3811336
+https://github.com/erosiv/geotransport
+https://gmd.copernicus.org/articles/17/3433/2024/
+https://www.nps.gov/articles/ushapedvalleysfjordshangingvalleys.htm
+https://www.nps.gov/articles/000/weathering-erosion.htm
+
+[S33] W3C WGSL: floating-point evaluation and implementation latitude.
+https://www.w3.org/TR/WGSL/#floating-point-evaluation
+
+[S34] Wube: deterministic concurrent transport/wake scheduling.
+https://www.factorio.com/blog/post/fff-364
+
+[S35] Glenn Fiedler: Fix Your Timestep!; bounded-work/admission policies here are Axiom proposals.
+https://gafferongames.com/post/fix_your_timestep/
+
+[S36] Native profiling references.
+https://learn.microsoft.com/en-us/windows/win32/direct3dtools/pix/articles/timing-captures/pix-timing-captures
+https://github.com/wolfpld/tracy
+
+END OF UNIFIED IMPLEMENTATION PROMPT
+

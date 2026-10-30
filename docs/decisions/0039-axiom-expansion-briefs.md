@@ -69,3 +69,36 @@ The audit found:
 Revisit 1 when M1 is accepted or the owner names a brief milestone as the next
 target. Revisit 2 when fixed-point bodies pass the determinism tests. Revisit 3
 item by item as the owner approves names.
+
+## Addendum, 2026-10-29: unified engine prompt
+
+`docs/specs/AXIOM_Unified_Engine_Implementation_Prompt.txt` consolidates the
+networking/performance and worldgen/physics briefs into stages 0 to 7. The
+rules above apply to it. Stage by stage against the tree at 67c2fcdf:
+
+- **Stage 0 (audit, freeze repro).** Prior audits: `docs/perf/audit-08e11ae3.md`
+  and the 2026-10-27 ten-rules pass. The known default-budget freeze is the
+  streaming source-cache stall at view 28 (published sources never evicted,
+  admission fails, the last ring regenerates forever). Fix 3f6d4eec sits on
+  branch `idle-stream`; HEAD still has the bug; the same change is applied,
+  uncommitted, in the shared tree with other residency edits. Fits.
+- **Stage 1 (lifetimes, ordinary edits).** `render/streaming/gpu_budget.rs`
+  (HEAD) reads the adapter budget. Uncommitted shared-tree work adds a GPU
+  growth reserve, pending-GPU publication tests and edit proxies. Fits; one
+  writer, landing that work before new streaming changes.
+- **Stages 2 and 3 (authority, prediction, joining).** `crates/netcode` has
+  edit prediction with sequence acks, acked delta baselines and budgeted cell
+  deltas. Section 7.1 local stepping of bodies is allowed only as a labelled
+  state-sync mode until fixed-point bodies land (decision 2). The transport
+  references in 7.5 (Quinn, Iroh) are reading only (decision 4). The
+  changing-cover PvP rule in 8.4 needs its own row and owner approval.
+- **Stage 4 (critical path).** Fits existing perf work and `just frame-bench`.
+- **Stage 5 (coupled materials).** The Salva and staggered-grid liquid pilot
+  is not taken: liquids are integer `engine_sim` (ADR 0018, M1), Salva is a
+  float dependency without an ADR. Coupling rules in 10.1 and 10.4 are
+  backlog for the M1.5 rigid/sim interface.
+- **Stage 6 (world).** Drainage and erosion fit gate 71 (`worldgen/src/geo`,
+  dormant). The four named locations in 11.2 are new proper nouns and are not
+  approved (decision 3); a first district uses a descriptive placeholder.
+- **Stage 7.** The acceptance matrix in 14.2 is backlog for MASTER_PLAN rows.
+  The Minecraft comparison runs are not scheduled.
