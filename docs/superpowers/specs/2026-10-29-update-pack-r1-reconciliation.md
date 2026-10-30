@@ -81,7 +81,10 @@ matter more than relative ones).
    expected-before validation (items 6, 7). Measure spans from section 2 on
    localhost; label cross-machine proof pending.
 3. M1 `dam_break` is the next content-side proof (owner, 2026-10-29); T03
-   waits.
+   waits. Sim slice landed: scenario, log replay and exact checkpoints
+   (76d77a4f), GPU bit-exact test (097d30df). App wiring waits on the owner
+   of the uncommitted `simulation/cpu_region` work; item 2 waits on the owner
+   of the untracked `crates/app/src/multiplayer` module.
 4. Measurement backlog, no code until a trace points at it: write_buffer
    staging accounting (item 2), DX12 compile stalls (item 5), queue age
    (item 9), checkerboard bench (item 10).
@@ -93,3 +96,80 @@ matter more than relative ones).
 - After the freeze fix, M1 `dam_break` comes next; T03 waits.
 - Still open: whether state-sync client stepping of bodies (R1 D16 fallback)
   gets its own decision now or waits for fixed-point bodies (0039 item 2).
+
+## 6. T03 first proof: forest slope outcrops (dormant gate 81)
+
+Run 2026-10-29 at the owner's request to implement the update pack. It runs
+ahead of the section 5 order (M1 `dam_break` next) because it is dormant:
+`CURRENT_GENERATOR_VERSION` stays 80 and no live world changes.
+
+Work card:
+
+- Player result: grey ground on forest and meadow slopes says what it is.
+  Steep slopes are the bed under them; on gentler slopes the bed breaks
+  through only on convex shoulders and stands 0.5 m proud as a knob; hollows
+  and soft beds keep soil and trees.
+- Cause found: `column_from_landscape` greyed 0.35..0.54 slopes with gravel
+  from a 19 m value-noise patch. Above 0.54 the slope rule's sediment test
+  never fires in forest (a probe over three seeds found sediment about 0 on
+  every slope above 0.2), so all of it was plain Stone.
+- Change: `crates/worldgen/src/ground_exposure.rs`; one gated branch and a
+  ledge term in `landscape.rs`; `sample_stratigraphic_bed` made crate-visible;
+  `main.rs` lets `--benchmark-generator-version=81` render the dormant gate.
+- Trial values: shoulder band starts at Stone 0.36, Basalt 0.38, Limestone
+  0.42, Sandstone 0.48, other 0.56 (plus or minus 0.05 of 9 m wobble) and is
+  0.18 wide; above it the whole slope is bare. Shoulders need 0.12 m (gentle
+  end) to 0.04 m (steep end) above the 4 m stencil mean, about the 85th
+  percentile of forest slopes on four seeds.
+- Preserved: every gate up to 80 (golden digests before and after identical);
+  trails grade over outcrops (`routes::block` carves to grade); households,
+  sites and the structure chain still own their voxels; caves stay open.
+- Not done: scree aprons below outcrops, ledges per bed boundary, litter,
+  paths, construction disturbance (later T03 increments).
+
+Evidence:
+
+| Check | Result |
+|---|---|
+| `gen_golden` digests, versions 2..80, two seeds, two scales | identical before/after |
+| `ground_exposure` tests (4), seeds 424242, 1, 7777, 1 m and 0.5 m | pass (run in a D: snapshot; the shared tree did not compile, see below) |
+| Grey area (rock plus gravel) on forest slopes, gate 81 vs 80 | not larger (test `grey_ground_does_not_spread_over_forest_slopes`) |
+| clippy on `engine_worldgen`, lines in this change | clean |
+| Outside banks and fault scarps, slope gravel at gate 81 | 0 (gate 80: 109 columns on seed 424242) |
+| Remaining gate-81 slope gravel | all drainage bank or fault scarp |
+| Full `engine_worldgen` lib suite | 6 failures, all at versions 80 or lower, untouched by this gate: amberroot pools, valley roofs, undercrown pin and roof, two tree-form tests. Peer gen-80 work; not chased |
+| Native captures | below; stills only, no motion |
+
+Native review, seed 2738958700 at (2728, -3448), 1 m voxels, noon, HUD off,
+one exe at `--benchmark-generator-version=80` and `=81`. Frames:
+`target/visual-direction/t03-outcrops-20261029/`.
+
+- First draft (`t03-g81-*`): rejected. Every 0.36+ hard-rock slope went bare,
+  a whole forested hillside became a stone wall and the lift read as slabs.
+- Revision (`t03r2-g81-*`): the stone bowl matches gate 80; gravel strips are
+  gone; a few stone knobs sit on shoulders; walking view keeps its grass and
+  trees with one knob in sight. Knobs are single-voxel steps: acceptable for
+  this proof, weak as art.
+- Outcrops on this seed lie about 4.4 km from spawn; near spawn the forest is
+  too gentle to expose rock, so few players would see this change early.
+
+Build context: the shared tree's app and worldgen failed to compile during
+this session on a peer's in-progress `BlockId::Obsidian` reference
+(untracked `hell_gate.rs`). Tests and captures ran in a copy at
+`D:/scratch/t03-outcrop-snap` with that variant replaced by Basalt in the two
+hell_gate files only; both gates rendered from the same exe.
+
+Acceptance: REV-06 partial (bedrock class only; sediment, soil and paths
+open); REV-29 partial (matched stills, no motion or reverse approach);
+REN-10 not run. Mine/build at outcrop contacts: automated (surface and next
+voxel are the bed), not played.
+
+Not committed: gate 81 sits above uncommitted gates 54 to 80, and HEAD is at
+generator 53 without `households`, `fernwake` or `meridian_terminal`, which
+the tests use. Owned files: `crates/worldgen/src/ground_exposure.rs` (new),
+the gate-81 hunks in `landscape.rs`, the `ground_exposure` line in `lib.rs`,
+the allow-list term in `main.rs`, gate rows 80 and 81 in GENERATOR_GATES.md.
+
+Next smallest step: scree aprons downhill of knobs (talus from the same bed),
+then a motion capture along the walking route, then the owner decides the
+gate-81 bump.
