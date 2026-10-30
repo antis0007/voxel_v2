@@ -4,6 +4,8 @@
 use super::pixel_art::{self, GOLD as PALETTE_GOLD, PAPER as PALETTE_PAPER, TEAL as PALETTE_TEAL};
 use crate::world::factory::Kind;
 use egui::{Color32 as C, Rect, Vec2, vec2};
+
+mod sprites16;
 pub const GOLD: C = PALETTE_GOLD;
 pub const PAPER: C = PALETTE_PAPER;
 pub const TEAL: C = PALETTE_TEAL;
@@ -1006,6 +1008,9 @@ pub(super) fn paint_rows(p: &egui::Painter, r: Rect, rows: &[&str], color: C) ->
 }
 
 fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, override_fx: Option<super::magic_fx::Effect>) {
+    if accent.is_none() && override_fx.is_none() && sprites16::paint(p, r, icon) {
+        return;
+    }
     let (rows, base) = art(icon);
     let color = accent.unwrap_or(base);
     let drawn = paint_rows(p, r, rows, color);
