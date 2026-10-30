@@ -1,0 +1,771 @@
+AXIOM / MERIDIAN — SPHERICAL WORLDS, CIVILIZATIONS, LIVABLE CITIES, AND FRIENDS CO-OP
+Research-backed implementation brief — 29 October 2026
+
+STATUS AND USE
+
+This document extends the Living World Expansion Prompt. It is a researched design and implementation prompt for the existing Windows-first Rust + raw WGPU engine. No Axiom source repository was opened or modified for this research, no proposed dependency was integrated, and no game performance was measured. Library capabilities and release information below are retrieved evidence; all Axiom architecture, targets, city layouts and implementation stages are proposals.
+
+Give the complete brief to the coding agent working in the real repository. Begin by inspecting existing ownership of planet coordinates, world generation, chunks, saves, networking, NPCs, navigation, inventory, cargo and UI. Extend sound systems. Preserve existing saves, world edits, content identities, mixed voxel scales, orbital infrastructure, portals, dimensions and prior art direction. Do not introduce Bevy, migrate the engine, or replace the native game with a browser prototype.
+
+Treat this brief, the Living World Expansion Prompt and AXIOM_Science_Spaceflight_And_Planetary_Expansion.txt as one dependency plan. The modest base loop and a narrow existing-system cargo delivery can be proved early. The later orbital milestone here expands that working slice into the broader regional and multiplayer simulation; it does not require postponing all rewarding base play until an entire planet is finished.
+
+Latest controlling addendum: AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt makes advanced erosion and coherent global geography the default, requires actual local interactive physics on every client, and supplies the detailed destruction/admission, PvP and minimal-hosting contract. The earlier client-motion limitation is replaced in sections 7.2 and 7.4 below.
+
+Latest networking/performance addendum: AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt promotes deterministic accepted-command replication for proven complete domains, defines fast loading and bounded replay, researches CPU/GPU voxel-rendering alternatives and makes safe default GPU allocation a release gate. Sections 7.3–7.5 below follow that preference; the reference-worldgen brief retains art, erosion and gameplay authority.
+
+The user wants a world that earns exploration and settlement: credible spherical geography; civilizations with history; attractive streets and comfortable places to live; friendly and mythic inhabitants; factions, caravans and recruits with actual origins; rewarding player infrastructure; and responsive online play with friends. Complexity must produce observable choices and consequences. It must not turn every settlement into an expensive full-resolution simulation or make ordinary play a maintenance job.
+
+DECISION
+
+Use a small native authoritative world model, a spherical strategic graph, bounded civilization history, constrained city generation, and several levels of simulation detail. Selectively reuse libraries and published methods. None of the inspected projects supplies the complete combination of spherical terrain, deterministic history, pleasant voxel cities, live logistics and robust multiplayer.
+
+Recommended direction:
+- Keep the engine's existing spherical partition if it already supports stable ownership and correct neighbors. If a strategic region grid is missing, evaluate h3o; if the existing planet is cube-face based, first evaluate reusing that hierarchy rather than adding a competing one.
+- Adapt Azgaar's settlement, polity and market concepts to the spherical graph. Its globe display is not a spherical world simulator.
+- Use Dwarf Fortress as a civilization and place-history reference, with bounded historical records and deferred detailed city realization. Build cities around traversable routes, useful neighborhoods and strong visual composition.
+- Evaluate analytical and multiscale erosion methods for hydrologically coherent terrain refinement. Keep expensive authoring work out of the gameplay frame loop.
+- Study Veloren's coarse world-simulation separation. Treat its code as GPL-licensed reference unless the project's licensing strategy explicitly accommodates reuse.
+- Keep Canwu as an optional coarse-simulation experiment until an actual Axiom scenario proves its value and costs. The default architecture must not depend on replacing the engine's save and command systems.
+- Keep one player-hosted or user/community-hosted authority for shared outcomes. Every relevant client runs actual local interactive physics, with deterministic commands and verification for validated complete domains, bounded state synchronization for compatibility/recovery, idempotent lasting operations, interest filtering and bounded traffic. Distant noninteracting state may interpolate. Retain a working transport and explicit relay funding; developer-operated world simulation is not the default.
+
+1. THE PLAYER EXPERIENCE THIS ARCHITECTURE MUST PRODUCE
+
+A player studies a globe and sees known rivers, settlements, passes, disputed roads and distant infrastructure. Some information is surveyed, some reported, some uncertain. They choose a base beside a plausible transport route and a recoverable water supply. Repairing a bridge makes a caravan route cheaper. A sheltered inn and storehouse make stopping there useful. A radio mast improves the timeliness of reports. A clinic earns trust and makes recovery practical. An accessible courtyard makes a particular household comfortable enough to move in.
+
+Meanwhile, the nearest city has a comprehensible founding reason, a market connected to surrounding production, streets shaped by its terrain and growth, quiet homes, public squares, working services, and older infrastructure reused in visible ways. Its abandoned districts have causes and surviving evidence. A player can explore, settle, trade, restore, bypass or build their own alternative.
+
+A caravan arriving at the base is the same group that left the city, carrying the same goods. A recruited person retains their identity and possessions. A defeated raiding group reduces a real source's capacity. A delivered orbital crate is transferred through one custody record. Friends can participate in different places without having to simulate every distant inhabitant on every client.
+
+2. SOURCE EVALUATION AND DEPENDENCY CHOICES
+
+The following candidate review distinguishes usable libraries, reference applications and research methods. A documented feature is not a measured integration result. Pin exact versions only after a minimal native build and representative tests.
+
+Research snapshot: 29 October 2026. These are primary-source findings, not independently reproduced benchmarks. Version references describe what the cited project documentation listed during research; pin a verified commit/release before implementation. No inspected candidate already solves realistic spherical terrain, fantasy civilization history, playable cities, live caravans and voxel integration as one mature package.
+
+Recommended direction: retain one native spherical world authority; adapt useful generation ideas; evaluate optional libraries through small reproducible scenarios. A globe renderer, a seeded map and a deterministic live simulation are different capabilities.
+
+COMPARISON
+
+| Candidate | Version/license evidence | Actual capability and limitations | Recommended role |
+| --- | --- | --- | --- |
+| Azgaar Fantasy Map Generator | Current changelog lists 1.156.0, 25 October 2026. MIT. JavaScript/TypeScript. [G1–G3] | Settlements, cultures, states, routes, markets and political editing. Seed reproduction also requires matching dimensions, options and generator version. Its Globe mode explicitly projects a flat map onto a sphere and does not change world data. [G2–G4] | Strong regional and political generation reference. Adapt suitability, graph traversal and economic relationships into Rust; do not use its map texture as spherical topology. |
+| Canwu | canwu-api 0.22.0, published 27 October 2026; Apache-2.0; pre-1.0. [G5–G7] | Native Rust command/event simulation with replay, actor-specific knowledge and optional resource, movement and military extensions. No built-in geography or complete fantasy content. Engine/plugin semantic versions must match saves. [G6–G8] | Evaluate a bounded strategic simulation behind Axiom interfaces. Useful patterns; not an automatic replacement for existing authority, saves or networking. |
+| WorldEngine | Stable version listed as 0.20.0; MIT; Python. Release notes include Python 3.14 support. [G9] | Seeded plate, climate, erosion, hydrology and biome pipeline using rectangular maps. No verified sphere-native topology or comprehensive cross-platform replay guarantee. [G10] | Offline baseline and algorithm reference; no civilization simulation included. |
+| worldengine-rust | New Rust source port; README states MIT. Stable public release contract not verified. [G11] | Ports WorldEngine layers and renderers; uses sibling plate-tectonics-rust. Author documents numerical reference tests and image fixtures, but retains width/height matrices and raster assumptions. [G11–G12] | Experimental native code candidate. Inspect individual algorithms, complete pipeline determinism and dependency packaging before reuse. |
+| Worlds — History Simulator | Repository README 0.3.2.2; MIT code; creator lists CC BY 4.0 assets and status On hold. Unity/C#. [G13–G14] | Population expansion, culture, technology and polities. Creator describes a 2D cell generator with alternative globe visualization. Sphere geometry and deterministic replay suitability remain unverified. | Design reference for historical pressures and social divergence, not a preferred native dependency. |
+| SongsOfFOSS / Songs of the Eons derivatives | Current Calandiel repository: most files MIT, with named directory exceptions. Unreleased 0.3 lineage. [G15–G16] | Lua game code; README explicitly excludes the original world generator. The older SongsOfGPL release describes an unfinished square-tile rewrite. [G17] | Selective ecological/economic inspiration. Do not present the original planetary generator as available reusable code. Inspect file-specific licensing. |
+| Red Blob sphere experiments and mapgen4 | Sphere article originated in 2018; related mapgen4 code is Apache-2.0. [G18–G19] | Actual spherical Delaunay/Voronoi construction is explained, including pole handling and prototype compromises. Separate mapgen4 is a visual wilderness generator and lists sphere output as future work. | Excellent graph/geometry explanations. Implement carefully or use a suitable library; these are not complete civilization engines. |
+| h3o | 0.11.0, 29 August 2026; BSD-3-Clause; pure Rust. [G20] | H3 spherical indexing and geometry. Every resolution includes twelve pentagons; parent/child geometric containment is approximate. It supplies neither terrain nor history generation. [G21] | Strong candidate for a RimWorld-like strategic cell graph when compatible with Axiom's existing geography. |
+| Rust s2 | 0.2.0, 19 August 2026; Apache-2.0. [G22] | Spherical cube-derived hierarchy and cell IDs. Current port documentation explicitly says line and polygon support remains incomplete. [G22–G23] | Consider implemented indexing/cell operations if cube-face subdivision fits the engine. Do not assume the complete C++ S2 API exists. |
+| Dwarf Fortress | Active commercial/free game lineage; no reusable engine source identified in the inspected materials. [G24] | Persistent civilizations and recorded history provide a design benchmark. Historical developer discussion distinguishes aggregate city state from detailed maps. [G25] | Adopt causal-history and simulation-level principles. Do not recreate its entire scope or claim its generator can be embedded. |
+
+WHAT TO TAKE FROM THE STRONGEST REFERENCES
+
+Azgaar's current market model chooses economic centers from settlements and expands their catchments using travel costs. Roads, waterways, terrain and administrative boundaries matter. Its trade display visualizes recorded deals; moving icons are not proof of physical caravans with interruptible journeys and persistent inventories. Axiom must implement that connection explicitly. [G26]
+
+Canwu's knowledge separation fits rumors, radio reports and faction intelligence. Its named/versioned random streams demonstrate how unrelated mechanics can avoid perturbing each other's outcomes. Nevertheless, campaign history, keyed-draw records, snapshots and forks have storage and runtime costs. Use it only for coarse consequential events unless profiling proves broader use practical. Its published examples do not establish large-population voxel-game performance. [G6–G8]
+
+The native WorldEngine port documents meaningful work on numerical compatibility and serialization, which makes it worth inspecting. Its tests do not make it spherical. Its plan records original plate-output portability limitations and order-sensitive raster behavior; verify full-world hashes on the actual supported targets rather than inferring determinism from Rust or a seed field. [G11–G12]
+
+IMPLEMENTATION DECISION
+
+First inspect the existing planetary partition. If it already supplies stable cells, neighbors and surface coordinates, preserve it. Otherwise evaluate h3o for strategic territory cells against S2-style cells for a cube/quadtree design. Do not introduce competing authoritative grids without a demonstrated need.
+
+Place Axiom-owned terrain, climate, settlements and political records above that substrate. Influence, formal ownership, military presence, market access and culture need separate fields. Connect sites through actual travel edges with cost, capacity, seasonality and infrastructure conditions. Generate bounded history and save its resulting state.
+
+Prove one regional network containing settlements, an abandoned site, a market route, a recruited resident, a raiding party and a player-built improvement. The same caravan and cargo must survive abstract travel, local materialization, interception, save/load and resumed travel without duplication.
+
+Only then expand geography, faction count and history depth. Compare generation cost, strategic update cost, memory, save size and real player decisions. A library earns adoption by reducing verified implementation work while meeting those requirements, not by having the broadest feature list.
+
+SOURCE INDEX
+
+[G1] https://github.com/Azgaar/Fantasy-Map-Generator/wiki/Changelog
+[G2] https://github.com/Azgaar/Fantasy-Map-Generator/wiki/URL-parameters
+[G3] https://github.com/Azgaar/Fantasy-Map-Generator/blob/master/LICENSE
+[G4] https://github.com/Azgaar/Fantasy-Map-Generator/blob/master/docs/domain/3d-view.md
+[G5] https://docs.rs/crate/canwu-api/latest
+[G6] https://canwu.org/en/
+[G7] https://canwu.org/en/credits/
+[G8] https://canwu.org/en/developer/persistence/ and https://canwu.org/en/architecture/randomness/
+[G9] https://github.com/Mindwerks/worldengine/releases
+[G10] https://github.com/Mindwerks/worldengine and https://github.com/Mindwerks/worldengine/blob/master/manual/cli.rst
+[G11] https://github.com/ftomassetti/worldengine-rust/blob/main/README.md
+[G12] https://github.com/ftomassetti/worldengine-rust/blob/main/PLAN.md
+[G13] https://github.com/Zematus/Worlds
+[G14] https://drtardigrade.itch.io/worldhistorysim
+[G15] https://github.com/Calandiel/SongsOfFOSS
+[G16] https://github.com/Calandiel/SongsOfFOSS/blob/master/LICENSE
+[G17] https://github.com/songs-of-the-eons/SongsOfGPL
+[G18] https://www.redblobgames.com/x/1842-delaunay-voronoi-sphere/
+[G19] https://github.com/redblobgames/mapgen4/blob/main/README.org
+[G20] https://docs.rs/crate/h3o/latest
+[G21] https://h3geo.org/docs/core-library/overview/ and https://docs.rs/h3o/latest/h3o/
+[G22] https://docs.rs/crate/s2/latest
+[G23] https://s2geometry.io/devguide/s2cell_hierarchy
+[G24] https://www.bay12games.com/dwarves/features.html
+[G25] https://bay12games.com/media/df_talk_13_transcript.html
+[G26] https://github.com/Azgaar/Fantasy-Map-Generator/blob/master/docs/domain/trade_schema.md
+
+3. SPHERICAL GEOGRAPHY AND DETERMINISTIC GENERATION
+
+3.1 One canonical spatial model
+
+Represent each world with stable dimension/body IDs, planet parameters and canonical region identities. The strategic surface graph stores spherical position, area, neighbor edges, elevation/climate fields and stable references to sites. Rendered globe tiles, terrain chunks and local navigation query this model through defined mappings; they are not independent mutable copies of geography.
+
+Choose topology before committing to a library. h3o offers a practical Rust implementation of H3 indexing for strategic cells. H3 includes twelve pentagons at every resolution and uses Earth-related units in some convenience APIs. Use angular measurements or consistently scale distances and areas for Axiom's body radius. Do not assume every cell has six neighbors or equal area. H3's index parentage is exact, while geometric parent-child containment is approximate; never use that approximation as the sole ownership rule for exact voxel edits.
+
+If the existing world uses cube faces and quadtrees successfully, retain that ownership system and derive strategic adjacency from it. S2 offers a relevant cube-based hierarchy, but the current Rust port is not the full C++ S2 feature set. There is no need to force hexagons into local voxel storage. One authoritative region scheme and explicit conversion rules are preferable to two competing ownership systems.
+
+Use the actual surface metric and transport graph. Wrap longitude as a display convention; the date line must not behave like a world boundary. Pole neighborhoods, face seams and pentagons need the same routing, climate and ownership behavior as ordinary cells. Roads crossing a face boundary must remain connected. Sample global continuous fields using a sphere-aware mapping such as normalized 3D position; do not independently tile planar noise on each face without a seam contract.
+
+For large planets and orbital travel, preserve high-precision body/region coordinates and local tangent frames. Render with camera-relative floats. Derive gravity and orientation from the current body/frame. A city spread across a curved surface needs projected patch coordinates and shared edge constraints, not one arbitrary flat plane pretending to cover the globe. Preserve the engine's existing frame conventions where valid.
+
+Sources: https://h3geo.org/docs/core-library/overview/ ; https://h3geo.org/docs/ ; https://docs.rs/crate/h3o/latest ; https://s2geometry.io/devguide/s2cell_hierarchy ; https://docs.rs/crate/s2/latest . The particular Axiom partition decision above remains subject to repository inspection.
+
+3.2 Define exactly what deterministic means
+
+The generation manifest includes WorldSeed, GeneratorVersion, PlanetSpec, ContentManifestHash, named stage versions, coordinate conventions, and fixed algorithm parameters. Record it in saves and handshakes. A seed alone cannot identify a world whose code, content or parameters changed.
+
+Derive independent random streams from stable keys such as world seed, generation stage, region ID, object ID and purpose. Fix the hash/RNG algorithm and serialization. Avoid a shared mutable random stream whose outcome changes when a worker finishes first or a player visits another city. Adding a new fairy decoration must not relocate a capital, reroll a recruit or change a river.
+
+Use stable iteration and tie-breaking. Sort ambiguous graph candidates by explicit scores and stable IDs. Avoid ungoverned hash-map order, unordered parallel floating reductions and race-dependent writes. Quantize authoritative generation fields at defined boundaries where practical. GPU noise can produce visual detail, but do not assume GPU floating point gives identical authoritative collision on every platform.
+
+Generate and persist the compact canonical world through the player-world authority; this does not require a developer-hosted generation service. Compatible clients may reconstruct immutable data and verify hashes. Supply canonical region data or clearly reject incompatible manifests when hashes differ. A client must not proceed with a different bridge, cave or collision surface because its seed appears to match.
+
+Generation replay and live-simulation replay are distinct contracts. Validated command-replicated domains require bit-identical shared simulation across their compatibility profile; state-synchronized fallback domains do not. Neither mode requires whole-world lockstep. Coarse strategic simulation can use deterministic scheduling and integer/fixed-point quantities for replay and debugging.
+
+Persist mutable overlays, inventory, named actors, site changes, event clocks and committed effects. Keep the saved planet-wide macro graph, drainage, site identities, route connections and history authoritative even where detailed terrain has never loaded. Major upgrades use an explicit migration and backup. New local realization rules may apply only in still-ungenerated areas through a versioned compatibility contract that preserves those macro facts and neighboring boundary conditions; a new river or political generator cannot silently replace them. No silent regeneration of a player's house or a city already recorded in the save.
+
+3.3 Generate the planet in causal stages
+
+Coherent global structure, resolved drainage and bounded erosion are required default behavior. Use the detailed pipeline in AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt for analytical/coarse erosion, constrained multiscale refinement, glacial/coastal histories and sphere-boundary contracts. Expensive geological aging belongs to generation/authoring, not live destruction or every rainfall update.
+
+Build a bounded pipeline with independently inspectable outputs:
+
+1. Body specification and topology. Set radius, gravity model, rotation/season rules, sea level, broad terrain intent and region resolution. Existing fantasy and dimension rules remain explicit inputs.
+2. Geological structure. Generate broad uplift, basins, plate-like boundaries, lithology and resource provinces. Use stylized plate histories when useful; full mantle dynamics are unnecessary for playable geology.
+3. Climate fields. Estimate temperature from latitude/elevation and world rules, then prevailing moisture transport, rain shadows and seasonal variation. Make these approximation levels explicit. Avoid full atmospheric fluid simulation merely to decide forest placement.
+4. Drainage. Derive connected basins, spill elevations, lake outlets and river directions. Preserve endorheic basins when intentional. Ensure the directed drainage structure is valid and flow does not reverse because a later decorative-noise pass moved the valley floor.
+5. Land cover and ecological capacity. Place biomes, soils, wetlands, forage and habitat corridors from water, climate and geology. Mythic conditions can add rules such as old grove continuity or compatible magic, but should remain legible in the world.
+6. Settlement suitability. Evaluate water, food, materials, transport, defensibility, climate and existing infrastructure. Distinguish an ancient site's founding reason from its current salvage, pilgrimage, trade or refuge role.
+7. Regional routes. Connect plausible trade partners through mode-specific cost and capacity. Cross rivers at meaningful bridges or ferries, mountains at passes, and orbital infrastructure at real terminals.
+8. Society and history. Produce population pools, cultures, institutions, factions, exchanges and a bounded sequence of consequential events. Use the civilization chapter's constraints.
+9. Cities and local sites. Reserve street skeletons, blocks, service routes, important buildings, megastructure corridors and approach vistas before filling parcels.
+10. Local terrain refinement. Refine landforms, caves, vegetation and voxel materials while preserving upstream/downstream boundary conditions, route elevations, site foundations and geological continuity.
+11. Final validation and persistence. Check graph connectivity, water behavior, local access, identity uniqueness, generation hashes and bounded generation time. Save the manifest and resulting world records.
+
+Every stage should support a debug overlay and a reason query: why this forest, river, settlement, road, ruin or resource exists. The explanation can be a compact record of input factors rather than a verbose generated essay.
+
+Fantasy geography may intentionally break Earth-like rules. Encode that cause: a suspended aquifer, magical heat source, ancient climate machine or dimension-specific field. The exception must have consistent consequences for plants, settlements and travel. Do not hide accidental river discontinuities behind lore.
+
+3.4 Recent terrain research worth testing
+
+The 2024 paper Physically-based analytical erosion for fast terrain generation explores analytical stream-power erosion with accelerated numerical treatment. It is relevant to producing coherent uplift-and-erosion forms without long brute-force aging passes. Evaluate the method on representative patches and boundary constraints before selecting an implementation.
+Primary source: https://www-sop.inria.fr/reves/Basilic/2024/TGSC24/ ; DOI: https://doi.org/10.1111/cgf.15033 .
+
+Terrain Amplification using Multi-Scale Erosion, presented at SIGGRAPH 2024, refines low-resolution terrain into higher-resolution terrain with hydrological consistency, combining erosion and deposition approximations at several scales. The useful Axiom research question is whether refinement can preserve a planet's river and valley structure while adding attractive local terrain within a bounded generation budget.
+Primary source: https://h-schott.github.io/p/mserosion/ ; DOI: https://doi.org/10.1145/3658200 .
+
+Authoring Terrestrial Planets with Diffusion Models (2026) uses globe authoring, a quadsphere representation and river-conditioned generation for planetary elevation and appearance. Its published scope includes exosphere flyovers thousands of kilometers above the surface. That is useful authoring research, not evidence of playable voxel geology, stable item placement or deterministic runtime simulation. Consider it only for optional offline world art; bake and version accepted outputs. Do not place a generative-model inference service in ordinary chunk loading or multiplayer joining.
+Primary institutional record: https://researchportal.ip-paris.fr/en/publications/authoring-terrestrial-planets-with-diffusion-models/ ; DOI: https://doi.org/10.1111/cgf.70390 .
+
+These papers are research candidates, not dependencies already integrated or speed results transferable to Axiom. Source-code availability and licensing must be checked on any chosen implementation. Prefer the simplest method that passes the game's geology, appearance, determinism and streaming tests.
+
+3.5 Compose exploration over the coherent geography
+
+Layer the requested Zelda influences onto the generated landscape through explicit composition rules. Give each region a recognizable terrain and material identity, useful paths, distant landmarks and smaller discoveries. Compose bends, wooded thresholds and ridge approaches that reveal places gradually. Maintain multiple practical approaches: a road suitable for freight, a ridge for surveying, a stream route, a ruined service passage, or player-built alternatives.
+
+Measure what is visible from plausible routes at the native game camera. A megastructure should survive distance rendering and vegetation occlusion well enough to orient the player. Ordinary homes, gardens, farms, repair sites and friendly activity should make intermediate travel worthwhile. Leave quiet terrain between encounters; a dense grid of identical reward icons is not a discovery system.
+
+Roads can guide attention without being exclusive entrances. Climbing, digging, flight, vehicles, magic and construction must preserve the engine's freedom. Interesting obstacles offer choices and consequences, not a mandatory universal key. Regional claims and radio reports are information available to characters, not automatic omniscient map knowledge.
+
+4. CIVILIZATION HISTORY AND CITY CREATION
+
+The next chapter defines how history becomes a place that is attractive and comfortable to navigate. Its design rules are mandatory acceptance criteria alongside deterministic output and performance.
+
+Status: proposed implementation requirements for Axiom/Meridian. This chapter does not claim that any feature has been implemented or benchmarked. Extend verified existing Rust/WGPU systems and the planetary authority established elsewhere in this brief.
+
+4.1 OUTCOME AND RESEARCH BOUNDARY
+
+Generate civilizations whose settlements have understandable founding reasons, attractive streets, useful buildings, and histories visible in the landscape. A city should support exploration, trade, companionship, construction and discovery while leaving the player free to pursue a small home or remote workshop. Its apparent population and scale must not require every resident, room and machine to run at full fidelity.
+
+Bay 12's official features describe a persistent world with civilizations and recorded history [C1]. An older developer interview specifically describes tracking building and profession quantities during history, then creating detailed city maps later to avoid substantial generation and memory costs [C2]. That historical explanation is useful inspiration; it is not a claim about current Dwarf Fortress internals or a prescription to reproduce its entire simulation.
+
+Parish and Mueller describe a pipeline from geographical inputs through roads, lots and buildings, with global goals and local constraints [C3]. Chen and colleagues show controllable street generation using directional fields, terrain information and graph edits [C4]. These are established research references, not current turnkey Rust dependencies. The requirements below are our proposed adaptation for a playable voxel world.
+
+4.2 FOUND CITIES FOR REASONS
+
+Each settlement begins with a site record: location, founding event, water source, food hinterland, economic function, regional connections, usable land, hazards and political relationships. Candidate suitability considers actual terrain and transport costs. A mine town needs a reachable deposit; a port needs navigable water and a useful hinterland; a freight city needs transfer capacity; a sanctuary needs habitat and appropriate access.
+
+Choose compatible combinations rather than maximizing one universal score. A defensible hill town may accept difficult freight access. An orbital outport accepts exposure in exchange for a clear receiving corridor. A river market trades flood risk for transport and fertile ground. These compromises create different places and opportunities.
+
+Keep species, culture, occupation and political affiliation separate. Different body plans influence access and furniture; they do not assign a universal profession. A mixed settlement can share institutions while accommodating particular needs.
+
+Preserve several settlement scales and states: homestead, refuge, village, specialist outpost, market town, inhabited city district, major metropolitan region and abandoned site. Smaller places remain useful after the player encounters a megacity. Some settlements are recently founded; others reuse one or several historical layers. Do not force the same Founder/Engineer/present-day sequence into every neighborhood.
+
+4.3 RUN A BOUNDED, CAUSAL HISTORY
+
+Generate a limited number of consequential epochs and events. Suitable events include foundation, bridge construction, agricultural expansion, a new trade connection, migration, political separation, resource exhaustion, flood, conflict, abandonment and resettlement. Each event requires preconditions and creates explicit changes in population, facilities, ownership, routes or local conditions.
+
+The goal is an interpretable present, not a complete biography of every historical inhabitant. Store population cohorts, productive capacity, important relationships, infrastructure changes and selected named figures. Retain individual identities for people the player can meaningfully encounter or whose actions explain persistent evidence.
+
+A conflict may damage one approach, empty a workshop district and create a refugee community elsewhere. A failed freight economy may leave large warehouses around a much smaller living town. Growth creates street extensions and new neighborhoods; it does not randomly replace the old center.
+
+Bound work by configured epochs, event counts and settlement budgets. Use stable ordering and independently keyed random choices. Stop the history pass at a coherent starting state. Begin live play with the remaining tensions and opportunities, allowing the player to change them.
+
+Avoid brittle boom/bust cascades. Capacity buffers, substitution, alternate routes and migration delays should prevent a missing ingredient from immediately deleting a civilization. Explain significant changes through rumors, records, visible construction or damaged facilities.
+
+4.4 BUILD THE TRANSPORT STRUCTURE BEFORE THE STREET DECORATION
+
+Represent roads, paths, canals, docks, railways, lifts and freight links as connected graphs with geometric paths. Distinguish regional approaches, primary town streets, neighborhood streets, service lanes and pedestrian shortcuts. Their widths, grades, turning space, clearance and crossing types follow their intended users.
+
+First connect essential destinations: gates or approaches, market, water access, freight terminal, major workshops and inhabited districts. Use terrain-aware candidate routes with costs for excessive slope, unstable ground, flooding, excavation and expensive crossings. A short road through an impassable cliff is not a valid connection.
+
+Then add selected loops, secondary routes and local access. A minimum connecting network alone creates excessive chokepoints and repetitive backtracking. Additional connections should have a purpose: bypassing freight traffic, connecting homes to a common, providing emergency access, reaching a dock or supporting an alternative exploration approach.
+
+Use district-specific layout controls. A planned industrial extension may use aligned streets; a hill neighborhood can follow contours; old market routes can converge on a square; a canal district follows banks and crossings. Directional fields are one useful technique [C4], but a complete tensor-field editor is not a prerequisite. Combine a few controllable layout rules with terrain constraints and inspect the resulting graph.
+
+Reserve bridges, retaining walls, stairways, ramps, drainage, utility access and loading areas before filling adjoining parcels. Roads must meet entrances at sensible elevations. Avoid junctions that create sliver blocks, unusable corners or immediate sharp reversals for carts.
+
+Fit local geometry within a bounded tangent patch while retaining authoritative spherical positions and shared boundary connections. Large cities may span several patches; their connections must agree. Longitude wrapping or a cube-face seam cannot terminate a road or divide a neighborhood.
+
+4.5 DERIVE BLOCKS, PARCELS AND BUILDINGS FROM ACCESS
+
+Extract buildable blocks from the street network and protected terrain. Subdivide them according to frontage, depth, slope, intended use and service access. A narrow plot may become a small home or shop; a deep industrial plot needs freight access; irregular remnants can become courtyards, gardens, stairs or open land.
+
+Reject unusable parcels rather than squeezing a building onto every polygon. Keep waterways, maintenance corridors, sightlines and public space. Some vacant plots and gardens make growth and player construction possible.
+
+Assign a building purpose and access plan before selecting its appearance. Homes need living and sleeping space; workshops need work areas and materials; warehouses need handling routes; clinics need recovery space; inns need a usable social room. Produce compact room topology, entrances, circulation and relevant utility connections before detailed decoration.
+
+Generate building families with shared construction logic and meaningful variation. Roof shape follows footprint and climate; upper floors have support; drains discharge somewhere; smoke sources have outlets; stairs actually reach their destination. Vary proportions, frontage arrangements, extensions and repair history rather than merely recoloring the same house.
+
+Deeply model buildings that support interactions. Other structures may be damaged shells, solid infrastructure or later-expandable premises, with an honest appearance and access policy. A convincing door is a promise: make it usable, visibly blocked, or explainably locked. Do not rely on attractive but inaccessible doors throughout the city.
+
+4.6 MAKE NEIGHBORHOODS BEAUTIFUL AT WALKING HEIGHT
+
+Compose streets as sequences of recognizable places: approach, bend, opening, courtyard, bridge, market and view toward a larger landmark. Preserve a few strong vistas while allowing discovery through partial concealment. The entire city should not be simultaneously visible as a noisy wall of detail.
+
+Use Axiom's artistic direction consistently. Give neighborhoods coherent material families, restrained base colors and purposeful accents. Let vegetation, cloth, signage, roof profiles and inhabited lighting carry identity. Translate the requested Minish Cap whimsy through clear silhouettes, grouped pixel detail, expressive props and small lived-in spaces, while retaining the massive industrial history of the larger structures.
+
+Keep streets readable. Pavement, thresholds, steps, curbs and water edges must remain distinguishable in ordinary lighting. Concentrate clutter around actual work and habitation; leave movement and interactions clear. Use warm social spaces and sheltered resting places without turning every district into a collection of glowing particles.
+
+Give each neighborhood an everyday activity and an exploration possibility: a repair court overlooking a sealed service gallery, gardens above an old cistern, a market beside a disused lift, or a tiny inhabited culvert beneath a freight road. Some discoveries are people, views, stories or useful spaces rather than containers of loot.
+
+Compress uninteresting travel while preserving apparent scale. Put common services within a readable precinct; use trams, lifts, boats, mounts and shortcuts to connect distant districts. A beautiful kilometer of repeated walking is still tedious when the player needs one repair.
+
+4.7 SUPPORT REAL INHABITANTS WITHOUT CREATING CHORES
+
+Attach households and occupations to usable facilities. Nearby residents visibly travel, work, rest and socialize. Give them shared defaults and simple agreements rather than requiring meal-by-meal supervision. Suitable housing and available supplies should sustain ordinary routines autonomously; shortages first reduce optional output and produce understandable warnings.
+
+Validate circulation for the actual body plans present. Centaurs need turning space and appropriate ramps; larger residents need headroom and work reach; small residents need usable interaction points; aquatic inhabitants need connected wet access and compatible landings. Provide shared public routes and specialized alternatives rather than forcing every doorway to fit every creature.
+
+Caravans, visitors, potential recruits and raiders originate from the regional simulation. Each has a reason, identity, destination and resources. Recruitment can follow hospitality, employment, rescue, shared projects or migration; it is not a workstation spawning a generic person. Threats need causes and ways to resolve them. Prosperity alone must not trigger endlessly escalating attacks.
+
+Let the player contribute a bridge, inn, garden, workshop, warehouse or outport. Its actual capacity and access change routes and services. A quiet cabin and animal sanctuary remain valid alternatives to governing a city.
+
+4.8 CONSTRUCT RUINS AND REPAIRS FROM THEIR HISTORY
+
+Apply damage to previously coherent buildings and infrastructure. Flooding leaves waterlines, sediment and affected lower rooms. Fire follows combustible material and surviving structure. Abandonment causes selective salvage, vegetation growth and lost maintenance. Avoid uniformly damaging every surface.
+
+Retain enough of the original plan for players to infer purpose. Broken pipes, rail approaches, foundations and loading doors should connect the site to its former network. Present inhabitants reuse the portions that still offer shelter, water, safety or livelihood.
+
+Repair through saved, localized world changes. Partial restoration yields partial benefits. A fixed bridge changes access immediately; a reopened cistern supplies a district; a working lift opens another precinct. Do not require a global quest flag before any improvement matters.
+
+New live construction reserves an appropriate parcel, checks access and materials, and advances through visible stages when relevant. It must respect player ownership, existing homes, protected habitats and edited terrain. No overnight city expansion may silently overwrite the player's workshop.
+
+4.9 KEEP ONE CITY ACROSS SIMULATION LEVELS
+
+Store compact authoritative records for settlements, districts, parcels, buildings, facilities, important inhabitants, inventories and journeys. Their identities persist regardless of rendering distance. Far-away activity uses bounded scheduled updates to capacities, stocks, routes and selected events, without running every local animation or path query.
+
+Materializing a caravan or resident refines the same record into nearby physical entities. Reserve its inventory and participation once; suspend overlapping abstract work. Returning to coarse simulation transfers the resulting state once. Loading two adjacent districts must not duplicate a trader, consignment or household.
+
+Keep public street topology, building footprints, important entrances and logical interiors stable before they affect routing or discovery. Derive the baseline plan from fixed world-generation history and stable district/parcel identities. Apply later growth through recorded events with stable identities, even if their geometry is still deferred. Player visit order cannot become the seed or sequence for choosing streets. Detailed room geometry, furnishings and ambient activity can activate progressively. Deferred materialization saves work; it must not reroll a building when the player opens its door.
+
+Use logical destinations and cached route segments for distant travel. Only nearby movement needs fine collision avoidance. Edited bridges, doors and passages invalidate affected connections and schedules. A change to one house should not recompute every route on the planet.
+
+4.10 BUDGET GENERATION, RENDERING AND CHANGE
+
+Use hierarchical representations: region silhouette, district structures, nearby buildings and interactive interiors. Match important silhouettes across levels and preserve openings that affect visible routes. Avoid a distant city proxy covering newly demolished terrain or hiding a real passage.
+
+Schedule generation in resumable, bounded jobs. Separate pure planning from mesh generation, collision construction and GPU upload. Prefetch along travel routes and visible approaches. Prioritize walkable ground, entrances and safety-critical collision before decorative detail. Never stall a frame to instantiate an entire city.
+
+Reuse compatible geometry and materials, spatially batch draw work, bound dynamic lights and shadow casters, and activate costly animation only where it contributes. Far windows and lamps can use cheaper representations whose appearance remains consistent. Maintain a meaningful nearby population; reducing work must not make the street visibly empty the instant performance becomes difficult.
+
+Derive stable seeds from world version and persistent region/district/parcel identities. Use stable ordering and deterministic tie-breaking. Store plans or validated outputs where algorithm changes could alter existing places. Player edits overlay generated content permanently. Incremental generation touches only affected or still-ungenerated areas; it does not rebuild the city from a new random order.
+
+4.11 VALIDATE A PLACE, NOT JUST ITS GENERATOR
+
+Automated structural checks should detect disconnected required entrances, invalid slopes or clearances, unsupported crossings, overlap, unusable parcels, inaccessible workstations and missing destination links. Check spherical boundaries, save/load, repeated materialization and edited routes. Validate the same-identity transfer for inventories and people.
+
+Use native playthroughs to measure time to reach common services, confusing junctions, repeated walking, useful diversions, recognizable landmarks and alternative approaches. Walk a resident's home-to-work path and drive a real cargo load to its destination. Review ordinary street views, interiors and night scenes, not only aerial screenshots.
+
+Profile representative district entry, busy market activity, a delivery, a route edit and rapid departure. Record generation latency, upload spikes, active agents, path work, memory and CPU/GPU frame times, including tail behavior. Set budgets against the existing game and target hardware; do not claim speed from an empty showcase.
+
+Complete one attractive inhabited precinct, its rural supplier, a ruined neighboring district and a functional freight connection before scaling the pattern across megacities. The acceptance question is concrete: can the player enjoy living here, understand why it exists, change it meaningfully, leave, and return to persistent consequences without a performance collapse?
+
+PRIMARY REFERENCES AND CLAIM BOUNDARIES
+
+[C1] Bay 12 Games, Dwarf Fortress features. Supports persistent generated civilizations and recorded history, not Axiom's implementation details.
+https://www.bay12games.com/dwarves/features.html
+
+[C2] Bay 12 Games, Dwarf Fortress Talk #13, historical developer discussion of cities. Supports the described historical aggregate/deferred-generation approach; proposed future features in the transcript must not be represented as current implementations.
+https://bay12games.com/media/df_talk_13_transcript.html
+
+[C3] Parish and Mueller, Procedural Modeling of Cities, SIGGRAPH 2001. Research paper on geographical inputs, road networks, lots and buildings; an algorithm reference, not a supplied Rust engine.
+https://people.eecs.berkeley.edu/~sequin/CS285/PAPERS/Parish_Muller01.pdf
+
+[C4] Chen, Esch, Wonka, Mueller and Zhang, Interactive Procedural Street Modeling, SIGGRAPH 2008. Author page and paper describe controllable terrain-aware street modeling. Its listed source is historical C++; performance claims do not transfer to Axiom.
+https://www2.cs.uh.edu/~chengu/Publications/streetModeling/street_modeling.html
+https://peterwonka.net/Publications/pdfs/2008.SG.Chen.InteractiveProceduralStreetModeling.pdf
+
+5. INFLUENCE, TRAVEL, ECONOMY, RAIDERS AND RECRUITS
+
+5.1 Factions are institutions with reach
+
+A faction has stable identities for institutions and leadership where relevant, settlements, population pools, controlled facilities, production/consumption profiles, stocks, transport capacity, relations and available forces. Culture, species, profession and political membership are different attributes. A centaur, satyr, human or goblin can live in the same city and disagree about politics. Household agreements, preserve custodians and local councils need not imitate large empires.
+
+Store distinct fields for asserted territory, effective control, patrol response, economic catchment, cultural presence and what each observer knows. A kingdom can claim a valley it no longer patrols; a merchant league can serve towns outside its political border. A radio relay can improve reporting without extending legal ownership. Do not use one colored capital-radius field for every relationship.
+
+Compute reach over mode-specific travel costs. Roads, slopes, water crossings, seasonal conditions, political access and service stops modify edges. Patrol influence depends on available forces, travel time and supply, with limited coverage; it should not teleport a response across an impassable ridge. Keep sparse leading influences per region where adequate, and update affected regions after meaningful changes instead of recomputing all cells against all factions each frame.
+
+For UI, offer separate readable overlays and practical questions: Who claims this land? Who can help or threaten me here? Where can this cart travel? Which market serves this town? How recent is this report? Keep timestamps, source and uncertainty. The default map should remain readable without a stack of every simulation layer.
+
+5.2 Settlements consume, produce and exchange bounded quantities
+
+Begin with a modest set of commodity groups whose differences affect decisions: food, timber, stone, metals, fuel/energy, tools, medical supplies, construction parts and selected local specialties. These groups are economic summaries. Authoritative coarse stocks and manifests still retain item definition, quantity, relevant quality/state and unique identity where required. Materializing a category such as six metals cannot invent its composition. Coarse stock records and physical containers must reconcile losslessly through an explicit ownership contract.
+
+Track opening stock, production, consumption, transfers and losses. Scarcity can change a purchase offer, request or migration decision. Buffer needs and use substitutes so one delayed shipment does not collapse the planet. Avoid a fragile model where every town requires every other town's specialty every day. Record why a market price or demand changed and cap the frequency and magnitude of adjustments for stable play.
+
+Useful services can matter independently of commodity output: accommodation, treatment, repair, ferrying, freight handling, protection, knowledge and festivals. A base can become a comfortable destination without becoming an industrial fortress. Automation and trade remain valid alternatives; ordinary progress should not require recruiting one irreplaceable species or harvesting a mythical person.
+
+5.3 Travel uses one persistent group
+
+A strategic caravan needs origin and destination IDs, a purpose, members or a reserved population allocation, real cargo/custody, transport capacities, route segments, progress, supplies, risk policy, scheduled stops and pending requests. The group does not emerge from an arbitrary encounter roll each time a player approaches a road.
+
+Reserve goods before departure. Loading, departure, arrival and unloading have explicit states and recoverable failures. If a bridge closes, evaluate a detour, waiting, returning or requesting help using the group's actual options. Keep route progress in a stable edge coordinate or waypoint reference so terrain streaming does not reset travel.
+
+Prepare the local representation from the persistent record without advancing it independently. At one authoritative tick boundary, atomically transfer the ownership token and increment the simulation-mode revision; this starts the host-owned detailed simulation mode and stops abstract advancement. It does not grant separate world authority to each viewing client. Reject queued coarse events with the old revision. On exit, atomically summarize the updated position, cargo, health and commitments and resume coarse advancement at the same simulation time under a new revision. Hysteresis prevents repeated transitions when a player stands at a boundary. Two nearby clients share the same transition; they do not independently spawn the caravan.
+
+Do not hide incompatibility between abstract and local movement by teleporting a caravan through a destroyed bridge. Local damage updates strategic route availability, with a conservative state until navigation is rebuilt. Distant combat can use an abstract resolution model, but it must respect the same participants, broad capabilities, supplies and objective. Loading a scene must not reroll the outcome.
+
+5.4 Raiders have sources, goals and limits
+
+Represent raiders as actual groups funded and supplied from a camp, polity, splinter group or another explicit source. Missions have objectives such as theft, rescue, intimidation, seizure or revenge; a route, force allocation, equipment, supply horizon, information and retreat conditions. Scouts, rumors and radio traffic can reveal their movement where communication permits.
+
+Defeating a group consumes real capacity. Destroying, negotiating with, relocating or economically changing the source can produce durable regional safety. Do not refill an infinite army because the player's warehouse became valuable. A pacing system can select feasible events and moderate timing, but it must respect world state and the user's chosen danger settings.
+
+Positive events use the same rigor: traders plan a circuit, refugees seek a credible destination, a festival uses available goods, a repair crew travels to a damaged aqueduct, and a neighbor offers a joint project. This makes infrastructure and friendship as visible as conflict.
+
+5.5 Recruitment draws from people, not rerolled menus
+
+Keep identifiable residents, acquaintances, specialists, caravan members and story-relevant people persistent. Distant unobserved population can remain aggregated by household, profession or cohort until needed. Preassign stable logical slots keyed by world, site, cohort/household and slot identity; later population changes create slots through recorded demographic events. First named realization resolves such a slot and removes its participation from the unallocated aggregate; future visits use the same identity. Never assign the next recruit's traits from a counter advanced by player arrival order. Allocation must preserve counts and cannot manufacture unlimited elite recruits.
+
+Give candidates understandable motivations: safety, interesting work, a connection, fair support, compatible housing, recovery, curiosity or a temporary contract. Show what the player knows and how to learn more. Joining is a versioned agreement and an actual journey, not an instant duplicate appearing at the base. Jobs are not determined exclusively by lineage.
+
+Keep conversation and agreements light enough for co-op. Visiting, travelling together, temporary employment and residency should be distinct. A guest can become a friend without becoming a worker. Accommodation can create delightful architecture: a dryad's courtyard, a centaur-friendly stable-sized doorway, or tiny household access through a wall. See the colony chapter for reservations, permissions and arrival semantics.
+
+5.6 Player construction changes useful connections
+
+Register player-built services against the same world graph:
+- A bridge or road reduces the cost of a traversable edge when its capacity, clearance and condition support the traveler.
+- A storehouse adds real stock and handling capacity, with configurable trade permissions.
+- An inn or sheltered camp supports rest and staging where appropriate.
+- A clinic makes recovery and treatment available and can motivate visits.
+- A workshop supplies repairs and local production.
+- A radio station improves the reach or timeliness of information.
+- A restored outport or orbital receiver adds scheduled cargo transfer through supported infrastructure.
+
+Make the resulting opportunity visible: a new route, a trader's request, shorter delivery forecast, a visitor's comment, a changed map estimate or an arrived household. Do not reward every building only with an invisible percentage bonus. A safe, beautiful home should also be rewarding through routines, familiar faces and spaces the player likes inhabiting.
+
+Orbital and portal travel are typed edges with endpoints, schedules, capacity, jurisdiction, cost and transfer rules. They are not ordinary nearest-neighbor surface roads. Supply forecasts originate in the actual freight schedule. Radio reception exposes an appropriately aged report on the map. Space elevators and moving skyhooks retain their separate physical models and the existing cargo-account contract from the Living World Expansion Prompt.
+
+6. RIMWORLD-INSPIRED COLONY PLAY IN 3D
+
+Bring across understandable work, meaningful inhabitants and logistics through the following contracts. The player remains physically present in a sandbox; residents provide autonomy without taking away direct construction, automation or exploration.
+
+Design status: The contracts and budgets below are proposed Axiom/Meridian designs. They are not claims about existing implementation or descriptions of RimWorld's proprietary internals. RimWorld supplies useful precedents: distinct residents, physical stockpiles, autonomous work, rooms, health, relationships, trade, and caravans. Ludeon's Alpha 16 announcement describes its spherical world and simultaneous maps; the 1.6 announcement discusses planning, recovery camps, room purpose, and bounded computational work [R1–R4].
+
+6.1 BUILD THE DEPENDENCIES IN THE RIGHT ORDER
+
+Implement persistent identities and inventories first; then work goals and reservations; then storage, hauling, production, and usable rooms; then recruitment and health; then caravan continuity; then regional trade, factions, and threats. Mood and empire simulations must not conceal broken logistics.
+
+Carry across eighteen useful feature families: persistent individual residents; work priorities; recoverable reservations; physical stockpiles; production bills; hauling; construction plans and upgrades; purposeful rooms; sensible schedules; skills and learning; health and treatment; modest mood and social memory; hospitality and recruitment; caravans; faction relations and influence; regional supply and trade; raids with objectives; and world-grounded requests. Develop them around player-authored bases and direct exploration.
+
+Keep human-controlled avatars distinct from AI residents. A player controls their avatar; settlement permissions govern who may assign resident work, spend shared stock, recruit, or change policies. Different players may explore, build, and manage simultaneously. AI residents perform delegated work without taking control of a player's character.
+
+6.2 IDENTITIES, INVENTORIES, AND AUTHORITY
+
+Give people, creatures, settlements, caravans, containers, significant items, and work goals stable identifiers. Streaming, recruitment, transport, and save/load change representation or location without creating replacement identities. An NPC cannot remain available for recruitment at their former village after joining a caravan elsewhere.
+
+Use server-authoritative transactions for ownership and inventory changes. A successful transfer records source, destination, quantities, relevant revisions, and a transaction identifier. Duplicate requests return the previous result. Split stacks retain provenance sufficient to prevent duplicate consumption. Displayed inventory, physical cargo, crafting inputs, and orbital freight must reference the same state.
+
+Preserve generated baseline data separately from persistent changes. Deterministic generation establishes the original people, places, and resources; it must not regenerate spent stock, dead individuals, or destroyed camps when a player returns. Keep generator versions in saves. The order in which friends discover regions must not redefine their original populations.
+
+6.3 GOALS, PRIORITIES, AND RESERVATIONS
+
+Let players request outcomes such as repairing a radio mast or supplying a clinic. A goal owns its prerequisites: inspect, acquire permitted materials, find access, transport, perform work, place leftovers, and report completion. Temporary interruptions should preserve useful progress.
+
+A goal record needs identity, revision, issuer, target, desired outcome, eligibility, permissions, acceptable inputs, priority, assigned actor, current progress, blocked reason, cancellation policy, and retry conditions. Use simple occupation presets as defaults; expose detailed priorities only when useful. Emergency work can interrupt ordinary work through explicit rules.
+
+Reserve quantities, tools, interaction positions, and destination capacity for the next actionable work package. Avoid reserving an entire megastructure's materials for days. Each reservation has an owner and renewal or expiry policy. Destruction, changed permissions, unreachable access, cancellation, death, or departure invalidates affected reservations and triggers bounded replanning.
+
+Two workers cannot consume the same stack or occupy the same narrow work position. Retries cannot complete a recipe twice. Workers must release impossible tasks rather than repeatedly selecting them. Prefer batchable nearby work and age waiting requests so distant projects cannot starve forever.
+
+Explain inactivity directly: missing connectors, full shelf, unsafe access, unavailable crane, forbidden stockpile, or travelling specialist. A reliable blocked-reason display is part of the system, not optional debugging polish.
+
+6.4 STORAGE, HAULING, AND PRODUCTION
+
+Stockpiles and containers need filters, access permissions, priorities, capacity, and optional minimum/maximum targets. Goods remain physically represented or attached to authoritative container records. Regional totals are summaries, not a second source of inventory truth. Hauling consumes actual route time and carrying capacity.
+
+Support production orders to make a quantity, maintain a target stock, or repeat under bounded conditions. Define acceptable ingredient substitutions, tool and skill requirements, permitted source storage, output destinations, and suspension conditions. Reserve output capacity before starting a process that cannot safely discard its result.
+
+Use sensible batching and replenishment thresholds. Do not move one meal across a city whenever somebody eats. Allow shelves near workstations, carts, pack animals, pipes, conveyors, and player-designed automation to compete or cooperate. Ordinary materials must have multiple acquisition routes; skilled residents are useful without becoming mandatory progression keys.
+
+Construction plans must include reachability and dependencies. Workers should not build themselves into inaccessible cavities. Provide layer inspection, material estimates, partial completion, and direct upgrades of existing structures. Preserve necessary access while replacing a wall, stair, door, or conduit, or clearly display why a temporary alternative is required.
+
+6.5 ROOMS, ROUTINES, HEALTH, AND SOCIAL LIFE
+
+Detect usable spaces using enclosure, access, shelter, climate, furnishings, and practical circulation. A room does not succeed because enough furniture objects exist inside an inaccessible box. Body plans affect clearance: centaurs need turning space, large inhabitants need suitable openings, and tiny households need safe routes.
+
+Make architecture useful through actual activity. Residents eat at accessible tables, sleep in assigned or suitable places, gather in common areas, treat patients in clinics, and work near tools and supplies. Workshops benefit from protection, light, and organization. Comfortable ordinary homes should work well; luxury is optional.
+
+Default schedules should maintain a functioning settlement without meal-by-meal supervision. Support rest, work, social activity, emergencies, and local customs. Food and supplies remain real resources, but a competent, adequately stocked settlement should handle routine care autonomously. Avoid compulsory chore hunger or forced waiting as the price of residency.
+
+Start health with a small set of meaningful capabilities: locomotion, manipulation, perception, pain, fatigue, and major injury or illness states. Demonstrate rescue, transport, treatment, recuperation, and return to work before adding detailed organ simulations. Treatment has actual inputs and outcomes, with readable prospects for recovery.
+
+Start social simulation with comfort, security, belonging, purpose, and a small event-memory system. Residents remember meaningful help, conflict, shared experiences, and broken agreements. Dissatisfaction first produces visible requests or changed behavior. Do not routinely convert a missing chair into destructive violence.
+
+Give residents activities appropriate to the world: satyr music, shared meals, gardens, fairy visits, welcoming a caravan, or celebrating a repaired station. Relationships should make places memorable without evaluating every possible pair of inhabitants every tick. Skills can improve through practice and teaching.
+
+6.6 HOSPITALITY AND RECRUITMENT
+
+Use a persistent sequence: known individual, contact, offer, acceptance, arrival arrangement, arrival, residency or employment, and renewal or departure. Distinguish guests, refugees, hired specialists, travelling companions, and permanent members. Rescue does not silently make someone property.
+
+An agreement records expected activities, optional emergency responsibilities, compensation or support where applicable, housing, environmental accommodations, inventory permissions, travel arrangements, and departure conditions. Display the terms concisely. Useful recruitment should be possible from a modest settlement without bureaucratic micromanagement.
+
+Two players recruiting the same person operate on one versioned offer. Acceptance changes the individual's authoritative commitment. Their possessions and relationships move with them. Recruitment can affect an existing affiliation according to visible rules, but hiring an ordinary traveller should not inexplicably provoke species-wide hostility.
+
+Preserve autonomy and recovery. A blocked arrival can reroute, shelter, or request help. A dissatisfied resident can ask for improvements, renegotiate, or leave. Different lineages share professions; physiological accommodations do not dictate someone's occupation or moral alignment.
+
+6.7 CARAVANS ARE PERSISTENT GROUPS
+
+A caravan keeps one identity across strategic travel and detailed local simulation. Record members, purpose, authority, origin, destination, route, cargo, transport capacities, current segment and progress, supplies, planned stops, risk policy, and event history. It is not a map icon that spawns unrelated NPCs when approached.
+
+Formation shows ready, missing, reserved, and overloaded cargo. Residents physically load actual containers. Players can revise, cancel, or depart with a clearly shown reduced manifest. A departure commits the actual assembled group, not an optimistic estimate.
+
+Travel uses the same geographic connections as the spherical world: roads, passes, bridges, ferries, portals, terminals, and orbital transfers. Terrain and available transport determine costs. A destroyed bridge causes a legible detour, wait, return, negotiation, or request for assistance.
+
+When players approach, materialize the same people and cargo at positions consistent with route progress. Local losses, injuries, trades, and delays persist when the group becomes abstract again. Avoid jumps to the destination merely because nobody is watching.
+
+Trouble should be recoverable. Caravans can retreat, establish camps, repair transport, redistribute loads, or request help where communications permit. Their selected policy handles immediate danger while players elsewhere continue playing. Arrival transfers goods through the same inventory system and releases obsolete reservations.
+
+6.8 FACTIONS, TRADE, AND RAIDS
+
+Separate political claims, effective control, patrol coverage, economic reach, and player knowledge. Influence follows transport, terrain, settlement capacity, alliances, and supply access. A coloured circle around a capital is insufficient. Unknown or outdated information remains marked as such on the player's map.
+
+Give factions stable settlements, bounded populations, production and consumption profiles, stockpiles, transport capacity, relations, and deployable forces. Regional updates may aggregate ordinary individuals, but named people and committed parties retain identity. Caravans and deployments draw from these resources.
+
+Raids have origins, routes, objectives, supplies, and retreat conditions. Theft, intimidation, rescue, sabotage, and territorial conflict should produce different behavior. Defeating or negotiating with a real source can create lasting safety. Avoid infinite replacement armies and automatic punishment for accumulating wealth.
+
+Positive faction activity matters equally: markets, migration, shared works, rescue parties, festivals, and repair contracts. A request director surfaces opportunities grounded in these activities through radios, visitors, conversations, and maps. It must not falsify a supply delivery or invent an army merely to maintain tension.
+
+6.9 CO-OP TIME, SAVES, AND PERFORMANCE
+
+Inventory screens, dialogue, building plans, and ordinary incidents do not globally pause online play. Any global pause or speed change follows the server's agreed policy, such as a vote among active players. Disconnecting does not turn an avatar into compulsory AI labour.
+
+Default friend co-op stops world time when the session stops or all players leave. A persistent-server mode uses an explicit saved policy. Do not silently advance days of starvation, destroyed bases, or missed freight windows from wall-clock time. Save simulation time, pending events, work goals, reservations, cargo progress, and committed transactions.
+
+Profile staged fixtures before increasing scale. First demonstrate two players, ten residents, shared inventory, reconnection, storage, hauling, and one production chain. Then connect two settlements by a real caravan and introduce route disruption. Add health, recruitment, faction supply, and one recoverable raid before expanding political scope.
+
+A later proposed fixture is four players, two active settlements, forty residents, eighty nearby animals, several caravans, and a larger abstract regional population. These are test targets, not measured capacity. Stagger ordinary decisions, interrupt for urgent events, and advance distant work through scheduled updates. Measure simulation time, pathfinding work, memory, network traffic, and queue age. Bounded cost must not hide permanent starvation of deferred jobs.
+
+PRIMARY REFERENCES
+
+[R1] Official RimWorld feature overview: https://rimworldgame.com/
+[R2] Ludeon, Alpha 16 — Wanderlust: https://ludeon.com/blog/2016/12/rimworld-alpha-16-wanderlust-released/
+[R3] Ludeon, Alpha 1 stockpiling design, archive: https://ludeon.com/blog/page/20/
+[R4] Ludeon, Odyssey and update 1.6 announcement: https://ludeon.com/blog/2025/06/announcing-odyssey-and-update-1-6/
+[R5] Ludeon, Odyssey and 1.6 release: https://ludeon.com/blog/2025/07/the-rimworld-odyssey-expansion-is-out-now/
+
+7. SIMPLE FRIENDS MULTIPLAYER WITH CORRECT PERSISTENT STATE
+
+Research snapshot: 29 October 2026. Proposed architecture; not implemented or benchmarked in Axiom.
+
+7.1 CHOOSE ONE TRANSPORT WITHOUT REPLACING THE ENGINE
+
+Preserve the Windows-first Rust + raw WGPU engine. Inspect the repository's existing multiplayer, connection, serialization, persistence, and physics code before choosing dependencies. Extend a working implementation when it meets the requirements below. A fashionable library is not sufficient reason to replace it.
+
+If no suitable connectivity layer exists, evaluate iroh first for native, non-Steam friends sessions. It provides authenticated endpoint identities, direct QUIC connections, NAT traversal, relay fallback, streams, and unreliable datagrams. This can support a straightforward host-world, share-invite, join-world flow without writing a custom NAT traversal stack. It supplies connectivity, not NPC replication, prediction, inventory transactions, or world persistence.
+
+There is a material qualification: the official iroh relay change describes a WebSocket relay path carried over TCP, while some crate prose still describes the older raw-TCP upgrade. Verify the pinned implementation. Loss on a TCP-carried relay can introduce head-of-line delay even for application datagrams, so require a forced-relay impairment benchmark. Current production guidance recommends against production dependence on public relays; availability, rate limits, cost, credentials and discovery require explicit deployment choices. Player hosting removes mandatory developer world-simulation cost, not all connectivity costs.
+
+If Steam integration is already part of the product, evaluate SteamNetworkingSockets and Steam Datagram Relay through a maintained compatible Rust binding. The standalone open-source GameNetworkingSockets library does not automatically include Steam authentication, signaling, or SDR access. Its documentation identifies additional services required for standalone P2P operation.
+
+For an existing public server or working NAT/relay solution, Renet, Renet2, or Quinn may require less integration. Renet and Renet2 provide game-oriented message channels; Quinn provides QUIC streams/datagrams. Naia is an alternative when adopting its entity-replication schema would reduce more work than it introduces. Its core is ECS-agnostic. Do not adopt Lightyear or bevy_replicon by introducing Bevy: their supported game integration is Bevy-based, even where transport modules are replaceable.
+
+Retrieved version evidence, not Axiom validation:
+- Renet core 2.0.0: its release notes explicitly remove direct Bevy dependencies. MIT/Apache-2.0.
+- Renet2 1.0.0, published 16 October 2026: separate fork, optional Bevy integration. MIT/Apache-2.0. Renet 2.0 and Renet2 1.0 are different projects.
+- iroh 1.4.1, published 21 October 2026. MIT/Apache-2.0.
+- Quinn main crate 0.11.12 in retrieved releases; related crates have independent versions. MIT/Apache-2.0.
+- Naia client metadata 0.25.0, published 12 May 2026; retrieved README examples still use 0.24. Verify matched crate versions and version-specific examples. MIT/Apache-2.0.
+
+Keep one transport behind a small Axiom interface. Do not stack multiple reliability protocols over one reliable QUIC stream. Select and pin compatible releases after compiling a minimal native integration and testing real joining, direct traffic, and fallback traffic.
+
+7.2 ONE AUTHORITATIVE WORLD
+
+Use an authoritative listen server for friends. Run the same simulation headlessly for an optional dedicated server. A network connection described as peer-to-peer does not require peer-to-peer world authority: clients connect to the chosen host, which owns the world.
+
+Clients send inputs and intentions and MUST run the actual local solver for their relevant interacting bodies: characters, nearby dynamic actors, vehicles, moving platforms, manipulated objects, supported projectiles and consequential fragments. The host validates inputs, reach, permissions, inventory, prices, capacity, cooldowns, targets and revisions; it resolves shared outcomes, AI intentions, colony work, terrain edits, freight custody and lasting state. Clients predict and reconcile physical interaction but cannot unilaterally declare an accepted hit, acquired item or completed trade. The host executes the union of active authoritative domains; local client simulation does not automatically eliminate that host workload.
+
+Single-player and the local host player use the same command-validation path as remote players. An in-process path can avoid serialization, but it must preserve authority and operation semantics. Extract networking concerns from rendering without undertaking an unrelated engine rewrite.
+
+The initial topology should support one world authority and a small measured group. Do not add distributed consensus, player meshes, or seamless host migration to the first implementation. A listen host leaving should save and close the session clearly. Reconnecting to that world later must work.
+
+Invites identify the intended endpoint and world session and provide revocable joining authorization. Cryptographic endpoint identity is not itself permission to enter a world. Use a simple paste/deep-link flow, with a readable error for expired invitations, incompatible content, unreachable hosts, or denied admission.
+
+7.3 DEFINE DETERMINISTIC GENERATION AND LIVE SIMULATION CONTRACTS
+
+Generation and live simulation have distinct manifests and tests. Deterministic spherical generation specifies seed, content/generator version, coordinates, stable region/object IDs, numerical rules and inputs to every stage. World creation remains independent of who visits first. Persist canonical global fields and accepted edits so loading does not reroll resources, histories or cargo or repeat expensive erosion.
+
+Promote deterministic live gameplay and physics to an explicit required capability for the supported domain envelope. Peers with matching complete baselines, manifests and accepted command streams must reproduce shared state exactly. Verify across supported machines, worker counts, restore/replay and topology changes before claiming the bandwidth saving. Do not assume language, floats, GPU execution, seeded randomness or a physics feature flag alone makes the application deterministic.
+
+Compatible clients may regenerate immutable world facts and verify hashes, or reuse cached canonical data when faster. Mismatches use authoritative data or a clear compatibility result. Keep old save-generation versions unless deliberately migrating. Render meshes and cosmetic effects need not be bit-identical and cannot determine authoritative collision.
+
+Do not require every client to simulate every planet or introduce a global wait-for-all barrier. Define complete canonical physics domains on both authority and subscribing clients; arbitrary subsets of a huge host solver can differ in hidden state and ordering. Domain merges/splits, boundary events and frame transitions have epoch, revision and tick contracts. Private strategic decisions remain authority-owned and enter relevant simulation as permitted external events.
+
+7.4 ACTUAL LOCAL PHYSICS, COMMAND REPLICATION AND BOUNDED REPAIR
+
+Each relevant client runs actual physics for its character, shared bodies, vehicles, occupants, cargo, constraints, contacts, projectiles and consequential fragments within the supported complete domain. Use matching canonical geometry, solver state, stable insertion/order rules, controller inputs and numerical configuration. The host remains authority for validation, shared outcomes and durable transactions.
+
+Healthy deterministic domains receive accepted commands, external events, membership/boundary changes, completeness watermarks and digests instead of routine per-body pose streams. The host sequences inputs without waiting for every client's acknowledgment. Missing continuous controls have bounded hold/neutral behavior; shots, item use, casts and trades are not fabricated from previous input. Packet timing and local worker completion cannot alter shared activation ticks.
+
+Keep state synchronization as a documented mode for unsupported/open domains and as a recovery mechanism. It still runs real local physics. Mode transitions happen before cross-domain coupling requires a different authoritative context. Using this mode does not make an oversized physical scene cheap; admission, contact/fragment budgets and a shared supported physical model remain necessary.
+
+Number and acknowledge commands, retain bounded histories and cap prediction/replay work. A full checkpoint ties tick, frame, attachments, membership, geometry/topology, bodies, joints, solver internals, RNG and controller state together. Transforms and velocities alone are not a guaranteed deterministic restore. If replay cannot converge within budgets, install a newer coherent baseline or keep that client in explicit bounded recovery while the session continues. Do not replay the world from creation or silently skip accepted outcomes.
+
+Stable effect IDs separate provisional feedback from committed inventory, damage and cargo. Smooth presentation separately from physical correction. Installed collision and minimal accurate visuals agree per peer; network delay does not imply instantaneous host-latest geometry or a wait-for-all-GPUs barrier. The host uses a declared bounded historical body-and-cover policy for competitive hits. Digests diagnose divergence, not malicious clients; a malicious listen host remains privileged.
+
+Reserve critical destruction consequences before irreversible cast/projectile activation and use authority-defined effect/stage ticks. Optional delegation remains a later separate design for trusted isolated domains with fenced epochs; it is not required for deterministic local execution. AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt supplies current primary sources, protocol requirements, full-session byte accounting, loading and CPU/GPU acceptance gates.
+
+7.5 BOUNDED TRAFFIC LANES AND SCHEDULING
+
+Implement explicit delivery classes with per-peer byte budgets, queue limits, priority, expiry where applicable, and cancellation:
+
+A. Session/control: small reliable handshake, permissions, protocol agreement, resume negotiation, and disconnect reasons. Keep promptly serviced.
+
+B. Continuous input: unreliable sequenced datagrams with recent input redundancy and acknowledgements. New useful input supersedes obsolete queued state. Discrete item-consuming actions belong in the durable-operation lane instead.
+
+C. Accepted command frames and verification: authoritative tick, canonical order, domain/epoch, completeness watermark, relevant external events and bounded digests. A lost frame cannot silently become an empty tick. Bound retransmission/history and keep a checkpoint repair path.
+
+C2. Entity state in compatibility/recovery mode: unreliable sequenced snapshots prioritized by interaction relevance. Include authoritative tick, entity generation, reference-frame identity, and baseline information. Use acknowledged baselines and a recovery path when they are missing. A lost fragment must not prevent every subsequent update from being understood indefinitely.
+
+D. Durable operations: reliable requests and receipts for crafting, trading, hiring, cargo transfers, construction, and other lasting actions. Each has a stable logical operation identity.
+
+E. World edits: reliable application with region/entity revisions. Preserve required ordering within affected state, while allowing unrelated regions to progress independently. Represent a multi-region atomic operation explicitly instead of accidentally relying on socket ordering.
+
+F. Bulk/bootstrap: reliable chunked terrain, content, and snapshot transfer with hashes, bounded concurrency, resume support, and cancellation. Limit background bandwidth; elevate only data required for immediate safe interaction.
+
+G. Strategic summaries: low-frequency subscribed map, empire, settlement, colony, and logistics updates. A distant faction panel does not need every worker's detailed simulation state.
+
+Never put all traffic into one giant reliable FIFO. Independent QUIC streams can separate ordering dependencies, but still share bandwidth and congestion. An application scheduler remains necessary. Respect the transport's current datagram size limit; do not assume a fixed oversized packet survives every path.
+
+For snapshots, prefer bounded newest-useful-state behavior over waiting indefinitely for queue space. Iroh documents that send_datagram_wait prioritizes older queued data by waiting for room, whereas its nonwaiting datagram operation may discard older queued datagrams. Choose semantics deliberately. Keep important action receipts on a reliable path.
+
+7.6 DURABLE EFFECTS, CRASHES, AND RECEIPTS
+
+A transport acknowledgement does not prove that the remote application processed or saved an action. Do not promise exactly-once network delivery. Implement one durable gameplay effect for a repeated logical operation.
+
+Attach an OperationId, authenticated actor identity, world identity, and relevant expected revision. The operation identity must survive transport reconnects. Validate the operation and record its mutation and result atomically. A source-to-destination inventory transfer must commit both sides together, including updated quantities, ownership, and the receipt or deduplication record.
+
+Define the persistence boundary explicitly. A committed receipt means the operation is recoverable after the supported crash scenario. Use the existing storage system's transactional or journal mechanism. If group commits are used for performance, distinguish provisional acceptance from durable commitment; do not display an unsaved operation as safely stored. Movement snapshots need not force a disk flush, but inventory and other lasting transactions require documented durability semantics.
+
+On retry, verify the authenticated actor/world scope and look up the recorded outcome before treating the old expected revision as a fresh conflict. Return that outcome rather than applying the action again. Retain result records or a safe rejection mechanism for expired operation ranges. Pruning a deduplication cache must not make an old request executable again. After a crash, replay complete committed records and ignore incomplete records according to the chosen journal format.
+
+At minimum, test disconnect immediately before application, after application but before receipt delivery, after durable commit, and during restart recovery. Receiving the same request twice must neither duplicate cargo nor charge the player twice. A rejected request must preserve the original inventory and expose a useful reason.
+
+7.7 REGIONS, PORTALS, VEHICLES, AND PLANETARY FRAMES
+
+Represent location with a body/dimension identity and an appropriate high-precision world frame, then local region coordinates. Rendering can use camera-relative floats. Do not send low-precision absolute planetary coordinates and expect tiny doorways or moving decks to remain stable.
+
+Replicate attachment relationships and vehicle-relative poses for passengers, cargo, and mounted objects. A frame transition has an authoritative tick and revision. Portal travel and boarding cannot temporarily create two authoritative copies of the same actor or cargo. Do not interpolate directly between unrelated planetary frames; apply the transition, restore the relevant attachment/collision context, and reconcile pending input deliberately.
+
+Interest management includes nearby regions, controlled entities, active interactions, vehicles, relevant owned infrastructure, and bounded portal destination views. Seeing a portal should not subscribe a client recursively to every connected world. Put limits on recursion, bandwidth, and remote simulation detail while preserving the visible interaction contract.
+
+Use the union of relevant active regions across players. Share authoritative work where their interests overlap. Distant colonies, empires, caravan routes, and orbital facilities use coarse simulation records and scheduled events. They do not all need fully animated inhabitants.
+
+Entering a region should install a consistent baseline and then apply subsequent revisions. Bound join/spawn bursts. Keep collision safety explicit while data arrives; missing collision cannot become a convenient tunnel through a fortress. Existing verified proxies can help, but camera LOD must never change authoritative terrain solidity.
+
+7.8 RECONNECT, HOST EXIT, AND OPERATIONAL BEHAVIOR
+
+A transient connection loss retains player identity and durable operation history for a defined reconnect window. Resume with the world's current epoch, accepted operations, inventory revisions, attachment state, and required regional baselines. A reconnect is not a new character spawn unless the session rules explicitly require one.
+
+Do not trust a client's old inventory snapshot as restoration authority. Ask for missing receipts or authoritative resynchronization. In-flight transactions have explicit pending, committed, rejected, or unknown-to-client status.
+
+On clean host exit, stop accepting new lasting operations, resolve or reject pending work, persist the required state, and close the session with a readable reason. On abrupt failure, recover the last documented durable state. Provide a restart/rejoin path; leave seamless host migration for a separately justified milestone.
+
+Keep network I/O, large serialization, compression, terrain generation, and disk work off the simulation's blocking path through bounded tasks/queues. Never hold a central world lock while uploading chunks. Under overload, reduce distant detail and background transfer before starving local input or action receipts.
+
+7.9 ACCEPTANCE GATE AND MEASUREMENTS
+
+Start with a representative four-player scenario containing active building, a shared inventory, NPC jobs, terrain edits, moving cargo, and players in different regions. Record actual hardware, world seed, content version, transport, and direct/relay route. This is an initial target, not a universal capacity claim.
+
+Exercise latency, jitter, reordering, duplication, bandwidth restriction, burst loss, and temporary outages. Test both ordinary NAT connectivity and forced relay. While one player joins and downloads terrain, another must still move, build, trade, and receive inventory results.
+
+Include simultaneous requests for the last shared item; stale revisions; missing snapshot baselines; server restart during a transaction; reconnect while aboard a moving vehicle; portal transit during interruption; content-version mismatch; bounded handling of oversized messages and excessive requests; and a clean host shutdown.
+
+Measure server tick time and backlog, per-lane queue age/bytes, bandwidth per peer, packet loss, correction magnitude, visible remote-state age, reconnect convergence time, join time, and persistence latency. Report percentiles and worst observed stalls alongside averages. Attribute bottlenecks to simulation, encoding, transport, disk, or rendering before proposing changes.
+
+The gate passes when lasting state remains correct, queues remain bounded, reconnection converges without duplication, and responsiveness meets explicit measured targets under stated conditions. Do not substitute 'robust', 'state of the art', 'zero lag', or 'flawless' for evidence.
+
+PRIMARY SOURCE NOTES
+
+Current library metadata and features, retrieved 29 October 2026:
+Renet releases: https://github.com/lucaspoffo/renet/releases
+Renet2: https://docs.rs/crate/renet2/latest
+Iroh crate/version: https://docs.rs/crate/iroh/latest
+Iroh relay/connectivity documentation: https://docs.rs/iroh/latest/iroh/
+Iroh datagram and connection semantics: https://docs.rs/iroh/latest/iroh/endpoint/struct.Connection.html
+Quinn: https://github.com/quinn-rs/quinn
+Naia core and adapters: https://github.com/naia-lib/naia
+Standalone GameNetworkingSockets P2P prerequisites: https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/README_P2P.md
+Steam networking services: https://partner.steamgames.com/doc/features/multiplayer/networking
+Lightyear: https://github.com/cBournhonesque/lightyear
+Replicon: https://github.com/simgine/bevy_replicon
+Original-author background on state synchronization and visual correction: https://gafferongames.com/post/state_synchronization/
+Rapier determinism conditions: https://rapier.rs/docs/user_guides/rust/determinism/
+Jolt rollback/property/topology limits: https://github.com/jrouwe/JoltPhysics/blob/master/Docs/Architecture.md
+Iroh production guidance: https://docs.iroh.computer/add-a-relay
+Iroh relay protocol change: https://www.iroh.computer/blog/iroh-0-91-0-the-last-relay-break
+Iroh prices and current limits: https://www.iroh.computer/pricing
+
+All Axiom-specific architecture, test gates, and tradeoffs above are proposals. None of these sources demonstrates Axiom's actual performance or implementation status.
+
+8. PERFORMANCE, IMPLEMENTATION ORDER AND ACCEPTANCE
+
+8.1 Three levels of simulation, one world
+
+Planet level stores immutable or slowly changing geography, settlement summaries, population cohorts, territorial/economic fields and route graphs. Advance meaningful events and periodic production batches. Do not visit every actor each frame or recalculate every border on every stock change.
+
+Regional level stores travelling groups, districts, service networks, selected named people and scheduled commitments. Advance route segments and arrivals with bounded time steps/events, re-evaluating when relevant conditions change. Keep ownership, quantities and history authoritative even when the scene is absent.
+
+Local level runs detailed NPC actions, collisions, physical inventories, editable voxels and visible animation within the union of player-relevant areas. The same underlying IDs connect all levels. Render distance, simulation relevance and server authority are different decisions: a skyline can be visible without animating all its residents, while an unseen machine needed by an active task may still need simulation.
+
+Veloren's rtsim documentation is a useful reference for separating an abstract world model from fine gameplay. Its documented list includes both existing and intended responsibilities, so do not cite it as proof that every listed economic or political system is complete. Its GPL-3.0-or-later license also makes it a deliberate code-reuse choice, not a casual dependency for an unspecified project license.
+Sources: https://docs.veloren.net/veloren_rtsim/index.html ; https://gitlab.com/veloren/veloren/-/blob/master/LICENSE .
+
+Design the transition contract before adding scale. In particular, quantities cannot exist simultaneously in a city's coarse stock, a caravan manifest and a physical crate. Summaries may reference the same assets but must not become independent spendable balances. Preserve time, progress, ownership, reservations and revisions through every activation change.
+
+8.2 Budget the expensive work explicitly
+
+Use bounded work queues for city planning, terrain refinement, meshing, collision construction, navigation rebuilds, saving, serialization and transfer. Give jobs priority, age, cost estimates and cancellation. A player changing direction should not leave dozens of obsolete terrain tasks blocking their new destination. Apply completed pure calculations at safe simulation boundaries using version checks; stale results cannot overwrite newer edits.
+
+Do not hold a central world lock during network or disk I/O. Minimize allocation churn in hot paths. Use compact data for frequently scanned strategic fields and stable indexed handles for referenced records. A broad ECS migration is not a prerequisite. Batch compatible work and use worker threads where ownership is clear; measure synchronization overhead rather than assuming more threads guarantee speed.
+
+Navigation needs hierarchy. Route between regions and district entrances using stable graphs; use detailed local movement only where relevant. Cache paths against the revisions of their affected connections. Rebuild only dirty rooms, passages and terrain areas after edits. Limit synchronous searches, share route work when actors have compatible destinations and clearance, and keep separate path capabilities for different bodies and vehicles. A narrow invalid doorway should produce a reason and an alternative, not repeated full-city searches.
+
+Important responses such as collision, damage, immediate safety and explicit player interactions use the appropriate fixed simulation contract. Ordinary high-level NPC choices can often be staggered at a lower frequency; begin by profiling a few decisions per second, with event-driven interruption where needed. This is a tuning proposal, not a universal AI tick rate. Coarse production, diplomacy and offscreen travel do not require frame-rate decisions.
+
+For visuals, bound dynamic lighting, shadows, particles, skeletal animation and skinning work. Reuse materials and compatible meshes, cull spatially, preserve landmark silhouettes through LOD, and separate decorative detail from stable collision. Use native captures to check distant city appearance and pixel-art texture mip behavior. Performance must not be purchased through broken collision, obvious spawn-in, missing landmarks or an empty-looking nearby street.
+
+8.3 Set measured targets before claiming speed
+
+Record a native baseline on declared target hardware, resolution, content revision and settings. Capture CPU and GPU frame-time distributions, server tick distributions, memory, main-thread stalls and streaming latency before expanding the world. Identify existing lighting, LOD, collision or generation problems that would make new population tests misleading.
+
+Frame budgets follow the actual target: 120 rendered frames per second gives about 8.33 milliseconds per frame; 60 gives about 16.67. These are arithmetic budgets, not measured Axiom performance. Decide which machine and scene must meet which target, reserve headroom, and report tail times rather than quoting an uncapped empty-world average. Keep simulation and rendering budgets separate.
+
+For server simulation, begin with the existing fixed tick and require substantial headroom below its interval under the representative fixture. A proposed initial gate is p99 simulation work below 80 percent of the tick interval, with no accumulating tick backlog; adjust the target through measured baseline decisions. A small mean with periodic multi-frame stalls is a failure worth investigating.
+
+Use three fixtures, all explicitly proposed:
+A. Correctness slice: two players, one precinct/base, ten useful residents, one production chain, a real shared inventory, one recruit and one route to a supplier.
+B. Co-op region: four players, two separated active settlements, forty detailed residents, eighty nearby animals, several travelling parties, voxel edits, building work, moving cargo and a live orbital delivery.
+C. Planet scale: a spherical graph on the order of forty thousand cells, many aggregated settlements and population cohorts, a sparse set of named actors and active journeys, with one generated megacity region streamed as districts. Increase density, city count and history depth independently so the cost of each is visible.
+
+These counts are a starting stress plan, not a supported maximum or evidence of present capability. Include low-end target hardware and realistic host upload limits. A later eight-player target must pass its own separated-interest scenario; four friends standing in one room does not establish four friends exploring four cities.
+
+Track simulation backlog; age of work, path and generation queues; active versus coarse actor count; time to usable collision; mesh/upload spikes; memory and save size; per-peer bandwidth; action-receipt latency; snapshot age; reconnect convergence; and generation throughput. Bound logs and retention. Do not conceal overload by permanently postponing jobs or dropping important world changes.
+
+8.4 Implementation milestones with usable results
+
+Milestone A — Audit and protect the current game.
+Map current module ownership, saves, IDs, coordinate frames, fixed ticks, transports and asset pipeline. Make a reproducible native profiling fixture. Preserve current behavior and existing saves. Select only the minimal missing components. Report what is actually implemented versus described in documents.
+
+Milestone B — One persistent co-op settlement.
+Prove authoritative commands, item ownership, save/reconnect, work reservations, hauling, a production order, simple useful rooms and one voluntary recruit. Show two friends interacting concurrently with the same last item. Make blocked work explain itself. Fix this before adding a broad mood or empire simulation.
+
+Milestone C — One spherical regional network and inhabited precinct.
+Connect a supplier, an attractive town precinct, a neighboring abandoned district and the player's base through terrain-correct routes. Include a seam-crossing route in the test world. Prove one real caravan, a restored bridge, remembered trade, a recruited person's arrival and local/abstract handoff. Walk every essential service route at the native camera. Establish the street/district art and navigation standard here.
+
+Milestone D — Bounded civilization history and strategic consequences.
+Generate a small set of polities and selected historical events that explain current settlement roles and ruins. Add separate claim, patrol and market overlays, reports with timestamps, bounded resource pools, a plausible raider mission and a positive visiting event. Defeating or negotiating with the source must change future outcomes. Keep this scenario small enough to diagnose.
+
+Milestone E — Orbital logistics and expanded characterful habitation.
+Connect the established city and outposts to the existing elevator/skyhook plan. Prove radio forecast, map information, shipment custody, safe receiving, partial restoration and useful supplies. Add the first staged mythic encounter families with individual behavior and saved consequences. Validate vehicle/frame transfers online. Reuse the living-world prompt's art and orbital requirements.
+
+Milestone F — Scale generation and performance through measured gates.
+Expand districts, cities, factions and species only after prior invariants hold. Run the separated-player fixture, forced-relay tests, save-growth tests, city-entry stress and longer-lived simulation scenarios. Reduce measured cost before increasing detail again. Maintain the ability to build an attractive small home without engaging with every strategic system.
+
+Each milestone ends in native playable behavior, saved state and an evidence report. A registry, mockup, menu screenshot or paper specification alone is not its completion condition. Implement the next bounded milestone completely rather than declaring the entire planetary civilization system finished from a broad scaffold.
+
+8.5 Required acceptance scenarios
+
+Generation and persistence:
+- The same complete generation manifest produces the same authoritative hashes across promised supported targets and worker-order variations. Unsupported replay combinations are rejected clearly.
+- Rivers, roads, territory queries and travel remain continuous at poles, date-line crossings, cube seams or H3 pentagons as applicable. A native traversal across a planet patch/face boundary verifies continuous position, gravity/up direction, collision and travel distance, not only a connected globe overlay.
+- Visiting sites in different orders does not change recruits, loot, street plans or history. Save/load and content upgrades preserve existing edits and identities under the declared migration rules.
+
+Places and inhabitants:
+- Required services are reachable through appropriate entrances for the body plans that use them; carts can reach freight facilities and residents can reach homes/workplaces.
+- One city can be explored with optional markers hidden. The player can recognize districts, find common services and use an alternate approach without excessive repetition.
+- Restoring a bridge, clinic, garden or freight receiver creates a visible practical consequence. Quiet occupation and permanent local safety remain possible.
+- A recruit, caravan and consignment survive repeated local/coarse transitions with exactly one authoritative identity and no extra inventory.
+
+Multiplayer and faults:
+- Concurrent claims on the last item or the same recruit resolve consistently and expose the resulting state.
+- Lost receipts, duplicate requests, temporary outages and a server restart cannot repeat a committed trade, craft or cargo transfer.
+- Joining and bulk terrain transfer do not starve movement or lasting-action results. Inputs and queues remain bounded under loss, jitter, reordering and constrained bandwidth.
+- Reconnection on a moving platform or across a portal restores the correct body/frame, inventory and authority without duplication or permanent falling.
+- A host leaving saves/closes clearly; later restart and rejoin recover the documented state. All-offline time follows the saved policy.
+
+Performance:
+- Native stress captures meet agreed CPU/GPU and simulation tail-time budgets on declared hardware, with active work and separated players.
+- City entry, route edits, saving and network bootstrap remain bounded; no hidden growing backlog or indefinite deferred-job starvation is accepted.
+- Claims identify direct versus relayed networking and actual scene/population conditions. Averages alone and vendor/tutorial performance claims are insufficient.
+
+9. REQUIRED IMPLEMENTATION REPORT
+
+Return the concrete changes, their purpose and resulting native behavior; exact modules and asset paths; dependency decisions and pinned versions; save/manifest migration behavior; evidence from native play; measured hardware/scenes and frame/tick/network distributions; fault-test results; and the remaining bounded milestone.
+
+Clearly distinguish verified implementation, content-only additions, experiments, proposals and failures. Do not claim that a library's documented features establish Axiom's scalability. The intended result is a coherent and enjoyable inhabited world whose complexity remains observable, persistent and affordable.
+
+10. SCIENTIFIC INDUSTRY, SPACECRAFT AND MULTI-PLANET EXTENSION
+
+AXIOM_Science_Spaceflight_And_Planetary_Expansion.txt defines the further scientific and space gameplay scope: material processing, functional electronics, automation, twelve planetary destination archetypes, player-built spacecraft, local and orbital flight, specialized expeditions, combat, salvage, stations and industrial routes. Its research distinguishes Seed of Andromeda's demonstrated historical work from its ambitions and adapts specific Elite Dangerous systems into original Axiom design.
+
+This is an extension of the architecture above. Retain the canonical spatial hierarchy, deterministic generation manifest, population identities, transport graph, economy, clock, durable operations and authoritative host. Add bodies and ports through those contracts. Do not introduce a competing netcode implementation, second cargo ledger or a separate simulation that resets consequences when players cross a surface/orbit boundary.
+
+Spacecraft use explicit frames and full state transformations. Construction and damage stage coherent topology revisions covering authoritative collision, module locations, mass properties, compartments and ownership. Detaching a loaded section preserves the relevant motion and identity transfers. Coarse travel advances fuel, life support, heat, damage and scheduled maneuvers to the same epoch; unloading or reconnecting must not freeze hazards or create a free journey.
+
+Keep scientific factories meaningful at every simulation level. A coarse representation must preserve supported electrical, thermal and material behavior or wake the affected network when its assumptions cease to apply. Spatial interest and streaming cover separated players and fast travel without dropping authoritative collision. Budget ship fragments, sensors, spells, controller execution, generation and rendering explicitly.
+
+Implement the first useful home experiment, local craft and worthwhile orbital round trip before expanding to a complete additional world and then the full catalog. Preserve the early settlement and narrow freight milestones from this brief. The new acceptance scenarios add scientific conservation, moving-ship interiors, structural splits, surface/orbit transfers and fault-injected shared expeditions to the existing measured native-game gates.
+
+11. REFERENCE-DRIVEN TERRAIN AND BOUNDED LOCAL PHYSICS
+
+The latest addendum, AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt, analyzes the user's ten concept-art images and specifies original industrial ships, readable working interiors, inhabited layered cities and landscape-connected megastructures. Its four provisional site briefs connect geology, settlement history, daily life, automation and editable combat spaces. Existing canonical locations remain valid.
+
+Default geology now explicitly includes coherent spherical structure, drainage, valleys and erosion. Global aging and drainage are prepared and versioned; local refinement preserves shared boundaries and saved facts; live excavation, weather and fluids use supported bounded models. A GPU seed does not by itself guarantee identical authoritative terrain across devices.
+
+The destruction path costs and reserves whole-action consequences, revalidates prepared read-sets at commit, preserves accepted material and ownership, and coalesces only reconstructible derived work. Track queue work, bytes, oldest age and post-burst recovery. Current fast geometry/collision must remain valid while optimized meshes and distant data refine. Deadline/fence rules prevent cancellation livelock. Compound fragments and conserved aggregates avoid one rigid body per voxel while retaining common cover and salvage.
+
+Every client now runs real local interactive physics. Shared state uses the host authority, transaction and epoch rules above. Peer simulation must not be confused with unverified client authority. Ordinary sessions require no developer-operated world simulation; direct connections, optional relays and user/community hosting have explicit costs and limits.
+
+The implementation gate combines a default eroded valley, one inhabited reference-quality site, concurrent local physics, destruction/PvP, an operating factory, separated players and direct/forced-relay fault tests. An empty flyover or average FPS cannot establish that result.
+
+END OF IMPLEMENTATION BRIEF
+
+12. DETERMINISTIC REPLICATION, FAST ENTRY AND DEFAULT GPU MEMORY
+
+AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt is the controlling technical continuation. It preserves the world/civilization design while requiring exact command-replicated domains, recent coherent checkpoints, indexed loading, bounded work, tested CPU/GPU render paths and conservative adaptive residency by default. Existing user data and accepted gameplay effects remain authoritative; derived rendering caches are disposable.
+
+Prioritize reproducing the reported default-preset freeze, recording a native frame/memory baseline, and stopping uncontrolled allocations before optional rendering features or much larger content. The initial suggested 70% soft target and 80% admission ceiling concern the current OS process budget, require hardware validation and do not guarantee immunity to sudden external pressure. Measure total process usage, reserved/transient/retired resources and actual reclaimed memory. Full engine tests and improvements remain future implementation work until performed in the actual repository.

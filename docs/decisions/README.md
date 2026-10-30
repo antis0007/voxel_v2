@@ -16,3 +16,4 @@ core reveal, changed permadeath rules) require the human under B.6.
 - [0025: Space track from the Seed of Andromeda review](0025-space-track-soa-port.md).
 - [0034: Player-freedom addendum (07) as an acceptance addendum](0034-player-freedom-addendum.md), reversed 2026-10-26 (brief parked; hunger and sand/gravel rulings recorded there); numbered above ADR 0033.
 - [0036: Scope of the revised Axiom agent brief](0036-axiom-brief-scope.md): tests and local gates, reordered plan, 4.5–5.5 mm texels, pack text register.
+- [0039: Axiom expansion briefs as backlog](0039-axiom-expansion-briefs.md): 0022/0036 stand, lockstep authority, no new names, three first slices.

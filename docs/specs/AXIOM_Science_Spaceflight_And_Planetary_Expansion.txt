@@ -1,0 +1,855 @@
+AXIOM / MERIDIAN — SCIENCE, INDUSTRY, PLANETS, SPACEFLIGHT AND COMBAT
+Expanded design and implementation prompt — 29 October 2026
+
+STATUS, SCOPE AND CONTINUITY
+
+This is a substantial expansion of the Living World Expansion Prompt and Planetary Simulation and Co-op Architecture brief. It specifies proposed gameplay and engineering for the existing Windows-first Rust + raw WGPU voxel game. No game repository was accessed or changed, no new library was integrated, and no performance claim here is a measured Axiom result. Research findings are separated from original proposals. Preserve the no-Bevy constraint and current engine, saves, identities, voxel scales, dimensions and working systems.
+
+Read together with:
+- AXIOM_Living_World_Expansion_Prompt.txt: inhabitants, mythology, attractive settlements, ruins, restoration, orbital freight, radio and map knowledge.
+- AXIOM_Planetary_Simulation_And_Coop_Architecture.txt: deterministic spherical geography, civilization history, city creation, economy, caravans, recruitment, authoritative co-op, durable effects and performance gates.
+- voxel_science_electronics_implementation_brief.txt, revision 2 dated 22 October 2026: meaningful electrical models, useful products before elaborate factories, condition-driven automation, process lots, functional boards, semiconductor routes and deliberately abstracted process timing.
+
+This expansion adds deep scientific industry, a varied planetary campaign, buildable spacecraft, useful spaceflight, surface/orbit operations, combat, salvage and interplanetary logistics. It must strengthen the player's reasons to explore and build. It must not make enjoyable habitation wait until every planet, machine or propulsion system exists.
+
+Audit the real repository before implementation. Earlier reports about devices, spacecraft, skyhooks, shaders, generation and netcode are leads to verify. Retain the previous briefs' implementation sequence: stable identities and ownership, a useful base, real work and cargo, a coherent regional network, then expansion. A playable prototype of one layer is not completion of the full scope.
+
+LATEST EXECUTION AND ART ADDENDUM
+
+AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt is controlling for the new concept-art direction, required default erosion/global structure, actual physics on every client, PvP, bounded destruction and minimal developer hosting. Retain this document's scientific and planetary content; apply the new local-physics and workload contracts to its implementation.
+
+READING GUIDE
+
+1–4: player experience, reference choices, scientific rules and an open capability progression.
+5: twelve proposed planetary destination archetypes, plus small bodies and stations.
+6: materials, processing, electrical systems, electronics, automation and advanced industry.
+7–8: buildable spacecraft, flight, sensing, roles, damage, encounters and combat.
+9–11: practical expedition loops, equipment, people, infrastructure and art direction.
+12: native implementation sequence, performance budgets and acceptance scenarios.
+13: primary research references and companion design documents.
+
+The catalog is broader than the first deliverable. Prove one worthwhile round trip and one useful additional world before scaling the destination count.
+
+1. THE GAME THIS EXPANSION SHOULD CREATE
+
+The player can begin in a wooded region among ruined magitech, build a comfortable workshop, learn useful science through instruments, and manufacture devices they have a reason to use. Better production supports better vehicles, exploration equipment, homes and defenses. A working orbital port, a purchased passage, a restored ship or a self-built craft opens space without making every player personally manufacture every upstream component.
+
+Different destinations change the activity: crossing a thin-atmosphere canyon in a rover, operating an airless quarry, sailing an ocean world, diving into an ice moon's ocean, anchoring a research platform in a dense atmosphere, recovering a disabled freighter or establishing an asteroid workshop. The same materials, machines, people and scientific relationships connect these experiences.
+
+A pilot can enjoy flight, a builder can design ships and bases, a scientist can survey and investigate, an industrial player can organize production, and friends can cooperate without mandatory role assignments. Combat supports objectives, retreat, rescue, boarding and salvage. It remains possible to make progress through exploration, trade, engineering and negotiated access.
+
+Space does not replace the existing world. The home region remains worth returning to: familiar residents, gardens, factories, archives, shipyards, expeditions and routes that the player changed. More planets should produce more kinds of meaningful decisions, not merely a longer list of exclusive ore colors.
+
+2. BORROW SPECIFIC STRENGTHS FROM THE REFERENCES
+
+Large technology modpacks supply the ambition of interdependent production, visible infrastructure, alternate processing routes, multiblocks, logistics and long-term projects. Adapt those relationships into a more coherent native game with stronger instruments, convenient construction, physical clarity and fewer redundant recipes. Preserve powerful automation and optional complexity.
+
+Seed of Andromeda supplies a historical reference for spherical voxel worlds and transitions between planetary scales. Verify its public code and demonstrations separately from its vision statements; do not claim that intended spaceflight, settlements or damage systems were all shipped. Its repository is reference material, not a reason to migrate Axiom to another engine or language.
+
+Elite Dangerous supplies reference points for piloting, ship systems, outfitting, surveying, mining, cargo, docking, readable contacts and combat choices. Adapt these into original voxel construction and shared-world systems. Keep travel purposeful and give players constructive alternatives to combat and procurement grind.
+
+The existing references continue to govern the experience: Noita's interactions and spell combinations; technical Minecraft's construction and automation; Dwarf Fortress/RimWorld's inhabitants and consequences; Zelda's legible places and exploration; Minish Cap's expressive small-scale detail; the palimpsest of abandoned technology, mythology and serious whimsy already established for Axiom.
+
+The chapters below identify primary sources for factual claims. All named Axiom worlds, equipment roles, progression bands, balance targets and implementation structures are original design proposals.
+
+3. SCIENTIFIC RULES THAT CREATE USEFUL PLAY
+
+3.1 Preserve a few strong relationships
+
+Use explicit material, energy, thermal, structural and information models where they produce decisions. Each supported process should explain its inputs, outputs, conditions, losses, useful work and limitations. A machine's animation consumes no extra independent resource and produces no unrecorded item.
+
+Mass and composition: a refinery changes concentration, recovery, chemical form and waste streams. Six kilograms of mixed feedstock cannot become unlimited kilograms of refined metal because it passed through more machine tiers. Some processes add material from reagents or the atmosphere; show those inputs. Commodity categories are analytical summaries over lossless item/lot records.
+
+Energy and power: joules or kilowatt-hours describe stored/used energy; watts or kilowatts describe a rate. Preserve finite source, converter, cable and port limits. A bigger energy store does not automatically provide more instantaneous output. Retain the existing electrical brief's voltage/current-aware islands, current limits, averaged converters and supported circuit behavior.
+
+Thermal behavior: machines, habitats and vessels have heat sources, thermal capacity, transfer paths and rejection capacity. Use lumped thermal nodes and useful operating bands. In vacuum, external convective cooling is unavailable; radiative rejection and conductive paths matter. Cooling loops move heat to a sink and consume work where appropriate; they do not erase it. NASA's spacecraft thermal-control survey supports this distinction. [C1]
+
+Pressure and atmosphere: model compartments, bulk gas quantities, temperature, volume and composition only to the fidelity needed by life support, processing, buoyancy and leaks. Space is low pressure; a vacuum chamber still needs purity, seals, handling and thermal control. Outside vacuum does not make every semiconductor process clean or every gas disappear instantly.
+
+Propulsion: thrust accelerates mass, orientation changes the direction of thrust, and slowing down requires a force or an explicit fictional field. Chemical propulsion can serve high-thrust maneuvering and ascent; conventional electric propulsion exchanges low thrust and power demand for efficient propellant use. NASA's propulsion survey is a source for that distinction, not for Axiom's balance numbers. [C2]
+
+Measurement: instruments reveal specific properties with limits. A spectrometer, radar, gravimeter, thermal imager, geological probe and electrical meter answer different questions. Readings have source, location, time, confidence and relevant sampling conditions. Avoid a single scanner that identifies every secret on every world instantly.
+
+3.2 Mark the approximations
+
+Distinguish physical relationships, deliberately simplified simulation and explicit magic. A compact heat network can be physically motivated without being computational fluid dynamics. A chemical process can conserve its supported ingredients without simulating arbitrary molecular reactions. A stable orbit approximation does not require integrating an entire star system with unrestricted n-body physics.
+
+Author process work and duration for enjoyable play; do not claim that short game batches reproduce real industrial elapsed time. Keep electrical power, delivered energy, accumulated work and the game's time convention internally consistent. Slow a visual replay to teach a transient without changing a real capacitor's declared physical behavior.
+
+Compact planets need a consistent radius, gravitational parameter and flight model. If their gravity or density departs from an astrophysically plausible body, identify the authored scaling or fictional cause. Derive orbital calculations from the same configured model instead of using real-world numbers for one mode and unrelated arcade gravity for another.
+
+Faster-than-light travel, mana conversion, artificial gravity and magical shielding are authored fictional systems. Give them clear domains, inputs, rates, heat, restrictions and recovery behavior. A spell that supplies process heat enters the supported heat account. A magical source may add fictional energy by an explicit rule, but must not disguise numerical energy creation as electrical science.
+
+3.3 Make difficult environments readable and recoverable
+
+Planet and suit inspectors report the environmental demands that matter: pressure, breathable composition, temperature, local gravity, illumination, exposure and known hazards. Habitability uses partial pressures and the relevant physiology, not oxygen percentage alone. Apply the same environmental capability checks to settlers, companions and generated wildlife. Route planning estimates the equipment and reserves needed, with uncertainty marked. Suitable presets and generous early margins make ordinary trips approachable.
+
+Use progressive warning and recoverable failure where feasible: a hot machine throttles, an inadequate radiator limits output, a leaking compartment can be isolated, and a damaged drive can retain a tow or rescue option. Expert risk can allow harsher outcomes. Routine use should not become a constant sequence of coolant topping, suit chores and invisible damage rolls.
+
+4. A CONNECTED CAPABILITY GRAPH
+
+These are overlapping opportunities, not a compulsory chronological curriculum.
+
+Band A — Field workshop and regional travel.
+Useful products: lamps, detectors, pumps, simple controllers, storage, renewable power, treatment equipment, a rover or glider, and practical magical tools. The player can already improve a home, understand a ruin, move goods and automate a small process.
+
+Band B — Precise fabrication and local vehicles.
+Useful products: improved alloys, seals, glass/ceramics, batteries, motors, control boards, compact instruments, drones and reliable atmospheric craft. Choices concern weight, power, handling, environmental suitability and manufacturing convenience.
+
+Band C — First orbit through several routes.
+Use an existing elevator/skyhook service, buy passage, restore a small craft, commission a hull, or build a supported ascent vehicle. First orbital access must not demand mastery of every advanced reactor and semiconductor process. Take a usable tool or module home and discover why producing it would be valuable.
+
+Band D — Local space industry.
+Useful products: service tugs, cargo pods, vacuum workshops, habitats, thermal control, survey probes, orbital assembly, lunar processing and mining craft. A local depot can reduce supply dependence through actual water, oxygen, propellant or repair production. A functioning home factory still matters.
+
+Band E — Interplanetary expeditions and specialization.
+Improve transfer capacity, ship autonomy, communications, cooling, life support and navigation. Build variants suited to oceans, high gravity, dense atmospheres, cold worlds, debris fields or salvage. Several imperfect designs should be viable; a universal superior ship would erase engineering decisions.
+
+Band F — Advanced science and deep infrastructure.
+Introduce photonics, specialty electronics, selected fusion systems, advanced materials, larger shipyards, higher-capacity freight links and optional fictional transit. Mature processes remain useful for robust, inexpensive or application-specific parts. New capabilities need demonstrated jobs, not merely a new numbered tier.
+
+Keep both builder and explorer entry points. A player can find, buy, recover, commission or fabricate equipment under explicit ownership and economy rules. A research journal records experiments and usable knowledge. Known results and blueprints can be shared, inspected and independently reproduced; avoid an abstract research-point toll on every ordinary recipe.
+
+5. PLANETARY CAMPAIGN AND DESTINATION DESIGN
+
+The next chapter specifies distinct world archetypes and how science, inhabitants, travel and combat create reasons to visit and settle. Preserve existing canonical names. Suggested new names are provisional and may be generated or adapted to established lore.
+
+5.1 Generate systems with related, distinct worlds
+
+Create a deterministic system manifest with star properties, body hierarchy, orbit/rotation parameters, mass/radius or the game's explicit gravity model, atmospheric profiles, geology, climate, water/volatile inventory, ecological constraints, civilization layers, accessible sites and generation versions. These fields drive planet appearance, navigation and local behavior through the same authority.
+
+World archetypes are a catalog distributed across compatible seeded systems, not a demand to put every climate into one implausible orbit list. A tidally locked temperate world might belong around a suitable small star. A volcanic moon's heat can arise from configured tidal interactions. An atmospheric ocean planet needs a water and thermal regime consistent with its intended surface. Fantasy exceptions require an authored cause with observable consequences.
+
+Each substantial landable world needs several connected regional environments, meaningful terrain variation, a distinct sky, a different travel problem, original inhabitants or occupation, a civilization history, and multiple kinds of reward. Avoid whole planets that are one material under one colored sky. Likewise, avoid filling every world with the same human village, ruins, insects and ore distribution.
+
+The initial campaign should concentrate on a rich home system. Broader stellar generation and interstellar expansion follow proven local gameplay. An enormous count of empty destinations is not a quality target. Track every entry as a catalog archetype, prototype or completed playable world. A rendered giant can be the first moon's sky landmark long before its atmospheric facilities are implemented.
+
+Evaluate moons in their parent-system context: radiation environment, eclipses, tides and orbital access depend on the actual configuration, not only the moon's atmosphere. Select elevator, tether or powered transfer infrastructure per body's gravity, rotation, orbital stability, available clearance and material/magical support. Check whether relevant orbits fit within the usable gravitational domain. Do not stamp the same surface-to-synchronous-orbit elevator on every moon or slow-rotating world; choose an eligible alternative where necessary.
+
+5.2 Proposed destination catalog
+
+A. HOMEWORLD — KEEP THE EXISTING WORLD AND NAME
+Role: comfortable origin, deep civilizations, agriculture, familiar habitats, varied geology, magical ecology, sophisticated ruin cities and the main return point.
+Terrain and art: wooded basins, rivers, plains, mountains, coasts and old industrial corridors under the current art direction. Existing sites and local history remain authoritative.
+Science and building: broad feedstocks, water, weather, farms, power networks, semiconductor workshops, shipyards and comfortable inhabited bases.
+Exploration: recover instruments, investigate historical networks, befriend residents and discover why orbital infrastructure matters.
+Combat: existing ground encounters and defenses remain relevant. Improving safety can support a peaceful home; space progression does not trigger unavoidable attacks on it.
+Return value: residents, gardens, fabrication capacity, collections, trade contacts, information and a place the player knows.
+
+B. CAIRN — AN AIRLESS ROCKY MOON
+Role: first accessible offworld destination and a compact lesson in vacuum, low gravity, sunlight, shadows and freight.
+Terrain and art: crater rims, ejecta, exposed strata, lava-tube systems where geology supports them, long sightlines, a large parent world in the sky and genuinely dark sheltered spaces.
+Science and building: anchored extraction, regolith processing, solar/battery tradeoffs, insulated habitats, radiators and vacuum-rated mechanisms. Water ice occurs where the generation conditions support preservation; it is not spread uniformly through all rock.
+Exploration: a damaged survey station, a sheltered habitat network, abandoned prospectors, a buried archive and a recoverable tug.
+Combat: short encounters around ridges, anchored equipment and exposed modules; low gravity changes movement without making uncontrolled drifting the default experience.
+Base identity: a small depot becomes a practical rescue, survey and freight stop. No native unprotected grazing animals appear without an explicit supported fictional physiology.
+
+C. ROOK — A THIN-ATMOSPHERE ARID PLANET
+Role: rover expeditions, long terrain routes and accessible geological fieldwork.
+Terrain and art: eroded plateaus, canyon systems, dunes, exposed sedimentary basins, old shorelines and industrial towns built around surviving utilities. Climate and color vary by region.
+Science and building: atmospheric intake and separation where composition permits, buried ice prospecting, dust protection, greenhouse habitats, regolith construction and local power.
+Exploration: trace former waterways, map a collapsed transport network, recover an observatory and help a settlement reopen a pass.
+Combat: escort or evade convoys, use canyon cover, disable extraction equipment or negotiate a contested deposit. Terrain and objectives give battles their shape.
+Engineering distinction: aircraft and parachutes respond to actual atmospheric density. Terrestrial aircraft do not retain identical performance here by changing their texture.
+
+D. THALASSA — AN OCEAN AND ARCHIPELAGO PLANET
+Role: ships, diving, pressure habitats, marine ecology, undersea ruins and vertical exploration.
+Terrain and art: several archipelago regions, reefs where ecology supports them, storms, shelves, basaltic islands, abyssal terrain and old structures descending below the water.
+Science and building: desalination where needed, corrosion-resistant materials, buoyancy, pumps, underwater lighting, pressure-compatible enclosures, biological observation and local transport.
+Exploration: chart safe approaches, investigate a sunken city, negotiate with aquatic communities and restore a flooded service network.
+Combat: surface craft, underwater vehicles and boarding have different visibility, mobility and sensing. Do not make lasers, radar and projectile behavior identical across air and water without an explicit supported model.
+Base identity: a harbor, floating workshop or sheltered underwater station connects scientific work to trade and settlement. Water access is both an opportunity and an engineering condition.
+
+E. VESPER — A TIDALLY LOCKED ROCKY WORLD
+Role: expeditions shaped by illumination, climate gradients and atmospheric transport.
+Terrain and art: persistent star-facing vistas, colder dark-side regions, weather systems and selected habitable or industrial areas according to the generated atmosphere and heat transport. Do not assume every tidally locked planet has a narrow perfect twilight ring.
+Science and building: solar siting, heat transport, shelter, energy storage, thermal insulation and regional logistics.
+Exploration: a chain of settlements across changing conditions, a migration route, heat-exchange megastructures and observatories with distinct purposes.
+Combat: route choice, visibility, shelter and power access shape objectives. The world’s broad day/night pattern is geography, not a rapid arbitrary weather debuff.
+Base identity: choose between access to energy, comfortable conditions, transport and scientific opportunity. Several settlement strategies should work.
+
+F. CINDER — A TIDALLY HEATED VOLCANIC MOON
+Role: heat-resistant engineering, hazardous fieldwork and industrial archaeology.
+Terrain and art: volcanic plains, fissures, highlands, cooled flows and sparse infrastructure positioned around stable areas. Use ash, deposits and geological boundaries deliberately instead of random glowing cracks everywhere.
+Science and building: high-temperature materials, remote probes, thermal isolation, selected heat recovery and carefully located extraction. Harnessing heat requires a usable temperature difference and accounted conversion.
+Exploration: research stations, surviving maintenance machines, unusual geological processes and older attempts to exploit the moon. Magical beings, if present, have explicit fictional environmental adaptations.
+Combat: protect or recover a probe, escape a changing route, disable industrial guardians or rescue a stranded crew. Environmental threats have readable warnings and safe alternatives.
+Science anchor: Io is a real example of strong tidal heating associated with extensive volcanic activity. Cinder's exact environment and content are original. [P1]
+
+G. NACRE — AN ICE-SHELL OCEAN MOON
+Role: ice traversal, descent expeditions, pressure environments, remote sensing and subglacial mysteries.
+Terrain and art: fractured ice, ridges, translucent local features, subsurface cavities and occasional access infrastructure. The ocean is a distinct destination beneath a meaningful shell, not water directly under every decorative snow block.
+Science and building: insulated drilling/descending systems, pressure-compatible vehicles, thermal control, acoustic communication where supported and sample containment.
+Exploration: survey before descent, enter a preserved station, discover a deep geothermal region and return samples or observations with usable scientific consequences.
+Combat: close encounters around infrastructure, limited visibility, route protection and recovery. A combat failure should leave a recoverable expedition or wreck when possible.
+Biology: any inhabited ecosystem is explicit speculative content. It is not presented as evidence that Europa or another real moon has known life.
+
+H. SABLE — A COLD HAZY WORLD WITH HYDROCARBON LAKES
+Role: cold-environment industry, dense-atmosphere travel and unfamiliar surface chemistry.
+Terrain and art: haze, dark dunes, branching channels, lakes and seas of configured hydrocarbons, water ice acting as local structural terrain, and isolated heated habitats.
+Science and building: insulation, controlled heating, atmospheric separation, polymers and chemical feedstocks. Hydrocarbon availability does not provide free power: a combustion system also requires a compatible oxidizer, which may need importing or manufacturing.
+Exploration: follow seasonal channels, investigate older processing sites, recover atmospheric probes and study unfamiliar chemistry.
+Combat: visibility, terrain, signature management and protected infrastructure matter. A warm operating ship can have a distinctive signature, but detection remains bounded by the actual sensor model.
+Science anchor: Titan has a nitrogen-rich atmosphere and surface hydrocarbon lakes and seas. Sable’s societies, organisms and gameplay are fictional additions. [P2]
+
+I. AUREOLE — A DENSE, HOT ATMOSPHERE WORLD
+Role: elevated habitats, airships, probes and demanding surface expeditions.
+Terrain and art: thick cloud layers with distinct lighting, mountain tops where appropriate, long atmospheric views and engineered platforms. Surface conditions follow the body manifest rather than ordinary homeworld weather.
+Science and building: buoyancy at suitable altitude, aerodynamic control, corrosion/temperature protection, pressure-rated equipment, atmospheric sampling and heat rejection limits. Platforms need lift, stationkeeping or an explicit magitech support mechanism.
+Exploration: cloud settlements, abandoned aerostats, a communication network and recoverable surface science equipment.
+Combat: maneuver around platforms, escort transports, recover a drifting habitat or approach a guarded station through weather. Avoid forcing every mission to the most punishing surface layer.
+Base identity: inhabiting the atmosphere can be the main settlement path. A surface landing is an advanced optional operation with useful rewards.
+
+J. FERRUM — A LARGE ROCKY WORLD WITH DEMANDING GRAVITY
+Role: structural design, heavy industry and the value of orbital logistics.
+Terrain and art: massive landforms, compact robust architecture, deep excavations and transport infrastructure fitted to the generated environment. High gravity follows the chosen mass/radius model; a metal-rich label alone does not determine it.
+Science and building: load distribution, high thrust requirements, durable ground transport, high-capacity lifting and processing near deposits.
+Exploration: established industrial communities, buried infrastructure, sophisticated metallurgy and accessible service routes through intimidating terrain.
+Combat: positioning, vehicles, cover and supply matter more than endless aerial hopping. Existing weapons and magic remain useful under consistent movement rules.
+Base identity: a freight terminal, elevator connection or well-designed logistics network can be more valuable than repeatedly launching a poorly suited ship. Players can choose to trade instead of operating a local mine.
+
+K. ORISON — A GAS GIANT AND ITS ORBITAL SYSTEM
+Role: a visually dominant region, moon expeditions, ring operations, high-altitude facilities and deep logistics.
+Terrain and art: cloud bands, storms, eclipses, rings where configured, moons and stations with strong silhouettes. The giant is not a normal landable rock hidden under a cloud texture.
+Science and building: upper-atmosphere sampling, protected platforms, station power/thermal systems, scheduled transfers and servicing local moons. Each atmospheric facility needs an explicit lift/support mechanism, such as modeled heated-gas buoyancy, aerodynamic lift, continuous thrust, suitable suspended infrastructure or magic. A helium balloon model for an air-like atmosphere cannot be reused unchanged in a hydrogen/helium atmosphere. No universal infinite helium-3 shortcut to all advanced technology.
+Exploration: scientific stations, derelict habitats, disrupted freight routes, old custodial machinery and unusual orbital sites.
+Combat: station approaches, convoys, rings and moon orbits provide concrete objectives. Physical cover comes from resolved objects; a background ring texture or decorative particle cannot block a projectile. Sensor interference from dust uses a separately declared model. Radiation or weather hazards follow the specific generated environment rather than applying identically to every giant planet.
+Base identity: useful stations and cloud facilities can be inhabited where their support systems make sense. Deep descent has a clear limit or failure envelope and does not secretly reveal a conventional ground plane.
+
+L. PALE REACH — AN ICE-GIANT REGION
+Role: a later expedition theater built around remote moons, orbital observatories and isolated settlements.
+Terrain and art: a distinct giant-planet sky, low solar illumination at the configured orbit, icy satellites and long views through sparse infrastructure. Do not describe an ice giant as a solid ball of walkable ice.
+Science and building: dependable non-solar or enlarged solar power where viable, insulation, remote maintenance, survey relays and expedition staging.
+Exploration: forgotten observatories, unusual small bodies, an independent society, scientific records and optional links to established extradimensional lore.
+Combat: interception, rescue and approach planning around scarce services. Prepared expeditions can earn safety and establish support instead of facing endless random ambushes.
+Implementation: this is a later catalog member. It must not delay the first useful homeworld/moon loop.
+
+5.3 Small bodies, orbital habitats and exceptional destinations
+
+Asteroid regions contain related bodies and orbital distributions with mineral, volatile and structural variation. Survey identifies promising targets; detailed active objects support mining, anchoring, salvage and construction. The far field is a deterministic statistical/render representation, not millions of continuously simulated rigid bodies. Mineable or otherwise interacted objects receive stable identities and persistent edits.
+
+Comets and volatile-rich small bodies support changing illumination, sublimation-related hazards under a bounded model, sampling and mobile staging. Their movement and activity are forecastable through instruments. A timed opportunity must have an alternate route or repeatable schedule; a missed window should not permanently invalidate ordinary progression.
+
+Orbital habitats include rotating stations, industrial yards, ship graveyards, agricultural facilities, elevator hubs and small communities. Rotation, artificial gravity or microgravity must be explicit. A rotating habitat's frame cannot be treated as a stationary room while its exterior moves independently.
+
+A rare rogue world can use geothermal, nuclear, stored or explicitly magical energy, with deep shelters and a strong visual identity. Its lack of stellar illumination should create a different expedition rather than merely hiding content in blackness.
+
+Preserve pocket dimensions and nexus spaces as distinct traversal domains. The Hall of the Crimson King and other established extradimensional places should not be reduced to ordinary planets in the orbital list. Use explicit portal/transit edges between physical and nonphysical domains while preserving actor, vehicle and cargo identity.
+
+5.4 Give every destination several reasons to matter
+
+For each completed world, provide at least:
+- One immediately useful activity available on first arrival.
+- A different travel or engineering problem with practical support.
+- Several regional environments and a strong visual approach.
+- A person, community, expedition, ecology or other meaningful presence.
+- A scientific investigation with measurement, interpretation, competing engineering options, a physical choice and an observed consequence.
+- A recoverable piece of equipment, useful location, relationship or knowledge.
+- An optional industrial specialization and a trade alternative.
+- A return visit that reflects recorded actions.
+
+Planet-specific resources can provide advantages, distinctive properties or high concentrations. Ordinary materials and core progression need several practical supply routes. Keep substitution, trade, salvage, synthesis and alternative processes where appropriate. A planet should not exist solely to force one compulsory ore collection trip.
+
+The same physical material can have different value because of concentration, accessibility, transport, associated byproducts or available services. That creates reasons to build infrastructure without inventing one exclusive element per planet.
+
+6. SCIENCE, INDUSTRY AND PLAYER-DESIGNED TECHNOLOGY
+
+Status and boundaries: This is a proposed Axiom/Meridian implementation chapter. Audit the existing repository and earlier electronics brief before changing behavior. Preserve its typed materials, finite-resistance circuits, current limits, abstract timing, condition controls, and functional circuit-design contracts. The mod references below establish useful gameplay patterns; they are not evidence that their recipes are physically realistic or that Axiom already implements them.
+
+6.1 ADAPT THE STRONG PATTERNS
+
+GT New Horizons explicitly emphasizes interconnected processing chains and industrial progression [I1]. Adapt the satisfaction of building reusable production infrastructure and choosing processing routes. Keep ordinary resources available through several routes instead of inheriting compulsory planetary material locks or lengthy manual crafting.
+
+Mekanism documents successive ore-processing stages with additional machines and inputs [I2]. Adapt understandable upgrades and linked processes, but express improvements as recovery, purity, throughput, and byproduct capture rather than unexplained multiplication of the same metal mass.
+
+Create's developer documentation describes an intentionally simplified torque/capacity model, physical logistics, and reusable schematics [I3–I5]. Adapt visible motion, comprehensible bottlenecks, spatial ingenuity, and reusable construction patterns. Immersive Engineering's author page emphasizes recognizable multiblocks and suspended power cables [I6]. Adopt that physical legibility while retaining Axiom's own materials and visual language.
+
+PneumaticCraft's maintainer design notes discuss pressure, heat, controls, and logistics [I7]; this is a historical design reference, not a current feature checklist. NuclearCraft's author page describes reactors, heat exchangers, turbines, and fuel systems [I8]. Use these as examples of interacting engineering domains, not instructions to copy every machine.
+
+6.2 PRODUCTS AND CHOICES COME BEFORE FACTORY SIZE
+
+Introduce each process because it makes something the player wants: a reliable pump, better climbing equipment, a radio, a vehicle bearing, a quiet generator, a greenhouse controller, a precision wand component, or a repair part for a ruin. Demonstrate the product first, then expose the infrastructure that makes it affordable at scale.
+
+Use several viable technological routes. Mechanical power, simple electrical controls, recovered equipment, conventional electronics, biological processes, and explicitly fictional magitech can overlap. Historical technologies remain useful branches rather than obsolete checkboxes. A remote windmill and rugged controller should remain sensible after the player builds an advanced fabrication plant.
+
+Every added production stage must create a meaningful choice involving quality, recovery, energy, throughput, footprint, transport, climate, reliability, or flexibility. Merge stages that only add another waiting bar. Presets should produce competent results; deeper control rewards understanding. No nanosecond clicking, obligatory idle waiting, or punishment for choosing a simpler factory.
+
+6.3 GEOLOGY, PROSPECTING, MINING, AND RECOVERY
+
+Generate deposits from the world's geological history, host materials, structure, and weathering rules. Use consistent fictional approximations where full geology is unnecessary. Surface exposures, stream sediments, old surveys, mine workings, and instrument readings provide evidence. Surveys report uncertainty and depth intervals rather than instantly revealing every valuable voxel.
+
+Represent extracted material as typed lots with mass, composition or grade classes, mineral form, contamination, and provenance. Keep lots stackable through practical quality bands; avoid a unique floating-point composition object for every pebble. Sampling and recovery remain deterministic for a saved deposit and process state, so unloading cannot reroll yields.
+
+Provide hand collection, selective extraction, mechanized mining, salvage, recycling, and trade. Different methods affect dilution, throughput, energy, and landscape damage. Depletion and excavated geometry persist. Bulk mining must produce manageable containers or aggregate flows rather than thousands of loose physics objects.
+
+Use ore-appropriate routes: sorting, crushing, screening, washing or other separation, extraction, refining, and forming. A richer route can recover more of the metal already present or produce higher purity. Track residual material and explicitly represented external inputs. Tailings can become fill, construction feedstock, or later reprocessing opportunities; their existence must not force continuous manual disposal.
+
+6.4 MATERIALS, ALLOYS, AND SERVICE CONDITIONS
+
+Give materials a compact set of useful properties: density, strength class, toughness, hardness, conductivity, thermal behavior, corrosion compatibility, and processing difficulty. Component roles determine which properties matter. A strong but heavy structural material is not automatically the best conductor, bearing, blade, pressure vessel, or aircraft skin.
+
+Heat treatment, alloying, surface protection, machining, and finishing alter typed lot state. Distinguish composition from processing history. Provide useful tradeoffs such as a simple locally available alloy versus a lighter imported one, or an inexpensive coated component versus a bulk corrosion-resistant component.
+
+Corrosion and wear should create planning choices about environment and maintenance access. Use slow, legible condition changes with inspections, replacement modules, and automated maintenance. Avoid routine hammer-click chores or sudden destruction without warnings. Salvage should preserve useful components and material fractions.
+
+6.5 FLUIDS AND PROCESS CHEMISTRY
+
+Build reusable operation families around the earlier brief's HeatTreat, Separate, GrowCrystal, Deposit, Pattern, Etch, Dope, Inspect, and Package operations. Add mixing, filtration, pumping, phase separation, and controlled biological processing where they create distinct gameplay. Machines implement capabilities and process windows rather than hundreds of unrelated single-recipe boxes.
+
+A recipe declares typed inputs, resulting lot changes, energy, process conditions, expected yield range, outputs, and recoverable failure states. Track temperature, pressure, phase, and a bounded composition model only where relevant. Process times and tolerance bands are explicitly game-scaled approximations.
+
+Teach concepts through machine operations, diagrams, material identities, and cause-and-effect feedback. The player adjusts condition presets and equipment choices at the supported game abstraction, with enough detail to understand process dependencies and failure causes.
+
+Use water treatment, brine separation, gas separation, polymer production, fermentation, and recycling as intersecting industries. Byproducts may feed another line, be sold, stored, or safely handled by an ordinary disposal process. Optional recovery improves economics; it must not become a mandatory maze for every product.
+
+Reserve output capacity and necessary inputs before an irreversible batch stage. Full tanks cause a visible block, throttling, or a defined controlled stop. Inputs must not disappear because a machine loses power. Keep energy and material ledgers consistent across shutdown, save/load, and multiplayer retries.
+
+6.6 POWER MEANS ENERGY FLOW THROUGH REAL CONNECTIONS
+
+Preserve joules and kilowatt-hours for energy, watts for power, and voltage/current for electrical behavior. One kilowatt-hour equals 3.6 MJ [I9]. Energy changes according to delivered power over simulation time, after losses and limits. Capacity and charge/discharge power are separate quantities.
+
+Audit the established induction matrix before changing it: 64 kWh per cell, 256 kW per provider, configured input/output ports, and the existing 3–9 m envelope. Capacity equals installed cells times cell capacity; throughput also respects providers, ports, conductors, and connected devices. A roughly 22 MWh large matrix is a configuration-dependent result, not an unconditional entitlement to every shell of that size. Provider occupancy can reduce cell count.
+
+Retain persistent finite-resistance DC networks, source and current limits, and a small bounded MNA/RC solver where already specified. Model voltage drop and resistive heating meaningfully. A component cannot draw unlimited power merely because the network contains stored energy. Cache topology; do not replace circuit behavior with an arbitrary shared power pool.
+
+DC voltage conversion uses an averaged DC/DC converter model. AC uses an explicitly simplified RMS/real-power model with phase ignored, as established. Do not call this a complete AC simulation or silently add reactive-power behavior. Keep transformers, rectifiers, and inverters distinct. Transformer and converter losses enter the same energy accounting.
+
+Preserve Q = CV and capacitor energy E = 0.5 C V² [I12]. A regulated capacitor bank needs its converter model; it is not a battery with a flat voltage and unlimited output. Larger stable networks may use validated equivalent models that preserve terminal behavior and conservation. Existing circuit gameplay takes priority over simplistic aggregation.
+
+6.7 HEAT, PRESSURE, VACUUM, AND STORAGE
+
+Use bounded thermal nodes with heat capacity, transfer paths, operating windows, and environmental exchange. Heat exchangers let players recover useful process heat. Cooling requires an actual sink; refrigeration consumes work to move heat and still rejects that heat plus its input work elsewhere. Vacuum is not an infinite cooling source; spacecraft thermal systems require a deliberate heat-rejection model.
+
+Use liquid and gas network models appropriate to their behavior. Approximate incompressible liquids and lumped gas volumes are acceptable when documented. Pumps, valves, reservoirs, restrictions, leaks, and pressure ratings create understandable choices. Compressed air stores energy supplied by compressors; expansion and recompression cannot create a free-energy loop.
+
+Batteries trade energy capacity, power capability, mass, cost, and thermal limits. Fuel cells consume fuel and oxidizer to provide power; electrolysis consumes energy to produce an energy carrier. Hydrogen is a carrier, not a primary energy source [I10]. A closed electrolysis/fuel-cell loop must lose energy overall.
+
+Flywheels, thermal stores, and capacitor banks can serve different load profiles. Keep interfaces consistent so players can compare them. Batch maintenance, gradual degradation, and automatic control provide engineering depth without demanding constant intervention.
+
+6.8 FABRICATION AND THE IC DESIGN MINIGAME
+
+Separate mechanical fabrication, printed circuit boards, and integrated circuits. Casting, cutting, forming, additive fabrication, machining, ceramics, and glass processing provide parts with different tolerances and properties. PCB assembly connects components; wafer fabrication creates device and interconnect structures. ASML describes microchips as repeated patterned layers on wafers [I11]. Use the distinction without attempting a microscopic process simulator.
+
+Preserve the earlier brief's separation of design, process, and package. Players arrange functional modules, routing, power distribution, memory, interfaces, and control elements on multilayer grids. Smaller fictional process nodes offer more usable design density at a fixed die size, with different fabrication requirements and yield tradeoffs. State this as a game abstraction rather than equating a commercial node name with literal universal spacing.
+
+Compile a design into a functional macrodevice. A controller must actually expose the designed inputs, outputs, state, and computation capabilities. Do not convert a decorative grid into a generic efficiency bonus. A sensor-heavy board, memory-heavy scheduler, and high-throughput processor should solve different problems.
+
+Evaluate routing, connectivity, power demand, heat, timing class, and manufacturability with readable diagnostics. Abstract timing removes nanosecond manipulation while retaining meaningful latency and throughput constraints. CMOS must not imply zero dynamic or leakage power. Larger designs are not automatically better when routing, energy, cooling, and yield become limiting.
+
+Save versioned designs and manufacturing recipes for repeat production. Provide a test bench, known-good examples, condition presets, and understandable failure reports. Discrete circuits, programmable controllers, and specialized chips remain viable alternatives. Runtime execution uses bounded compiled models, not a full transistor simulation for every installed chip.
+
+6.9 SENSORS, CONTROLS, AND AUTOMATION
+
+Provide sensors for level, flow, pressure, temperature, power, position, material state, and selected environmental conditions. Players connect logic, feedback controllers, relays, timers, and programmable modules. Defaults handle ordinary machines; advanced control improves a real process.
+
+Use setpoints, hysteresis, interlocks, and controlled start/stop sequences. Show requested versus actual behavior. A pump controller should explain whether it lacks power, has a closed valve, or cannot reach its target. Automation may perform prospecting and discovery when equipped appropriately; do not impose human-only interaction flags.
+
+Blueprints preserve components, connections, settings, access spaces, and permitted substitutions. Bulk ordering and logistics connect workshop bills to storage, caravans, and orbital manifests. Construction validates resources and actual placement without producing free machines.
+
+6.10 AGRICULTURE, ECOLOGY, AND BENIGN BIOTECHNOLOGY
+
+Connect soil, water, climate, pollination, compost, crop choices, and habitats through a bounded ecological model. Greenhouses and irrigation trade construction and energy against local conditions. Seed selection, breeding, and cultivation can improve suitable traits without requiring endless random rerolls.
+
+Use fermentation, cultivated fungi, enzymes, fibres, oils, and food preservation as benign process families. Biomass can come from crops, forestry residues, algae, compostable waste, or trade. Friendly creatures must not become compulsory slaughter inputs. Ecological restoration and efficient production can cooperate, with visible effects on water and habitat.
+
+6.11 ADVANCED ENERGY HAS DISTINCT PURPOSES
+
+Keep solar, wind, water, geothermal, biomass, and conventional thermal generation useful where local resources favor them. Fission can support compact steady power with fuel, cooling, shielding, inspection, and residual-heat concerns represented by bounded, readable game systems.
+
+Fusion belongs later as a demanding integrated power system: startup energy, magnets or other confinement equipment, fuel handling, cooling, and conversion losses all matter. Show net output after internal loads. Treat practical compact fusion and exotic magitech as the setting's technology, not proof of current real-world capability. Large installations can power orbital industry without making small local systems pointless.
+
+6.12 MACHINES MUST EXPLAIN THEMSELVES AND SCALE WELL
+
+Give machines physical ports, moving parts where useful, readable gauges, access clearances, sound, and condition indicators. Show throughput, energy per product, actual utilization, lost time, output quality, and the current bottleneck. An in-world inspect view and a short animated process explanation should be enough to build the first functioning line.
+
+Use cached connection graphs and invalidate only affected topology. Sleeping machines wake on input, condition, control, or topology changes. Aggregate stable flows and homogeneous lots while preserving inventory, energy, and terminal circuit contracts. Visual belts and pipes may render representative motion without creating a physical entity per item or fluid unit.
+
+Bound dirty work, controller evaluation, solver iterations, and scheduling queues. Remote factories follow the same conservation rules at an appropriate abstraction level. Promote them to detailed simulation without duplicating work or stock. Host authority owns transfers and process completion; clients run actual local physics for interactive machinery and bodies, while noninteracting presentation may interpolate.
+
+Validate one complete product chain before expanding: prospect and obtain material, process alternative feedstocks, fabricate a controller, power a useful pump, automate its supply, and use the result to improve a settlement or restore a ruin. Then test larger factories, parallel players, interrupted power, blocked outputs, saved partial batches, and network splits. Profile representative machines and report the hardware and scene. Do not claim superior performance without measurements.
+
+7. BUILDABLE SPACECRAFT AND A PLAYABLE PLANETARY FRONTIER
+
+Research status: 29 October 2026. This is a proposed implementation chapter, not evidence of repository changes, working spacecraft or measured performance. Preserve Axiom/Meridian's Windows-first Rust + raw WGPU engine, existing planetary authority, inventories, orbital infrastructure and multiplayer contracts. Do not introduce Bevy or a replacement engine.
+
+REFERENCE BOUNDARY
+
+Seed of Andromeda's public game-code repository identifies an MIT-licensed C++ codebase with Vorb and game-data submodules; its documented Windows setup still targets Visual Studio 2015 [F1]. Regrowth's historical announcements presented spherical voxel mapping and reported terrain-generation and meshing work, including a move to 64-bit CPU generation because of GPU precision problems [F2–F3]. Its broader survival, settlement, crafting and spaceflight vision contains future intentions [F4]. Treat these as technical inspiration and historical prototype evidence, not proof of a finished interconnected game. This chapter has not built or executed that project.
+
+Axiom's objective is continuous ownership and understandable travel between detailed places: build a craft at home, load actual supplies, fly it, reach another world, explore or construct something useful, and return with persistent consequences.
+
+7.1 MAKE FLIGHT SERVE THE SANDBOX
+
+Ships should expand what the player can do. An atmospheric hauler reaches a distant ruin; a shuttle makes an orbital workshop usable; a survey craft discovers landing sites; a rescue tug recovers a disabled vessel; a freighter connects player settlements. Combat is one activity among exploration, industry, trade, salvage and companionship.
+
+Keep homes relevant throughout progression. Early workshops produce frames, controls, containers and fuel. Later bases supply specialized fabrication, coolant, life-support consumables, maintenance and freight handling. Space resources improve terrestrial projects, while agriculture, ecology, communities and cultural discoveries continue to matter.
+
+Use existing elevators, skyhooks and transport services as alternative access routes. Owning an advanced spacecraft must not be the only way to visit an orbital destination. A player can initially buy passage, ship cargo or operate a receiving station, then construct a vessel when its freedom becomes useful.
+
+7.2 A PROGRESSION OF COMPLETE TRIPS
+
+Stage A — local mobility. Complete one practical atmospheric craft with cargo, controllable takeoff, terrain-aware travel and landing. A light survey aircraft, powered glider or modest cargo flyer is sufficient. Its propulsion and lifting surfaces must operate according to declared rules; a fan cannot work in vacuum merely because the same control remains pressed.
+
+Stage B — surface-to-orbit. Provide an achievable shuttle with tanks, propulsion, controls, a protected cabin and a return capability. The player can follow a flight director or engage a bounded autopilot. Reaching altitude alone does not count as achieving orbit. Prove an orbital rendezvous, docking, unloading, departure and safe return using the same craft and inventories.
+
+Stage C — nearby moon. Add a distinct destination, survey, landing, EVA, a small field installation and a return journey. Supply clear fuel/reserve estimates and recovery options. The first moon trip should reveal a useful new environment or process, not only a differently colored ore field.
+
+Stage D — interplanetary service. Introduce one explicitly fictional cruise drive or established transfer service to shorten otherwise tedious transit. Define entry conditions, energy/material costs, departure and arrival states, interruption rules and navigational limits. It must not silently convert ordinary thrust into unlimited velocity.
+
+Stage E — specialist fleets and orbital construction. Expand into research vessels, tugs, habitat tenders, heavy freight and combat craft after the shared construction and travel contracts work. Stations, surface settlements and orbital infrastructure create distinct destinations and purposes.
+
+Each stage is playable before the next. Avoid requiring an entire semiconductor history or enormous factory before the first useful flight. Manufactured improvements should broaden options and efficiency, with recoverable machinery, trade and service access supplying alternative routes.
+
+7.3 CONSTRUCT SHIPS FROM THE PLAYER'S ACTUAL DESIGN
+
+Represent a vessel as a persistent assembly of structural cells or modules with functional components. Preserve Axiom's detailed voxel appearance without requiring every visible voxel to become an independent rigid body.
+
+Derive dry mass, cargo mass, fuel mass, center of mass and rotational inertia from the assembly. Thrusters produce forces at their actual attachment points; asymmetric placement creates torque. Control systems distribute commands across available actuators and explain inadequate authority. Losing an engine or changing cargo can change handling.
+
+Provide structural attachment rules, accessible interiors, containers, tanks, power connections, seats, doors, docking interfaces and useful service access. Shared building tools, blueprints and manufacturing should work for vessels. A preview identifies missing equipment, blocked exits, insufficient lift, unsafe loading or disconnected machinery using concrete explanations.
+
+Use compound collision representations for coherent hull sections. Rebuild only changed sections and derived properties. Structural damage may detach meaningful pieces; tiny debris can become bounded effects or simplified salvage. Do not simulate thousands of full rigid bodies merely because a panel broke.
+
+Copying a blueprint does not copy its inventory, fuel or unique modules. Assembly, disassembly, salvage and conversion between a landed structure and a vessel must conserve material through the existing ownership and inventory systems. In-flight edits need safe, atomic topology updates and relevant construction rules.
+
+Stage structural changes under one topology revision. Commit the relevant authoritative hull, collider, module locations, mass properties, compartment changes and ownership transfers consistently. Expensive derived work may be prepared asynchronously and only changed regions rebuilt, but gameplay must not use an unexplained mixture of revisions. Cosmetic meshes may lag through a controlled visual transition. Do not turn every hit into a synchronous whole-ship rebuild.
+
+Detachment assigns fragments, attached cargo and occupants their appropriate pre-split point velocities and angular motion. Recomputing center of mass or changing the assembly's reference origin must not itself create an impulse. Apply declared ejection, collision or docking impulses separately, and commit identity and inventory transfers through the existing durable operation. Loading and unloading should account for transferred mass and momentum at the supported physical abstraction; changing cargo must not become a free propulsion exploit.
+
+7.4 KEEP SCIENCE LEGIBLE AND SELECTIVELY SIMPLIFIED
+
+Use kilograms, meters, seconds, newtons, watts and joules consistently. Separate energy storage from power limits. A large battery can still have limited output; a powerful engine can still lack propellant. Chemical engines use propellant energy; electric propulsion uses electrical power and reaction mass. Neither creates free fuel.
+
+For conventional rockets, provide a consistent effective exhaust velocity and mass-flow model. The ideal relationship delta-v = exhaust_velocity × ln(initial_mass/final_mass) can support planning estimates, with losses and operating assumptions shown separately [F5]. Players receive practical range/reserve guidance instead of having to calculate equations manually. Fictional engines state where they differ.
+
+Represent a limited thermal network: machinery produces waste heat, storage absorbs it temporarily, heat exchangers move it, and exposed radiators reject it. NASA's thermal-control material supports this general energy-balance framing [F6]; Axiom's coefficients and time scales are gameplay choices. Radiators cannot function as unrestricted heat deletion inside sealed walls. Avoid expensive fluid or radiative-transfer simulation for every pipe and surface.
+
+Atmospheric lift and drag can use aggregated exposed areas and authored component coefficients. Pressure, gravity, atmosphere density, local temperature and weather should affect operations coherently. Use simple survivable envelopes and clear warnings before obscure material failures. Do not implement full computational fluid dynamics or a whole-ship finite-element solver.
+
+Magitech modules obey explicit inputs, limits and failure conditions. They can enable unusual craft without pretending to be ordinary physics. Scientific and magical designs should both create choices rather than one universally superior technology.
+
+7.5 MAKE CONTROLS PLEASANT BEFORE ADDING DEPTH
+
+Support mouse/keyboard and appropriate controller inputs through the existing input system. Provide clear pitch, yaw, roll, translation, throttle and braking behavior. Let the player configure assistance without requiring a cockpit full of switches for routine travel.
+
+Flight assist requests achievable acceleration and attitude changes from the actual craft. It cannot erase momentum without available force. Distinguish surface-relative velocity, target-relative velocity and orbital motion in the HUD. Showing one unlabeled speed value creates avoidable confusion.
+
+Provide heading/attitude guidance, approach cues, reserve estimates, terrain warnings and a readable indication of the current travel mode. Autopilot can hold attitude, match a reachable target velocity, follow a validated approach or complete a booked transfer. It uses the same actuator, fuel, collision and authority rules as manual control.
+
+Failure should remain understandable. A damaged thruster causes a visible handling problem; low reserves suggest nearby services; overheating invites reducing load or exposing cooling. Give the player time to respond. Beginner assistance should enable interesting journeys while skilled manual piloting remains worthwhile.
+
+7.6 USE EXPLICIT REFERENCE FRAMES AND PRESERVE VELOCITY
+
+Maintain persistent frame IDs for the system, relevant bodies, local encounters, vessels and attachments. Every state carries a timestamp/epoch. Store authoritative large-scale coordinates at sufficient precision; convert to small camera-relative values before supplying ordinary float GPU transforms. Never subtract two enormous float positions after precision has already been lost.
+
+A frame change transforms position, orientation, linear velocity and angular velocity. For a local point r with orientation R, the parent-space position is x0 + Rr. Its velocity includes origin velocity, rotated local velocity and the rotational term omega × (Rr). NASA's SPICE documentation distinguishes position transformations from full state transformations for this reason [F7]. Merely rotating a velocity or resetting it on a boundary is incorrect.
+
+Choose the numerical physics frame explicitly. A translating frame is inertial only while its origin is nonaccelerating. If an encounter frame follows an accelerating or orbiting origin, account for that acceleration explicitly or integrate motion in an inertial parent frame. A body-fixed rotating frame also needs the appropriate inertial effects. Do not silently mix these cases. Ground contact must include the surface's motion, and releasing cargo inherits the correct point velocity.
+
+Origin rebasing is a coordinate operation, not a force or teleport. Transform dependent trails, constraints, projectiles, particles, audio positions and network interpolation consistently. Boarding a moving craft preserves relative motion; disembarking does not drop the player into an unrelated world velocity.
+
+7.7 BOUND ORBITAL AND INTERPLANETARY SIMULATION
+
+Use prescribed or otherwise bounded planet/moon motion compatible with the existing world model. Nearby encounters run the required local dynamics. Distant inactive craft can use analytic or numerically bounded dominant-body propagation, updating at relevant events rather than every rendered frame.
+
+Advancing a vessel in its coarse representation must advance relevant fuel balances, life support, leaks, thermal conditions and scheduled maneuvers to the same simulation epoch. Use bounded analytic or event updates, including threshold events that change the mode or outcome. Changing representation, disconnecting or loading a region must not reset reserves, freeze a consequential hazard or provide an uncosted journey. A whole-world pause or configured offline policy applies consistently; it is not inferred from which player is nearby.
+
+Compact planets still need consistent radius R, surface gravity g and gravitational parameter mu: for the chosen spherical model, mu = g × R². Derive orbital speeds and synchronous geometry from that model. If gameplay requires incompatible values, declare the fictional field instead. Schedule travel against simulation time, not an unrelated wall clock.
+
+Patched-conic methods divide transfer analysis into phases with different dominant bodies [F8]. Axiom may use a simplified version with documented boundaries and hysteresis. Crossing one must preserve the physical state at the same epoch; avoid repeated switching, artificial impulses and inconsistent predictions.
+
+The planning preview and actual travel must use compatible assumptions. If fuel, mass, damage or a maneuver changes, revise the forecast. Do not display a perfect trajectory from one model while the ship follows another.
+
+All multiplayer participants share the authoritative clock. Do not accelerate the universe independently for one pilot. The fictional cruise/transfer mode can shorten travel through its declared rules while maintaining route, cargo and encounter continuity. Single-player time acceleration, if supported later, must respect active hazards and simulation limits.
+
+7.8 DOCK, LAND, WALK INSIDE AND GO OUTSIDE
+
+Landing requires actual clearance, surface support and a safe relative velocity. The craft remains an owned persistent assembly. A landing assist may perform the maneuver; a valid approach must not become a teleport through terrain. Cargo ramps and doors need enough space to be used.
+
+Docking requires compatible interfaces, alignment, acceptable relative motion and permission where relevant. Capture creates a validated constraint or merged motion arrangement. Services and inventory transfer become available after that transaction succeeds. Undocking releases constraints once and preserves the correct velocity.
+
+Let players walk inside moving ships using coherent contact and attachment behavior. Seats, handholds and magnetic boots can provide understandable stabilization. Any artificial gravity has an explicit rule. Avoid a separate fake cabin whose doors and occupants do not correspond to the external vessel.
+
+EVA needs a usable suit, breathable reserve where required, power, controllable movement, a return beacon and clear status. Tethers, handholds, rescue lines and recoverable emergency supplies make mistakes interesting. Airlocks and compartment leaks can use a simple connectivity-and-volume model; recalculate affected compartments after relevant edits rather than flood-filling the whole ship every frame.
+
+Provide rescue gameplay: locate a distress signal, match motion, reach the casualty, repair or tow the vessel, and deliver people or cargo. Losing propulsion should not automatically mean deleting a campaign's unique inventory.
+
+Default assistance favors recoverable mistakes and bounded rescue costs. Recovery relocates or repairs existing assets; it does not duplicate them.
+
+7.9 MORE PLANETS SHOULD MEAN DIFFERENT EXPEDITIONS
+
+Author a bounded family of useful destinations and let seeded geography vary them. Proposed roles include a temperate homeworld; an airless icy moon with cold traps; a dry storm-prone mineral world; a dense-atmosphere world requiring different landing and cooling choices; an active volcanic moon with difficult terrain; and gas-giant environments accessed through suitable stations or upper-atmosphere facilities.
+
+These are gameplay hypotheses, not a requirement to implement six unfinished worlds simultaneously. Complete the homeworld/moon journey first. Do not give gas giants an arbitrary solid landing surface.
+
+Ordinary biological creatures require suitable habitat or life support; native vacuum life needs an explicitly fictional physiology.
+
+Each destination needs scientific resources, exploration discoveries, communities or remnants where appropriate, and a reason for a persistent installation. Avoid requiring a unique mandatory ore from every planet. Alternatives, trade and specialized advantages preserve player freedom.
+
+Preserve the established regional art direction while keeping navigation, silhouettes and planet lighting readable. Crimson nexus spaces remain distinct authored dimensions; they do not require every physical star system to have the same crimson sky. Atmospheres, eclipses, rings and visible orbital installations should follow the authoritative system state. A beautiful approach must resolve into the same reachable terrain, city or station.
+
+7.10 STREAM SAFELY, PRESERVE AUTHORITY, AND PROVE THE TRIP
+
+Stream according to predicted travel and stopping/approach requirements. Use coarse planetary representations far away, refining terrain, structures and collision ahead of contact. Prefer bounded destinations and safe holding approaches when data is not ready. Never permit collision with invisible terrain or a landing pad that appears after the ship intersects it.
+
+Run full collision and high-frequency behavior only around relevant encounters, crew and edited installations. Keep distant ships as compact travel records. Debris, exhaust, shadows and interior simulation have explicit budgets. Local edits update nearby meshes and collision asynchronously without changing authoritative hull or cargo state twice.
+
+The player-hosted or user/community-hosted authority owns accepted vessel identity, controls, topology, damage, fuel, passengers and inventories. Every relevant client runs actual local vessel/contact physics and reconciles against state carrying frame IDs, epochs and topology/collision revisions. Docking, cargo transfer, capture, destruction and recovery use idempotent transitions. Loading a region or reconnecting cannot manufacture another ship or duplicate supplies.
+
+Validate one complete atmospheric cargo flight, then one orbital round trip, then one moon expedition with EVA and rescue. Include save/load during flight, frame transitions, docking retries, cargo changes, component damage, a streamed approach and multiplayer reconnection where supported. Check momentum continuity, mass/resource accounting, identity preservation and visible behavior.
+
+Profile busy surface departure, approach to a detailed station, cockpit/interior movement and entry into a populated planetary region. Record tail frame times, collision work, mesh/upload spikes and memory alongside average throughput. The expansion is incomplete if only an empty ship flies over a placeholder planet.
+
+8. PILOTING, SHIP ROLES, DISCOVERY AND SYSTEMIC SPACE COMBAT
+
+Research snapshot: 29 October 2026. Design proposals for Axiom/Meridian, not an implementation report.
+
+8.1 WHAT TO LEARN FROM ELITE DANGEROUS
+
+Frontier's established manuals describe flight assistance as automatic counterthrust, allowing an optional less-assisted control style. They distinguish ordinary maneuvering, in-system supercruise, and interstellar hyperspace jumps. They also separate power distribution, stored subsystem capacity, internal heat, emitted signature, and sensor contact resolution. These are useful design distinctions; the older manuals are not a complete statement of the current game's balance or controls. [E1, E2]
+
+Frontier's October 2025 introductory guide confirms useful specialization through hardpoints, utilities, core and optional modules; staged discovery and surface mapping; and a mining chain involving prospecting, extraction, collection and refining. Its combat guidance connects power allocation, weapon choice and aiming assistance. [E3]
+
+Current Frontier announcements strengthen the connection between space activities and places: September 2026's Rhino update describes surface scanning, deployable mining equipment and a multi-crew vehicle, alongside a settlement-blockade operation. October 2026's Found Adrift operation concerns recovering an asset from an abandoned megaship. These are specific references, not evidence that Axiom has implemented comparable systems. [E4]
+
+Translate those ideas into a world where ships serve settlements, discovery, construction and friendship. The following systems and encounters are original Axiom proposals. Preserve its existing orbital elevators, skyhooks, freight custody, frame conventions and authoritative multiplayer architecture.
+
+8.2 PILOTING WITH A CLEAR PHYSICAL CONTRACT
+
+Use the spacecraft construction chapter's physical local flight: available thrust and torque move the actual loaded vehicle. Flight assist requests counterthrust from installed actuators; it cannot brake instantly or conceal missing engines. Offer approachable assisted controls, optional independent translation/rotation, a velocity-vector indicator, and a deliberate brake/match-velocity command.
+
+Always show the reference frame used by velocity matching. Matching a landing platform, a nearby vessel, or a local orbital frame are different actions. Do not damp a healthy orbit toward zero velocity relative to the planet's center. Damage or overload should produce readable loss of control authority, with a suggested recovery action.
+
+Atmospheric flight, docking and orbital maneuvering use appropriate conditions without demanding specialist knowledge before the first useful journey. Provide a short practice course around the home outpost: lift a loaded crate, translate sideways, brake at a marked berth, land, and transfer it. Let players inspect how loading changes acceleration and stopping distance.
+
+Long-distance convenience follows the agreed explicit fictional cruise/transfer mode, not an unexplained multiplication of ordinary thrust. Define entry clearance, energy/fuel use, destination validation, abort behavior and exit velocity. Axiom need not implement all of Elite's travel modes immediately. No independent multiplayer time warp; shared-world time and orbital schedules remain coherent.
+
+Navigation automation can handle routine journeys once a route is established. Meaningful moments should be surveying a new approach, negotiating access, flying through dangerous terrain, docking or responding to an event. Avoid long mandatory intervals of watching a countdown.
+
+8.3 SHIP ROLES EMERGE FROM BUILD CHOICES
+
+Create six initial role examples from the same module and physics rules:
+
+- Survey launch: excellent visibility, scanners, sample storage and a small landing footprint; limited carrying capacity and protection.
+- Frontier cutter: versatile cargo, a workshop and modest defensive equipment; capable of long expeditions without excelling at every task.
+- Salvage tug: maneuvering authority, clamps, cutters, repair equipment and handling access; useful for disabled ships and orbital construction.
+- Prospector tender: geological sensors, extraction tools, sorting/refining equipment and a deployable surface machine; depends on logistics and careful heat management.
+- Escort skiff: rapid response, useful pursuit sensors and modest sustained armament; sacrifices industrial volume and expedition endurance.
+- Expedition habitat: beds, life support, laboratory, cargo and small-craft service; a comfortable mobile base with substantial docking and maneuvering demands.
+
+These are starter designs, not immutable classes. Players can rebuild them, save blueprints and manufacture replacement modules. A small clever ship should retain useful roles after larger craft become affordable. Larger hulls need operating and handling tradeoffs rather than universally better statistics.
+
+Use the same scientific industry as ground factories. Better wiring supports more power, improved capacitors support bursts, precision controls improve actuator response, and better heat exchangers improve sustained operation. Give each improvement an observable benefit. Avoid a second disconnected currency or repetitive material lottery exclusively for ship upgrades.
+
+8.4 POWER, ENERGY AND HEAT CREATE DECISIONS
+
+Separate instantaneous power availability, stored energy, thermal storage and heat rejection. Present normal operating presets such as Cruise, Survey, Combat, Quiet Approach and Emergency. Experienced players can edit priorities and reserve limits without requiring constant button tapping.
+
+Priorities allocate a finite electrical budget among propulsion, defensive systems, tools, sensors and accommodation. They do not create extra energy. Essential life support and control have protected configurable reserves. Starting a powerful tool should clearly show which optional system is curtailed when supply is insufficient.
+
+Use a small thermal network per ship: major heat sources, shared coolant circuits and radiator/storage groups. Track energy consistently; thermal storage cannot absorb waste heat forever. Radiator deployment, damaged coolant paths and atmospheric conditions change sustained capability. Show useful quantities and a forecast such as time until a thermal limit, while allowing a simpler status view.
+
+A quiet approach can reduce reactor load and exposed emissions while consuming thermal headroom. It is temporary and directional circumstances matter; it is not perfect invisibility. Opening radiators restores sustainable operation while making the vessel easier to detect under suitable sensor conditions. A heat-sink cartridge consumes a real item and transfers heat into it. A magical heat sink must name its destination, capacity or cost rather than silently deleting unlimited heat.
+
+Do not simulate every coolant molecule or electrical waveform. Reuse the existing power/circuit abstraction, aggregate unchanged sections, and recompute affected connectivity after meaningful edits.
+
+8.5 SENSORS AND COMBAT INFORMATION
+
+Model what a pilot knows separately from the server's world state. Contacts progress from uncertain bearing or signal, to localized object, to identified vessel, to inspected equipment or cargo where the installed sensor permits it. Preserve source, age and uncertainty in the navigation log.
+
+Use bounded sensor queries over spatial candidates. Account for distance, obstruction, sensor mode, target emissions and relevant environment. Avoid testing every ship against every object across a planet each frame. The player should understand a few useful actions: reduce emissions, use terrain or structures to break observation, actively scan, share a contact, investigate a beacon, or follow a last-known trajectory.
+
+Combat UI must communicate relative movement, weapon range, line of fire, charge or reload state, heat, defensive status, damaged modules and an escape option. Important cues require shape, animation or text as well as color. Keep messages short and persistent in a log instead of hiding them behind modal screens.
+
+Provide a forgiving assisted weapon option with visible tracking limits, alongside manually aimed weapons. Readable attacks need an identifiable preparation, firing event and consequence. A hostile approaching with a scanner, a charging siege weapon and a fleeing freighter should not all look like identical red triangles.
+
+8.6 MODULAR DAMAGE AND MAGITECH COUNTERPLAY
+
+Use the construction system's real layout. Engines, radiators, exposed sensors, cargo access and protected control systems have meaningful locations. Armor and structure affect which modules can be reached. Damage can disable, leak, jam or detach something before destroying the whole vessel.
+
+Keep causal results legible. A punctured cooling line reduces sustained output; a disabled maneuvering cluster makes a particular correction harder; an opened cargo bay exposes an extraction route. Repair, isolation, emergency rerouting and towing provide alternatives to total replacement. Detaching a section transfers its modules and inventory into one persistent fragment identity.
+
+Extend Noita-like spell composition through a bounded typed system: emitter, delivery behavior, timing/modifier and impact effect. Examples include a conductive tether that links exposed equipment, a frost projector that temporarily changes a material interaction, a repulsion burst that moves loose debris, and a ward that alters compatible projectile paths. Physical and magical effects must use shared interaction rules where appropriate.
+
+Every capability needs a cost, readable cue, countermeasure and computational limit. Prevent unbounded recursive projectiles, particle-induced physics storms and infinite cargo creation. Decorative trails can be client effects; damage, forces, inventory consumption and lasting material changes remain server authoritative. Unique enemy mechanics should emerge from available systems, not hidden immunity to every player invention.
+
+8.7 COMBAT HAS OBJECTIVES, OFFRAMPS AND CONSEQUENCES
+
+Give groups an origin, resources, information and purpose. Pirates want cargo or payment; scavengers want a recoverable component; patrols protect a route; a damaged machine defends its installation. They can negotiate, withdraw, pursue, surrender, call known allies or change priorities when the situation changes.
+
+A cargo demand identifies the requested goods and conditions. Complying should have a coherent chance of ending that encounter under the faction's established behavior. Repeated treachery, rescue or resistance changes actual relationships. Do not teleport endless replacement pirates into view because the hold contains something valuable.
+
+Retreat should be an intentional skill: cover, evasion, decoys, propulsion reserve, breaking a sensor track, docking with protection or making a valid cruise escape. Provide an understandable reason when an escape method is unavailable. Avoid a universal invisible combat lock that forces every meeting to end in destruction.
+
+Friends can share one craft or operate separate vehicles. Pilot, observer/navigator, turret operator, engineer and salvage handler are useful activities, but no basic ship should require several humans to fly. Solo presets and capable routine automation cover unattended stations. Co-op adds choices rather than mandatory workload.
+
+8.8 FIVE ORIGINAL ENCOUNTER FAMILIES
+
+The Interrupted Catch: a real skyhook shipment approaches Talon Catchfields while a raider group attempts to seize its receiving equipment. Repair the beacon, negotiate, escort the descending carrier, divert it to a valid alternative or defend the apron. Track the same consignment identity and custody through every choice. Diversion, damage, theft, delivery and destruction have explicit outcomes; changing the encounter state must not spawn a replacement copy. Success changes regional freight reliability.
+
+The Turning Conservatory: an abandoned orbital greenhouse rotates around a damaged service structure. Recover botanical records and living specimens by matching motion, restoring power, stabilizing a docking arm, cutting an alternate entrance or using a supported portal. Quiet maintenance machines and territorial creatures complicate salvage. Destroying everything is possible but loses particular opportunities.
+
+The Shardbelt Bargain: prospectors and scavengers contest a small belt containing both valuable rock and historical wreckage. Scans distinguish ore, stressed cavities and recoverable modules. Careful extraction preserves evidence; indiscriminate blasting damages it. Trade information, hire help, protect a tow or quietly retrieve a component through debris cover.
+
+The Stormshore Supply Route: a surface settlement needs a replacement pump during severe weather. A tender can land farther away and deploy a rover, use a repaired cableway, risk a difficult sheltered landing or bring a lighter assembly in stages. Local defenses, wildlife and terrain create choices; combat is one possible complication, not the only activity.
+
+The Crimson Anchorage: a ruined fortress merges industrial defenses with magical circuits. Approach along derelict service structures, disable a relay from the ground, disrupt a visible ward network, dock and board, or construct a protected route. Interior action, exterior ship support and infrastructure repair affect the same site. Useful shortcuts follow the game's construction and magic rules.
+
+8.9 EXPLORATION AND INDUSTRY CLOSE THE LOOP
+
+Discovery progresses from broad orbital reconnaissance to targeted inspection, then sampling or physical investigation. A scan should reveal a decision, not merely award another completion percentage. Record landing conditions, deposits, life, anomalies, ruins, routes, local societies and the reliability of each observation.
+
+Mining includes choosing a deposit, finding a safe productive approach, extracting useful material, separating it and arranging transport. Offer manual precision, deployable equipment and automation as progressively useful options. Asteroid and surface resources feed the same fabrication economy. Depleted or altered sites persist according to their declared regeneration rules.
+
+Exploration rewards new designs, relationships, organisms, unique mechanisms, attractive places and practical routes. Common commodities can become automated; meaningful discovery remains valuable. A successful expedition brings something home that changes a workshop, garden, vehicle or settlement. Resupply, repair, storage, research and visitors give a base lasting purpose.
+
+8.10 BOUNDED IMPLEMENTATION AND PROOF
+
+Reuse the existing authoritative server, durable operations, vehicle frames, cargo ledger and region activation contracts. Do not create a second ship networking architecture. Predict the controlled vehicle only within a measured bounded scope; replicate major state and damage events, while reconstructing cosmetic effects locally.
+
+Distant craft follow coarse routes or the chosen orbital propagation model. Only relevant encounters activate detailed pilots, weapons and physical interactions. Use compound ship collision, spatial queries and selective continuous collision checks. Limit fragment and projectile work without discarding lasting inventory or changing an outcome because a camera moved.
+
+First prove one enjoyable loop: assemble a useful small craft; load it; practice maneuvering; survey a nearby site; recover a real component with an optional confrontation; return; unload; improve the base. Then prove a two-to-four-player variant with separate roles, a damaged module, an interrupted cargo transfer and reconnect aboard a moving ship.
+
+Acceptance covers understandable controls, visible load/thermal tradeoffs, worthwhile noncombat outcomes, meaningful retreat, module damage and repair, conserved cargo, stable frame transitions, persistent discoveries and bounded CPU/GPU/network costs. Test loss and constrained bandwidth during combat and boarding. Report actual hardware and scenes; a library, tutorial or another game's scale proves none of Axiom's performance.
+
+9. EXPEDITIONS MUST CHANGE WHAT THE PLAYER CAN BUILD
+
+9.1 A concrete first journey
+
+Begin with an already useful home workshop, a visible orbital landmark and a radio report concerning a real delayed consignment. The map distinguishes the predicted receiving area, the report's age, the receiving authority and the confirmed landing point. Restoring a relay or speaking to an operator improves information. A player can repair the receiving apron, trade for passage, join an expedition, restore a small craft or commission the missing part. The first offworld trip must remain accessible before advanced chip fabrication or a fusion plant.
+
+An initial Cairn expedition supplies a borrowed or repaired survey kit, a comprehensible landing site, a safe return option and two plausible objectives. One route surveys a sheltered volatile deposit; another visits an old service facility with usable equipment. The player can learn, recover a real pump/controller, help a stranded worker or acquire a practical surface contract. Combat is a possible complication with alternatives. Observations and interventions persist.
+
+Returning home should produce an immediate improvement: a reliable greenhouse pump, a better thermal controller, a calibrated prospecting instrument, a new freight connection or a useful recruit. The journal explains what the recovered device does and how it can be maintained or reproduced. Manufacturing a second unit becomes attractive because the first already proved its value. A player who prefers construction can obtain the same functional class through trade, another salvage site or a terrestrial process route.
+
+The next expedition carries something the player made. Improved controls or thermal hardware now solve a problem that the player previously experienced. That is the recurring rhythm: discover, understand, recover or fabricate, use, and change a place. Do not turn every discovery into a recipe icon that has no effect until several unrelated planets have been visited.
+
+9.2 Four production and exploration loops
+
+Water and propellant: survey a candidate deposit, estimate recoverable material and energy demands, choose extraction and treatment equipment, and compare local processing with importing supplies. Water can support people, crops and supported chemistry; electrolysis consumes energy and produces accounted gas outputs. Fuel cells return part of the stored chemical energy with losses. Condensation, purification, pressure storage and waste heat have useful roles. A functioning depot enables a heavier load or a more ambitious route. It also gives traders a reason to visit. This is an application of resource utilization concepts, not a promise of a complete real chemical plant. [C3]
+
+Controls and expeditions: encounter a rover that stalls on loose terrain or a pump that cycles badly, inspect signals, select a controller or modify a functional board, test it under representative load, and install the improved device. Sensors, filters, control logic, motors, power limits and thermal protection each have a role. Distinguish a control problem from inadequate torque, traction, source current or cooling; a better IC cannot remove those physical bottlenecks. A compact custom IC may make the controller smaller or more efficient within the earlier electronics contract. It must still implement actual logic. Factory automation, flight stabilization, agriculture and a ruin's mechanisms use the same building blocks.
+
+Materials and hot-world operation: compare a readily available alloy, a lighter processed alloy, a refractory ceramic and a protected composite for a particular application. Choose between mass, temperature capability, brittleness, corrosion resistance, repairability and manufacturing effort. Cinder might favor remote equipment and replaceable hot-side components; an ocean port might reward corrosion control and seals. Purity and process history affect supported properties. No material is simply a universal higher tier. A local service contract can justify a specialized workshop while ordinary repairs stay practical.
+
+Survey and logistics: investigate a route, inspect local demand, establish a landing pad or dock, connect power and storage, book actual consignments and watch the route become useful to settlements. Repeat journeys can be scheduled through capable autopilots or carriers. Production has finite throughput, transport has capacity and journey costs, and demand responds to real activity. Improvements shorten a difficult trip, stabilize deliveries or make a remote settlement more independent. Avoid collapsing every successful route into an automatic endless raid generator.
+
+9.3 Science has decisions and evidence
+
+Provide investigations with competing explanations or engineering options. A mineral sample might distinguish a rich accessible vein from a poor weathered surface. A thermal survey could reveal that a shadowed depot saves refrigeration power but needs imported electricity. An electrical trace can distinguish inadequate generation from current limiting or a bad connection. A cloud probe can compare pressure, weather and power demand at several operating altitudes. A biosurvey can connect a creature's feeding behavior to a local resource cycle. Show observations before asking for a conclusion.
+
+Record the sample location, conditions, equipment, result and confidence. Let players compare readings and repeat measurements. Instruments need meaningful limitations, but routine scanning should not become a long animation repeated over identical objects. A laboratory adds a specific analytical capability or supports experiments; it does not merely convert colored research points into permission to craft.
+
+Provide a small test range and instrument bench at an early stage. Players can compare radiator arrangements, motor loads, controller responses and suit endurance under supported conditions before risking a long trip. Forecasts state their assumptions. Observed results can improve a design or expose a faulty assumption. Fast presets make this approachable, while experienced players can inspect quantities and graphs.
+
+10. COMBAT EQUIPMENT AND SURFACE-TO-SPACE OPERATIONS
+
+Give weapon and tool families distinct jobs using the same construction, energy, thermal, sensor and material rules. These are game capabilities, not real weapon manufacturing specifications.
+
+- Kinetic mounts: finite ammunition, recoil and travel time make movement and loading matter. Geometry and module placement govern protection. Aiming assistance has visible limits, and distant misses expire under a bounded lifetime/range policy.
+- Beam tools and weapons: require a clear path, electrical input and heat rejection. Cutting a disabled hull, clearing an obstruction and attacking an exposed component can share supported material interactions. If local beams use an effectively instantaneous hit test, document that encounter-scale approximation and retain occlusion.
+- Guided projectiles: require a supported guidance method and useful tracking information. Maneuvering, structures, decoys, tracking disruption and point defense provide counters. Bound active seekers and prediction work. A seeker does not receive secret perfect knowledge merely because the server knows a target's location.
+- Close industrial equipment: clamps, grapples, repair arms and cutters allow rescue, towing, salvage and boarding. Securing a damaged freighter can be more valuable than destroying it. Forces and attachment permissions remain explicit.
+- Magitech equipment: wards, conductive links, repulsion, temporary material changes and constructed spell devices use bounded typed effects. A ward's scope, upkeep and counterplay are visible. Magical cooling, acceleration or shielding declares its exceptional rule and cannot silently turn a conventional device into a source of unlimited energy.
+
+Environmental differences should influence tactics. An atmosphere changes drag and flight support; terrain provides actual obstruction; a dense storm can affect a supported sensor model; vacuum changes cooling and suit requirements. Ring textures and distant asteroid scenery do not become invisible collision walls. Resolve physical obstacles where an encounter requires them and use consistent authoritative geometry for movement and attacks.
+
+Link exterior and interior action through the same site. A team can interrupt a power feed, land under cover, disable a control module, board through a real opening, extract an occupant or tow a prize. Friends outside can provide repairs, transport or support. Solo play supplies routine automation and alternate approaches. Do not require a crew member to stare at a meter for the whole flight.
+
+Defenses can create lasting security. Restoring a station, improving observation, negotiating access, protecting a route and reducing a raider group's capacity should change later encounters. Enemy escalation needs a causal source and visible limits. Secure facilities and ordinary travel can remain calm; exploration needs room for beauty, curiosity and surprising friendly encounters.
+
+11. ONE INHABITED WORLD FROM THE WORKSHOP TO THE OUTER SYSTEM
+
+11.1 People, ecology and industry
+
+Carry the existing friendly-mob, sapient-culture and occupation systems into the frontier. Use plausible environmental capabilities: ordinary residents require suitable habitats, equipment and supply; exotic life needs an authored ecology or explicit magical mechanism. Do not distribute the same satyr camp across airless moons and ocean trenches. A ship mechanic, botanist, instrument maker, freight scheduler, pilot, diver or surveyor adds a capability and social connection using the same recruitment and work system as the home settlement.
+
+Settlements arise from local advantages, transport, resources, historical institutions and the state of old infrastructure. A mining camp, relay monastery, orbital garden, shipbreaking district and ocean research port should have different layouts, routines, services and dependencies. The Dwarf Fortress-inspired history should explain who built a place, how it changed and why people remain. Preserve livable circulation, legible districts, attractive public spaces and enough ordinary activity to make the place feel inhabited.
+
+Ships and stations should carry evidence of daily life: personal storage, seating, maintenance access, galley/garden space, spare parts, communal areas and visible adaptations. Residents use enough of this to establish believable routines. Avoid adding unbounded per-person simulation or continuous life-support chores merely to decorate an interior.
+
+11.2 Space infrastructure belongs to the same economy
+
+Extend the existing settlement and transport graph with ports, orbital terminals, transfer windows, depots, stations, shipyards and supported long-distance routes. They retain jurisdiction, capacity, services, travel time and custody rules. Ships, caravans, cargo pods and receiving machines exchange the same goods and lots through the same authoritative transactions. A factory completion, loading operation, hook transfer or salvage action must not create an independent parallel inventory.
+
+Radio information, map contacts, predicted deliveries and local events are views of recorded state with appropriate age and uncertainty. A changing route forecast may cause an operator to update a report. Missing communication can make the report stale; it must not secretly teleport the cargo or reroll its destination. Establish explicit communication abstractions where instantaneous play convenience differs from astronomical signal delay.
+
+Evaluate elevator and skyhook designs for the body on which they operate. Surface-synchronous geometry, stable orbital space, rotation, gravity, material limits and the project's magical rules constrain what is eligible. Powered shuttles, orbital tugs and other tether designs remain viable alternatives. Preserve the earlier elevator/skyhook distinction, momentum and energy accounting, usable boarding, receiving infrastructure and cargo ownership contracts.
+
+Dock connections expose actual supported services: power, gas, coolant, data, people or freight. Opening a valve or moving an item requires a valid connection and permission. Undocking removes it consistently. It must not leave an infinite wire across interplanetary distance, a duplicated oxygen source or a passenger attached to both craft.
+
+11.3 Construction and art keep a coherent identity
+
+Retain the established voxel scales and use real dimensions for volume, mass, passage clearance and machinery. Refining visual voxel resolution cannot multiply the material in a hull or change its mass arbitrarily. Detailed assets can use richer authored forms while sharing the game's materials and construction language.
+
+Combine expressive small-scale silhouettes and warmth with large industrial structures, overgrown ruins and visually legible machinery. Use varied rooflines, catwalks, service routes, gardens, textiles, signs and lights to make stations and outposts places worth inhabiting. Landmark placement should connect long approach views to reachable entrances, shortcuts and rewards. The remembered Zelda map principles continue from the planetary horizon down to an individual courtyard.
+
+Plan cockpit views, landing approaches, docking markers and terrain silhouettes with the rendering team. Atmospheric scattering, clouds, rings, stars and interior lighting must retain navigation readability. Crimson nexus dimensions have their own authored visual identity; ordinary star systems can have diverse skies and palettes. Resolve existing terrain shading, LOD cracks and streaming artifacts before using the spacecraft camera to expose them across a much larger view.
+
+12. IMPLEMENTATION ORDER, PERFORMANCE AND ACCEPTANCE
+
+12.1 Extend the existing contracts
+
+Keep the Rust/WGPU architecture, canonical spherical coordinates, identities, simulation clock, durable operation receipts, world versions and server authority from the companion architecture. Do not add a separate spacecraft netcode stack, a second economic ledger or peer lockstep for the whole mutable world. Deterministic generation does not imply that cross-platform floating-point physics must run identically on every client.
+
+The host resolves consequential movement, edits, attachment, damage, inventory, production, docking and travel transitions. Every client executes the actual local physics for its relevant interacting bodies, including nearby shared vessels and fragments, then reconciles against authoritative inputs/state. Distant noninteracting state may interpolate. Prediction/replay is bounded and topology-aware. Bounded controller inputs and revisioned changes are more useful than streaming every voxel or decorative particle each tick. Reuse the reliable/durable operation channel and transient snapshot scheduling; ordinary world simulation is player- or community-hosted.
+
+Crew access and building permissions apply consistently to seats, containers, flight control, docking, construction and destructive actions. Two friends cannot both consume the same reserved item or independently complete the same boarding transfer. Disconnect and rejoin preserve the player's identity, location and vessel relation. A configurable safe recovery can relocate the existing person under a recorded operation when their original position is no longer viable.
+
+Represent each region, vessel and factory at an appropriate level of detail without changing its identity or conservation rules. On promotion or demotion, advance to the same authoritative tick and commit a single mode revision. Fuel, heat, life support, damaged components and production keep their consequences. Thresholds can schedule bounded events. Avoid per-frame updates for every distant ship, factory, civilian and atmosphere.
+
+Factories that depend on detailed circuits retain the earlier electrical contract. A coarse surrogate is valid only for an operating regime it can represent; topology changes, nonlinear limits and important transients can require waking the affected network. Do not replace a functioning custom circuit with an unrelated generic energy counter when its owner leaves the area. Bound integration work and expose a clear overload policy in engineering diagnostics.
+
+12.2 Budget the expensive work
+
+Use changed-region rebuilding, cached mass properties, compound hull collision, bounded contact work and explicit limits on detached physical debris. Fine visual voxels do not each require a rigid body. Stage structural revisions so hull, collider, module hit maps, compartments and mass properties agree at commit. Preserve position and momentum semantics across splitting, docking and reference changes.
+
+Use atmosphere and weather profiles, bounded thermal/compartment networks, authored chemistry and analytic or scheduled distant travel. Do not simulate arbitrary molecular reactions, full atmospheric flow, complete structural finite elements, microscopic transistor switching or unrestricted n-body dynamics as a dependency for the first fun expedition.
+
+Stream by predicted demand, including stopping distance, descent, destination complexity and other players' areas. A fast craft must not outrun authoritative collision availability. If data is late, use a truthful coarse representation, a valid speed limit or a controlled hold before the unsafe boundary. Do not let the client fly through unloaded terrain and correct the result afterward. Preload a destination's essential terrain and approach data while keeping background queues and memory bounded.
+
+Plan limits and holding maneuvers early enough to execute them with the vessel's available propulsion and reserves, or at an explicitly defined fictional travel boundary. Preserve valid authoritative collision coverage when a craft cannot physically stop; a loading delay must not silently clamp its velocity, supply free braking or suspend it against gravity.
+
+Give projectiles and fast objects supported swept collision or continuous checks where required; do not assume frame-by-frame overlap catches every hit. Partition sensor and interaction queries spatially. Bound seeker work, spell expansion, fragments, controller execution, active jobs and pending mesh uploads. Under stress, reduce cosmetic detail before changing inventory or authoritative outcomes.
+
+Put reusable planet profiles, material properties, supported recipes, modules, encounters and civilization templates in validated data. Preserve generation/content versioning and stable namespaced IDs. Mod contributions declare supported operation families and resource limits. A custom board can compile to a bounded controller representation; it must not introduce an unrestricted per-machine script or unbounded per-tick graph traversal. Use the same inspection and blueprint tools for player-built and generated machines.
+
+12.3 Deliver complete milestones
+
+Milestone 0 — Audit and baseline. Inspect the actual repository, prior electronics work and current terrain/netcode problems. Record what exists, what is incomplete and what is only an earlier report. Capture CPU/GPU/frame-time distributions, memory, streaming stalls, server tick cost and bandwidth in representative existing scenes. Resolve blockers that would invalidate all later flight work.
+
+Milestone 1 — Useful science at home. Complete the early instrument bench, one alternative-feedstock process, a functional controller, a worthwhile machine and simple automation. Demonstrate the product before requiring the player to manufacture every upstream component. Preserve inventory, incomplete batches and electrical state across saves and reconnects.
+
+Milestone 2 — One craft, one local journey. Build or restore a small craft with actual cargo mass, constrained power, readable heat, useful assist and accessible interiors. Fly, land, unload, repair and modify it. Prove multiplayer boarding and a structural change without duplicating occupants, modules or goods. A complete terrestrial/nearby test comes before a large ship catalog.
+
+Milestone 3 — One worthwhile orbital round trip. Finish ascent or a usable infrastructure route, relative-motion docking, EVA, a service destination, a recoverable complication and safe return. Radio/map information must refer to the actual shipment or event. Prove moving-frame and disconnection behavior, including coarse advancement of an unattended vessel.
+
+Milestone 4 — One additional world with a complete loop. Cairn is a suggested first moon, not a required retcon of existing geography. Include several regional sites, practical surveying, a useful resident or expedition, an engineering choice, a homeward reward and a reason to return. Prove surface/orbit/transfer/landing continuity and a remote outpost that improves a real route.
+
+Milestone 5 — Shared expedition, combat and salvage. Complete the small-team loop with solo assistance, independent nearby craft, sensor uncertainty, module damage, repair/tow, alternate outcomes and real salvage custody. Test one friend operating the home factory while others travel or explore. Their activities share one clock and economy without forcing synchronous time acceleration.
+
+Milestone 6 — Contrasting environments and automation. Add a thin-atmosphere planet and an ocean or cold atmospheric destination, followed by the other catalog archetypes as complete experiences. Introduce reusable route automation, planet-appropriate bases, deeper material and semiconductor options, and specialized ship designs. Verify that established early processes and small ships retain valuable uses.
+
+Milestone 7 — Large infrastructure and outer-system ambitions. Expand megastructure restoration, stations, orbital assembly, giant-planet facilities, advanced power and long-distance travel after the earlier loops meet their gates. Each additional world needs the minimum completed-world contract. An impressive sky object or empty procedural sphere is not a finished destination.
+
+12.4 Acceptance must test the claimed experience
+
+Scientific and state checks: verify mass/composition through refining and assembly; consistent electrical energy and power limits; heat transfer and rejection; supported gas balances; ideal trajectory assumptions; moon/parent context; correct frame velocities; and deliberate fictional exceptions. A save/load, region transition or disconnect must not refill fuel, cool a hot ship for free, halt a leak only for absent players or duplicate a process output.
+
+Construction and combat checks: damage a moving hull, detach a loaded section, move between its interior and EVA, dock or tow it, and recover cargo. Confirm coherent topology revisions, point velocities, ownership, compartment behavior and module hit locations. Exercise concurrent edits, a blocked door, a stale target, a projectile crossing a streaming boundary and a controlled failed docking attempt. Preserve consequences through crash/restart at the durable commit boundary.
+
+Co-op fault checks: test latency, jitter, loss, duplication, reordering, bandwidth constraints, host save/exit and reconnect during travel, boarding, mining and production. Include invalid/stale requests and bounded oversized-message handling. Report the supported host model and recovery behavior honestly. Avoid claiming flawless networking; identify the tested fault envelope and unresolved cases.
+
+Performance fixtures: choose an agreed baseline machine, resolution and settings. Start with one craft and one active factory. Then test a declared four-player fixture in which people occupy different surface/orbit areas, plus a shared encounter with several craft and damaged assemblies. Scale factory devices, active actors, ship blocks, lights and edited terrain independently to find limiting systems. Record counts and distinguish active from sleeping objects. These are proposed test configurations, not existing capacity claims.
+
+For a selected 60-fps target, the frame budget is about 16.7 ms; use the actual selected target and existing server tick rate when setting gates. Record p50/p95/p99 frame and tick times, CPU/GPU division, memory, streaming backlog, upload pressure and per-client traffic. Leave measured headroom for spikes. A high average frame rate does not excuse severe descent, damage or join stalls. Compare like-for-like scenes and stop optional testing once the concrete gate is satisfied.
+
+Gameplay checks: can a new player identify a useful destination, obtain travel through more than one practical route, understand an environmental requirement, accomplish something worthwhile, return and improve home? Can a builder advance without compulsory combat? Can an explorer gain capability without building every production chain? Can friends contribute without mandatory stations? Does a secure route stay improved? A feature is complete only when these questions have demonstrated answers in the native game.
+
+12.5 Required implementation report
+
+For each delivered milestone, report the player-visible result, native files changed, evidence from the running game, reproducible validation, baseline hardware and relevant limits. Separate implemented, prototype, data-only, placeholder and deferred features. Link the exact sources or prior design contracts used. Do not label a catalog of names, a UI mockup, a separate demo, an unbuilt dependency or a plan as completed engine functionality.
+
+13. RESEARCH REFERENCES AND PROJECT CONTINUITY
+
+Sources were checked while preparing this expansion. Historical prototypes, design visions, established manuals and current publisher announcements are distinguished in the relevant chapters. Scientific references support limited physical relationships; they do not validate the original planets, game balance, fictional technology or implementation performance.
+
+13.1 Core scientific relationships
+
+[C1] NASA, 7.0 Thermal Control: https://www.nasa.gov/smallsat-institute/sst-soa/thermal-control/
+[C2] NASA, 4.0 In-Space Propulsion: https://www.nasa.gov/smallsat-institute/sst-soa/in-space_propulsion/
+[C3] NASA Johnson Space Center, In-Situ Resource Utilization: https://www.nasa.gov/reference/jsc-in-situ-resource-utilization/
+
+The NASA references ground limited physical relationships and resource-use concepts. They do not validate the proposed planets, machine balance, fictional systems, game timescales or Axiom implementation.
+
+13.2 Planetary analogues
+
+[P1] NASA, Io facts: https://science.nasa.gov/jupiter/jupiter-moons/io/facts/
+[P2] NASA, Titan facts: https://science.nasa.gov/saturn/moons/titan/facts/
+[P3] NASA, planetary and exoplanet diversity: https://science.nasa.gov/solar-system/planets/ ; https://science.nasa.gov/exoplanets/planet-types/
+These references support the named environmental analogues only. The destination catalog, names, settlements, speculative life and gameplay are original proposals.
+
+13.3 Technology and industrial design references
+
+[I1] GTNH official repository; progression and processing inspiration: https://github.com/GTNewHorizons/GT-New-Horizons-Modpack/blob/master/README.md
+[I2] Mekanism official ore-processing documentation: https://wiki.aidancbrady.com/wiki/Ore_Processing
+[I3] Create developer wiki; explicitly simplified kinetic stress: https://github.com/Creators-of-Create/Create/wiki/Stress-Units,-Capacity-and-Impact
+[I4] Create developer wiki; logistics: https://github.com/Creators-of-Create/Create/wiki/Create-Logistics
+[I5] Create developer wiki; schematics: https://github.com/Creators-of-Create/Create/wiki/Create-Schematics
+[I6] Immersive Engineering author project page: https://modrinth.com/mod/immersiveengineering
+[I7] PneumaticCraft maintainer's historical design note: https://gist.github.com/desht/b604bd670f7f718bb4e6f20ff53893e2
+[I8] NuclearCraft author project page: https://modrinth.com/mod/nuclearcraft
+[I9] NIST SI conversion factors: https://www.nist.gov/pml/special-publication-811/nist-guide-si-appendix-b-conversion-factors/nist-guide-si-appendix-b9
+[I10] US DOE hydrogen fundamentals: https://www.energy.gov/cmei/fuels/hydrogen-fuel-basics
+[I11] ASML chipmaking overview: https://www.asml.com/en/technology/all-about-microchips/how-microchips-are-made
+[I12] OpenStax capacitor energy: https://openstax.org/books/college-physics/pages/19-7-energy-stored-in-capacitors
+All quantitative machine balance, fictional process tiers, content order, and engineering architecture above are proposed game design. The sources support the stated concepts and reference patterns, not the proposed implementation's accuracy, completeness, or performance.
+
+13.4 Spacecraft and flight references
+
+[F1] Public Seed of Andromeda code and stated MIT license; historical build instructions. Separate assets and dependencies require their own inspection before reuse.
+https://github.com/RegrowthStudios/SoACode-Public
+https://github.com/RegrowthStudios
+
+[F2] Creator-posted spherical voxel mapping presentation, 25 March 2015. Describes the technique and drawbacks, not complete commercial gameplay.
+https://www.indiedb.com/games/seed-of-andromeda/videos/soa-tech-round-voxel-planets
+
+[F3] Developer update, 5 July 2015. Reports prototype generation/meshing progress and explicitly unfinished work.
+https://www.moddb.com/games/seed-of-andromeda/news/developer-summary-4th-of-july-2015
+
+[F4] Developer vision, 17 May 2015. Future design ambitions must remain distinct from implemented evidence.
+https://www.moddb.com/games/seed-of-andromeda/news/the-vision-for-seed-of-andromeda
+
+[F5] NASA Glenn, Ideal Rocket Equation. Supports the stated ideal relationship, not chosen game engines or balance values.
+https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/
+
+[F6] NASA, Small Spacecraft Technology State of the Art, Thermal Control. Supports the thermal-balance framing; no spacecraft-engineering fidelity is claimed for this game model.
+https://www.nasa.gov/smallsat-institute/sst-soa/thermal-control/
+
+[F7] NASA/JPL NAIF, Reference Frames. Full state transformations include velocity effects of changing frames; no SPICE runtime dependency is required.
+https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/frames.html
+
+[F8] NASA, Patched Conic Trajectory Code. Supports the approximation's phase-based organization; Axiom's travel compression remains an explicit fictional mechanic.
+https://ntrs.nasa.gov/archive/nasa/casi.ntrs.nasa.gov/20120006596.pdf
+
+13.5 Elite Dangerous reference boundaries
+
+[E1] Frontier's established full game manual, especially flight assist, sensors, power distribution and heat/signature sections. Historical manual; do not infer current numerical balance or key bindings.
+https://hosting.zaonce.net/elite/website/assets/ELITE-DANGEROUS-GAME-MANUAL.pdf
+
+[E2] Frontier quick manual, travel sequence and the distinctions between ordinary flight, supercruise and hyperspace.
+https://hosting.zaonce.net/elite/website/assets/ELITE-DANGEROUS-MANUAL.pdf
+
+[E3] Frontier's official Steam announcement, Getting Started in Elite Dangerous, 2 October 2025; outfitting, trading, mining, exploration and combat sections. Retrieved through the publisher's announcement feed.
+https://store.steampowered.com/news/posts/?appgroupname=Elite%3A+Dangerous&appids=359320&enddate=1760615315&feed=steam_community_announcements
+
+[E4] Frontier official announcement feed, retrieved 29 October 2026: Rhino SRV Update, 2 September 2026; Anaconda Mk II Update, 20 October 2026, including Found Adrift. Feed changes over time; retain the named post/date when recording evidence.
+https://store.steampowered.com/news/posts/?appids=359320
+
+Source features are summarized in section 8.1. All Axiom-specific roles, encounters, controls, simulation constraints and progression choices are proposals requiring native implementation and playtesting.
+
+13.6 Companion design documents
+
+AXIOM_Living_World_Expansion_Prompt.txt — friendly and mythic populations, regional identity, livable ruins, megastructures and usable orbital freight.
+https://chatgpt.com/library?file_id=libfile_93af63b820a48191ad47ceb7177e95d8&account_id=personal
+
+AXIOM_Planetary_Simulation_And_Coop_Architecture.txt — researched sphere/terrain methods, civilization generation, cities, influence, caravans, recruitment, colony work and authoritative multiplayer.
+https://chatgpt.com/library?file_id=libfile_7033d540843c819183622890781a23f2&account_id=personal
+
+voxel_science_electronics_implementation_brief.txt — revision 2 dated 22 October 2026; electrical and semiconductor implementation contracts preserved by this expansion.
+https://chatgpt.com/library?file_id=libfile_dc63b09d9dbc8191a4b4fe3d71c05252&account_id=personal
+
+14. REFERENCE ART, DEFAULT EROSION AND LOCAL PHYSICS UPDATE
+
+Read AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt for the complete controlling addendum. Its ten-image analysis gives the ships, hangars, cities and interiors stronger physical organization and material hierarchy. Large ships have service access and human-scale routes; coastal districts follow water and transport; monumental machinery remains reachable and useful. Keep Axiom's original voxel art, residents, magic and historical layers.
+
+Default planet generation includes coherent structure, drainage and advanced bounded erosion before civilization/site planning. Constrained refinement preserves valleys, boundaries and saved edits. Geological aging belongs to world preparation, while live water, destruction and excavation use supported runtime models. Spaceflight must reveal the same terrain at every scale and retain collision coverage during approach.
+
+Every client executes real physics for the relevant local interaction set. Shared outcomes remain singular and authoritative. Bounded state synchronization, coherent topology/terrain baselines and frame-aware transitions handle ships, boarding, meaningful fragments and PvP. Listen hosts and user/community dedicated servers keep developer-operated world simulation out of the default cost model; relay service has explicit funding and limits.
+
+Destruction reserves impact work before irreversible action activation, validates prepared read-sets, publishes essential state at declared ticks, and uses coherent per-peer installed geometry. Coalesced derived jobs, fair service, bounded replay and explicit overload admission prevent growing update debt. Material, energy, inventory and accepted damage remain accounted. A quiet distant vessel or factory keeps consequential state under a valid coarse model and never requires replaying every unseen frame when visited.
+
+Apply the new stress gates to the existing orbital round trip, inhabited port, factory, damaged moving ship and separated-player scenarios. This is an implementation specification, not a claim of finished code or measured engine speed.
+
+END OF SCIENCE AND SPACE EXPANSION BRIEF

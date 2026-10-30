@@ -1,0 +1,897 @@
+AXIOM / MERIDIAN — LIVING POPULATIONS, RUIN CITIES, AND ORBITAL LOGISTICS
+Implementation prompt and design addendum — expanded 29 October 2026
+
+STATUS AND USE
+This is a proposed implementation brief for the existing game. Preparing this document did not change the repository, build assets, or validate gameplay. Its creature names, new places, tuning values, and implementation structures are proposed choices. Confirm current code before treating any previous report as implemented.
+
+Give this complete prompt to the coding agent working in the real Axiom/Meridian repository.
+
+BEGIN IMPLEMENTATION PROMPT
+
+You are extending Axiom/Meridian, our Windows-first Rust + raw WGPU voxel sandbox. Preserve the existing engine and its mixed voxel scales. Do not introduce Bevy or replace the project with a web prototype.
+
+The problem is that building and exploration currently feel unrewarding because the world does not feel naturally inhabited, historically connected, or responsive to the player. Expand friendly fauna and NPC variety toward Minecraft-like breadth, restore our abandoned futuristic cities and outposts, surround them with meaningful megastructures, and complete usable orbital logistics with radio announcements and map information.
+
+The desired outcome is a world in which the player can understand why a creature lives somewhere, why a settlement was founded, what a ruin used to do, and how building a home changes their relationship with those places.
+
+
+REFERENCE DIRECTION AND COMPANION BRIEF
+
+Use Breath of the Wild for landmark-driven exploration and route choice; Twilight Princess for coherent regional geography, memorable approaches and atmosphere; The Minish Cap for sprite-like shape/color discipline and small inhabited worlds; and Fablehaven and Percy Jackson for mythic variety, sanctuary relationships and creatures with individual lives. Translate these qualities into original Axiom locations, characters, Blender assets and native 3D behavior. Appendix B makes this direction concrete.
+
+Make Dwarf Fortress a central reference for civilization history and city creation. Streets, homes, workshops, markets and ruins should follow the same geography, transport and history while remaining pleasant to inhabit. Appendix C sets the essential requirements; AXIOM_Planetary_Simulation_And_Coop_Architecture.txt supplies the researched spherical generator comparison, detailed city pipeline, faction/caravan/recruitment contracts, RimWorld-inspired work systems, authoritative co-op and performance gates.
+
+Use both briefs as one dependency plan. Prove the modest base loop and a narrow actual shipment early, then grow the regional simulation around working identities and inventory. Do not make enjoyable habitation wait for every civilization feature or every new creature family.
+
+The further expansion AXIOM_Science_Spaceflight_And_Planetary_Expansion.txt adds scientific industry, twelve planetary destination archetypes, buildable spacecraft, flight, combat and shared expeditions. Appendix D connects that scope to this living-world plan.
+
+The latest technical/art addendum, AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt, is controlling for the ten supplied concept references, default geological/erosion quality, real physics on each client, minimal developer hosting and bounded destruction. Preserve the living-world content here while applying those execution contracts.
+
+1. PRESERVE CONTEXT AND ESTABLISH WHAT EXISTS
+
+Read the actual repository instructions, architecture, art direction, world generation and save rules, and current tracking documents. Locate relevant versions of:
+- MERIDIAN_ANCHOR_V2_DESIGN_AND_IMPLEMENTATION.md.
+- 07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md.
+- Underkingdom lore and Founder/Engineer/Chorister material.
+- Existing species, NPC, settlements, maps, radio, cargo, power, physics, portal, and orbital systems.
+
+Satyrs already exist according to the user. Inventory other existing species before adding equivalents. Earlier reports described Meridian corridor classes, four orbiting megastructures, three skyhooks, a receiver/radio, and a Talon freight momentum ledger, with parts of landing, booking and cargo transfer unfinished. Verify those reports in code and native gameplay; extend working systems rather than creating parallel replacements.
+
+Create a short evidence table: feature, actual owner/module, working behavior, missing behavior, persistence support, and the next concrete change. Separate design-only documents, data definitions, rendered content, and genuinely playable systems.
+
+Preserve existing world edits, inventories, NPC identities and concurrent work. New world-generation rules need versioned behavior. Preserve the saved planet-wide geography, drainage, site identities, route graph and history even where detailed terrain has never loaded. New local city/terrain realization may apply in ungenerated areas only through a versioned contract that preserves macro facts and neighboring boundaries; other changes require explicit migration. Staged restoration may modify an existing site through ordinary saved world changes. Never silently regenerate an inhabited base or overwrite old terrain.
+
+This task extends the previous design work into functioning gameplay. An earlier document's audit-only kickoff is not the completion condition for this expansion. Continue through integrated playable milestones. Do not substitute a registry, mock scene, debug menu, or list of future work for the requested result.
+
+2. THE CORE PLAYER EXPERIENCE
+
+Make this loop work:
+
+Explore a place -> understand its inhabitants and broken systems -> bring home knowledge, materials, organisms, contacts or equipment -> construct a useful facility -> see people, wildlife and logistics respond -> gain a new reason and a better means to explore.
+
+Each major addition must answer:
+1. How does the player encounter it without a wiki?
+2. What can the player physically do with it?
+3. What changes when the player builds, repairs, befriends, studies, trades, or removes something?
+4. What survives leaving the region and returning?
+5. Why does it remain interesting after ordinary resources are automated?
+
+A sheep can supply renewable fleece and make a pasture feel alive. A centaur archivist can use an accessible library and interpret a survey. A restored radio relay can improve regional forecasts. A repaired terminal can bring a real shipment from an orbital depot. These benefits must appear through actual behavior.
+
+Preserve the previous economy promises:
+- Powerful factories, magical automation and clever farms remain legitimate.
+- Ordinary building materials and early tools have multiple practical acquisition routes.
+- Exploration reveals knowledge, relationships and useful places, including after industrial abundance.
+- Drones, sensors, companions and automation may help discover things under the same world rules. No arbitrary human-only discovery flags.
+- Local safety can be earned and retained. A prosperous home does not automatically attract endless scaling raids.
+- Food, care, repairs and scheduling support play without mandatory attendance or repetitive chores.
+- A solitary cabin, travelling workshop, animal sanctuary, restored outpost and large town are all valid homes.
+
+3. GENERATE CAUSES BEFORE SCENERY
+
+Create a compact regional plan before placing settlements and ruins:
+
+Geography and climate -> water/food/material sources -> original economic purpose -> transport and utilities -> settlements -> historical disruptions -> ecological succession -> present occupation -> current opportunities.
+
+Use bounded authored rules and seeded parameters. Generate selected civilization events and compact population/building records that explain the present, then refine places into detailed geometry when needed under stable identities. Do not attempt to simulate every historical year. The result needs spatial consistency, useful evidence and persistent consequences. Global geography must be spherical in its actual adjacency and travel metric; a flat map displayed on a globe is insufficient.
+
+A city built around orbital freight should have oversized yards, transport approaches, utility capacity, crew accommodation, customs/storage facilities, workshops, and smaller dependent settlements. An extraction outpost needs the actual deposit and a way to move its output. A waterworks settlement needs an intake, destination and believable elevation relationship.
+
+Choose a few compatible historical events per region. Examples include river migration, a broken freight link, industrial decline, evacuation after a localized hazard, a breached levee, or surviving machinery isolated by lost power. Make each event leave different physical evidence.
+
+A shifted river should leave dry quays, abandoned intake channels and replacement wells. A flooded industrial city should contain waterlines, sediment, drowned service routes and occupation above the water. A terminal that lost trade should contain stripped machinery, empty storage and communities using the land differently.
+
+Nature follows conditions: vegetation concentrates near light, water, soil and cracks; grazers use meadows; nests occupy shelter; predator signs follow prey; paths connect actual destinations. Do not distribute every creature, vine, ruin and glowing object uniformly.
+
+Keep familiar landscapes and quiet intervals. Most hills should not contain a giant tower, a legendary animal and a loot chest.
+
+4. RESTORE THE ABANDONED FUTURISTIC CITY DIRECTION
+
+Use our RimWorld/Titanfall references as an art brief: abandoned advanced industry, strong structural silhouettes, operational machinery, modular habitation, utilitarian signage and small communities making practical use of immense old systems. Translate these ideas into Axiom's authored pixel textures, detailed voxel terrain, restrained palette and readable geometry.
+
+Keep three major construction layers legible:
+- Founder infrastructure: pale durable masses, dark tensile elements, deep foundations, immense scale, sparse precision interfaces and protected negative space.
+- Engineer retrofits: steelwork, copper, rails, ducts, motors, transformers, replacement bridges, standardized panels, repair scaffolds and visible maintenance.
+- Present habitation: patched roofs, gardens, workshops, kitchens, animal shelters, markets, laundry, furniture, lamps, public rooms and deliberate repairs.
+
+Use Chorister acoustic and magical architecture where history supports it. Avoid covering every building with runes or neon.
+
+Choose the historical layers appropriate to each place. Some settlements are recent; some Founder systems never received Engineer occupation; some industrial districts still work. Preserve established Chorister chronology and relationships rather than treating this visual palette as a universal historical sequence.
+
+Generate the circulation and utility networks before building plots:
+- Streets, canals, service routes, rail approaches, ramps, bridges and vertical connections.
+- Water, power, drainage, loading access and communications.
+- Districts whose purpose follows these connections.
+- Building footprints, entrances and interiors.
+- Damage, collapse, salvage and reoccupation.
+- Material wear, vegetation, clutter, sound and lighting.
+
+Every advertised doorway must have an honest interaction policy. A deeply modeled building can have multiple interiors; a collapsed shell can expose only some rooms; a structural core can be solid. Avoid decorative doors promising rooms that do not exist.
+
+A major city needs connected residential remnants, freight yards, workshops, civic records/services, water infrastructure, reclaimed green space, utility underworks and a meaningful ancient core. It also needs surviving people with reasons to be there. Abandoned does not mean every square meter is empty and hostile.
+
+Give major precincts multiple practical approaches: a street, canal, service tunnel, rooftop link, damaged maintenance shaft or player-made route. Route variety must emerge from actual geometry and systems. Digging, climbing, bridging, magic and engineering should work where physically appropriate. If a site has special resistant materials or fields, make their source, boundaries and disable conditions discoverable.
+
+Preserve long views and substantial quiet spaces while concentrating meaningful interactions along readable routes. Do not make a kilometer of monotonous walking the cost of seeing the next useful room. Restore trams, lifts, waterways, roads and mounts as the city becomes usable.
+
+Provisional scale bands for native-camera evaluation, not promises of achieved performance:
+- Small outpost: roughly 40–120 m of usable facilities.
+- Village or reclaimed neighborhood: roughly 120–400 m.
+- First complete urban precinct: roughly 300–700 m with multiple routes and services.
+- Flagship megacity: several connected precincts within a kilometer-scale metropolitan footprint, expanding toward roughly 2–6 km only when content and streaming support it.
+- Regional megastructure: much larger visual reach, with bounded interactive areas and honest distant representations.
+
+Validate scale in travel time, street views, accessible routes, visibility and frame cost. One excellent connected precinct precedes city-wide repetition. Require useful public squares, sheltered social spaces, readable neighborhood identities, practical service distances and comfortable homes. Streets and parcels must support actual inhabitants and cargo, including the clearance of different body plans. Beauty is assessed from the normal player camera and through everyday use, alongside the aerial composition.
+
+5. MEGASTRUCTURES MUST ORGANIZE THE SURROUNDING WORLD
+
+Use a varied regional palette:
+- The Meridian Anchor and its stationary elevator.
+- Rotating skyhook corridors with ground tracking and freight infrastructure.
+- Giant dams, aqueducts, reservoirs and pumping terraces.
+- Elevated rail spines, freight bridges and transfer yards.
+- Vast heat exchangers and thermal distribution works.
+- Ground-based shipyard cradles, launch/service facilities and heavy assembly halls.
+- Telescope or communications arrays with actual survey/relay functions.
+- Flood barriers, atmospheric works or unusual Founder machines with explicit fictional operating rules.
+
+Each landmark needs a visible relationship to nearby outposts, roads, utilities and inhabited places. At least one major part must be usable, restorable, transformable or explorable. A landmark may contain inactive structural volumes; it must not be entirely a distant prop.
+
+For each substantial site author:
+- Original purpose and surviving functions.
+- Required inputs, capacity and relevant hazards.
+- Current occupants and ownership.
+- Access routes and maintenance geometry.
+- Salvage value versus restoration value.
+- One regional consequence the player can cause.
+- A discoverable link to another place.
+- Its far/near representation and persistent edit policy.
+
+Preserve the earlier Meridian Anchor identity: a continuous narrow skyward tether, substantial low buttress fins around open space, terraced basin walls, freight approaches and warm inhabited edges. Keep major bridges out of the main tether sightline. The station must read as an immense anchorage surrounded by a town.
+
+Use the previous S0–S4 idea as observable capability, not a quest flag:
+S0: surviving communities and accessible salvage, major systems damaged.
+S1: safe public routes, water, shelter and local services.
+S2: working freight/stabilization systems and maintenance travel.
+S3: actual cargo and passenger ascent.
+S4: reliable regional and orbital links.
+
+Partial repair must produce partial benefits. Local homes and workshops remain worthwhile before the entire installation works.
+
+6. FOUR CONNECTED PLACE EXEMPLARS
+
+Meridian Anchor:
+An inhabited salvage city in the foundations of the elevator. A market uses a sheltered freight concourse; gardens occupy watered terraces; repair businesses work beside climber docks. Public works improve real paths and utilities. Founder vaults, Engineer modifications and current residents disagree about the installation's original purpose. Player restoration opens freight, passenger travel and deeper investigation.
+
+Bellwater Exchange:
+A partly flooded rail-and-river city. Elevated transit arches, surviving rooftops, aqueducts, submerged streets and repurposed stations provide distinct routes. Canal inhabitants, boat traders, orchard keepers and salvage crews use different elevations. Selective drainage can restore workshops; retaining water can preserve navigation and habitats. Design both approaches as valid.
+
+Talon Catchfields:
+A wide orbital logistics landscape: tracking dishes, arrival corridors, landing aprons, storage yards, abandoned sidings and settlements dependent on freight. A scheduled hook pass matters because residents prepare receiving machinery, radio forecasts change and actual cargo arrives. Repairing an outport makes a base eligible for reliable service.
+
+The Nine Radiators:
+A cold valley beneath immense industrial heat structures. Surviving heat supports greenhouses, warm pools, workshops and unusual habitats. Insulation, exchanger repairs, flow control and power supply determine what can operate. A player can establish a useful northern base without rebuilding the entire complex.
+
+These are starting site grammars, not four identical quest chains. Generate variants through geography, damage, occupation and functioning systems, not only names and chest rolls.
+
+7. FRIENDLY POPULATIONS: BREADTH WITH ACTUAL BEHAVIOR
+
+Use the roster appendix as the target palette after auditing existing creatures. Treat near-Minecraft parity as functional coverage plus substantial content breadth, not a claim about Minecraft's current exact mob count.
+
+Cover renewable animal products, breeding/habitat establishment, companionship, ground mounts, pack transport, aquatic life, pollination, environmental ambience, defensive partners, discovery assistance, later air travel, merchants, craftspeople, wandering visitors and resident services.
+
+Distinguish Species/BodyPlan, Personhood, Individual, Occupation, Culture, Faction and Relationship. A species is not a profession, a moral alignment, or a hostility flag. A sapient resident is not a tameable livestock entity. A simple cargo robot is not automatically a self-aware person.
+
+Keep common fauna common enough to anchor the landscape. Place rare mythic and prehistoric creatures in specific habitats with evidence: tracks, nests, feeding traces, migration routes, old reserve records, fossils, local stories or active conservation machinery. Do not turn the whole world into a random menagerie.
+
+Use habitat, resources and group behavior to place living populations. Individual creatures need readable resting, feeding, social and threat responses, but the world does not need to tick every distant stomach. Express absence and abundance through compact regional state.
+
+Support persistent familiar animals, trust, return locations, transport, optional care and appropriate housing. Renewable products need actual time and inputs. Fleece does not regrow on every chunk load; eggs and milk do not appear infinitely from repeated interaction.
+
+Where relevant, connect to existing creature-growth, summoning, mutation or magical augmentation. A larger creature needs a larger collider, more clearance, changed mass/payload and appropriate resource demand. Do not scale the render mesh alone. Summoning must follow existing cost and persistence rules and must not create infinite free export cargo.
+
+Residents visibly use buildings. Provide short, legible routines: work, eat/socialize, rest, shelter and occasional visits. Dialogue should refer to known local events, deliveries, weather, damaged infrastructure and recent discoveries. Use authored templates and state predicates; do not introduce an online LLM dependency for ordinary NPC behavior.
+
+8. BASE BUILDING MUST UNLOCK USEFUL RELATIONSHIPS
+
+Recognize facilities by usable properties and access, with optional player designation. Avoid one exact floor plan, mandatory decoration scores or a single global town level.
+
+A facility query checks purpose-specific conditions: shelter, reachable equipment, available capacity, permitted storage, supplies, safe access and relevant utility connections. Cache results and invalidate affected areas when geometry or equipment changes. A new bed must not trigger a full-world scan.
+
+Provide explanations players can act on: "The guest bed has no reachable entrance," "The receiving apron is blocked," or "The workshop has power but no permitted repair parts." Avoid opaque percentages.
+
+Facility -> visible behavior -> practical reward:
+- Guest room and shared table -> travellers stay and use the space -> information, trade and possible voluntary recruitment.
+- Workshop and permitted materials -> a mechanic repairs actual equipment -> less routine maintenance work and access to specialized services.
+- Farm, orchard or greenhouse -> planting, harvesting and cooking -> expedition provisions, trade and sustained habitation.
+- Pasture, stable, pond or conservatory -> animals settle into suitable routines -> renewable materials, transport, companionship and ecological activity.
+- Radio mast, receiver and map table -> reports are decoded and recorded -> forecasts, route information and freight opportunities.
+- Landing apron, beacon, warehouse and unloading access -> actual cargo is received -> selected imports and a regional transport role.
+- Clinic and supplies -> injured residents and visitors receive care -> successful rescues persist and useful specialists recover.
+- Archive, display space and instruments -> finds are studied and compared -> routes, histories, operating knowledge and meaningful collections.
+- Roads, ramps, bridges, docks and public access -> residents and caravans can actually travel -> trade reaches new destinations.
+- Defenses and resolved local threats -> reliable safe areas -> uninterrupted building, social life and nighttime ambience.
+- Portal room, where portals already work -> a maintained connection with real clearance and permissions -> inter-base travel and logistics through the same transport contracts.
+
+Residents join through agreements, trust, compatible conditions and available work or community ties. Give players understandable choices about inviting, hosting or declining visitors. Do not spawn a generic worker instantly when a workstation is placed.
+
+A suitable habitat and permitted supplies satisfy routine care autonomously. Hand feeding, grooming and personal visits can deepen relationships without becoming compulsory production clicks. Shortages first pause production or optional work and produce actionable warnings. Region unloading must not create sudden starvation, relationship collapse or unexplained departures. Any serious deterioration follows the same visible, forgiving world-time rules in active and inactive regions.
+
+Allow broad defaults such as "maintain this workshop," "tend this pasture" and "accept booked cargo." Detailed work priorities are optional. Bound any simulated needs to useful decisions. Provide grace periods and clear responses when conditions deteriorate; a short outage should not immediately erase a settlement.
+
+NPCs may only use inventories, build areas and equipment authorized by the player or their actual owners. No consuming unique artifacts as generic repair metal, dismantling player construction, or emptying personal chests without permission.
+
+Architecture must affect usability:
+- Large bodies need turning space, doors, ramps and appropriately placed tools.
+- Cargo needs loading clearance, storage and a route to its destination.
+- Aquatic residents need connected wet routes and usable docks.
+- Plants and animals need habitat conditions.
+- Radios benefit from relevant placement and network connections.
+- Workshops need workable access and utilities.
+
+A small, well-designed home should achieve useful capabilities early. Expand facilities because the player wants another activity or relationship, not because every recipe requires a large population.
+
+Peaceful prosperity is a valid outcome. Raids need a world cause, a warning where appropriate, and ways to reduce or resolve them. Do not spawn enemies inside secured inhabited spaces to maintain a difficulty curve. Dangerous expeditions, voluntary industrial risks and distant frontiers can supply challenge.
+
+9. ARCHAEOLOGY AND EXPLORATION THAT FEED BACK INTO HOME
+
+Treat archaeology as understanding and using the past. Paleontology concerns ancient life; archaeology concerns past cultures and their material remains. The game can connect them through old reserves, laboratories, settlement records and ecological changes without treating fossils as viable eggs.
+
+Use layered evidence:
+- Physical traces: foundations, canals, tool marks, flood lines, nests, fossils, pollen-bearing strata and unusual material boundaries.
+- Records: manifests, maintenance diagrams, maps, names, recordings and damaged archives.
+- Surviving systems: pumps, organisms, custodians, heat sources, transport nodes and experiments the player can perform.
+- Living perspectives: residents who know a route, remember a repair, disagree about ownership, or can interpret an artifact.
+
+Each major mystery gets at least two independently obtainable leads and a way to test the explanation. Failures and alternative approaches must remain playable. Breaking one inscription must not permanently erase all progression.
+
+Excavation, salvage, interpretation and restoration are different actions. Give players useful tools and optional care for fragile evidence, but avoid turning every block into a mandatory brushing minigame. A crane, quarry tool, magic spell or trained helper can assist when used sensibly.
+
+Use rewards in several categories:
+1. Commodities: useful quantities of material, supplies and recoverable assemblies.
+2. Capabilities: designs, cultivation methods, materials knowledge, operating procedures and spell interactions.
+3. Relationships: residents, trading partners, companions and negotiated access.
+4. Places: a good workshop site, functioning water source, dormant terminal, rare habitat or strategic route.
+5. Personal meaning: distinctive furnishings, displayed finds, recorded journeys and evidence of what the player changed.
+
+A wealthy player should still want to visit a region for an unusual habitat, unknown mechanism, independent community, orbital destination or historical explanation. Do not make exploration compete with factories only on ingots per hour.
+
+Let research and museums change understanding. An exhibit can combine a recovered manifest, a real material sample and a resident's interpretation to reveal where a shipment went. Avoid a museum that only gives a generic global research bonus.
+
+Enable expeditions to bring useful discoveries home: propagules, cultivation techniques, adoptable animals, willing residents, recoverable machines, architecture patterns, maps, equipment and transport access. Make large salvage a logistical activity with early containers/carts/pack animals and later cranes or freight, without crippling ordinary building stacks.
+
+Exploration can also justify a second base. A cold-region workshop, canal port, sanctuary, research camp and orbital receiving station should offer different opportunities. Avoid forcing every unique world feature to fit in the first home's garden.
+
+Do not invent random new physical laws indefinitely. Use a bounded authored rule set whose combinations, locations and consequences support meaningful discoveries.
+
+10. MAKE ELEVATORS, SKYHOOKS AND SUPPLY DELIVERY ACTUALLY USABLE
+
+Reuse verified orbital, corridor, radio and Talon ledger code. Separate four systems that share logistics interfaces:
+
+A. Stationary elevator: a surface terminal, tensioned tether, climbers, synchronous station and suitable counterweight/continuation. Players book freight, board a vehicle, travel, disembark at a usable destination and send material home.
+
+B. Rotating skyhook: an orbiting tether whose tip passes a predictable capture/release corridor. Players initially recover compatible descending freight, later book launches, prepare carriers and ride transfers.
+
+C. Descent/ascent carrier: a capsule, guided pallet, powered shuttle or explicitly magical braking cradle. It bridges the route between the orbital transfer and the ground terminal.
+
+D. Depot/outport: an actual source or destination with inventory, storage, handling capacity, ownership, service availability and a reason to trade.
+
+A rotating hook is not a stationary elevator. A conventional elevator's geometry depends on the planet's rotation and synchronous orbit. A momentum-exchange transfer changes the hook's state and requires a defined restoration/reboost mechanism. Preserve these distinctions in an accessible game model.
+
+Document planet radius, gravitational parameter, rotation and reference frames. For the conventional idealized circular, equatorial, prograde case, synchronous radius is r_sync = (mu / omega^2)^(1/3), measured from the planet center; altitude is h_sync = r_sync - R_planet. Choose a compatible anchor location and parameters. A small planet can still use a self-consistent model. If the established geometry is incompatible, use an explicit powered orbital-ring or fictional aether-stabilized arrangement with known operating costs. Do not quietly describe incompatible geometry as ordinary orbital mechanics.
+
+Separate the visible moving orbital ring from a stationary synchronous terminal unless the actual design supplies a coherent mechanical interface. The earlier Meridian Anchor plan already called for this distinction.
+
+Model cargo mass, vehicle capacity, power use, condition and service windows. The skyhook ledger must account for the signed energy/momentum effect of its simplified transfers and reboost. Balanced outgoing/incoming traffic can help only where the model supports it. Unloading one box must not produce unlimited launch capacity.
+
+Players should see practical status: next window, mass capacity, required carrier, price/material requirements, readiness and the reason for delay. They should not need to calculate orbital equations manually.
+
+10.1 Supply deliveries
+
+Every delivery must exist as a persistent shipment before it is announced. Give it:
+- Stable identity and revision.
+- Origin, destination candidates and route.
+- Manifest, quantities, total mass and cargo class.
+- Sender, receiver/public-salvage status and ownership.
+- Carrier and actual custody.
+- Release/arrival window and reachable footprint.
+- Capacity reservations, operating cost and current state.
+- Reasons for delays, diversion, damage, cancellation and loss.
+
+Hearing a broadcast, walking into a chunk, or clicking a marker must not create or reroll the cargo.
+
+Recurring supplies need an actual producer, trade arrangement or explicitly budgeted external economy. Ancient emergency stores can be finite. A revived orbital greenhouse can trade biological stock for surface feedstocks. A precision workshop can exchange components for metal and service parts. Stock changes should be understandable.
+
+Choose useful cargo: seeds, textiles, food, tools, medicine, fabrication components, replacement pumps, survey instruments, habitat equipment and ordinary building supplies. Rare cargo should enable interesting projects rather than make local crafting pointless.
+
+Differentiate service classes:
+- Public salvage or emergency recovery: accessible early, approximate landing area and no requirement to own a base.
+- Contracted freight: known manifest, understandable price or exchange, reserved destination and persistent receipt.
+- Player export: actual goods loaded at home, delivered to a real recipient.
+- Heavy industrial freight: prepared apron, handling gear, power and sufficient storage.
+- Passenger or research service: people and destinations handled as persistent entities.
+- Hook ascent: carrier, capture interface and trajectory that can actually reach the rendezvous.
+
+Cargo released from orbit needs a credible descent mechanism. Show braking, guidance, heat shielding where appropriate, parachute/parafoil deployment in suitable atmosphere, thrusters or a defined magical equivalent. A plain box must not drift gently from orbital speed without explanation.
+
+A receiving beacon supplies guidance within a carrier's reachable footprint. It cannot summon any shipment from the other side of the planet. Capture and landing corridors should contain candidate outports with real advantages; players may establish additional valid sites through construction and survey.
+
+Reuse a route's authoritative trajectory for the visible carrier, its forecast, the map and landing validation. Visible flight and the underlying transfer must agree.
+
+For player information, evaluate only the last received forecast/observation and its revision. Sharing trajectory code does not authorize a map to access unreceived live truth. A new diversion stays unknown until a report or observation reveals it.
+
+10.2 Radio and map design
+
+Radio is a working information system with useful simple defaults:
+- Tune or discover a relevant channel.
+- Receive readable subtitles and optional speech.
+- Store reports in a persistent log.
+- Select a report to track its related map entry.
+- Update that entry when newer information is received.
+- Replay the message and display its timestamp, source and confidence.
+
+Separate world truth from player/faction knowledge.
+
+Information states:
+Rumored: broad area from a trader, old record or damaged broadcast.
+Forecast: a decoded schedule gives corridor and arrival window.
+Updated: a later report revises time, destination or reachable footprint.
+Tracked: current/last-known position from a sensor or direct observation.
+Located: credible landing report or direct observation confirms the site.
+Resolved: receipt, recovery, wreck status or cancellation recorded.
+
+Do not reveal the full world by placing every site marker at generation time. A forecast should show an approximate area or corridor until the information supports an exact location. Once the player has directly surveyed a static site, radio interference must not erase that knowledge.
+
+Example broadcast:
+"Meridian freight, Kestrel Seventeen. West aqueduct apron, arrival in eight minutes. Cargo: water-treatment ceramics, grain and two pump rotors. Crosswind advisory. Beacon correction available."
+
+The map should show the referenced apron, confidence, estimated window and useful route context. Time values here are tuning examples, not fixed production deadlines.
+
+Make radio infrastructure matter: a better location, antenna, powered relay or repaired dish improves coverage, received services or forecast reliability. Use a bounded propagation/coverage model, not full electromagnetic simulation. Give players a practical first receiver early.
+
+Automatic landing alerts and logistics messages should be filterable and non-spamming. Preserve updated records without opening modal screens while the player is building or fighting.
+
+10.3 Keep schedules enjoyable
+
+Forecast several upcoming windows. Early recovery opportunities need enough notice for plausible travel and preparation. Routine service should be recurrent, bookable and compatible with exploration elsewhere.
+
+Single-player pause/closure follows the existing game-clock policy; do not invent hidden real-time progress. In a running shared server, the world continues consistently for everyone. Receiving infrastructure can accept authorized deliveries while a player is away. Full storage, outages and missed windows need clear hold, return or diversion behavior.
+
+Missing a routine pass should usually mean using another service or recovering stored/diverted freight. Do not place mandatory progression behind a one-time event that happens while the player is offline. Avoid repeated unattended cargo destruction as an attendance tax.
+
+Some passes should simply be beautiful background events. Other events can involve maintenance, visitors, weather, research, salvage or negotiated access. Do not turn every delivery into the same defend-the-crate battle.
+
+10.4 Complete travel, not only the sky animation
+
+The expansion is incomplete until:
+- One actual player shipment travels from a surface inventory to an orbital destination.
+- One descending shipment is received and used.
+- A player can board and disembark from a functioning elevator trip.
+- A player can use a skyhook route through a compatible carrier, including a valid capture/transfer and a reachable destination.
+- Failures have understandable, recoverable outcomes.
+- Cargo, passengers and vehicles preserve identity across travel, save/load and network reconnect.
+
+If planet-scale rendering or multiplayer is incomplete, first integrate the local simulation through narrow interfaces and clearly label that milestone. Do not build a replacement planetary engine just to animate the first drop. Conversely, do not claim full orbital usability from a menu that teleports the player between unrelated mock rooms.
+
+Respect planned portals. If an existing portal can transport a compatible carrier or item, apply the same ownership, capacity and coordinate rules. If magical travel can undercut a freight route, balance it through its actual costs and capabilities; do not forbid it only to protect the orbital minigame.
+
+11. A COMPLETE FIRST PLAYABLE REGION
+
+Build the first integrated scenario around a reclaimed freight outpost near a useful city ruin.
+
+Reach this complete-region milestone through Stage B's smaller working loops followed by Stage C. Do not make the first useful base or shipment wait for all six new creature assets.
+
+1. The player encounters existing satyrs and several residents actually using homes, paths and work areas. Six fauna designs demonstrate farming, habitat, transport and one distinctive discovery interaction.
+2. A damaged receiver and visible old freight infrastructure suggest a connection to a regional system.
+3. A resident, physical sign or accessible record offers leads to a replacement part, an alternate outport and a nearby salvage district.
+4. The player can salvage, purchase, manufacture or use a supported magical substitute to restore the relevant facility. No one exact chest is mandatory.
+5. A small home/workshop, food or habitat area, receiver, storage and receiving apron provide useful capabilities.
+6. A real scheduled shipment is announced, tracked, guided and delivered. It can arrive while the player explores elsewhere.
+7. A recovered filtration assembly or pump component enables a visible useful change: water service, a greenhouse, an opened route or another equivalent system.
+8. A specialist can visit or settle; a genuine trade or courier route becomes viable.
+9. A recovered record and a second independent clue point to a larger ruin or orbital facility.
+10. Returning after an expedition reveals the player's lasting improvements and routine activity.
+
+This is a demonstration of connected systems, not a required quest chain. The player may discover the ruin first, use another receiving site, invite a different specialist, preserve a flooded route, or ignore freight and still establish a useful home.
+
+Use this region as the proof that new content improves play. Then expand the roster and world with the same contracts.
+
+12. IMPLEMENTATION CONTRACTS FOR THE EXISTING RUST/WGPU ENGINE
+
+The following are conceptual responsibilities, not instructions to create duplicate files or replace established abstractions. Map them to current owners first.
+
+Regional world state:
+- A stable regional plan and site identities.
+- Watersheds, resources, route/utility connections, selected history and current occupation.
+- Population summaries, services, ownership and player-caused changes.
+- A deterministic generation revision plus persistent edits.
+
+Creature and resident state:
+- Stable individual identity, body plan, personhood, role/skills, home, relationships, inventory and current activity.
+- A reusable action vocabulary with species-specific constraints and locomotion.
+- Habitat and group state that can advance without fully simulating every distant member.
+- Explicit authority for adoption, recruitment, possessions, reproduction and death.
+
+Infrastructure:
+- Sites and facilities expose actual service capacity and access.
+- Power, heat, materials and transport use existing shared systems.
+- Restoration is a set of functioning components and routes, not a global repaired boolean.
+- Regions outside active rendering still have useful aggregate production and logistics under the game clock.
+
+Transport:
+- Orbital body and reference-frame identity.
+- Service schedules and reservations.
+- Shipments, carriers, manifest lots and custody.
+- Forecasts and player knowledge.
+- Ground approach, landing, docking, boarding and recovery.
+
+12.1 One authoritative cargo account
+
+A unit or quantity of cargo has one authoritative custody location at a time. Reservations are claims on capacity or stock; they are not extra physical copies.
+
+Loading, unloading, trading, splitting stacks, passenger boarding and portal transfer need explicit transaction identity and revision handling. Make concurrent or repeated requests safe:
+- Remove from the source once.
+- Commit to the carrier or destination once.
+- Reserve capacity consistently with inventory.
+- Persist partial unloading and cargo-lot lineage.
+- Record consumed, destroyed, abandoned or salvaged quantities.
+- Return the same outcome for the same completed operation.
+- Reject conflicting revisions with a current actionable state.
+
+Prefer a typed transport state machine with valid transitions. Example progression: Planned, Reserved, Loaded, Departed, InTransit, Approaching, Landed, Unloading, Completed. Delayed, Diverted, AbortReturned, Damaged, Wrecked and Cancelled require reasons and valid subsequent states. Adapt names to actual code.
+
+A container mesh represents existing cargo. It never creates a manifest merely by spawning. A radio message and map marker cannot mutate stock. Two players cannot each claim a shared shipment. Reconnects cannot repeat delivery rewards.
+
+Use authoritative server simulation where multiplayer exists; single-player should use the same core ownership rules. Do not require client floating-point lockstep or introduce a distributed database for this.
+
+12.2 Coordinates, passengers and portals
+
+Use the engine's high-precision world/body coordinates and camera-relative rendering. A carrier moving between local, planetary and orbital frames needs explicit transforms for position, orientation and velocity.
+
+Skyhook capture validates relative position and velocity in the tether-tip frame, compatible orientation/hardware and payload capacity. The carrier must reach that envelope through a valid ascent or transfer; the hook need not sweep along the ground.
+
+Passengers stay attached to a persistent vehicle-local frame while aboard. Save/load, reconnect, local origin changes and handoffs must preserve the passenger and their possessions. Prevent duplicate bodies, collisions that throw players through a cabin, or unloading the only valid support beneath them.
+
+Define hold, return, rescue or safe checkpoint recovery when a climber loses power, a destination is temporarily unavailable, a hook capture is aborted or a player disconnects. Failures should not trap a player indefinitely. A destination that has not finished streaming must not be exposed as an empty void.
+
+Existing portal connections use explicit source/destination frames, clearance and custody rules. Prevent duplicate simulation, duplicate inventories or a zero-cost energy loop created accidentally by frame handling. Deliberate fictional energy effects belong in the documented world model.
+
+12.3 Simulation detail and streaming
+
+Nearby entities use detailed movement, collision and animation. Regional entities use coarser scheduled actions, route progress and bounded resource accounting. Distant populations and orbital routes use compact authoritative summaries or analytic trajectories.
+
+Define handoff rules between these representations. Preserve identity, inventory, relationships, mortality, reservations and terrain changes. Rendering distance must not decide whether a factory works, a creature breeds, a shipment exists or a catastrophe occurs.
+
+For an unloaded arrival, validate against persistent terrain/structure summaries, advance the carrier and create a logical landed container with a recorded location and custody. Materialize its visual representation later. Do not reroll weather, cargo, landing or damage at chunk load.
+
+Camera changes alone must not alter conserved outcomes. Detailed local player intervention can alter a shipment because it is an actual world action; looking away is not an action that creates a different history. Declare tolerances for approximate motion while keeping inventory conservation and event identity exact.
+
+Use bounded work queues, spatial indexing, hierarchical navigation and cached facility results. Avoid per-frame world scans, all-pairs creature perception, full path searches per resident, or per-voxel rigid-body simulation for megastructures.
+
+Navigation must support real body sizes, doors, ramps, water routes, cargo clearance and supported portal connections. Update affected navigation when terrain changes. If a creature cannot find a route, show a legible response and bounded retry behavior; do not silently teleport it through walls.
+
+Do not add fake populations at every camera turn. Named residents and companions persist individually. Anonymous fauna may be represented by regional cohorts if birth, loss, migration and materialization conserve the intended population state.
+
+12.4 World generation, asset detail and rendering
+
+Site plans must be reproducible without depending on which neighboring chunk loads first. Assign boundary-spanning structures and utility connections stable ownership. Use reserved corridors, support volumes, flood levels and motion envelopes so later decoration cannot block a tram or climber.
+
+Generate far and near representations from the same site plan and revisions. Preserve skyline, structural connections, major terrain contact and occlusion across distance. Keep a valid proxy until the replacement geometry is uploaded and ready. Do not open terrain gaps or erase a megastructure during streaming.
+
+Use static batching/instancing, appropriately sized spatial clusters, mesh LODs and camera-relative precision. Dynamic machinery should be restricted to actual moving components. Distant NPCs do not need full skeleton animation. Small animal swarms use suitable aggregate representations.
+
+Render light according to useful scale. Use practical fixtures and bounded shadowing instead of a shadow-casting point light on every moth, window or beacon. Night streets need navigable luminance; abandoned rooms can be dark without making every interior unreadable.
+
+Create actual art assets through the established Blender/import pipeline when the task needs sculpted body plans, machinery or modular architecture. Include editable sources, collision proxies, relevant rigs, pivots, texture/material assignments and reproducible export settings. A script that describes intended Blender work is not proof that Blender ran.
+
+Evaluate silhouettes and animation in native gameplay. Reject primitive box creatures, generic humanoid bodies with swapped heads, sliding feet, floating saddles, clipped horns, motionless large wings, detached cargo, flickering pixel textures and inconsistent material scale.
+
+Inspect animal access, gardens, food preparation, seating, sleeping areas and loading machinery from normal walking camera height. Habitation must read in the places the player actually spends time, not only in distant skyline captures.
+
+Keep the distinctive Axiom palette and pixel clusters. Terrain can use fine voxels while fauna and machinery use authored meshes; fidelity should be coherent at the gameplay camera. Do not add photorealistic assets that clash with the world or hide weak forms under glow.
+
+12.5 Measure the cost of the living world
+
+Capture a reproducible baseline and the same post-change scenes. Record hardware, build, resolution, render scale, view distance, seed, camera and simulation population.
+
+Measure CPU simulation, navigation, streaming/generation, mesh uploads, GPU frame time, memory, p95/p99 frame time and relevant long-frame events. Inspect busy towns, multiple visible districts, a landing event, a large animal group and rapid travel toward a skyline.
+
+Set budgets from the actual baseline and intended target configuration. Treat proposed frame budgets as hypotheses until measured. A high-end development GPU is not proof of efficiency. Do not claim performance from an empty showcase or average FPS alone.
+
+Reuse profiler evidence to remove work that does not change visible or persistent behavior. Keep core conservation and ownership rules intact while reducing simulation detail.
+
+13. IMPLEMENTATION ORDER AND HONEST COMPLETION
+
+Work in complete, reviewable increments. The full target spans the following stages; finishing the first stage does not finish the expansion.
+
+Stage A — Verify and reuse:
+Inspect current code and saves, identify owners, capture representative scenes and baseline timings, and map already working species/transport. Repair the smallest blocking issue required by the next stage. Do not end with the audit.
+
+Stage B — Prove two useful loops:
+First demonstrate a modest nonorbital payoff: a suitable habitat and useful building produce a renewable resource, a visit or a functioning resident service.
+Then prove one shipment end to end using the existing orbital schedule or a narrow authoritative service implementation: stock, forecast, map, approach, landing, receipt and a useful base improvement.
+Reuse current fauna/assets initially. These two loops must work before they become dependent on the entire new creature catalog or a fully restored megacity.
+
+Stage C — Complete the first living region:
+Finish the six-fauna ensemble, resident routines, small outpost, one high-quality city precinct, habitat services and the integrated scenario in section 11. Replace temporary assets before passing its final art gate. Demonstrate alternate routes and persistence. Once those foundations work, complete two Appendix B encounters: one small inhabited place and one relationship tied to useful infrastructure. Expand toward the six-encounter palette in later regions without making all six a prerequisite for this stage.
+
+Stage D — Expand places and consequences:
+Implement distinct site grammars for Meridian, Bellwater, Talon and the thermal outpost, with local historical variation. Add connected outposts, restoreable utilities, archaeological evidence and permanent regional improvements. Expand measured city scope only when route density and rendering remain acceptable.
+
+Stage E — Finish usable orbital travel:
+Complete elevator boarding/ascent/disembarkation, real exports and imports, a usable skyhook carrier transfer, orbital destinations and passenger recovery. Finish missing momentum/capacity accounting and integration with the actual planet/multiplayer substrate.
+
+Stage F — Complete roster breadth and stress the systems:
+Expand toward the appendix's 30 fauna, 10 sapient options and 16 occupations, crediting existing completed equivalents. Validate multiple seeds, habitats, save versions, supported voxel scales, populated regions and multiplayer scenarios. Dependency-heavy species wait for their real substrate; they remain explicitly unfinished until it works.
+
+Explicit later dependencies: giant-beaver dams require functioning bounded water flow; mossback planting surfaces require attachment and persistence; plesiosaur travel/towing requires aquatic movement and tow rules; griffins/cloud rays require actual aerial navigation and landing. Reuse shared systems. Do not create replacement engines for individual species or substitute hidden bonuses and fake motion for their promised behavior.
+
+Maintain a concise completion matrix linking each item to code, native evidence and remaining gaps. Continue within the task's authorized scope; if an external capability is unavailable or a session limit interrupts progress, preserve an actionable checkpoint and distinguish incomplete work from verified completion. Do not silently shrink the requested expansion to a single prototype.
+
+14. ACCEPTANCE SCENARIOS
+
+A. A useful modest base:
+A new player establishes a small home, practical habitat and workshop. At least one renewable creature interaction and one resident/visitor service work without orbital technology, a huge factory or a colony-management spreadsheet.
+
+B. Habitat and individuality:
+Moving or modifying a habitat changes behavior. Different species demonstrate distinct locomotion and interactions. A companion and a named resident survive travel and save/load with their identities and possessions intact.
+
+C. Legible settlement:
+An unfamiliar player can find water, habitation, workshops, freight, dangerous areas and onward routes through geometry, activity, signs and observation. Occupants use their buildings. The city is recognizable at street level as well as from orbit.
+
+D. Multiple valid approaches:
+A useful city system can be reached or repaired through at least two real approaches. Trading, fabrication, exploration, engineering or supported magic offer alternatives where appropriate. One missing quest item cannot permanently brick ordinary progression.
+
+E. Persistent public works:
+Repairing a bridge, water system, relay or terminal changes actual routes/services. Returning after an expedition shows the same improvement. Secured areas do not silently revert to mandatory hostile spawning.
+
+F. Real cargo:
+Manifest quantities move source -> carrier -> destination once. Exercise partial unload, full storage, duplicate commands, concurrent claim, save during transfer, unload/reload and reconnect. Destruction becomes explicit loss or salvage. No duplicated reward or untracked disappearance.
+
+G. Information with evidence:
+A rumor is approximate. A decoded forecast is more useful. A stale map report remains stale until updated. A diversion is reflected after receipt or observation. Listening does not instantiate cargo.
+
+H. Remote arrival:
+Run equivalent arrivals with the destination active and inactive, under equivalent authoritative inputs and no local intervention. Conserved outcomes agree. Loading the region does not produce a fresh crate or reset its contents.
+
+I. Failed delivery and passenger recovery:
+Obstruct an apron, remove beacon power after commitment, fill storage, abort a capture and disconnect aboard. The resulting hold, diversion, return, rescue or recovery matches the declared rules and preserves identity.
+
+J. Usable space infrastructure:
+Carry an actual outbound load, receive a return load, ride the elevator and use a hook transfer to a playable destination. The visible carrier, timing and current authority agree; the player's knowledge is limited to received information.
+
+K. Meaningful veteran exploration:
+A player with abundant common materials still finds a specific useful relationship, place, mechanism, habitat or piece of knowledge in an unfamiliar region. The reward is more than a stronger random item.
+
+L. Procedural and technical quality:
+Check multiple seeds and supported voxel scales for missing roads, flooded homes, blocked entrances, impossible routes, fauna clipping, hollow/floating landmarks, LOD discontinuity and save migration damage. Profile representative populated scenes, not only isolated components.
+
+M. A natural-looking world:
+Ask a tester to explain why the main settlement exists, how food/water/freight reach it, what happened to the ruin, and what the player changed. The world should support their explanation with visible evidence. Repeated lore paragraphs do not pass this gate.
+
+
+N. Wonder and changed encounters:
+For each completed Appendix B encounter, show environmental evidence before contact, ordinary activity, at least two appropriate approaches, a readable response, a persistent consequence and a changed return visit. Observation, companionship and an appealing place are valid rewards alongside resources.
+
+O. Streets worth inhabiting:
+Walk from a real resident's home to work, from a public approach to common services, and with a real load to the freight facility. Verify clearances, routes, neighborhood identity, practical travel time and pleasant native-camera views. Profile the same precinct while active.
+
+P. One persistent world for friends:
+Two friends interacting with the same recruit, last item, caravan or shipment receive one authoritative outcome. Visit order cannot reroll a person's identity. Distant and local representations preserve people, inventory and history. Reconnect and repeated requests cannot duplicate committed effects.
+
+15. REPORT THE RESULT WITH EVIDENCE
+
+Report what changed for the player, which prior systems were reused, which assets were actually authored/imported, which scenarios were played, measured performance, remaining gaps and material risks.
+
+Compilation and unit tests establish only part of correctness. Show native views and short gameplay captures of the living base, a city street, a fauna interaction, a functioning resident, a radio/map update, an actual delivery and usable orbital travel for the stages that claim those features.
+
+Use focused tests for state conservation, generation consistency, save migration, navigation clearance and authority. Do not inflate confidence with hundreds of tests that merely restate data definitions. Visual quality and enjoyment require observation and playtesting.
+
+Final rejection conditions:
+- Thirty reskins sharing a generic wander script.
+- Residents that are only static shop menus.
+- Huge empty cities with interchangeable corridors.
+- Restoration that changes only a light or UI label.
+- Cargo appearing because the player hears a message.
+- A skyhook that is only a sky animation.
+- A base whose inhabitants and functions remain unchanged after construction.
+- Roster expansion that worsens the existing performance problems.
+- Finishing an audit or one prototype and claiming the whole brief is done.
+
+The intended result is a recognizable home in a region the player understands and has changed: familiar animals, strange neighbors, inhabited ruins, working routes, meaningful discoveries, and immense infrastructure that can genuinely be used.
+
+APPENDIX A — FRIENDLY FAUNA, PEOPLES, AND WORKING SETTLEMENTS
+
+Treat everything in this appendix as a proposed implementation target. Audit existing creatures first; keep working equivalents, including satyrs. The target is 30 distinct fauna designs, 10 sapient body-plan or lineage options, and 16 shared occupations. This is a staged roadmap, not a claim about Minecraft's current roster or a requirement to replace existing species. Coat colours, juveniles, sex variants, equipment sets, and renamed copies do not count as distinct fauna designs.
+
+The first complete regional milestone contains six completed fauna and several functioning residents in one coherent region, following the smaller nonorbital and shipment proofs in Stage B. The complete roadmap remains unfinished until its later entries pass the same behavioral, visual, persistence, and performance gates. Do not declare parity because thirty configuration records exist.
+
+1. KEEP THE WORLD ECOLOGICALLY LEGIBLE
+
+Establish familiar animals before concentrating on rare spectacles. A farm should plausibly contain pasture, livestock, hens, bees, dogs, and cats; a ruin should show nesting, shelter, disturbed ground, water access, and food sources. Distribute populations through habitat and regional history. Avoid placing all species in every biome or spreading creatures uniformly around the player.
+
+Describe each species with habitat suitability, home range, food relationships, movement constraints, social grouping, shelter, reproduction or recruitment rules, and reactions to danger. Use the minimum simulation needed to produce observable behavior. Distant populations use bounded regional updates; nearby individuals execute physical actions. Preserve population changes when regions unload. Respawning must not reverse conservation work, duplicate named companions, or refill repeatedly harvested nests for free.
+
+Friendly does not mean obedient or incapable of defending itself. Some creatures are domesticated, some can become companions, and others remain peaceful wildlife. Every species need not become a mount or crafting machine. Useful ecological activity, ambience, and observable relationships can justify its presence when sufficiently distinctive.
+
+2. THIRTY FAUNA DESIGNS
+
+The interaction in each row is an observable acceptance requirement, not merely lore text. Existing equivalents may satisfy a row after verification. Behaviors and values below are fictional game-design choices.
+
+Familiar anchors — fourteen designs:
+
+01. Cattle: Meadow and riverside herds with broad, readable bodies. Follow pasture, water, and shelter availability; support milk, manure, and optional harness work. Demonstrate a herd settling into a usable pasture and a renewable collection cycle. Meat remains optional rather than the only valuable outcome.
+
+02. Sheep: Open grazing areas, flocking, and obvious fleece changes. Graze, seek dry resting places, and regrow collectable wool. Demonstrate shearing, regrowth, and a real recipe using the fibre. Crowding or unsuitable terrain must be understandable without adding daily compulsory chores.
+
+03. Goats: Rocky terraces and scrub, with characteristic climbing and browsing. Carry modest loads through routes unsuitable for larger pack animals. Demonstrate traversing a stepped ruin path while refusing an actually impassable gap. Do not grant collision-free climbing or teleportation to follow the player.
+
+04. Pigs: Woodland edges and cultivated land, with rooting and group behavior. Disturb soft soil and find some buried edible growth. Demonstrate rooting changing a small patch of ground and fences protecting a garden. They must not reveal every buried chest or mineral deposit.
+
+05. Chickens: Dry yards and forest margins, scratching and evening roosting. Produce eggs through a bounded cycle and consume accessible scraps or forage. Demonstrate returning to an appropriate roost and a persistent nest. Eggs, chicks, and colour variants remain one design.
+
+06. Ducks: Wetland margins and shallow farm water, with credible swimming and transitions to land. Forage in wet plots and nest along sheltered banks. Demonstrate use of an irrigation pond and movement through a culvert, giving them behavior distinct from chickens beside blue terrain.
+
+07. Horses: Open-country herds and established travel routes. Provide fast riding when terrain permits; use stables or suitable outdoor shelter. Demonstrate mounting, dismounting, variable route suitability, and persistent equipment. Riding improves travel without replacing every other ground-transport choice.
+
+08. Donkeys: Settlement margins and rough caravan paths. Carry practical pannier loads at lower speed and work with accessible loading points. Demonstrate an actual inventory moving between two sites, with containers, obstacles, unloading, and recovery handled correctly. Distinguish their freight role from horse speed.
+
+09. Dogs: Settlements, camps, and travelling groups. Support companionship, local warning, and tracking a specific recent scent. Demonstrate recognizing their owner and recovering a designated dropped object. Tracking requires available evidence and a bounded trail, not omniscience about generated loot.
+
+10. Cats: Roofs, granaries, workshops, and warm resting places. Establish familiar territory and hunt actual small pests where that subsystem exists. Demonstrate voluntary rest, approach, retreat, and use of a building. Do not substitute an invisible global crop-protection bonus for observable behavior.
+
+11. Rabbits: Meadow edges, hedges, and burrowable soil. Maintain warrens, forage, flee, and sometimes browse exposed gardens. Demonstrate a persistent warren and escape behavior shaped by cover. Their contribution is believable small wildlife; avoid inventing a mandatory rare reagent to justify them.
+
+12. Deer: Woodland clearings and seasonal grazing routes. Browse, move as groups, rest in cover, and leave readable traces. Demonstrate a herd using a landscape corridor and responding to a new obstruction. Naturally shed antlers can offer a renewable collection opportunity.
+
+13. Honeybees: Flower-rich areas with accessible nesting sites. Pollinate compatible nearby plants and provide honey and wax. Demonstrate forage changing after a garden is planted and a visible return to the hive. Swarms require bounded representation rather than a full expensive agent per insect.
+
+14. River trout: Connected pools and flowing waterways. School, feed, and respond to habitat changes. Demonstrate fish movement through a restored channel and persistence of local depletion or recovery. A fishing interaction must operate on this population rather than an unrelated infinite loot table.
+
+Mythic and fictional fauna — eight designs:
+
+15. Jackalopes: Meadow–woodland boundaries, antlered silhouettes, and bounding movement. Prefer particular botanical habitats and establish repeating feeding trails. Demonstrate observation leading to a useful herb patch and a suitable garden attracting a small population. They do not become universal treasure scanners.
+
+16. Griffins: Cliffs, large nests, and wind-exposed ruins. Support observation, earned trust, ground companionship, and later aerial transport with real payload and landing constraints. Demonstrate perching, takeoff, landing, and safe rider handling. Do not mark flight complete using a floating ground-walk animation.
+
+17. Unicorns: Quiet woodland and restored water meadows. Offer a rare, voluntary relationship through repeated nonthreatening interaction. Their fictional magic can aid a local restoration process with an explicit bounded input or recovery cycle. Do not require blood, horn removal, or captivity for ordinary progression.
+
+18. Hearth salamanders: Warm rock, geothermal pockets, and abandoned furnace districts. Seek heat, shelter in appropriate cavities, and retain a bounded amount of thermal energy. Demonstrate heat transfer within the same energy accounting as equipment. They may complement heating systems but cannot create unlimited energy.
+
+19. Mossback tortoises: Humid lowlands, with massive shells carrying persistent vegetation. Follow slow routes and support a small living planting surface. Demonstrate plants remaining attached during movement and a correctly colliding body. This is a mobile habitat, not permission to simulate an unbounded moving voxel city.
+
+20. Lantern moths: Humid caves, shaded ruins, and selected night flowers. Form restrained light-bearing groups and gather at compatible surfaces. Demonstrate a dark-space interaction using their actual light. Most wildlife must remain unlit; do not turn the whole roster into glowing resource indicators.
+
+21. Cloud rays: A fictional aerial species using established wind corridors and sheltered roosts. Allow limited freight companionship after suitable infrastructure exists. Demonstrate gliding, landing, and payload handling with a role distinct from a griffin's maneuverability. This remains a later milestone if atmospheric navigation is immature.
+
+22. Mycelial rootlings: Explicitly non-sapient mobile fungal organisms living around rich substrate. Move small quantities of compatible organic material and spread selected plants locally. Demonstrate an observable material transfer and controlled colony growth. They need physical inputs and cannot replace unrestricted programmable workers for free.
+
+Prehistoric-inspired fauna — eight designs:
+
+23. Woolly mammoths: Cold grasslands and protected valleys. Support heavy hauling, route formation through snow, and seasonal fibre collection. Demonstrate clearance requirements, a real heavy cargo transfer, and use of a suitable sheltering area. Their large bodies must collide with buildings rather than pass through them.
+
+24. Glyptodons: Warm scrub and grassland refugia, with low armored silhouettes. Provide slow, robust short-haul carriage and defensive bracing. Demonstrate turning limitations, correct pack attachment, and a response to threats. Their niche must remain distinguishable from the mammoth's much heavier logistics.
+
+25. Moa: Forest clearings and old orchard districts. Browse, nest, and disperse seeds into suitable nearby ground. Demonstrate a changed patch of vegetation resulting from their movement. Provide eggs or feathers through appropriate cycles while preserving their distinct gait and habitat from domestic poultry.
+
+26. Giant beavers: River valleys and flooded infrastructure. Build dams from accessible material and alter local water behavior. Demonstrate a dam influencing a real water system and a player-built spillway shaping the outcome. Support cooperation or redirection instead of requiring extermination whenever their work causes flooding.
+
+27. Giant ground sloths: Woodland and open forest, with a distinctive reaching posture. Browse higher vegetation and manipulate branches or accessible plant matter. Demonstrate their reach changing a local patch while movement and collision remain credible. They are not another pack-animal statistics variant.
+
+28. Plesiosaurs: Large lakes and coastal waters in appropriate fictional refugia. Support observation and, where earned, aquatic travel or limited towing. Demonstrate surfacing, turning, shoreline clearance, and safe rider or tow handling. Avoid infinite underwater breath or towing power unless explicitly part of the game's magic rules.
+
+29. Ammonites: Offshore and deep-water habitats with distinct buoyant movement. Make marine ecosystems and aquarium-like habitats meaningfully different from rivers. Demonstrate feeding, movement, and compatibility with an appropriate enclosure. Empty shells or other nonlethal opportunities can support collection without mandatory farming slaughter.
+
+30. Trilobites: Shallow marine bottoms and rocky pools. Move along substrate, feed locally, and retreat into cover. Demonstrate grounded benthic movement and a small tidal habitat that sustains them. Their behavior must differ visibly from swimming fish and ammonites.
+
+Do not imply these prehistoric-inspired designs historically coexisted. Explain their present distribution through the game's refugia, ancient reserves, ecological engineering, or explicitly fictional science-magic restoration. Fossils are records and materials, not automatically viable eggs, seeds, or cells. Restoring a species requires an established fictional process; finding fossils alone does not silently satisfy it. Living populations and viable propagules need separate provenance and persistence.
+
+3. TEN SAPIENT OPTIONS; SIXTEEN SHARED OCCUPATIONS
+
+Keep personhood separate from species, occupation, culture, faction, and equipment. Sapient individuals negotiate, own possessions, make residence choices, and can leave. They are not tameable livestock, loot containers, or permanently owned workstations.
+
+The ten proposed options are humans; existing satyrs; centaurs; minotaurs; cyclopes; dryads; goblins; kobolds; amphibious canal folk; and awakened relic persons. Confirm existing names and equivalents before adding duplicates. Differentiate body plans through silhouettes, locomotion, interaction reach, clothing fit, door clearance, resting arrangements, and environmental preferences. Avoid inventing a separate incompatible civilization for every body plan.
+
+Centaurs need accessible circulation and turning space. Cyclopes and minotaurs need appropriate clearance and tools. Dryads may prefer living soil and planted courtyards. Canal folk benefit from connected water and accessible docks. Small inhabitants can use compact spaces while still sharing civic infrastructure. Relic persons need repair accommodations determined by their actual body. These are design affordances, not mandatory professions or species-wide moral traits.
+
+Provide sixteen occupation packages that qualified individuals of multiple lineages can learn: farmer, herder, cook, beekeeper, forester, carpenter, mason, smith, mechanic, healer, trader, archivist, radio operator, courier, scout/guide, and caretaker. Occupation packages define available tasks and tools, not a hard species lock.
+
+Each occupation must perform at least one visible task with real inputs and outputs. A courier transfers an actual consignment; a mechanic repairs actual equipment; an archivist interprets a recovered record; a cook uses permitted ingredients. Shared inventories require explicit access rules. Residents must not consume prized components, demolish structures, or relocate belongings without permission.
+
+Provide optional work priorities and simple agreements, but make normal residency run autonomously. Hospitality and comfortable buildings should produce visible use and practical services. Avoid compulsory meal-by-meal supervision, chore hunger, forced AFK timers, or constant threat inflation as the cost of having inhabitants. Ordinary supplies need multiple acquisition routes. Humane approaches must remain practical. Powerful automation and engineered discovery are allowed; do not add arbitrary human-only interaction locks.
+
+4. BUILD SIX COMPLETE FAUNA BEFORE EXPANDING
+
+The first slice should complete cattle, sheep, chickens, a pack animal, honeybees, and one signature mythic or prehistoric creature. Reuse existing equivalents. Include several residents, with at least a working trader, mechanic, and radio operator or courier, and retain existing satyr interactions. Demonstrate this ensemble in one coherent settlement connected to a real exploration destination.
+
+For every selected creature, produce or adapt a real Blender asset with documented source, organized meshes, named bones where applicable, useful pivots, collision proxies, material assignments, and a reproducible export. Import it through the actual game pipeline. Inspect idle, locomotion, turning, the signature interaction, damage or alarm response, and the relevant rest or flight cycle inside the game. Use representative terrain, lighting, viewing distances, and voxel scales. Configuration entries and primitive placeholders do not pass the final art gate.
+
+Verify the creature-specific interactions above, plus save/load, unload/reload, ownership or companion identity, inventory transfers, and multiplayer authority where supported. Confirm that distant population updates neither duplicate creatures nor consume full local simulation cost. Record before/after frame and simulation timings in a representative busy settlement.
+
+Advance only after the player can observe useful ecology, establish an appropriate habitat, use a creature interaction, and return from an expedition to find persistent consequences. Track later species and occupations openly as unfinished. The result should make a familiar base visibly more inhabited, more capable, and more connected to places the player has changed.
+
+APPENDIX B — LANDSCAPE IDENTITY, SMALL WORLDS, AND MYTHIC ENCOUNTERS
+
+Design status: The following is an original implementation direction for Axiom/Meridian. The named works are references for selected qualities, not templates for copied maps, characters, assets, or stories. Keep Rust, raw WGPU, the existing voxel framework, player construction, powerful automation, and online cooperation.
+
+Nintendo's Breath of the Wild description emphasizes surveying from high places and choosing routes [Z1]. Nintendo presents The Minish Cap around altered scale and tiny inhabitants [Z3]. Fablehaven's publisher describes a hidden sanctuary whose inhabitants coexist under old rules [F1–F2]. Riordan's official material presents location-connected nature spirits and mythic companions with individual lives [P1–P3]. Interpret the requested Twilight Princess reference as a direction toward memorable regional geography, strong approaches, settlement identity, and changes of atmosphere. The detailed rules below are proposed designs rather than claims about those games' internal systems.
+
+1. MAKE REGIONS RECOGNIZABLE BEFORE ADDING MORE CONTENT
+
+Give each major region a geographic premise that determines its terrain, water, paths, settlements, ruins, ecology, and views. Examples include an inhabited lake basin below a broken orbital terminal, a wooded escarpment cut by old freight tunnels, a dry plateau of abandoned reservoirs, or an alpine valley beneath a retired launch complex. Avoid selecting these ingredients independently and scattering them across unrelated noise.
+
+Build a hierarchy of landmarks. A regional landmark orients the player from far away; district landmarks guide an expedition; local details reward inspection. A megastructure can be the distant anchor while a bridge, orchard, radio tower, or unusual tree becomes the immediate objective. Not every location needs a gigantic monument.
+
+Test actual sightlines from roads, ridges, water approaches, settlements, and plausible player-built towers. A distant silhouette must correspond to a real place with useful approaches. Terrain, trees, haze, and architecture should reveal and conceal destinations deliberately. Preserve quiet stretches and intermediate views so discoveries have contrast.
+
+Support several understandable routes: a road suitable for carts, a steep walking shortcut, a river approach, a repaired bridge, a tunnel, or later flight. Their advantages should arise from terrain and infrastructure. Avoid arbitrary invisible walls and universal item gates. Engineering, magic, and player construction may create additional routes.
+
+Make the map express actual geography. Rivers connect catchments to lower water; roads connect useful places; industrial sidings lead to former industry; harbor districts face accessible water. Ruins preserve evidence of their original purpose and later occupation. A broken highway should lead somewhere, even if its final approach now requires repair or a detour.
+
+Use regional art direction to strengthen this structure: a limited material family, vegetation profile, roof language, water character, soundscape, and recurring shape vocabulary. Neighbouring regions need transitions rather than abrupt unrelated palettes. The same distant ridge, river, and city silhouette must remain recognizable as the player approaches through different voxel scales.
+
+2. TRANSLATE SPRITE DISCIPLINE INTO ORIGINAL 3D ASSETS
+
+Use the requested Minish Cap influence to demand deliberate shapes, colour clusters, expressive poses, and appealing small details. Do not imitate pixel art by adding random noise, posterization, or a low-resolution filter over generic assets.
+
+Model readable primary forms first. Every creature needs a recognizable silhouette in ordinary gameplay views. Use clear body masses, controlled proportions, intentional negative space, and a small number of distinguishing features. A satyr should read through posture, legs, head, and clothing rather than relying on a nameplate. A fairy needs more than a glowing dot.
+
+Textures should describe materials and forms with coherent clusters. Use restrained highlights, purposeful edge wear, controlled hue variation, and broad areas of rest. Avoid independent random colour per texel or voxel. Nearby texels may remain crisp while distant minification and LOD handling prevent shimmer. Preserve the engine's stable sampling and lighting behavior rather than forcing nearest sampling at every distance.
+
+Use bright accents selectively. Gardens, fabrics, signs, flowers, and celebrations can supply whimsy; shadowed ruins and huge industrial structures can remain restrained. Do not make all creatures luminous or cover every surface in gold trim. Lighting should reveal forms and maintain readable values through daylight, dusk, interiors, and weather.
+
+Create or adapt real original Blender meshes. Preserve organized source files, named objects and bones, sensible pivots, collision proxies, materials, and reproducible exports. Inspect imported animation in the actual game. A walking cycle does not satisfy flight; a floating body does not satisfy swimming; sliding feet do not satisfy locomotion.
+
+Capture representative views at normal player distance, close inspection, and the transition to distant representation. Review front, side, movement, shadow, and interaction poses. Verify creature clearance, equipment attachment, ground contact, and the relation between mesh detail and voxel scale. A configuration record or primitive placeholder does not pass the final visual gate.
+
+3. PUT SMALL INHABITED WORLDS INSIDE THE LARGE ONE
+
+Exploit detailed local scales through miniature doors inside roots, bridges across gutters, market stalls on a broken machine housing, and household paths behind shelves. A huge radio dish can shelter a tiny night market. An ordinary bench can cover a mushroom courtyard.
+
+These places need residents, access routes, furnishings, work or leisure, and signs of use. A decorative tiny door with nothing behind it is insufficient. Begin with inspectable spaces that the normal-sized player can observe and influence. Player shrinking, new dimensions, and unrestricted microphysics are later possibilities, not prerequisites.
+
+Use bounded fine-detail geometry and local navigation appropriate to the inhabitants. Do not refine every surrounding terrain voxel to the smallest possible size. Tiny agents need scale-aware collision and interactions, but their entire neighborhood need not simulate every seed husk as an independent rigid body.
+
+Support discovery through movement, sound, clues, unusual maintenance, and repeated observation. A player might notice swept dust beneath a shelf, lanterns in a gutter, or small footprints near a kitchen. Equipment and automated observation may help. Avoid human-only discovery flags or a mandatory consumable that must be repeatedly paid merely to see familiar inhabitants.
+
+4. KEEP THE EXISTING ROSTER; ADD A SEPARATE ENCOUNTER PALETTE
+
+The existing target of thirty fauna designs, ten sapient options, and sixteen shared occupations remains the foundation. Preserve familiar animals and original creatures. Track the following palette separately; do not pretend added families fit within the old count or inflate it with colours, life stages, and renamed copies.
+
+Fairies and small sprites: Develop one convincing family before multiplying labels. Give them small inhabited places, games, gatherings, curiosity, rivalries, and territorial concerns. Some can be helpful and some hazardous. Their value need not be a farmable dust resource.
+
+Brownies or household spirits: Treat them as small sapient residents with homes and preferences. They may repair, cook, make gifts, or rearrange permitted scrap, but also have their own relationships and activities. They are not an invisible maintenance modifier.
+
+Naiads or spring spirits: Associate individuals with actual springs, fountains, rivers, and water routes. Keep them distinct from biological canal folk. Restoring or diverting water changes their circumstances and supports negotiation, not merely an upgraded fishing percentage.
+
+Dryads and existing satyrs: Deepen their individual lives before adding duplicate species. A dryad's grove or particular tree can matter; satyrs can travel, argue, celebrate, tell stories, and develop friendships. Faun terminology may be a cultural or descriptive choice without requiring another identical agent type.
+
+Pegasi and hippocampi: Create encounters with wild populations and distinct individuals before assuming every one is a mount. Trust, rescue, curiosity, or shared travel can matter. A pegasus uses appropriate open terrain and resting places; a hippocampus belongs in convincing aquatic routes and habitats.
+
+Drakes and dragons: Distinguish animal-like drakes from sapient or exceptional dragons where the design requires it. Do not assume they are one growth ladder. A dragon can be a territorial individual with interests and history; it should not automatically become a furnace or a repeatable loot dispenser.
+
+Sphinxes and other rare guardians: Use them for investigation, interpretation, negotiation, and relationships to particular places. Keep alternative approaches grounded in the world. Avoid generic trivia quizzes whose arbitrary answers block unrelated exploration.
+
+Disposition depends on temperament, territory, activity, affiliations, and remembered actions. Communicate warnings and boundaries. A fairy defending its home can be dangerous; a dragon may tolerate respectful visitors. Reparation, withdrawal, and new agreements can change some outcomes. Species alone does not determine moral alignment.
+
+5. SIX PERSISTENT, RECOVERABLE ENCOUNTERS
+
+A. THE ELEVATOR GUTTER GARDENS
+
+A ruined orbital station contains enormous cargo halls, but its damaged gutters support fairy homes and miniature gardens. The player can notice movement and small bridges from the concourse. Repairing the roof would divert their water. Allow an alternate channel, negotiated relocation, a partial repair, or proceeding with understandable consequences. If the initial repair disrupts the settlement, rebuilding water access can restore relations. Later visits show actual new routes, residents, and occasional gatherings; no permanent quest flag should freeze the scene.
+
+B. THE OCCUPIED SIGNAL HOUSE
+
+An attractive abandoned outpost has a carefully swept corner and tiny furniture behind a cabinet. A brownie household already lives there. The player can agree on shared space, provide a permitted supply drawer, rearrange the building with their cooperation, or choose another home. Broken agreements can be repaired. After a successful arrangement, small gifts, repairs, visitors, and domestic activity make the base feel inhabited. Useful work consumes real permitted materials, and the household retains a life beyond serving the player.
+
+C. THE FOUNTAIN BELOW THE FREIGHT DISTRICT
+
+A spring reaches a neglected fountain through an old conduit. A naiad remains connected to the source. Examining maintenance records and following the water reveal several restoration choices: repair the old route, create a garden channel, or negotiate another arrangement. Mistakes can be corrected by changing the physical system. The result alters water, vegetation, public activity, and access through the district. The player returns to a changed place and a recognizable individual rather than collecting a one-time completion reward.
+
+D. THE DRAGON OF THE LAUNCH RIDGE
+
+A dragon rests among the freight cranes and foundations of a retired surface launch complex and can be seen from far away. Freight machinery risks disturbing its territory. The player can observe its habits, negotiate, isolate noise, reroute traffic, salvage stealthily, or confront it. Signals must make the danger legible. Conflict can end through withdrawal, restoration, or an agreed boundary where appropriate. A successful arrangement permits a useful route and future interaction without converting the dragon into obedient industrial equipment. Keep any genuine space-elevator counterweight in its correct orbital role.
+
+E. THE SPHINX AND THE INCOMPLETE ARCHIVE
+
+A sphinx guards civic records that contradict one another. Its challenge concerns the actual region: water distribution, an erased transport symbol, or why a district was sealed. Players gather evidence through exploration, conversation, instruments, or automation. They can also negotiate or find a practical alternate route. A mistaken interpretation leads to another clue or recoverable complication rather than permanently invalidating the world. New discoveries change later conversations and the archive's practical accessibility.
+
+F. THE HIPPOCAMPI OF THE DROWNED INTERCHANGE
+
+An elevated road overlooks a flooded interchange connected to open water. Hippocampi follow routes between submerged platforms. A missing consignment or blocked channel gives players a reason to investigate, but the animals are interesting before any task begins. Individuals differ in curiosity and caution. Clearing an obstruction, withdrawing after a warning, or rebuilding a dock can change their responses. Later encounters may support swimming together or voluntary travel assistance, while the population and habitat persist independently of the player's reward schedule.
+
+6. STAGE THE WORK AND VERIFY THE FEELING
+
+Do not implement all six encounter families alongside the first six-fauna milestone. First complete two: one small inhabited-place encounter and one relationship tied to useful infrastructure. Connect them to a settlement and a meaningful journey. Expand to the six-family regional target only after visual quality, persistence, authority, and performance are verified.
+
+For each completed encounter, demonstrate environmental evidence before contact, a characteristic ordinary activity, at least two appropriate approaches, readable responses, one persistent consequence, and a changed return visit. These are reusable-system requirements, not six compulsory scripted quest chains.
+
+Review the world through actual journeys. Can a player choose a destination by sight, understand why people settled there, find an unexpected small place, improve an inhabited base, and later recognize the consequences? Can friends approach the same situation differently without corrupting its state? Can a quiet pasture remain worthwhile beside fantastic creatures and immense ruins?
+
+Track incomplete assets, behaviors, and encounters honestly. Broad counts do not compensate for shallow interactions. Exploration must reward observation, relationships, discovery, and changed possibilities as well as resources. A base should become more inhabited and connected while still supporting a peaceful, low-chore way to play.
+
+PRIMARY REFERENCE NOTES
+
+[Z1] Nintendo, Breath of the Wild: https://www.nintendo.com/en-ca/store/products/the-legend-of-zelda-breath-of-the-wild-can/
+[Z2] Nintendo, Twilight Princess developer discussion: https://iwataasks.nintendo.com/interviews/wii/twilight_princess/0/1/
+[Z3] Nintendo, The Minish Cap: https://www.nintendo.com/en-gb/Games/Game-Boy-Advance/The-Legend-of-Zelda-The-Minish-Cap-267486.html
+[F1] Simon & Schuster, Fablehaven: https://www.simonandschuster.com/books/Fablehaven/Brandon-Mull/Fablehaven/9781416947202
+[F2] Shadow Mountain, The Caretaker's Guide: https://shadowmountain.com/product/the-caretakers-guide-to-fablehaven/
+[F3] Brandon Mull, Fablehaven and household brownies: https://brandonmull.com/category/fablehaven/
+[P1] Read Riordan, nature spirits: https://www.readriordan.com/2020/11/12/focus-on-nature-spirits-juniper/
+[P2] Read Riordan, water beings: https://www.readriordan.com/2024/06/13/your-guide-to-water-beings/
+[P3] Read Riordan, pegasus individuality: https://www.readriordan.com/2019/06/13/blackjack-pegasus-of-our-hearts/
+
+APPENDIX C — CIVILIZATIONS, LIVABLE CITIES AND THE PLANETARY SIMULATION
+
+Read AXIOM_Planetary_Simulation_And_Coop_Architecture.txt for the full researched generator comparison, city-creation pipeline, persistence and netcode contracts. The following requirements connect that technical brief to this living-world expansion.
+
+Make Dwarf Fortress a central inspiration for persistent civilization history and the relationship between society and places. Use a bounded selection of founding, growth, trade, migration, conflict, decline and restoration events to explain the present world. Record cohorts, capacities, important people, routes and surviving evidence. Detailed city geometry and full local character simulation can activate progressively, while the underlying place and inhabitants keep stable identities. This is a proposed Axiom design; it does not claim to reproduce Dwarf Fortress's current implementation.
+
+Found settlements where water, food, resources, travel, protection or old infrastructure make them useful. Connect a market to its farms and workshops, a mine town to its deposit and freight route, and an outport to actual transfer capacity. Preserve the difference between an ancient founding purpose and the current community's use. A civilization's culture, political allegiance, occupations and species composition remain separate attributes.
+
+Create beautiful, practical streets by generating the access graph before filling buildings. Distinguish regional approaches, primary streets, neighborhood routes, service lanes and pedestrian shortcuts. Respect slope, bridges, drainage, freight clearances and the intended body plans. Add useful loops and alternate approaches. Derive blocks and parcels with usable frontage; reserve gardens, courtyards, squares, repair courts, public water and future building space. Reject unusable slivers instead of placing a house on every polygon.
+
+Give neighborhoods everyday reasons to be visited: a market, workshop cluster, clinic, common room, gardens, dock, library or freight stop. Compose approaches and street-level views around recognizable landmarks. Keep common services convenient and connect longer journeys through mounts, trams, lifts, boats and shortcuts. Apparent metropolitan scale does not justify repeated empty walking. Some districts can be quiet and restful while others carry crowds or industry.
+
+Build homes and workspaces around actual circulation, shelter, work positions and furnishings. Validate doorways, stairs, turning space, storage and public routes for the residents who use them. Tiny households, centaurs, large inhabitants and aquatic neighbors should create distinctive places with understandable access. Ordinary housing and adequate supplies should support autonomous routines without constant intervention.
+
+Generate ruins from coherent prior layouts and selected historical damage. Floods, fires, lost maintenance and salvage leave different traces. Surviving residents reuse the practical parts. Repairing one bridge, water supply or lift yields a local benefit immediately and persists without needing a global completion flag. Live growth must respect player construction, permissions and existing homes.
+
+Separate claims, practical control, patrol response, market reach, cultural presence and player knowledge on the spherical world. Caravans depart from real sources with conserved goods. Raiders have bounded resources and objectives; their defeat or a negotiated settlement changes the source. Recruitable people occupy stable population slots and retain their identities when encountered, hired or transported. Positive activity such as festivals, migration, repair crews and visiting traders should be at least as visible as threats.
+
+Use the same world across simulation levels. The planet stores compact geography and regional records; distant districts and journeys advance through bounded scheduled work; nearby areas run detailed bodies, inventory interactions and navigation. One authoritative server resolves live outcomes for friends. Player presence changes detail, not the number of copies of a person or crate. Safe reconnect and repeatable transactions are part of the first useful settlement milestone.
+
+City generation must be deterministic under a complete versioned manifest. Save the global macro geography, site graph and history. Defer geometry through stable parcel identities and preserve edited places. New generator versions cannot silently alter existing rivers or routes merely because one adjacent district was never loaded. Regeneration and migration must have explicit compatibility rules.
+
+Prove one attractive inhabited precinct, a supplier, a neighboring ruin and a useful connection to the player base before expanding to many megacities. Native walkthroughs must show service access, pleasant streets, individual residents, a real delivery, a recruit's arrival and a visible consequence of construction. Profile city entry, busy activity, saving, route edits and separated co-op players. Meeting a population target while causing frame stalls or making streets tedious does not pass.
+
+Research references: Bay 12 official features, https://www.bay12games.com/dwarves/features.html ; historical developer discussion of aggregate city state and deferred detailed maps, https://bay12games.com/media/df_talk_13_transcript.html . The companion brief includes primary terrain, city-generation and networking references and distinguishes documented capabilities from proposed Axiom requirements.
+
+APPENDIX D — SCIENTIFIC INDUSTRY AND THE PLANETARY FRONTIER
+
+Read AXIOM_Science_Spaceflight_And_Planetary_Expansion.txt as the next expansion of this same game. It adds a connected science and industry progression inspired by large technology modpacks, grounded planetary variety, buildable ships, useful local flight, orbital travel, salvage, combat, specialized outposts and interplanetary logistics. Seed of Andromeda and Elite Dangerous provide specific researched references; the proposed Axiom content remains original.
+
+Preserve the home region as a place worth returning to. Expeditions should bring back equipment, knowledge, relationships, supplies or a new practical connection that improves the player's workshop and community. Passage, trade, salvage, commissioning and fabrication are alternative routes to capability. Advanced chips, reactors and a complete factory tree must not block the first enjoyable offworld visit.
+
+Carry the same residents, cargo, work, economy, radio knowledge and faction histories into ports and frontier settlements. People and creatures need suitable ecology, habitats or explicit magical capabilities. Every completed destination needs a useful first activity, a distinctive engineering or travel problem, a meaningful presence, a scientific decision and a lasting consequence. The twelve-entry catalog is a design scope, not a claim that twelve finished worlds exist.
+
+Use the same authoritative identities, clock, durable operations and conservation rules throughout. Spacecraft construction, docking, boarding, damaged fragments and freight transfers must not create duplicate people or goods. Distant craft continue to advance consequential reserves and hazards under the shared simulation policy. Elevator and skyhook eligibility depends on each body's geometry and physical or magical rules.
+
+The new brief extends the dependency plan rather than postponing the modest base, inhabitants or first real delivery. Prove one complete and rewarding round trip before expanding the planetary catalog. Keep the established art direction, original mythology, mixed voxel scales, native Rust/WGPU engine and measured performance gates.
+
+APPENDIX E — THE SUPPLIED ART, DEFAULT EROSION AND LIVE SHARED WORLDS
+
+Use AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt for the full image analysis and revised engineering prompt. The references emphasize large practical ship silhouettes, working aprons and maintenance gantries, layered inhabited cities, coastal/open-space geography, and readable cream/blue/yellow industrial interiors. Carry that into original Blender assets and variable-scale voxel construction alongside Axiom's established warmth, mythology and historical layers.
+
+Retain functioning communities alongside ruins. Four optional original sites—Ternwater Anchorage, Rainbreak Shipyard, Ambercut Counterweight Ward and Hearthglass Foundry—demonstrate how drainage, geology, industry, history and ordinary life produce distinct places. Existing canonical names take precedence. Their landmarks are reachable and their useful infrastructure connects to real work, inventories and routes.
+
+Connected watersheds, eroded valleys, coherent mountains, process-specific landforms and usable buildable ground are default generation requirements. Global geological preparation and local constrained refinement remain separate from runtime destruction. Detailed cover, openings, terrain edits, cargo and meaningful fragments retain coherent identities and revisions across clients and LOD.
+
+Every client runs the real physics of relevant local interactions; a player-hosted or user/community-hosted authority resolves shared outcomes. Ordinary play needs no developer-operated world simulation. PvP trust, relays, supported load and recovery behavior are explicit. No claim of unlimited free connectivity or unbounded exact destruction is made.
+
+Building, magic, excavation and automation use one bounded action pipeline. Cost admission, reserved impact consequences, coherent geometry/collision, coalesced derived jobs and conserved fragments prevent runaway work. Performance control does not justify invisible barriers, automatically indestructible megastructures or silently discarded accepted effects. Validate one beautiful inhabited site under actual shared interaction before multiplying content.
+
+END IMPLEMENTATION PROMPT
+
+PROVENANCE AND REFERENCE NOTES
+
+This addendum develops the user's 29 October 2026 request. Its new roster, place names, examples, gameplay rules and implementation structures are design proposals. The game repository was not accessed while preparing this prompt. All prior implementation reports remain audit targets for the coding agent.
+
+Prior design documents read for continuity:
+1. MERIDIAN_ANCHOR_V2_DESIGN_AND_IMPLEMENTATION.md — the inhabited salvage city, distinctive tether/anchor form, separate elevator and skyhook concepts, capability-based restoration, native-camera and performance gates. This document describes proposals rather than verified implementation.
+   https://chatgpt.com/library?file_id=libfile_1afc8ed9eb3c8191888d3667ae8e663b&account_id=personal
+2. 07_PLAYER_FREEDOM_EXPLORATION_ECONOMY.md — commodity/capability/opportunity value, powerful automation, humane alternatives, meaningful exploration, persistent local safety and no compulsory real-life AFK. This addendum preserves those design commitments.
+   https://chatgpt.com/library?file_id=libfile_6942e0ca4ca88191ae9c984cb0e1ac4c&account_id=personal
+
+Primary external references checked:
+3. Mojang, Everything You Need to Know About Minecraft Mobs — a reference for varied passive/neutral creature interactions and villager commerce. The roster target here is original and is not a numerical claim about the current Minecraft release.
+   https://www.minecraft.net/en-us/article/minecraft-mobs
+4. Mojang, Trails & Tales Update Now Available on Bedrock — documented archaeology, sniffer eggs and ancient plant discovery illustrate one existing connection between exploration, creatures and cultivation. Axiom's proposed archaeology and species design extends its own world rather than copying that system.
+   https://www.minecraft.net/en-us/article/trails---tales-update-now-available-bedrock
+5. NASA NTRS, Orbital Propagation of Momentum Exchange Tether Systems (2002) — a conceptual study explaining orbital-energy exchange, reboost and predictive rendezvous. Used only for these physical distinctions, not as proof of an operational present-day skyhook network.
+   https://ntrs.nasa.gov/citations/20020068839
+6. ESA, The space elevator (2004) — historical conceptual description of a surface-to-synchronous-orbit connection with climbers and counterweight. Do not import its dated material projections or anticipated deployment as current facts.
+   https://www.esa.int/ESA_Multimedia/Images/2004/12/The_space_elevator
+7. NASA, Testing Precision Landing for Payload Return from Low-Earth Orbit (2021) — a high-altitude balloon-drop test of a guided capsule and parafoil, useful as a descent reference. It was not an orbital-return demonstration.
+   https://www.nasa.gov/centers-and-facilities/armstrong/testing-precision-landing-for-payload-return-from-low-earth-orbit/
