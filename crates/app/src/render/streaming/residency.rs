@@ -148,13 +148,18 @@ impl ChunkCache {
         self.voxel_allocations.0.load(Ordering::Relaxed)
     }
 
+    /// Sources are regenerable meshing inputs, so a published column keeps
+    /// its GPU meshes, never its sources: at view 28 the published sources
+    /// alone exceed the budget, and protecting them left nothing to evict,
+    /// so admission failed and the last ring regenerated forever.
     fn trim_sources_to(&mut self, limit: usize) {
         let mut victims: Vec<_> = self
             .cpu_chunks
             .iter()
             .filter(|(q, source)| Arc::strong_count(source) == 1
                 && !self.horizon_pin_coords.contains(*q)
-                && !self.published_coords.contains(*q))
+                && !self.edit_proxies.contains(q)
+                && !self.quality_proxies.coords.contains(*q))
             .map(|(&coord, _)| (self.residency_rank(coord), coord))
             .collect();
         victims.sort_unstable_by(|a, b| b.0.cmp(&a.0));
@@ -330,5 +335,50 @@ impl ChunkCache {
                     .saturating_add(*bytes).saturating_add(self.pending_gpu.projected_growth(self))
                     <= self.mesh_limit()
         })
+    }
+}
+
+#[cfg(test)]
+mod source_trim_tests {
+    use super::*;
+    use crate::render::streaming::{ChunkCache, ChunkKey};
+    use crate::world::{BlockId, CHUNK_SIZE};
+    use glam::IVec3;
+
+    fn source(coord: IVec3) -> GeneratedChunk {
+        let padded = (CHUNK_SIZE + 2) as usize;
+        GeneratedChunk::new(coord, vec![BlockId::Stone; padded * padded * padded])
+    }
+
+    #[test]
+    fn published_source_is_evicted_for_a_new_source_under_pressure() {
+        let mut cache = ChunkCache::new(IVec3::ZERO);
+        let bytes = source(IVec3::ZERO).allocation_bytes();
+        // Room for one source and a half, so the second admission must evict.
+        cache.residency_limits.0 = super::super::terrain::reservation_bytes() + bytes + bytes / 2;
+        let far = IVec3::new(6, 0, 0);
+        let near = IVec3::new(2, 0, 0);
+        cache.visible = vec![ChunkKey { coord: far, lod: 0 }, ChunkKey { coord: near, lod: 0 }];
+        cache.rebuild_visible_sets();
+        assert!(cache.admit_source(far, source(far)));
+        cache.published_coords.insert(far);
+        assert!(cache.admit_source(near, source(near)), "a published source must be evictable");
+        assert_eq!(cache.cpu_evictions, 1);
+        assert!(!cache.cpu_chunks.contains_key(&far));
+        assert!(cache.cpu_chunks.contains_key(&near));
+    }
+
+    #[test]
+    fn pinned_source_is_kept_under_pressure() {
+        let mut cache = ChunkCache::new(IVec3::ZERO);
+        let bytes = source(IVec3::ZERO).allocation_bytes();
+        cache.residency_limits.0 = super::super::terrain::reservation_bytes() + bytes + bytes / 2;
+        let pinned = IVec3::new(6, 0, 0);
+        cache.visible = vec![ChunkKey { coord: pinned, lod: 0 }];
+        cache.rebuild_visible_sets();
+        assert!(cache.admit_source(pinned, source(pinned)));
+        cache.horizon_pin_coords.insert(pinned);
+        assert!(!cache.admit_source(IVec3::new(2, 0, 0), source(IVec3::new(2, 0, 0))));
+        assert!(cache.cpu_chunks.contains_key(&pinned));
     }
 }
