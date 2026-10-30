@@ -29,7 +29,12 @@ everywhere a body moves:
 | Sky light columns run down Y | `mesh/solid.rs`, `world_shader.wgsl` |
 | Liquids and sand fall to -Y | `engine_sim` Margolus kernel, `simulation/cellular.rs` |
 
-No `local_up`, gravity frame or quarter-turn code exists in any crate.
+At HEAD 0697be94 no gravity frame or quarter-turn code exists. The shared tree
+has uncommitted peer work for Stage A: `WorldType::Manyfold`
+(`voxel/src/config.rs`, save tag 5 in `world/storage.rs`), `Player::gravity_frame`
+(`player.rs:195`), a capsule sweep with rotation clearance in
+`player/radial.rs`, and `engine_worldgen::manyfold::acceleration`. Sections 2
+and 5 describe the cost from HEAD; that work answers question 3 with a capsule.
 
 ## 2. What a quarter-turn controller costs
 
