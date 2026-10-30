@@ -314,7 +314,7 @@ fn gpu_dam_break_matches_the_cpu() {
     let (device, queue) = device();
     let seed = 0xda4b;
     for (reservoir, ticks) in [(IVec3::new(12, 8, 6), 240), (engine_sim::DAM_BREAK_200K, 120)] {
-        let d = engine_sim::DamBreak { reservoir, wall: B::Stone as u8, liquid: B::Water as u8, release_tick: 0 };
+        let d = engine_sim::DamBreak { origin: IVec3::new(0, 1, 0), reservoir, wall: B::Stone as u8, liquid: B::Water as u8, release_tick: 0 };
         let mut cpu = BrickStore::new(d.capacity());
         d.build(&mut cpu).expect("pool room");
         for action in d.actions() {

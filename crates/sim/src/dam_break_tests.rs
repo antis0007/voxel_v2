@@ -1,13 +1,20 @@
 //! The dam-break scenario on the synthetic table: conservation, replay from the action log and
-//! continuation from a checkpoint, plus the checkpoint codec's refusals.
+//! continuation from a checkpoint, plus the codecs' refusals.
 use crate::test_support::*;
 use crate::*;
 use glam::IVec3;
 
 const SEED: u32 = 0xda4b;
 
+/// At the old fixed layout, straddling negative chunk boundaries, and a million cells out.
+const ORIGINS: [IVec3; 3] = [IVec3::new(0, 1, 0), IVec3::new(-40, -37, -70), IVec3::new(1 << 20, 5, -(1 << 20))];
+
+fn small_at(origin: IVec3) -> DamBreak {
+    DamBreak { origin, reservoir: IVec3::new(12, 8, 6), wall: STONE, liquid: WATER, release_tick: 5 }
+}
+
 fn small() -> DamBreak {
-    DamBreak { reservoir: IVec3::new(12, 8, 6), wall: STONE, liquid: WATER, release_tick: 5 }
+    small_at(ORIGINS[0])
 }
 
 fn built(d: &DamBreak) -> BrickStore {
@@ -23,17 +30,20 @@ fn liquid(s: &BrickStore, d: &DamBreak) -> u32 {
 
 #[test]
 fn the_dam_holds_until_the_log_removes_it_then_water_crosses_and_is_conserved() {
-    let (t, d) = (table(), small());
-    let mut s = built(&d);
-    let before = liquid(&s, &d);
-    assert_eq!(before, d.liquid_cells() * VOLUME_FULL as u32);
-    let (blo, bhi) = d.basin();
-    run_log(&mut s, &t, SEED, &[], 0..d.release_tick).unwrap();
-    assert_eq!(total(&s, blo, bhi, WATER), 0, "the basin is dry while the dam stands");
-    run_log(&mut s, &t, SEED, &d.actions(), d.release_tick..d.release_tick + 400).unwrap();
-    assert_eq!(liquid(&s, &d), before, "the release creates and destroys no water");
-    let far = IVec3::new(d.basin().1.x - d.reservoir.x, blo.y, blo.z);
-    assert!(total(&s, far, bhi, WATER) > 0, "water reaches the far half of the basin");
+    let t = table();
+    for origin in ORIGINS {
+        let d = small_at(origin);
+        let mut s = built(&d);
+        let before = liquid(&s, &d);
+        assert_eq!(before, d.liquid_cells() * VOLUME_FULL as u32, "{origin}");
+        let (blo, bhi) = d.basin();
+        run_log(&mut s, &t, SEED, &[], 0..d.release_tick).unwrap();
+        assert_eq!(total(&s, blo, bhi, WATER), 0, "{origin}: the basin is dry while the dam stands");
+        run_log(&mut s, &t, SEED, &d.actions(), d.release_tick..d.release_tick + 400).unwrap();
+        assert_eq!(liquid(&s, &d), before, "{origin}: the release creates and destroys no water");
+        let far = IVec3::new(bhi.x - d.reservoir.x, blo.y, blo.z);
+        assert!(total(&s, far, bhi, WATER) > 0, "{origin}: water reaches the far half of the basin");
+    }
 }
 
 #[test]
@@ -47,6 +57,18 @@ fn two_runs_of_the_same_log_agree_every_tick() {
         assert_eq!(a.state_hash(), b.state_hash(), "runs diverge at tick {tick}");
     }
     assert_eq!(a.encode_checkpoint(), b.encode_checkpoint());
+}
+
+#[test]
+fn one_long_run_and_tick_by_tick_runs_agree() {
+    let (t, d) = (table(), small());
+    let log = d.actions();
+    let (mut whole, mut steps) = (built(&d), built(&d));
+    run_log(&mut whole, &t, SEED, &log, 0..90).unwrap();
+    for tick in 0..90 {
+        run_log(&mut steps, &t, SEED, &log, tick..tick + 1).unwrap();
+    }
+    assert_eq!(whole.encode_checkpoint(), steps.encode_checkpoint());
 }
 
 #[test]
@@ -69,6 +91,26 @@ fn a_store_restored_from_a_checkpoint_continues_to_the_same_bytes() {
         assert_eq!(restored.encode_checkpoint(), whole.encode_checkpoint(), "cut at tick {cut}");
         assert_eq!(restored.pool_bytes(), whole.pool_bytes(), "the GPU upload matches too");
     }
+}
+
+#[test]
+fn a_run_resumes_from_saved_bytes_and_a_saved_log() {
+    let (t, d) = (table(), small_at(ORIGINS[1]));
+    let log = decode_log(&encode_log(&d.actions())).unwrap();
+    assert_eq!(log, d.actions());
+    let end = d.release_tick + 120;
+    let mut whole = RunCheckpoint { tick: 0, seed: SEED, store: built(&d) };
+    whole.resume(&t, &log, end).unwrap();
+    assert_eq!(whole.tick, end);
+
+    let mut first = RunCheckpoint { tick: 0, seed: SEED, store: built(&d) };
+    first.resume(&t, &log, d.release_tick + 30).unwrap();
+    let mut second = RunCheckpoint::decode(&first.encode()).unwrap();
+    assert_eq!((second.tick, second.seed), (first.tick, SEED));
+    second.resume(&t, &log, end).unwrap();
+    assert_eq!(second.store.encode_checkpoint(), whole.store.encode_checkpoint());
+    assert!(second.resume(&t, &log, 3).unwrap().is_empty(), "an end in the past steps nothing");
+    assert_eq!(second.tick, end);
 }
 
 #[test]
@@ -101,6 +143,26 @@ fn a_damaged_checkpoint_is_refused() {
     let copy = slot(&good, stored[1]).to_le_bytes();
     twice[slots_at + 4 * stored[0]..][..4].copy_from_slice(&copy);
     assert!(matches!(BrickStore::decode_checkpoint(&twice), Err(CheckpointError::Inconsistent(_))));
+
+    let run = RunCheckpoint { tick: 9, seed: SEED, store: s }.encode();
+    assert_eq!(RunCheckpoint::decode(&run[..run.len() - 1]).err(), Some(CheckpointError::Truncated));
+}
+
+#[test]
+fn a_damaged_log_is_refused() {
+    let a = Action { tick: 3, lo: IVec3::new(-5, 0, 2), hi: IVec3::new(-1, 4, 3), cell: Cell::filled(WATER) };
+    let good = encode_log(&[a, Action { tick: 1, ..a }]);
+    assert_eq!(decode_log(&good).unwrap(), vec![a, Action { tick: 1, ..a }], "order is kept");
+    assert_eq!(decode_log(&good[..good.len() - 1]).err(), Some(CheckpointError::Truncated));
+    assert_eq!(decode_log(&[good.as_slice(), &[0]].concat()).err(), Some(CheckpointError::TrailingBytes));
+    let inverted = encode_log(&[Action { lo: a.hi, hi: a.lo, ..a }]);
+    assert!(matches!(decode_log(&inverted), Err(CheckpointError::Inconsistent(_))));
+    let huge = encode_log(&[Action { lo: IVec3::splat(-1000), hi: IVec3::splat(1000), ..a }]);
+    assert!(matches!(decode_log(&huge), Err(CheckpointError::Inconsistent(_))));
+    // A count claiming more actions than the bytes hold is refused before allocating.
+    let mut lying = encode_log(&[]);
+    lying[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(decode_log(&lying).err(), Some(CheckpointError::Truncated));
 }
 
 /// `cargo test -p engine_sim --release dam_break_200k_tick_time -- --ignored --nocapture`
@@ -108,7 +170,7 @@ fn a_damaged_checkpoint_is_refused() {
 #[ignore = "timing: run in release"]
 fn dam_break_200k_tick_time() {
     let t = table();
-    let d = DamBreak { reservoir: DAM_BREAK_200K, wall: STONE, liquid: WATER, release_tick: 1 };
+    let d = DamBreak { origin: IVec3::new(0, 1, 0), reservoir: DAM_BREAK_200K, wall: STONE, liquid: WATER, release_tick: 1 };
     let mut s = built(&d);
     let before = liquid(&s, &d);
     let log = d.actions();
@@ -122,11 +184,13 @@ fn dam_break_200k_tick_time() {
     let mut sorted = times.clone();
     sorted.sort_by(f64::total_cmp);
     let p = |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
+    let worst = (0..times.len()).max_by(|&a, &b| times[a].total_cmp(&times[b])).unwrap_or(0);
     println!(
-        "dam_break_200k CPU: {} bricks, p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms over {} ticks",
+        "dam_break_200k CPU: {} bricks, p50 {:.2} ms, p95 {:.2} ms, p99 {:.2} ms, max {:.2} ms at tick {worst}, {} ticks",
         s.bricks_in_use(),
         p(0.5),
         p(0.95),
+        p(0.99),
         p(1.0),
         times.len()
     );

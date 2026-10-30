@@ -10,8 +10,6 @@ mod access;
 mod activity;
 mod checkpoint;
 
-pub use checkpoint::CheckpointError;
-
 const INACTIVE: usize = usize::MAX;
 
 /// No brick in this slot of a chunk's pointer table.

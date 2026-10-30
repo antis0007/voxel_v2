@@ -3,74 +3,11 @@
 //! A child module so it sees the store's private fields.
 use super::{BrickStore, ChunkEntry, INACTIVE, NO_SLOT};
 use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, Cell, Scale};
+use crate::codec::{CheckpointError, Reader, put_coord};
 use engine_core::fast_hash::FastMap;
 use glam::IVec3;
 
 const MAGIC: &[u8; 8] = b"VXSIMCK1";
-
-/// Why a checkpoint was refused. A refused checkpoint never yields a partial store.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckpointError {
-    BadMagic,
-    Truncated,
-    TrailingBytes,
-    /// The bytes decode but describe a store the pool rules forbid.
-    Inconsistent(&'static str),
-}
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], CheckpointError> {
-        if self.bytes.len() < n {
-            return Err(CheckpointError::Truncated);
-        }
-        let (head, rest) = self.bytes.split_at(n);
-        self.bytes = rest;
-        Ok(head)
-    }
-
-    fn u8(&mut self) -> Result<u8, CheckpointError> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn u32(&mut self) -> Result<u32, CheckpointError> {
-        let mut b = [0; 4];
-        b.copy_from_slice(self.take(4)?);
-        Ok(u32::from_le_bytes(b))
-    }
-
-    fn i32(&mut self) -> Result<i32, CheckpointError> {
-        Ok(self.u32()? as i32)
-    }
-
-    fn u64(&mut self) -> Result<u64, CheckpointError> {
-        let mut b = [0; 8];
-        b.copy_from_slice(self.take(8)?);
-        Ok(u64::from_le_bytes(b))
-    }
-
-    fn coord(&mut self) -> Result<IVec3, CheckpointError> {
-        Ok(IVec3::new(self.i32()?, self.i32()?, self.i32()?))
-    }
-
-    /// A count that must fit in what is left, `unit` bytes per item, before anything is allocated.
-    fn count(&mut self, unit: usize) -> Result<usize, CheckpointError> {
-        let n = self.u32()? as usize;
-        if n.checked_mul(unit).is_none_or(|bytes| bytes > self.bytes.len()) {
-            return Err(CheckpointError::Truncated);
-        }
-        Ok(n)
-    }
-}
-
-fn put_coord(out: &mut Vec<u8>, c: IVec3) {
-    for v in [c.x, c.y, c.z] {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-}
 
 impl BrickStore {
     /// The store as checkpoint bytes. Chunks are written in canonical (z, y, x) order, so equal
@@ -109,10 +46,7 @@ impl BrickStore {
     /// A store from `encode_checkpoint` bytes, checked against every pool invariant.
     pub fn decode_checkpoint(bytes: &[u8]) -> Result<Self, CheckpointError> {
         use CheckpointError::Inconsistent;
-        let mut r = Reader { bytes };
-        if r.take(MAGIC.len())? != MAGIC {
-            return Err(CheckpointError::BadMagic);
-        }
+        let mut r = Reader::open(bytes, MAGIC)?;
         let capacity = r.u32()?;
         let bricks = r.u32()? as usize;
         if bricks > capacity as usize {
@@ -183,9 +117,7 @@ impl BrickStore {
             entry.awake_index = index;
             awake_chunks.push(chunk);
         }
-        if !r.bytes.is_empty() {
-            return Err(CheckpointError::TrailingBytes);
-        }
+        r.finish()?;
         Ok(Self { capacity, pool, free, chunks, awake_chunks })
     }
 }
