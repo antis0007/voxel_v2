@@ -99,3 +99,44 @@ These close common Minecraft expectations without fighting our design:
 7. Signs.
 
 Larger items such as redstone signals, villagers, dimensions and a mod API need an owner decision first; several already have plan entries in `docs/MASTER_PLAN.md`.
+
+## 5. Implementation plan (owner request 2026-10-28)
+
+The owner asked for most of section 1 where it fits the game, leaving out redstone. Out of scope:
+- **Redstone:** signal wire, repeaters, pistons, buttons, plates and powered rails.
+- **Owner decision first:** dimensions and portals, which would clash with the planet and orbital design, and a WebAssembly mod API.
+- **Already covered by our own systems:** enchanting, bows and elytra (see section 1).
+
+Slices run in order. A slice that changes the save format takes the next save version after session 90's v35–41 chain lands in HEAD, and is committed only after that. One slice in this list claims v42, the next v43.
+
+| Slice | Contents | Save |
+| --- | --- | --- |
+| S1 Climbing and growth | Ladder and vine blocks with climbing; saplings from leaves that grow into trees through the crop roll; bonemeal | crop sidecar only |
+| S2 Weather in play | Snow layers settle and still water freezes during cold storms; lightning strikes ignite flammable blocks | none |
+| S3 Feedback | Block crack overlay while mining; break and place sounds by material class | none |
+| S4 Commands and rules | /give, /weather, /summon, /effect, /time set; world border; adventure and spectator modes; LAN discovery | rules block |
+| S5 Player progression | Durability, XP and levels, hunger saturation, player status effects, slot wear | `progression.vxp` sidecar |
+| S6 Stations | Anvil (repair), brewing stand and potions, stonecutter, grindstone | `blocks.vxb` v2 |
+| S7 Block data | Signs, chest, lectern, stairs, slabs, fences and walls, TNT | `blocks.vxb` sidecar |
+| S8 Creatures and travel | Villagers with trading, rideable mounts, boats, fishing | `travel.vxt` sidecar |
+| S9 Records | Advancements, statistics, map and clock items | not started |
+| S10 Content overrides | Recipe overrides from `<save>/datapack/recipes.ron` | none |
+
+No slice bumps `SAVE_VERSION`. Every new persistent field lives in a checksummed sidecar beside the world, and a missing file loads as defaults.
+
+## 6. Status (2026-10-29)
+
+| Slice | Commit | Not done, or waiting on other work |
+| --- | --- | --- |
+| S1 Climbing and growth | `d621c8dd` | Vines do not hang from other vines. Nobody has seen the new blocks in-game yet. |
+| S2 Weather in play | `2d1500b2` | Lightning damage to the player waits on uncommitted death code. Snowy grass thaws to grass in warm air; this needs review. Not checked visually. |
+| S3 Feedback | built by peers, uncommitted | Crack overlay uses 8 stages with lines, not the planned 10 pixel-art stages. No glass or cloth sound class. |
+| S4 Commands and rules | `82249a07` | Chat commands (`/gamemode`, `/give`, `/weather`, `/summon`, `/worldborder`) are uncommitted in `local_commands.rs`, a peer's untracked file. LAN discovery skipped. |
+| S5 Player progression | `3f76389f` | Offhand is built by a peer, uncommitted. Fire resistance and XP loss on death wait on peer death code. `/effect` commands uncommitted. Night vision skipped. |
+| S6 Stations | `8b786daa` | No water-bottle item, so brewing needs water touching the stand. No renaming. Block ids clash with uncommitted smeltery blocks; whoever commits second renumbers. |
+| S7 Block data | `b306848f` | Sign text is an egui overlay, not part of the world mesh. No upside-down stairs or top slabs. Fences are one block tall. |
+| S8 Creatures and travel | `a2666204` | Villagers spawn at the homestead only. No bobber model or bite sound. Riding has no unit test. |
+| S9 Records | not started | Statistics, advancements, map and clock items. Stopped at the account spend limit before any code was written. |
+| S10 Content overrides | `82249a07` | Recipes only. Crops and mob drops skipped. Must be present before first recipe use. |
+
+Shared-tree note: the working copy does not compile right now because of other sessions' unfinished crates. Every commit above was built and tested in its own worktree.
