@@ -7,6 +7,7 @@
 mod anchors;
 pub mod environment;
 mod cell;
+mod dam_break;
 mod digest;
 mod fine;
 mod matter;
@@ -17,6 +18,8 @@ mod pinned;
 mod react;
 mod rules;
 mod store;
+#[cfg(test)]
+mod dam_break_tests;
 #[cfg(test)]
 mod digest_tests;
 #[cfg(test)]
@@ -36,6 +39,7 @@ pub use cell::{
     AMBIENT_DECIKELVIN, BRICK_CELLS, BRICK_SIZE, BRICKS_PER_AXIS, BRICKS_PER_CHUNK, BrickCoord, CHUNK_CELLS, Cell,
     Scale, VOLUME_FULL, brick_and_cell, local_of, split_voxel,
 };
+pub use dam_break::{Action, DAM_BREAK_200K, DamBreak, run_log};
 pub use digest::{RegionDigest, brick_hash, step_tracked};
 pub use fine::{
     BLOCK_UNITS, Collapse, FINE_CELLS, FINE_SIZE, FineStore, SUB_BRICK_BYTES, collapsed,
@@ -45,7 +49,7 @@ pub use matter::{
     MatterMemory, MatterStepStats, MatterStore, RECOVER_TICKS,
 };
 pub use matter_jobs::{FineJob, FineJobs, FineJobStats, FineRegion};
-pub use store::{BrickStore, NO_SLOT, PoolFull};
+pub use store::{BrickStore, CheckpointError, NO_SLOT, PoolFull};
 pub use kernel::{StepStats, step, step_skipping, step_with};
 pub use offload::{PhaseBlocks, gather, scatter};
 pub use pinned::{

@@ -8,6 +8,9 @@ use glam::IVec3;
 
 mod access;
 mod activity;
+mod checkpoint;
+
+pub use checkpoint::CheckpointError;
 
 const INACTIVE: usize = usize::MAX;
 
