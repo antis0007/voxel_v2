@@ -123,9 +123,12 @@ was adjusted to stop asserting that loading a chunk reveals it; no tests were ad
 or executed.
 
 Local validation: offline development and `release-fast` application builds completed with
-warnings, including the expanded paging and recognition implementation. A final
-offline check of subsequent paging-priority, save-status and annotation edits is
-pending behind the shared build-directory lock.
+warnings, including the expanded paging and recognition implementation. The final
+offline application check also passed after the paging-priority, save-status,
+annotation privacy and report-validation edits. Logs are in
+`target/map-integration-build.log`, `target/map-integration-release-build.log`
+and `target/map-integration-final-check.log`. The full binaries predate the last
+small edits; only the final check covers the exact final source changes here.
 No tests were added or run. Native review could not start: the computer-use
 runtime failed to write its kernel assets (OS error 3), including after a reset.
 No native or multiplayer acceptance is asserted here.

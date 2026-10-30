@@ -80,6 +80,9 @@ impl Knowledge {
     }
 
     fn import_report(&mut self) -> Result<(), &'static str> {
+        if self.loading.is_some() {
+            return Err("Survey loading");
+        }
         let text = self.exchange.input.trim();
         if text.len() > MAX_REPORT {
             return Err("Report too large");
