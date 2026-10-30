@@ -332,7 +332,7 @@ Largest files: `render.rs` 5,131, `main.rs` 4,969, `egui_ui.rs` 3,279,
 
 - `docs/PLAN.md`: P0–P3 have actuals (2026-10-22); P4 reduction and P5 docs do not.
 - `docs/PLAN2.md`: Phase 0 and A1–A5 committed; A6–A8 and Phases B–F have no actuals.
-- `docs/MASTER_PLAN.md`: approved 2026-10-24; no spike, SDD or claim has passed; the M1 exit scenario `dam_break_200k` exists in no file; `docs/spikes/` holds only a README; no SDD files; `docs/systems/` has only the tooltip design.
+- `docs/MASTER_PLAN.md`: approved 2026-10-24; no spike, SDD or claim has passed; the M1 exit scenario `dam_break_200k` exists in `crates/sim` (`DamBreak`, 76d77a4f) with log replay, exact store checkpoints and a GPU bit-exact test (097d30df); app wiring, rendering, save integration and the Iris Xe timing are open; `docs/spikes/` holds only a README; no SDD files; `docs/systems/` has only the tooltip design.
 - Untracked documents: 15 `docs/design/*_20261026.md`, `FIRST_PERSON_VIEWMODEL_20261025.md`, ADRs 0022 and 0024–0035, the `docs/NEW/` U1 set (07 is the only tracked one).
 
 ### Most blocked areas
@@ -342,7 +342,7 @@ Largest files: `render.rs` 5,131, `main.rs` 4,969, `egui_ui.rs` 3,279,
    unit tests; ADRs 0025–0028 pending runtime; PLAN2 A6 not started.
 2. **Fine sub-bricks.** Committed in `crates/sim` today, never referenced
    from `crates/app`.
-3. **M1 milestone.** No `dam_break_200k`, no spike results, no SDDs, no claim
+3. **M1 milestone.** `dam_break_200k` runs in `engine_sim` only (CPU p95 3.5 ms on the dev machine, not Iris Xe); no spike results, no SDDs, no claim
    scenarios; cube-sphere has no consumer.
 4. **Traceability.** Save 35–39 and generators 54–65, the `tools` and `net`
    crates and 153 untracked paths exist only in the working tree.
