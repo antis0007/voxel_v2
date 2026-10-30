@@ -62,7 +62,7 @@ matter more than relative ones).
 
 | # | Rough claim | Tree | Status |
 |---|---|---|---|
-| 1 | Reproduce the default freeze first (REN-01) | Streaming source-cache stall at view 28. Fix `3f6d4eec` is not an ancestor of HEAD; same change sits uncommitted in the shared tree. | Confirmed blocker. Land it (one writer) before new streaming work. |
+| 1 | Reproduce the default freeze first (REN-01) | Streaming source-cache stall at view 28. Fix landed in HEAD as `cd114bce` (same diff as `3f6d4eec` on `idle-stream`). | Fixed in HEAD. Native view-28 convergence rerun not yet recorded. |
 | 2 | Cancelled StagingBelt encoders leak chunks (REN-03) | No `StagingBelt` use. 41 `Queue::write_buffer` call sites in `crates/app/src`; `render/streaming/gpu_upload.rs` has fallible staging. | N/A as written. Open: whether pending `write_buffer` staging counts against the budget in `gpu_budget.rs`. |
 | 3 | Memory thresholds are ceilings, not targets (REN-05) | `render/streaming/gpu_budget.rs`: "A budget is a ceiling, not an allocation"; native query off the frame loop. | Matches. Allocator backing vs live bytes not reported yet. |
 | 4 | No blocking `Device::poll(Wait)` in play | `render/frame_pacer.rs:52` waits with a timeout by design (device-lost fix 58f4b367); other `Wait` uses are tests and menu capture. | Refine the rule to: bounded waits only, reported as `acquire_ms`. |
@@ -75,22 +75,21 @@ matter more than relative ones).
 
 ## 4. Proposed order
 
-1. Land the source-cache eviction fix (item 1) with its residency tests. T01
+1. Done: source-cache eviction fix (item 1) is in HEAD as `cd114bce`. T01
    correctness, R1 "correctness before cosmetics".
 2. T13 first proof, narrowed: joiner dig/place through `EditPredictor` with
    expected-before validation (items 6, 7). Measure spans from section 2 on
    localhost; label cross-machine proof pending.
-3. Owner picks T03 (ground surfaces) or M1 `dam_break` as the next
-   content-side proof.
+3. M1 `dam_break` is the next content-side proof (owner, 2026-10-29); T03
+   waits.
 4. Measurement backlog, no code until a trace points at it: write_buffer
    staging accounting (item 2), DX12 compile stalls (item 5), queue age
    (item 9), checkerboard bench (item 10).
 
-## 5. Owner questions
+## 5. Owner answers, 2026-10-29
 
-- Does "take this design as key" approve the R1 names (Crimson Mirror, Hall
-  of the Crimson King, Null Choir, Kestrel, the realm list) for player text,
-  or only as design references?
-- After the freeze fix: T03 ground surfaces or M1 `dam_break` next?
-- Should state-sync client stepping of bodies (R1 D16 fallback) get its own
-  decision now, or wait for fixed-point bodies as 0039 item 2 says?
+- R1 names are design references only. Decision 0039 item 3 stands: no name
+  enters player text or RON rows without per-name approval.
+- After the freeze fix, M1 `dam_break` comes next; T03 waits.
+- Still open: whether state-sync client stepping of bodies (R1 D16 fallback)
+  gets its own decision now or waits for fixed-point bodies (0039 item 2).
