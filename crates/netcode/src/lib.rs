@@ -15,6 +15,7 @@ pub mod interp;
 pub mod link;
 pub mod lockstep;
 pub mod movement;
+pub mod operation;
 pub mod pose;
 pub mod quality;
 pub mod reliable;
