@@ -17,6 +17,17 @@ pub const PREFS_FILE: &str = "minimap.vxp";
 const COORD_LIMIT: i32 = 1 << 28;
 const TILE_BYTES: usize = 8 + COLUMNS / 8 + COLUMNS * 3;
 
+// Magic, count/flags and checksum, plus the largest legal payload. Use the
+// encoded format rather than the filename so renamed archives keep their bounds.
+fn file_limit(magic: &[u8]) -> Option<usize> {
+    match magic {
+        m if m == WAYPOINT_MAGIC => Some(20 + MAX_WAYPOINTS * (12 + 3 + MAX_NAME)),
+        m if m == TILE_MAGIC => Some(20 + MAX_TILES * TILE_BYTES),
+        m if m == PREFS_MAGIC => Some(20),
+        _ => None,
+    }
+}
+
 fn hash(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf29ce484222325, |h, &v| (h ^ v as u64).wrapping_mul(0x100000001b3))
 }
@@ -30,6 +41,7 @@ fn seal(mut body: Vec<u8>) -> Vec<u8> {
 /// The payload after `magic`, once length and checksum hold.
 fn open<'a>(bytes: &'a [u8], magic: &[u8; 8]) -> Result<&'a [u8]> {
     ensure!(bytes.len() >= 16 && bytes.get(..8) == Some(magic.as_slice()), "Unsupported map file");
+    ensure!(file_limit(magic).is_some_and(|limit| bytes.len() <= limit), "Map file exceeds limit");
     let end = bytes.len() - 8;
     let sum = u64::from_le_bytes(bytes[end..].try_into()?);
     ensure!(hash(&bytes[..end]) == sum, "Map file checksum mismatch");
@@ -85,7 +97,8 @@ pub fn decode_waypoints(bytes: &[u8]) -> Result<Waypoints> {
     let mut list = Vec::with_capacity(count);
     for _ in 0..count {
         let pos = IVec3::new(r.i32()?, r.i32()?, r.i32()?);
-        ensure!(pos.abs().max_element() < COORD_LIMIT, "Waypoint out of range");
+        // abs(i32::MIN) can panic in debug builds or wrap in release builds.
+        ensure!(pos.to_array().iter().all(|&v| v > -COORD_LIMIT && v < COORD_LIMIT), "Waypoint out of range");
         let colour = r.u8()?;
         ensure!((colour as usize) < PALETTE.len(), "Invalid waypoint colour");
         let kind = match r.u8()? {
@@ -138,7 +151,7 @@ pub fn decode_tiles(bytes: &[u8]) -> Result<Vec<(IVec2, Vec<Color32>)>> {
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let key = IVec2::new(r.i32()?, r.i32()?);
-        ensure!(key.abs().max_element() < COORD_LIMIT / 32, "Map tile out of range");
+        ensure!(key.to_array().iter().all(|&v| v > -COORD_LIMIT / 32 && v < COORD_LIMIT / 32), "Map tile out of range");
         let mask = r.take(COLUMNS / 8)?;
         let rgb = r.take(COLUMNS * 3)?;
         let colour = (0..COLUMNS)
@@ -179,23 +192,64 @@ pub fn decode_prefs(bytes: &[u8]) -> Result<Prefs> {
     Ok(Prefs { minimap: flags & 1 == 0, coordinates: flags & 2 == 0 })
 }
 
-/// Replace `path` through a synced temporary so a crash keeps the old file.
+/// Reserve a sibling without truncating another writer's file or a stale temp.
+fn create_temp(path: &Path) -> Result<(std::path::PathBuf, std::fs::File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().context("Map file has no name")?;
+    for _ in 0..16 {
+        let mut temp_name = name.to_os_string();
+        temp_name.push(format!(".{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let tmp = path.with_file_name(temp_name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    bail!("Cannot reserve a map temporary file")
+}
+
+/// Publish a complete, synced sibling by rename. A failed write keeps the old
+/// archive; concurrent writers cannot truncate or rename each other's temporary.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    let (tmp, mut file) = create_temp(path)?;
+    let result = (|| -> Result<()> {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    // The closure has closed the file even on error, so Windows can remove it.
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn read_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)?;
+    let limit = file_limit(&magic).context("Unsupported map file")?;
+    ensure!(file.metadata()?.len() <= limit as u64, "Map file exceeds limit");
+    let mut bytes = magic.to_vec();
+    // The sentinel byte catches growth after metadata inspection without an
+    // unbounded allocation. Truncation and checksum errors remain decoder errors.
+    file.take((limit - magic.len() + 1) as u64).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= limit, "Map file exceeds limit");
+    Ok(bytes)
 }
 
 /// Missing files read as `None`; unreadable or corrupt ones are reported.
 pub fn read<T>(path: &Path, decode: impl Fn(&[u8]) -> Result<T>) -> Option<T> {
-    let bytes = std::fs::read(path).ok()?;
-    match decode(&bytes) {
+    let result = read_file(path).and_then(|bytes| decode(&bytes));
+    match result {
         Ok(v) => Some(v),
+        Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => None,
         Err(e) => {
             eprintln!("[map] Ignoring {}: {e:#}", path.display());
             None
