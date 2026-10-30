@@ -8,6 +8,12 @@
 //! expired: the server can no longer tell whether they applied, so the caller
 //! must answer with a full state sync rather than guess.
 //!
+//! The sequence namespace outlives connections and server restarts. A
+//! reconnecting client resumes from [`Receipts::next_seq`] instead of zero, a
+//! reused sequence with different contents is a [`Seen::Conflict`], and the
+//! persisted [`Floor`] keeps every sequence issued before a restart from
+//! becoming executable again once its receipt is gone.
+//!
 //! Revision checks (`container`) reject actions made against stale contents;
 //! receipts reject the same action arriving twice against current contents.
 
@@ -27,46 +33,82 @@ pub enum Seen<R> {
     New,
     /// Already applied: send this result again.
     Done(R),
+    /// Sequence already applied with different contents; reject it.
+    Conflict,
     /// Older than the kept window; send a full sync.
     Expired,
+}
+
+/// Persisted part of a client's receipts: nothing below `next` may apply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Floor {
+    pub next: u32,
+}
+
+struct Entry<R> {
+    digest: u64,
+    result: R,
 }
 
 /// Bounded per-client results of applied operations.
 pub struct Receipts<R> {
     capacity: usize,
-    results: BTreeMap<u32, R>,
+    results: BTreeMap<u32, Entry<R>>,
     /// Lowest sequence that can still be classified.
     floor: u32,
+    /// One past the highest sequence recorded or restored.
+    next: u32,
 }
 
 impl<R: Clone> Receipts<R> {
     pub fn new(capacity: usize) -> Self {
-        Self { capacity: capacity.max(1), results: BTreeMap::new(), floor: 0 }
+        Self::restore(capacity, Floor::default())
     }
 
-    pub fn check(&self, seq: u32) -> Seen<R> {
+    /// Rebuilds receipts after a restart; earlier sequences are expired.
+    ///
+    /// Results are not persisted, so a sequence below the floor that never
+    /// applied (it arrived out of order) also expires; the client resyncs.
+    pub fn restore(capacity: usize, floor: Floor) -> Self {
+        Self { capacity: capacity.max(1), results: BTreeMap::new(), floor: floor.next, next: floor.next }
+    }
+
+    /// `digest` hashes the operation's canonical contents.
+    pub fn check(&self, seq: u32, digest: u64) -> Seen<R> {
         if seq < self.floor {
             return Seen::Expired;
         }
         match self.results.get(&seq) {
-            Some(r) => Seen::Done(r.clone()),
+            Some(e) if e.digest == digest => Seen::Done(e.result.clone()),
+            Some(_) => Seen::Conflict,
             None => Seen::New,
         }
     }
 
     /// Stores the result of an applied operation; returns false if `seq` is
     /// expired or already recorded, in which case nothing changes.
-    pub fn record(&mut self, seq: u32, result: R) -> bool {
+    pub fn record(&mut self, seq: u32, digest: u64, result: R) -> bool {
         if seq < self.floor || self.results.contains_key(&seq) {
             return false;
         }
-        self.results.insert(seq, result);
+        self.results.insert(seq, Entry { digest, result });
+        self.next = self.next.max(seq.saturating_add(1));
         while self.results.len() > self.capacity {
             if let Some((oldest, _)) = self.results.pop_first() {
                 self.floor = oldest + 1;
             }
         }
         true
+    }
+
+    /// Sequence a reconnecting client continues from.
+    pub fn next_seq(&self) -> u32 {
+        self.next
+    }
+
+    /// State to persist with the world so a restart cannot reapply.
+    pub fn floor(&self) -> Floor {
+        Floor { next: self.next }
     }
 
     pub fn len(&self) -> usize {
@@ -78,7 +120,7 @@ impl<R: Clone> Receipts<R> {
     }
 }
 
-/// Client-side sequence source; one per connection lifetime of a player key.
+/// Client-side sequence source for one player key.
 #[derive(Default)]
 pub struct Sequencer {
     client: u32,
@@ -90,83 +132,19 @@ impl Sequencer {
         Self { client, next: 0 }
     }
 
-    pub fn issue(&mut self) -> OperationId {
-        let id = OperationId { client: self.client, seq: self.next };
-        self.next = self.next.wrapping_add(1);
-        id
+    /// Continues from the server's [`Receipts::next_seq`] after a reconnect.
+    pub fn resume(client: u32, next: u32) -> Self {
+        Self { client, next }
+    }
+
+    /// Returns `None` once the sequence space is used up; the key needs a
+    /// new client id, because wrapping would collide with old receipts.
+    pub fn issue(&mut self) -> Option<OperationId> {
+        let seq = self.next;
+        self.next = seq.checked_add(1)?;
+        Some(OperationId { client: self.client, seq })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_returns_stored_result() {
-        let mut r = Receipts::new(8);
-        assert_eq!(r.check(0), Seen::<u8>::New);
-        assert!(r.record(0, 7));
-        assert_eq!(r.check(0), Seen::Done(7));
-        assert!(!r.record(0, 9));
-        assert_eq!(r.check(0), Seen::Done(7));
-    }
-
-    #[test]
-    fn out_of_order_sequences_are_independent() {
-        let mut r = Receipts::new(8);
-        assert!(r.record(3, 'c'));
-        assert_eq!(r.check(1), Seen::New);
-        assert!(r.record(1, 'a'));
-        assert_eq!(r.check(3), Seen::Done('c'));
-    }
-
-    #[test]
-    fn evicted_sequences_expire_instead_of_reapplying() {
-        let mut r = Receipts::new(2);
-        for seq in 0..3 {
-            assert!(r.record(seq, seq));
-        }
-        assert_eq!(r.len(), 2);
-        assert_eq!(r.check(0), Seen::Expired);
-        assert!(!r.record(0, 0));
-        assert_eq!(r.check(1), Seen::Done(1));
-    }
-
-    #[test]
-    fn last_shared_item_moves_once_under_resends() {
-        // Two clients each resend a take of the last item three times; the
-        // server applies each id once, so exactly one take succeeds.
-        let mut stock = 1u32;
-        let mut held = [0u32; 2];
-        let mut receipts = [Receipts::new(16), Receipts::new(16)];
-        let mut seqs = [Sequencer::new(0), Sequencer::new(1)];
-        let ids = [seqs[0].issue(), seqs[1].issue()];
-        for _ in 0..3 {
-            for id in ids {
-                let table = &mut receipts[id.client as usize];
-                match table.check(id.seq) {
-                    Seen::New => {
-                        let ok = stock > 0;
-                        if ok {
-                            stock -= 1;
-                            held[id.client as usize] += 1;
-                        }
-                        table.record(id.seq, ok);
-                    }
-                    Seen::Done(_) | Seen::Expired => {}
-                }
-            }
-        }
-        assert_eq!(stock, 0);
-        assert_eq!(held.iter().sum::<u32>(), 1);
-        assert_eq!(receipts[0].check(ids[0].seq), Seen::Done(true));
-        assert_eq!(receipts[1].check(ids[1].seq), Seen::Done(false));
-    }
-
-    #[test]
-    fn sequencer_numbers_per_client() {
-        let mut s = Sequencer::new(5);
-        assert_eq!(s.issue(), OperationId { client: 5, seq: 0 });
-        assert_eq!(s.issue(), OperationId { client: 5, seq: 1 });
-    }
-}
+mod tests;
