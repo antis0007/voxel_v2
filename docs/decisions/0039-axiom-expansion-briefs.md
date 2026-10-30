@@ -102,3 +102,11 @@ rules above apply to it. Stage by stage against the tree at 67c2fcdf:
   approved (decision 3); a first district uses a descriptive placeholder.
 - **Stage 7.** The acceptance matrix in 14.2 is backlog for MASTER_PLAN rows.
   The Minecraft comparison runs are not scheduled.
+
+## Addendum, 2026-10-29: update pack R1
+
+The owner named `docs/UPDATE_PACK/` R1 (DESIGN, TASKS, REVIEW, ACCEPTANCE) as
+the key design reference. Reconciliation with this record and the tree:
+`docs/superpowers/specs/2026-10-29-update-pack-r1-reconciliation.md`. Items 2
+(body authority) and 3 (names) stay in force until the owner answers the
+questions listed there.
