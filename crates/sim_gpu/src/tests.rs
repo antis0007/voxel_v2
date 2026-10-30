@@ -305,3 +305,42 @@ fn gpu_resident_timing() {
         assert_eq!(snapshot.overflow, 0, "{} bricks in use", snapshot.bricks_in_use());
     }
 }
+
+/// The M1 scenario on the resident GPU world: the dam is cleared on the CPU before upload, then both
+/// kernels run the flood and must agree on awake bricks every eighth tick and on every cell at the end.
+#[test]
+#[ignore = "needs a GPU: just test-gpu gpu_dam_break"]
+fn gpu_dam_break_matches_the_cpu() {
+    let (device, queue) = device();
+    let seed = 0xda4b;
+    for (reservoir, ticks) in [(IVec3::new(12, 8, 6), 240), (engine_sim::DAM_BREAK_200K, 120)] {
+        let d = engine_sim::DamBreak { reservoir, wall: B::Stone as u8, liquid: B::Water as u8, release_tick: 0 };
+        let mut cpu = BrickStore::new(d.capacity());
+        d.build(&mut cpu).expect("pool room");
+        for action in d.actions() {
+            action.apply(&mut cpu).expect("pool room");
+        }
+        let (lo, hi) = d.bounds();
+        let (clo, _) = split_voxel(lo);
+        let (chi, _) = split_voxel(hi - IVec3::ONE);
+        let window = Window { origin: clo - IVec3::ONE, size: (chi - clo + IVec3::splat(3)).as_uvec3(), capacity: d.capacity() + 64 };
+        let gpu = GpuWorld::new(device.clone(), queue.clone(), &SIM_RULES, window, &cpu).expect("upload");
+        for tick in 0..ticks {
+            step(&mut cpu, &SIM_RULES, seed, tick);
+            gpu.step(seed, tick);
+            if tick % 8 == 0 || tick + 1 == ticks {
+                let snapshot = gpu.read_back().expect("read back");
+                assert_eq!(snapshot.overflow, 0, "{reservoir} tick {tick}: overflow");
+                assert_eq!(cpu.dirty_bricks(), snapshot.dirty, "{reservoir} tick {tick}: awake bricks");
+            }
+        }
+        let snapshot = gpu.read_back().expect("read back");
+        let differs = (lo.x..hi.x)
+            .flat_map(|x| (lo.y..hi.y).flat_map(move |y| (lo.z..hi.z).map(move |z| IVec3::new(x, y, z))))
+            .find(|&p| {
+                let (chunk, local) = split_voxel(p);
+                cpu.get(chunk, local) != snapshot.get(p)
+            });
+        assert_eq!(differs, None, "{reservoir}: first differing cell after {ticks} ticks");
+    }
+}
