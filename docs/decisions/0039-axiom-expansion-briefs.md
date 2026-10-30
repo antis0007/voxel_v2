@@ -55,6 +55,14 @@ The audit found:
    tracked code depends on, and remove the `Instant` use in
    `world/orbital/passes.rs:47`.
 
+   Status 2026-10-29: `passes::forecast` only feeds `orbital::view()` display
+   data, so its wall-clock cap is allowed and stays. `dynamics.rs` is a peer's
+   untracked file. Slice 1 is `crates/netcode/src/operation.rs` (e83d7188,
+   0d6e529e). The live command path does not use it: `multiplayer::actions::
+   admit_sequence` already applies each ordered request once, and the reply is
+   the replicated `command_ack`. Receipts are for unordered or post-restart
+   retries (shipments, docking), wired with those features.
+
 ## Consequences
 
 - No save bump or generator gate is taken for brief work without a row in
