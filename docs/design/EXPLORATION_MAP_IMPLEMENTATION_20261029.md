@@ -4,7 +4,7 @@ Date: 2026-10-29. Source implementation; native visual and multiplayer acceptanc
 
 ## Integration update
 
-The observation schema is now `VXOBS003`. Version 1/2 observation files remain
+The observation schema is now `VXOBS004`. Version 1/2/3 observation files remain
 readable. Visual evidence is stored per voxel face, separately from footsteps,
 with monotonic observation ordering. A re-observed empty cell leaves an ordered
 absence record so chart reconciliation cannot resurrect an older wall.
@@ -39,6 +39,29 @@ directed historical routes, including short folds. Walking between discovered
 charts produces a directed connector. The route UI lists witnessed connections
 and searches that history only; it never queries live gate destinations. Local
 prediction receipts are not claimed to be server-confirmed topology transactions.
+
+Movement connections now retain the last grounded departure across observed
+airtime and complete only at a grounded arrival. Walking, ascent, descent,
+swimming, flight and assisted movement have separate historical labels; ascent
+and descent describe displacement, not an inferred ladder or jump mechanism.
+No reverse connection is synthesized. A trace uses constant memory and resets
+after a sample gap over one second, displacement over eight metres per sample,
+incompatible gravity, a scope/observer change or an explicit portal crossing.
+It also expires after 120 seconds or 512 sampled metres. Sparse samples cannot
+be labelled as walking. Approximate distances are sampled path lengths.
+
+Route search retains the actual edges so each step shows its movement kind.
+Its result is a chain of recorded chart connections, not a navigation mesh or
+proof of a continuous path between two entrance markers within the same chart.
+**Walked only** excludes portal, airborne, swimming, flight, assisted and legacy
+unclassified records; it is a historical filter, not a current traversability
+guarantee. Distinct entrances between the same charts remain separate when
+their endpoints are more than one metre apart. Legacy ordinary connectors are
+labelled **Traversed**, because their archives did not record movement mode.
+This remains frame-sampled local experience, not fixed-tick or server-confirmed
+movement proof. The offline application check passed with warnings; see
+`target/map-navigation-check-final.log`. No tests or native traversal review
+were run for this increment.
 
 Completing an inspection of a short sign/lectern inscription records a landmark.
 Re-inspecting the unchanged physical record in the same personal world archive
@@ -110,8 +133,9 @@ previous discoveries. Acquisition, paging, chart work and UI still need profilin
   by reading collision truth.
 - Server-confirmed crossing receipts and condition histories. Current directed
   routes record local traversal experience; prediction rollback is not reconciled.
-- Observed navigation connections between layers, richer continuous-slope chart
-  grouping, and floor labels learned from records or player annotations.
+- Richer continuous-slope chart grouping and floor labels learned from records.
+  Directed movement connections and player chart names are implemented; complete
+  fixed-tick movement evidence and native traversal validation remain open.
 - Permission-checked multiplayer report transport. Clipboard import/export is
   explicit and personal; no map knowledge is currently sent over the network.
 - GPU capture tokens and illusion/portal appearance adapters, texture reuse
@@ -128,7 +152,8 @@ offline application check also passed after the paging-priority, save-status,
 annotation privacy and report-validation edits. Logs are in
 `target/map-integration-build.log`, `target/map-integration-release-build.log`
 and `target/map-integration-final-check.log`. The full binaries predate the last
-small edits; only the final check covers the exact final source changes here.
+small edits. The later navigation increment was checked separately as recorded
+above; these earlier build logs do not validate its runtime behaviour.
 No tests were added or run. Native review could not start: the computer-use
 runtime failed to write its kernel assets (OS error 3), including after a reset.
 No native or multiplayer acceptance is asserted here.
@@ -139,6 +164,12 @@ these design records. Integration edits remain in the shared working tree in
 portal/Manyfold traversal. Their files contain concurrent changes, so they are
 not included wholesale in this checkpoint. A checkout of the commit alone is
 not the integrated application used by the build above.
+
+The navigation check initially stopped at the concurrent storage-scanner call to
+`factory::at_bench`. Its visibility was widened from `pub(super)` to `pub(crate)`
+to match that existing call, and the next check passed. This one-line build repair
+remains in the shared factory file; its unrelated changes are not part of the map
+commit.
 
 ## Counterweight integration
 

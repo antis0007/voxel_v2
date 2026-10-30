@@ -13,11 +13,13 @@ use std::{
 const MAX_PATCHES: usize = 262_144;
 const MAX_LAYERS: usize = 2048;
 const MAX_BYTES: u64 = 48 * 1024 * 1024;
+mod navigation;
 mod pages;
 mod paging;
 mod recognition;
 mod reports;
 mod routes;
+pub(super) use navigation::Motion;
 use pages::Pages;
 use routes::Route;
 
@@ -179,9 +181,11 @@ pub struct Knowledge {
     observer_epoch: u64,
     scale: f32,
     route_view: bool,
-    route_plan: Option<Vec<u32>>,
+    route_plan: Option<Vec<usize>>,
+    walk_routes_only: bool,
     exchange: reports::Exchange,
     pager: paging::Pager,
+    navigation: navigation::Navigation,
 }
 
 impl Default for Knowledge {
@@ -213,8 +217,10 @@ impl Default for Knowledge {
             scale: 1.0,
             route_view: false,
             route_plan: None,
+            walk_routes_only: false,
             exchange: Default::default(),
             pager: Default::default(),
+            navigation: Default::default(),
         }
     }
 }
@@ -266,7 +272,8 @@ impl Knowledge {
                         return Err("Observation archive exceeds limit".into());
                     }
                     let read = text
-                        .strip_prefix("VXOBS003\n")
+                        .strip_prefix("VXOBS004\n")
+                        .or_else(|| text.strip_prefix("VXOBS003\n"))
                         .or_else(|| text.strip_prefix("VXOBS002\n"))
                         .or_else(|| text.strip_prefix("VXOBS001\n"))
                         .and_then(|body| ron::from_str::<Saved>(body).ok());
@@ -335,7 +342,7 @@ impl Knowledge {
         }
     }
 
-    pub fn locate(&mut self, feet: Vec3, up: Vec3, forward: Vec3, scale: f32, grounded: bool) {
+    pub fn locate(&mut self, feet: Vec3, up: Vec3, forward: Vec3, scale: f32, motion: Motion) {
         if !feet.is_finite()
             || !up.is_finite()
             || !forward.is_finite()
@@ -344,6 +351,7 @@ impl Knowledge {
             || (up.length_squared() - 1.0).abs() > 0.01
         {
             self.active = None;
+            self.navigation = Default::default();
             return;
         }
         self.scale = scale;
@@ -351,6 +359,7 @@ impl Knowledge {
         self.finish_load(false);
         if !self.enabled || self.loading.is_some() {
             self.active = None;
+            self.navigation = Default::default();
             return;
         }
         // A discontinuous arrival does not establish its identity. Keep old
@@ -373,12 +382,12 @@ impl Knowledge {
             self.selected = None;
             self.last_step = None;
             self.recent.clear();
+            self.navigation = Default::default();
             self.dirty = true;
         }
         self.last_position = Some(feet);
         let cell = (feet / scale).floor().as_ivec3().to_array();
         // Return to an actually travelled patch before considering a nearby plane.
-        let previous = self.active;
         let visited = self
             .footsteps
             .get(&(self.saved.scope, cell))
@@ -407,7 +416,7 @@ impl Knowledge {
             });
         self.active = if existing.is_some() {
             existing
-        } else if grounded && self.saved.layers.len() < MAX_LAYERS {
+        } else if motion.grounded && self.saved.layers.len() < MAX_LAYERS {
             let reference = if up.dot(Vec3::Y).abs() < 0.9 {
                 Vec3::Y
             } else {
@@ -429,19 +438,36 @@ impl Knowledge {
         } else {
             None
         };
+        if let Some(leg) = self.navigation.observe(navigation::Sample {
+            at: Instant::now(),
+            point: feet,
+            up,
+            scope: self.saved.scope,
+            layer: self.active,
+            motion,
+        }) {
+            self.record_route(
+                routes::Crossing {
+                    from: leg.from,
+                    opening: 0,
+                    revision: 0,
+                    entry: leg.entry,
+                    exit: leg.exit,
+                },
+                leg.to,
+                leg.travel,
+                Some(leg.metres),
+            );
+        }
         if let Some(layer) = self.active {
-            if self.request_cell(layer, cell) {
-                return;
-            }
-            if let Some(from) = previous.filter(|from| *from != layer) {
-                self.record_connector(from, layer, feet);
-                self.route_plan = None;
-            }
             let l = &self.saved.layers[layer as usize];
             self.yaw = forward
                 .dot(Vec3::from_array(l.right))
                 .atan2(forward.dot(Vec3::from_array(l.forward)));
-            if grounded
+            if self.request_cell(layer, cell) {
+                return;
+            }
+            if motion.grounded
                 && self.last_step != Some((layer, cell))
                 && (self.saved.patches.len() < MAX_PATCHES
                     || self.saved.patches.contains_key(&(layer, cell)))
@@ -842,7 +868,7 @@ impl Knowledge {
                 if body.len() as u64 > MAX_BYTES - 9 {
                     return Err(std::io::Error::other("Observation archive full"));
                 }
-                sidecar::write_atomic(&path, format!("VXOBS003\n{body}").as_bytes())
+                sidecar::write_atomic(&path, format!("VXOBS004\n{body}").as_bytes())
                     .map_err(std::io::Error::other)
             })
             .ok();

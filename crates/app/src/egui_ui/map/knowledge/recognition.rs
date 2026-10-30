@@ -77,6 +77,7 @@ impl Knowledge {
                 self.active = Some(target);
                 self.selected = None;
                 self.last_step = None;
+                self.navigation = Default::default();
                 self.recent.clear();
                 self.route_plan = None;
                 self.dirty = true;

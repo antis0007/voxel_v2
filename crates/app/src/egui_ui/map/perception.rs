@@ -1,7 +1,7 @@
 //! Bounded fallback for the current opaque voxel renderer. Never generates or
 //! loads a chunk. Portal views and illusion facades require their own adapter;
 //! they must not be supplied through this ordinary-terrain path.
-use super::knowledge::Knowledge;
+use super::knowledge::{Knowledge, Motion};
 use crate::{
     mesh::GeneratedChunk,
     player::Player,
@@ -181,7 +181,15 @@ pub fn capture(knowledge: &mut Knowledge, view: View<'_>, cursor: &mut usize) {
         p.up_dir(),
         p.forward_dir(),
         scale,
-        p.on_ground,
+        Motion {
+            grounded: p.on_ground,
+            flying: p.flying,
+            swimming: p.swimming,
+            assisted: p.levitation_seconds > 0.0
+                || p.movement.dash_time > 0.0
+                || p.movement.wallrunning
+                || p.movement.air_jumps_used > 0,
+        },
     );
     if !knowledge.enabled || knowledge.active.is_none() {
         return;

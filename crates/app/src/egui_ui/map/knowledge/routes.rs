@@ -1,4 +1,5 @@
 //! Historical directed traversal. No live topology or destination lookup.
+use super::navigation::Travel;
 use super::{Knowledge, Layer, MAX_LAYERS};
 use egui::{Color32, Pos2, Stroke, emath::Rot2};
 use glam::Vec3;
@@ -22,6 +23,10 @@ pub struct Route {
     opening: u64,
     revision: u64,
     passages: u32,
+    #[serde(default)]
+    travel: Option<Travel>,
+    #[serde(default)]
+    metres: Option<f32>,
 }
 
 impl Route {
@@ -29,10 +34,21 @@ impl Route {
         (self.from as usize) < layers
             && (self.to as usize) < layers
             && self.passages > 0
+            && self
+                .metres
+                .is_none_or(|m| m.is_finite() && (0.0..=512.0).contains(&m))
             && [self.entry, self.exit].iter().all(|p| {
                 Vec3::from_array(*p).is_finite()
                     && Vec3::from_array(*p).abs().max_element() < 1_000_000.0
             })
+    }
+    fn travel(&self) -> Travel {
+        // Older archives did not distinguish walking from airborne transitions.
+        self.travel.unwrap_or(if self.opening == 0 {
+            Travel::Traverse
+        } else {
+            Travel::Portal
+        })
     }
 }
 
@@ -86,6 +102,7 @@ impl Knowledge {
         if self.observer_epoch != events.epoch {
             self.observer_epoch = events.epoch;
             self.last_crossing = 0;
+            self.navigation = Default::default();
         }
         for event in &events.events {
             if event.sequence <= self.last_crossing {
@@ -96,6 +113,7 @@ impl Knowledge {
             }
             self.last_crossing = event.sequence;
             if event.root.as_path() != root {
+                self.navigation = Default::default();
                 continue;
             }
             let from = self
@@ -114,6 +132,7 @@ impl Knowledge {
             self.selected = None;
             self.recent.clear();
             self.last_step = None;
+            self.navigation = Default::default();
             self.last_position = Some(event.exit);
             self.pending_arrival = false;
             if let (Some(from), Some(to)) = (from, self.active) {
@@ -126,55 +145,68 @@ impl Knowledge {
                         exit: event.exit,
                     },
                     to,
+                    Travel::Portal,
+                    None,
                 );
             }
         }
     }
 
-    pub(super) fn record_route(&mut self, c: Crossing, to: u32) {
-        if let Some(route) = self
-            .saved
-            .routes
-            .iter_mut()
-            .find(|r| r.from == c.from && r.to == to && r.opening == c.opening)
-        {
+    pub(super) fn record_route(
+        &mut self,
+        c: Crossing,
+        to: u32,
+        travel: Travel,
+        metres: Option<f32>,
+    ) {
+        let from = self.canonical(c.from);
+        let to = self.canonical(to);
+        if from == to && travel != Travel::Portal {
+            return;
+        }
+        let existing = self.saved.routes.iter().position(|r| {
+            self.canonical(r.from) == from
+                && self.canonical(r.to) == to
+                && r.opening == c.opening
+                && r.travel() == travel
+                && Vec3::from_array(r.entry).distance_squared(c.entry) <= 1.0
+                && Vec3::from_array(r.exit).distance_squared(c.exit) <= 1.0
+        });
+        if let Some(index) = existing {
+            let route = &mut self.saved.routes[index];
             route.passages = route.passages.saturating_add(1);
             route.revision = c.revision;
+            // Keep the entrance anchors stable: repeated nearby crossings must
+            // not drift this record until it absorbs a different entrance.
+            route.travel = Some(travel);
+            route.metres = metres;
         } else if self.saved.routes.len() < MAX_ROUTES {
             self.saved.routes.push(Route {
-                from: c.from,
+                from,
                 to,
                 opening: c.opening,
                 revision: c.revision,
                 entry: c.entry.to_array(),
                 exit: c.exit.to_array(),
                 passages: 1,
+                travel: Some(travel),
+                metres,
             });
         }
         self.dirty = true;
-    }
-
-    pub(super) fn record_connector(&mut self, from: u32, to: u32, point: Vec3) {
-        // A transition between walking charts establishes only the direction
-        // actually taken. No invented reverse stair, ladder or return portal.
-        if self.saved.layers[from as usize].scope == self.saved.layers[to as usize].scope {
-            self.record_route(
-                Crossing {
-                    from,
-                    opening: 0,
-                    revision: 0,
-                    entry: point,
-                    exit: point,
-                },
-                to,
-            );
-        }
+        self.route_plan = None;
     }
 
     pub(super) fn routes_ui(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .checkbox(&mut self.walk_routes_only, "Walked only")
+            .changed()
+        {
+            self.route_plan = None;
+        }
         let current = self.selected.or(self.active);
         if let (Some(from), Some(to)) = (self.active, current) {
-            if from != to && ui.small_button("Known route").clicked() {
+            if from != to && ui.small_button("Recorded route").clicked() {
                 self.route_plan = Some(self.find_route(from, to));
             }
         }
@@ -182,12 +214,20 @@ impl Knowledge {
             if plan.is_empty() {
                 ui.label("No known route");
             } else {
-                let label = plan
-                    .iter()
-                    .map(|&id| self.chart_name(id))
-                    .collect::<Vec<_>>()
-                    .join(" → ");
-                ui.label(label).on_hover_text("Last crossed connections");
+                egui::ScrollArea::vertical()
+                    .id_salt("route-steps")
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        for &index in plan {
+                            let route = &self.saved.routes[index];
+                            ui.label(format!(
+                                "{} → {} · {}",
+                                self.chart_name(route.from),
+                                self.chart_name(route.to),
+                                route.travel().label()
+                            ));
+                        }
+                    });
             }
         }
         let routes: Vec<_> = self
@@ -195,15 +235,18 @@ impl Knowledge {
             .routes
             .iter()
             .filter(|r| {
-                Some(self.canonical(r.from)) == current || Some(self.canonical(r.to)) == current
+                (!self.walk_routes_only || r.travel() == Travel::Walk)
+                    && (Some(self.canonical(r.from)) == current
+                        || Some(self.canonical(r.to)) == current)
             })
             .take(64)
             .map(|r| {
                 (
                     self.canonical(r.from),
                     self.canonical(r.to),
-                    r.opening == 0,
+                    r.travel(),
                     r.passages,
+                    r.metres,
                 )
             })
             .collect();
@@ -211,14 +254,15 @@ impl Knowledge {
             .id_salt("known-routes")
             .max_height(180.0)
             .show(ui, |ui| {
-                for (from, to, walked, count) in routes {
+                for (from, to, travel, count, metres) in routes {
                     let label = format!("{} → {}", self.chart_name(from), self.chart_name(to));
                     if ui
                         .small_button(label)
                         .on_hover_text(format!(
-                            "{} · {} crossings",
-                            if walked { "Walked" } else { "Last crossed" },
-                            count
+                            "{} · {} crossings{}",
+                            travel.label(),
+                            count,
+                            metres.map_or(String::new(), |m| format!(" · ~{m:.1} m"))
                         ))
                         .clicked()
                     {
@@ -228,35 +272,41 @@ impl Knowledge {
             });
     }
 
-    fn find_route(&self, from: u32, to: u32) -> Vec<u32> {
+    fn find_route(&self, from: u32, to: u32) -> Vec<usize> {
         use std::collections::{BTreeMap, VecDeque};
-        let mut edges: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        for route in &self.saved.routes {
+        let from = self.canonical(from);
+        let to = self.canonical(to);
+        let mut edges: BTreeMap<u32, Vec<(u32, usize)>> = BTreeMap::new();
+        for (index, route) in self.saved.routes.iter().enumerate() {
+            if self.walk_routes_only && route.travel() != Travel::Walk {
+                continue;
+            }
             edges
                 .entry(self.canonical(route.from))
                 .or_default()
-                .push(self.canonical(route.to));
+                .push((self.canonical(route.to), index));
         }
-        let mut previous = BTreeMap::from([(from, from)]);
+        let mut previous = BTreeMap::from([(from, (from, usize::MAX))]);
         let mut queue = VecDeque::from([from]);
         while let Some(node) = queue.pop_front() {
             if node == to {
-                let mut path = vec![to];
+                let mut path = Vec::new();
                 let mut at = to;
                 while at != from {
                     if path.len() >= 128 {
                         return Vec::new();
                     }
-                    at = previous[&at];
-                    path.push(at);
+                    let (parent, edge) = previous[&at];
+                    path.push(edge);
+                    at = parent;
                 }
                 path.reverse();
                 return path;
             }
             if let Some(next) = edges.get(&node) {
-                for &next in next {
+                for &(next, edge) in next {
                     if let std::collections::btree_map::Entry::Vacant(slot) = previous.entry(next) {
-                        slot.insert(node);
+                        slot.insert((node, edge));
                         queue.push_back(next);
                     }
                 }
@@ -279,7 +329,10 @@ impl Knowledge {
             .saved
             .routes
             .iter()
-            .filter(|r| self.canonical(r.from) == id || self.canonical(r.to) == id)
+            .filter(|r| {
+                (!self.walk_routes_only || r.travel() == Travel::Walk)
+                    && (self.canonical(r.from) == id || self.canonical(r.to) == id)
+            })
             .take(128)
         {
             let outgoing = self.canonical(route.from) == id;
