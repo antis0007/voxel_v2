@@ -153,11 +153,12 @@ fn rotation_moves_cells_with_their_support() {
 
 #[test]
 fn undo_restores_the_world_after_paste_and_cut() {
+    use crate::world::edit_history::{Direction, EditHistory, LOCAL_CELLS};
     let mut w = world();
     let area = Region::from_corners(IVec3::new(30, -2, -6), IVec3::new(36, 3, 1));
     let before = copy(&w, area);
     let bp = Arc::new(Blueprint::new(area.size(), (0..area.volume()).map(|i| pattern(IVec3::splat(i as i32))).collect()).expect("size"));
-    let mut history = History::default();
+    let mut history = EditHistory::new(LOCAL_CELLS);
     let mut job = Job::paste(&w, bp.clone(), area.min, false);
     run(&mut w, &mut job, usize::MAX);
     assert_matches(&w, area.min, &bp);
@@ -172,13 +173,20 @@ fn undo_restores_the_world_after_paste_and_cut() {
     assert_eq!(copy(&w, area).solid_count(), 0);
     assert!(history.push(&w, job.into_record()));
 
+    let reverse = |w: &mut World, history: &mut EditHistory, direction| {
+        history.start(w, direction).expect("history entry");
+        let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+        let mut prepare = admit;
+        let mut sink = Sink { prepare: &mut prepare, blocks: &mut blocks, chunks: &mut chunks };
+        while history.step(w, &mut sink, Budget::UNBOUNDED, 97).is_none() {}
+    };
     for expected in [&*bp, &before] {
-        let undo = history.pop_undo(&w).expect("history entry");
-        let mut job = Job::changes(&w, undo);
-        run(&mut w, &mut job, usize::MAX);
+        reverse(&mut w, &mut history, Direction::Undo);
         assert_eq!(copy(&w, area), *expected);
     }
-    assert!(history.pop_undo(&w).is_none());
+    assert_eq!(history.start(&w, Direction::Undo), Err("Undo History Empty"));
+    reverse(&mut w, &mut history, Direction::Redo);
+    assert_eq!(copy(&w, area), *bp);
 }
 
 #[test]

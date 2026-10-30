@@ -13,6 +13,7 @@ pub mod block_data;
 pub mod stations;
 pub mod travel;
 pub mod blueprint;
+pub mod edit_history;
 pub mod expedition;
 pub mod workshop;
 pub mod environment;

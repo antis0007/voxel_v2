@@ -61,6 +61,11 @@ pub struct Input {
 }
 
 impl Input {
+    /// Raw Shift state, whatever sneak is bound to.
+    pub fn shift_down(&self) -> bool {
+        self.shift_keys != 0
+    }
+
     pub fn keyboard(&mut self, key: winit::keyboard::KeyCode, pressed: bool) {
         let modifier = match key {
             KeyCode::ShiftLeft => Some((&mut self.shift_keys, 1)),

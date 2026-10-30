@@ -18,7 +18,7 @@ fn refresh(shelf: &mut Shelf, dir: &Path) {
     shelf.stale = false;
 }
 
-fn header(ui: &mut egui::Ui, tool: &mut BlueprintTool, open: &mut bool) {
+fn header(ui: &mut egui::Ui, tool: &mut BlueprintTool, history: (usize, usize), open: &mut bool) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Clipboard").color(style::AMBER));
         let summary = tool.clipboard().map_or_else(|| "Empty".to_owned(), |bp| format!("{} · {} Blocks", dims(bp.size()), bp.solid_count()));
@@ -29,7 +29,7 @@ fn header(ui: &mut egui::Ui, tool: &mut BlueprintTool, open: &mut bool) {
     }
     ui.horizontal(|ui| {
         ui.checkbox(&mut tool.paste_air, "Paste Air");
-        ui.label(RichText::new(format!("Undo: {}", tool.undo_depth())).color(style::MUTED));
+        ui.label(RichText::new(format!("Undo: {} · Redo: {}", history.0, history.1)).color(style::MUTED));
         if ui.button("Done").clicked() {
             *open = false;
         }
@@ -96,7 +96,8 @@ fn rows(ui: &mut egui::Ui, shelf: &mut Shelf) -> Option<RowAction> {
     action
 }
 
-pub fn draw(ctx: &egui::Context, open: &mut bool, tool: &mut BlueprintTool) {
+/// `history`: undo and redo steps of the player's edit history.
+pub fn draw(ctx: &egui::Context, open: &mut bool, tool: &mut BlueprintTool, history: (usize, usize)) {
     if !*open {
         return;
     }
@@ -110,7 +111,7 @@ pub fn draw(ctx: &egui::Context, open: &mut bool, tool: &mut BlueprintTool) {
         .default_width(330.0)
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
         .show(ctx, |ui| {
-            header(ui, tool, open);
+            header(ui, tool, history, open);
             save_row(ui, tool, &dir);
             ui.separator();
             let action = rows(ui, &mut tool.shelf);

@@ -1600,6 +1600,7 @@ fn main() -> Result<()> {
     let mut screenshot_notice: Option<String> = None;
     let mut creative = CreativeState::default();
     let mut blueprints = creative::blueprint::BlueprintTool::default();
+    let mut edit_history = world::edit_history::EditHistory::new(world::edit_history::LOCAL_CELLS);
     player.selected_block = creative.selected_block();
     let mut render_debug_view = benchmark_config.debug_view;
     let mut atmosphere_mode = AtmosphereMode::default();
@@ -1906,8 +1907,21 @@ fn main() -> Result<()> {
                                 sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
                             }
                             Some(bound @ (BindAction::BlueprintCorner | BindAction::BlueprintCopy | BindAction::BlueprintCut
-                                | BindAction::BlueprintPaste | BindAction::BlueprintRotate | BindAction::BlueprintMirror | BindAction::BlueprintUndo))
+                                | BindAction::BlueprintPaste | BindAction::BlueprintRotate | BindAction::BlueprintMirror))
                                 if fresh_press && grabbed && !creative.any_ui_open() => blueprints.press(bound),
+                            Some(bound @ (BindAction::Undo | BindAction::Redo))
+                                if fresh_press && grabbed && !creative.any_ui_open() => {
+                                let direction = if bound == BindAction::Undo { world::edit_history::Direction::Undo } else { world::edit_history::Direction::Redo };
+                                if let Some(w) = world.as_mut() {
+                                    if direction == world::edit_history::Direction::Undo && blueprints.cancel_paste() {
+                                        w.expedition.say("Paste Cancelled");
+                                    } else if creative.locked() {
+                                        w.expedition.say("Undo: Creative Only");
+                                    } else if let Err(refused) = edit_history.start(w, direction) {
+                                        w.expedition.say(refused);
+                                    }
+                                }
+                            }
                             Some(BindAction::RangeDown | BindAction::RangeUp)
                                 if fresh_press && grabbed && !creative.any_ui_open() => {
                                 creative.adjust_range(if action == Some(BindAction::RangeUp) { 1 } else { -1 });
@@ -2035,7 +2049,10 @@ fn main() -> Result<()> {
                             && fresh_press && keybinds::offer(keybinds::Binding::Key(code)) {
                                 return;
                             }
+                        // Ctrl chords sit beside the bindings: Ctrl is sprint and Z a tool key.
                         let action = match key.physical_key {
+                            PhysicalKey::Code(KeyCode::KeyZ) if input.ctrl_down && !input.shift_down() => Some(BindAction::Undo),
+                            PhysicalKey::Code(KeyCode::KeyZ | KeyCode::KeyY) if input.ctrl_down => Some(BindAction::Redo),
                             PhysicalKey::Code(code) => keybinds::action_for_key(code),
                             PhysicalKey::Unidentified(_) => None,
                         };
@@ -3037,7 +3054,7 @@ fn main() -> Result<()> {
                                 &mut creative,
                                 pending_tool_action.take(),
                             );
-                            egui_ui::blueprints::draw(&egui_ui.ctx, &mut creative.show_blueprints, &mut blueprints);
+                            egui_ui::blueprints::draw(&egui_ui.ctx, &mut creative.show_blueprints, &mut blueprints, edit_history.depth());
                             if let Some(w) = world.as_mut() {
                                 w.inventory = egui_ui.survival.clone();
                                 w.sync_from_inventory();
@@ -3795,10 +3812,15 @@ fn main() -> Result<()> {
                                     blueprints.overlay(creative.tool, eye, 0.003/world.voxel_scale.meters(), &mut outline);
                                 }
                                 // Pastes share the tool edit path, so they wait for residency like a brush stroke.
-                                blueprints.frame(world, &mut creative, raycast_target, false, &mut world::blueprint::Sink {
+                                let mut sink = world::blueprint::Sink {
                                     prepare: &mut |w: &mut World, p| fluid_sim.prepare_tool_edit(w, p),
                                     blocks: &mut dirty_blocks, chunks: &mut dirty_chunks,
-                                }, simulation::Budget::wall(std::time::Duration::from_millis(3)));
+                                };
+                                blueprints.frame(world, &mut creative, raycast_target, false, &mut edit_history, &mut sink,
+                                    simulation::Budget::wall(std::time::Duration::from_millis(3)));
+                                if let Some(message) = edit_history.step(world, &mut sink, simulation::Budget::wall(std::time::Duration::from_millis(3)), usize::MAX) {
+                                    world.expedition.say(message);
+                                }
 
                                 if place_edit && can_act && !active_input.sneak
                                     && creative.tool == creative::ToolKind::Hand
@@ -3979,6 +4001,9 @@ fn main() -> Result<()> {
                                                 }
                                             }
                                         }
+                                        if world.get(cell) != previous_block && !creative.locked() && !spell_blast {
+                                            edit_history.record(world, cell, previous_block, world.get(cell));
+                                        }
                                         if !emitted_tool_burst && world.get(cell) != previous_block {
                                             pending_tool_action = Some(match edit_mode { creative::BrushMode::Place => egui_ui::ToolUseAction::Place, creative::BrushMode::Erase => egui_ui::ToolUseAction::Break });
                                             let scale = world.voxel_scale.meters();
@@ -3995,6 +4020,8 @@ fn main() -> Result<()> {
                                             emitted_tool_burst = true;
                                         }
                                                                         }
+                                    // A stroke is queued whole, so an empty queue closes one undo step.
+                                    if creative.pending_cells() == 0 { edit_history.seal(); }
                                     if explosive_edit && !spell_blast {world.sync_from_inventory();}
                                 }
                                 if let Some(review)=sandbox_review.as_ref(){fluid_sim.set_enabled(review.running());}

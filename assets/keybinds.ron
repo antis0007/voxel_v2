@@ -7,6 +7,7 @@
 // PadRightTrigger, PadSelect, PadLeftStick, PadRightStick, PadDPadUp/Down/Left/Right,
 // and the left stick's directions PadLeftStickUp/Down/Left/Right. PadStart is
 // fixed to the pause menu and PadEast also closes open panels.
+// Ctrl+Z undoes and Ctrl+Y or Ctrl+Shift+Z redoes, beside the Undo and Redo bindings.
 [
     (action: "Forward", label: "Forward", group: "Movement", keys: ["KeyW", "PadLeftStickUp"]),
     (action: "Back", label: "Back", group: "Movement", keys: ["KeyS", "PadLeftStickDown"]),
@@ -55,12 +56,13 @@
     (action: "Hotbar9", label: "Slot 9", group: "Hotbar", keys: ["Digit9"]),
     (action: "HotbarPrev", label: "Previous Slot", group: "Hotbar", keys: ["PadDPadLeft"]),
     (action: "HotbarNext", label: "Next Slot", group: "Hotbar", keys: ["PadDPadRight"]),
+    (action: "Undo", label: "Undo", group: "Building", keys: ["Backspace"]),
+    (action: "Redo", label: "Redo", group: "Building", keys: []),
     (action: "BlueprintCorner", label: "Selection Corner", group: "Blueprints", keys: ["KeyK"]),
     (action: "BlueprintCopy", label: "Copy", group: "Blueprints", keys: ["KeyY"]),
     (action: "BlueprintCut", label: "Cut", group: "Blueprints", keys: ["Delete"]),
     (action: "BlueprintPaste", label: "Paste", group: "Blueprints", keys: ["KeyP"]),
     (action: "BlueprintRotate", label: "Rotate Clipboard", group: "Blueprints", keys: ["Period"]),
     (action: "BlueprintMirror", label: "Mirror Clipboard", group: "Blueprints", keys: ["Comma"]),
-    (action: "BlueprintUndo", label: "Undo Paste", group: "Blueprints", keys: ["Backspace"]),
     (action: "Blueprints", label: "Blueprint List", group: "Blueprints", keys: ["KeyJ"]),
 ]

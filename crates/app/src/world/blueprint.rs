@@ -10,7 +10,7 @@ pub mod library;
 #[cfg(test)]
 mod tests;
 
-pub use apply::{Change, History, Job, Sink};
+pub use apply::{Change, Job, Sink};
 pub use capture::Capture;
 pub use orient::{mirror_block, rotate_block};
 

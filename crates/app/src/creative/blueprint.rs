@@ -1,11 +1,14 @@
-//! Area Tool blueprints: two-corner selection, clipboard, paste preview and undo.
+//! Area Tool blueprints: two-corner selection, clipboard and paste preview.
+//!
+//! Finished pastes and cuts join the player's edit history as one undo step.
 //!
 //! Key presses queue here; `frame` runs them against the aimed cell and
 //! advances the copy or write in progress within the frame's budget.
 use super::{CreativeState, RaycastTarget, ToolKind};
 use crate::keybinds::Action;
 use crate::world::World;
-use crate::world::blueprint::{self, Blueprint, Capture, Change, History, Job, Region, Sink, library};
+use crate::world::blueprint::{self, Blueprint, Capture, Change, Job, Region, Sink, library};
+use crate::world::edit_history::EditHistory;
 use engine_core::Budget;
 use glam::{IVec3, Vec3};
 use std::sync::Arc;
@@ -19,7 +22,6 @@ enum Work {
     Copy { capture: Capture, cut: bool },
     Paste(Job),
     Cut(Job),
-    Undo(Job),
 }
 
 /// Panel-side state for the blueprint file list.
@@ -43,7 +45,6 @@ pub struct BlueprintTool {
     origin: Option<IVec3>,
     pub paste_air: bool,
     work: Option<Work>,
-    history: History,
     pub shelf: Shelf,
 }
 
@@ -59,7 +60,6 @@ impl Default for BlueprintTool {
             origin: None,
             paste_air: true,
             work: None,
-            history: History::default(),
             shelf: Shelf { stale: true, ..Shelf::default() },
         }
     }
@@ -95,17 +95,18 @@ impl BlueprintTool {
     pub fn progress(&self) -> Option<(usize, usize)> {
         Some(match self.work.as_ref()? {
             Work::Copy { capture, .. } => capture.progress(),
-            Work::Paste(job) | Work::Cut(job) | Work::Undo(job) => job.progress(),
+            Work::Paste(job) | Work::Cut(job) => job.progress(),
         })
     }
 
-    pub fn undo_depth(&self) -> usize {
-        self.history.len()
+    /// Drops an armed paste preview; true when one was armed.
+    pub fn cancel_paste(&mut self) -> bool {
+        std::mem::take(&mut self.armed)
     }
 
     /// Runs queued presses, then advances any copy or write within `budget`.
     /// `network` refuses writes: a client has no local authority over terrain.
-    pub fn frame(&mut self, world: &mut World, creative: &mut CreativeState, target: RaycastTarget, network: bool, sink: &mut Sink<'_>, budget: Budget) {
+    pub fn frame(&mut self, world: &mut World, creative: &mut CreativeState, target: RaycastTarget, network: bool, history: &mut EditHistory, sink: &mut Sink<'_>, budget: Budget) {
         if self.work.as_ref().is_some_and(|w| !work_world(w, world)) {
             self.work = None;
             self.corners = None;
@@ -122,7 +123,7 @@ impl BlueprintTool {
             (Some(bp), Some(cell)) if self.armed => Some(blueprint::origin_at(cell, bp.size())),
             _ => None,
         };
-        if let Some(message) = self.advance(world, sink, budget) {
+        if let Some(message) = self.advance(world, history, sink, budget) {
             world.expedition.say(message);
         }
     }
@@ -192,29 +193,14 @@ impl BlueprintTool {
                 self.set_clipboard(turned);
                 Some(format!("Clipboard: {}", dims(size)))
             }
-            Action::BlueprintUndo => {
-                if self.armed {
-                    self.armed = false;
-                    return Some("Paste Cancelled".into());
-                }
-                if let Some(refused) = writes_refused() {
-                    return Some(refused);
-                }
-                if busy {
-                    return Some("Blueprint Busy".into());
-                }
-                let Some(ops) = self.history.pop_undo(world) else { return Some("Undo History Empty".into()) };
-                self.work = Some(Work::Undo(Job::changes(world, ops)));
-                None
-            }
             _ => None,
         }
     }
 
-    fn advance(&mut self, world: &mut World, sink: &mut Sink<'_>, budget: Budget) -> Option<String> {
+    fn advance(&mut self, world: &mut World, history: &mut EditHistory, sink: &mut Sink<'_>, budget: Budget) -> Option<String> {
         let finished = match self.work.as_mut()? {
             Work::Copy { capture, .. } => capture.step(world, budget, usize::MAX),
-            Work::Paste(job) | Work::Cut(job) | Work::Undo(job) => job.step(world, sink, budget, usize::MAX),
+            Work::Paste(job) | Work::Cut(job) => job.step(world, sink, budget, usize::MAX),
         };
         if !finished {
             return None;
@@ -237,30 +223,29 @@ impl BlueprintTool {
                 self.set_clipboard(bp);
                 text
             }
-            Work::Paste(job) => self.record(world, job, "Pasted"),
-            Work::Cut(job) => self.record(world, job, "Cut"),
-            Work::Undo(job) => format!("Undone: {} Blocks", job.into_record().len()),
+            Work::Paste(job) => record(world, history, job, "Pasted"),
+            Work::Cut(job) => record(world, history, job, "Cut"),
         })
     }
+}
 
-    fn record(&mut self, world: &World, job: Job, verb: &str) -> String {
-        let skipped = job.skipped;
-        let changes = job.into_record();
-        let count = changes.len();
-        let mut text = format!("{verb}: {count} Blocks");
-        if skipped > 0 {
-            text += &format!(" · Skipped: {skipped}");
-        }
-        if !self.history.push(world, changes) {
-            text += " · Undo: Too Large";
-        }
-        text
+fn record(world: &World, history: &mut EditHistory, job: Job, verb: &str) -> String {
+    let skipped = job.skipped;
+    let changes = job.into_record();
+    let count = changes.len();
+    let mut text = format!("{verb}: {count} Blocks");
+    if skipped > 0 {
+        text += &format!(" · Skipped: {skipped}");
     }
+    if !history.push(world, changes) {
+        text += " · Undo: Too Large";
+    }
+    text
 }
 
 fn work_world(work: &Work, world: &World) -> bool {
     match work {
         Work::Copy { capture, .. } => capture.same_world(world),
-        Work::Paste(job) | Work::Cut(job) | Work::Undo(job) => job.same_world(world),
+        Work::Paste(job) | Work::Cut(job) => job.same_world(world),
     }
 }

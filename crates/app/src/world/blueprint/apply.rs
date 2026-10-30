@@ -6,16 +6,13 @@ use super::Blueprint;
 use crate::world::{BlockId, World, WorldSampleConfig, effects};
 use engine_core::Budget;
 use glam::IVec3;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const BUDGET_STRIDE: usize = 32;
 /// Frames a deferred cell is retried before it is skipped, so a saturated
 /// wake queue slows a paste without wedging it.
 const MAX_STALLS: u32 = 240;
-const MAX_UNDO: usize = 8;
-/// Recorded changes kept across the whole undo history.
-const MAX_UNDO_CELLS: usize = 1 << 22;
 
 /// Where a batch writes: residency admission and the dirty sets meshing reads.
 pub struct Sink<'a> {
@@ -167,44 +164,5 @@ fn write(world: &mut World, sink: &mut Sink, p: IVec3, expected: Option<BlockId>
         }
         Err(effects::Failure::Deferred) => Outcome::Deferred,
         Err(_) => Outcome::Skipped,
-    }
-}
-
-/// Bounded undo stack of committed pastes and cuts, per world.
-#[derive(Default)]
-pub struct History {
-    entries: VecDeque<(WorldSampleConfig, Vec<Change>)>,
-}
-
-impl History {
-    /// Keeps `changes`; false when they alone exceed the history's cell cap.
-    pub fn push(&mut self, world: &World, changes: Vec<Change>) -> bool {
-        if changes.len() > MAX_UNDO_CELLS {
-            return false;
-        }
-        if changes.is_empty() {
-            return true;
-        }
-        self.entries.push_back((world.sample_config(), changes));
-        while self.entries.len() > MAX_UNDO || self.cells() > MAX_UNDO_CELLS {
-            self.entries.pop_front();
-        }
-        true
-    }
-
-    fn cells(&self) -> usize {
-        self.entries.iter().map(|(_, c)| c.len()).sum()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Ops that reverse the newest entry for this world; other worlds' entries drop.
-    pub fn pop_undo(&mut self, world: &World) -> Option<Vec<Change>> {
-        let cfg = world.sample_config();
-        self.entries.retain(|(c, _)| *c == cfg);
-        let (_, changes) = self.entries.pop_back()?;
-        Some(changes.into_iter().rev().map(|c| Change { p: c.p, old: c.new, new: c.old }).collect())
     }
 }

@@ -45,9 +45,9 @@ actions!(
     Interact, NextSpell, Lamp, ToolHand, ToolBrush, ToolBuilders, ToolDestructor,
     ToolArea, ToolExplosive, RangeDown, RangeUp, Inventory, CreativePanel, WandAtelier,
     QuickSelect, Map, Waypoint, Minimap, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
-    Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9, HotbarPrev, HotbarNext,
+    Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9, HotbarPrev, HotbarNext, Undo, Redo,
     BlueprintCorner, BlueprintCopy, BlueprintCut, BlueprintPaste, BlueprintRotate, BlueprintMirror,
-    BlueprintUndo, Blueprints,
+    Blueprints,
 );
 
 /// Actions `Input` tracks per frame; only these accept mouse buttons.
@@ -60,6 +60,8 @@ impl Action {
     }
 
     fn from_name(name: &str) -> Option<Self> {
+        // Override files written when undo covered only blueprint pastes.
+        let name = if name == "BlueprintUndo" { "Undo" } else { name };
         Self::ALL.iter().copied().find(|a| a.name() == name)
     }
 
