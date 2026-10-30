@@ -110,6 +110,8 @@ struct Saved {
     landmarks: BTreeMap<[i32; 3], recognition::Landmark>,
     #[serde(default)]
     aliases: BTreeMap<u32, u32>,
+    #[serde(default)]
+    pins: BTreeSet<([i32; 3], u32)>,
 }
 
 type Footsteps = BTreeMap<(u64, [i32; 3]), u32>;
@@ -288,6 +290,12 @@ impl Knowledge {
                                 && saved.routes.len() <= routes::MAX_ROUTES
                                 && saved.routes.iter().all(|r| r.valid(saved.layers.len()))
                                 && recognition::valid(&saved)
+                                && saved.pins.len() <= 4096
+                                && saved.pins.iter().all(|(cell, layer)| {
+                                    (*layer as usize) < saved.layers.len()
+                                        && saved.layers[*layer as usize].report.is_none()
+                                        && cell.iter().all(|v| (-4_000_000..=4_000_000).contains(v))
+                                })
                                 && saved.names.len() <= MAX_LAYERS
                                 && saved.names.iter().all(|(id, name)| {
                                     (*id as usize) < saved.layers.len() && name.len() <= 96
@@ -570,8 +578,35 @@ impl Knowledge {
             l.report.is_none()
                 && l.accepts(cell.as_vec3() * scale, Vec3::from_array(l.up))
                 && (l.scope == 0
-                    || id.is_some_and(|id| self.saved.patches.contains_key(&(id, cell.to_array()))))
+                    || id.is_some_and(|id| {
+                        self.saved
+                            .pins
+                            .range((cell.to_array(), 0)..=(cell.to_array(), u32::MAX))
+                            .any(|(_, chart)| self.canonical(*chart) == self.canonical(id))
+                    }))
         })
+    }
+    /// A stored global coordinate is not recognition evidence after a fold.
+    /// Remember only annotations explicitly made on this personal chart.
+    pub fn mark(&mut self, cell: IVec3, here: bool) {
+        let Some(id) = (if here {
+            self.active
+        } else {
+            self.selected.or(self.active)
+        }) else {
+            return;
+        };
+        if self.saved.pins.len() < 4096 && self.saved.layers[id as usize].report.is_none() {
+            self.dirty |= self
+                .saved
+                .pins
+                .insert((cell.to_array(), self.canonical(id)));
+        }
+    }
+    pub fn can_measure_from_player(&self) -> bool {
+        self.layer(false)
+            .zip(self.layer(true))
+            .is_some_and(|(shown, here)| shown.report.is_none() && shown.scope == here.scope)
     }
     pub fn unproject(&self, point: egui::Vec2, scale: f32) -> Option<IVec3> {
         let l = self.layer(false)?;

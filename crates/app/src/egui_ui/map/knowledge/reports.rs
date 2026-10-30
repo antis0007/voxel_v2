@@ -46,7 +46,7 @@ impl Knowledge {
         let base = (Vec3::from_array(layer.origin) / self.scale)
             .floor()
             .as_ivec3();
-        let patches = self
+        let patches: Vec<_> = self
             .saved
             .patches
             .pages
@@ -56,6 +56,9 @@ impl Knowledge {
             .take(MAX_CELLS)
             .map(|(cell, p)| ((glam::IVec3::from_array(*cell) - base).to_array(), p.faces))
             .collect();
+        if patches.is_empty() {
+            return None;
+        }
         let report = Report {
             author: self
                 .exchange
@@ -99,6 +102,14 @@ impl Knowledge {
                 .patches
                 .iter()
                 .any(|(cell, _)| cell.iter().any(|v| !(-4_000_000..=4_000_000).contains(v)))
+        {
+            return Err("Invalid report");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        if report
+            .patches
+            .iter()
+            .any(|(cell, faces)| !seen.insert(*cell) || faces.iter().all(Option::is_none))
         {
             return Err("Invalid report");
         }

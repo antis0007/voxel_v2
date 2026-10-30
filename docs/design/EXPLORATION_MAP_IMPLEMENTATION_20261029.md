@@ -88,6 +88,9 @@ Explicit crossings and otherwise large discontinuous movement begin a provisiona
 knowledge by destination coordinates. Its displayed coordinates are local. Global
 waypoint distances are suppressed when the waypoint cannot be placed on that chart.
 The distance rule remains a conservative fallback for relocations without a receipt.
+Provisional charts display only annotations explicitly made on that chart; an old
+waypoint at the same stored coordinate cannot identify an unknown arrival. Viewing
+an old chart from an unlocalized arrival also withholds player-distance readouts.
 
 Archives are personal to the explicit multiplayer profile, or otherwise the local
 machine/account. Creative observations have a separate filename and never merge
@@ -119,9 +122,10 @@ a tested engine module. Its test suite was not copied or run. An existing map te
 was adjusted to stop asserting that loading a chunk reveals it; no tests were added
 or executed.
 
-Local validation: the offline `release-fast` application build completed with
+Local validation: offline development and `release-fast` application builds completed with
 warnings, including the expanded paging and recognition implementation. A final
-offline check covers the subsequent paging-priority and save-status edits.
+offline check of subsequent paging-priority, save-status and annotation edits is
+pending behind the shared build-directory lock.
 No tests were added or run. Native review could not start: the computer-use
 runtime failed to write its kernel assets (OS error 3), including after a reset.
 No native or multiplayer acceptance is asserted here.
