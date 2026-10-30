@@ -34,6 +34,7 @@ pub mod landscape;
 pub mod ecology;
 pub mod drainage;
 pub mod geo;
+pub mod sphere;
 pub mod lakes;
 pub mod river_ice;
 pub mod lore;
