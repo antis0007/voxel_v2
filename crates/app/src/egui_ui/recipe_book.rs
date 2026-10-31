@@ -422,15 +422,18 @@ pub(super) fn draw(ui: &mut egui::Ui, survival: &mut SurvivalInventory, bench: b
                 draw_item_icon(ui.painter(), r, item);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.label(RichText::new(item.name()).size(14.0).color(PAPER));
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · carried {}",
-                            item.category(),
-                            amount_text(stock_of(survival, item))
-                        ))
-                        .size(11.0)
-                        .color(JADE),
+                    ui.add(egui::Label::new(RichText::new(item.name()).size(14.0).color(PAPER)).wrap_mode(egui::TextWrapMode::Extend));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{} · carried {}",
+                                item.category(),
+                                amount_text(stock_of(survival, item))
+                            ))
+                            .size(11.0)
+                            .color(JADE),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Extend),
                     );
                 });
             });
