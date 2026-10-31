@@ -174,17 +174,21 @@ fn undo_restores_the_world_after_paste_and_cut() {
     assert!(history.push(&w, job.into_record()));
 
     let reverse = |w: &mut World, history: &mut EditHistory, direction| {
-        history.start(w, direction).expect("history entry");
+        assert!(history.request(direction));
         let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
         let mut prepare = admit;
         let mut sink = Sink { prepare: &mut prepare, blocks: &mut blocks, chunks: &mut chunks };
-        while history.step(w, &mut sink, Budget::UNBOUNDED, 97).is_none() {}
+        loop {
+            if let Some(text) = history.step(w, &mut sink, Budget::UNBOUNDED, 97) {
+                return text;
+            }
+        }
     };
     for expected in [&*bp, &before] {
         reverse(&mut w, &mut history, Direction::Undo);
         assert_eq!(copy(&w, area), *expected);
     }
-    assert_eq!(history.start(&w, Direction::Undo), Err("Undo History Empty"));
+    assert_eq!(reverse(&mut w, &mut history, Direction::Undo), "Undo History Empty");
     reverse(&mut w, &mut history, Direction::Redo);
     assert_eq!(copy(&w, area), *bp);
 }

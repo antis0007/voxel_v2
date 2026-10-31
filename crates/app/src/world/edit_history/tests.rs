@@ -21,17 +21,25 @@ fn edit(w: &mut World, h: Option<&mut EditHistory>, p: IVec3, new: BlockId) {
     }
 }
 
-fn run(w: &mut World, h: &mut EditHistory, direction: Direction) -> String {
-    h.start(w, direction).expect("history has a step");
+fn settle(w: &mut World, h: &mut EditHistory, max_cells: usize) -> String {
     let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
     let mut prepare = admit;
     let mut sink = Sink { prepare: &mut prepare, blocks: &mut blocks, chunks: &mut chunks };
+    let mut last = None;
     for _ in 0..1000 {
-        if let Some(text) = h.step(w, &mut sink, Budget::UNBOUNDED, 64) {
-            return text;
+        if let Some(text) = h.step(w, &mut sink, Budget::UNBOUNDED, max_cells) {
+            last = Some(text);
+        }
+        if h.running.is_none() && h.requests.is_empty() {
+            return last.expect("a status line");
         }
     }
     panic!("undo never finished");
+}
+
+fn run(w: &mut World, h: &mut EditHistory, direction: Direction) -> String {
+    assert!(h.request(direction));
+    settle(w, h, 64)
 }
 
 /// Cells straddling chunk borders at negative and far coordinates.
@@ -69,7 +77,8 @@ fn undo_then_redo_restores_each_stroke_across_chunk_borders() {
     assert_eq!(run(&mut w, &mut h, Direction::Undo), format!("Undone: {} Blocks", cells.len()));
     assert_eq!(cells.iter().map(|&p| w.get(p)).collect::<Vec<_>>(), before);
     assert_eq!(h.depth(), (0, 2));
-    assert_eq!(h.start(&w, Direction::Undo), Err("Undo History Empty"));
+    assert_eq!(run(&mut w, &mut h, Direction::Undo), "Undo History Empty");
+    assert!(!h.take_touched().is_empty());
 
     run(&mut w, &mut h, Direction::Redo);
     run(&mut w, &mut h, Direction::Redo);
@@ -108,7 +117,7 @@ fn a_new_edit_clears_redo() {
     edit(&mut w, Some(&mut h), p + IVec3::X, BlockId::Planks);
     h.seal();
     assert_eq!(h.depth(), (1, 0));
-    assert_eq!(h.start(&w, Direction::Redo), Err("Redo History Empty"));
+    assert_eq!(run(&mut w, &mut h, Direction::Redo), "Redo History Empty");
 }
 
 #[test]
@@ -140,8 +149,36 @@ fn another_worlds_steps_never_apply() {
     let mut h = EditHistory::new(LOCAL_CELLS);
     edit(&mut first, Some(&mut h), IVec3::new(2, 10, 2), BlockId::Planks);
     h.seal();
-    let second = World::new(WorldType::Superflat, VoxelScalePreset::HalfMeter);
+    let mut second = World::new(WorldType::Superflat, VoxelScalePreset::HalfMeter);
     assert_ne!(first.sample_config(), second.sample_config());
-    assert_eq!(h.start(&second, Direction::Undo), Err("Undo History Empty"));
+    assert_eq!(run(&mut second, &mut h, Direction::Undo), "Undo History Empty");
     assert_eq!(h.depth(), (0, 0));
+}
+
+#[test]
+fn rapid_presses_queue_and_share_one_cell_budget() {
+    let mut w = world();
+    let mut h = EditHistory::new(LOCAL_CELLS);
+    for i in 0..3 {
+        for x in 0..10 {
+            edit(&mut w, Some(&mut h), IVec3::new(x, 10 + i, -9), BlockId::Planks);
+        }
+        h.seal();
+    }
+    for _ in 0..3 {
+        assert!(h.request(Direction::Undo));
+    }
+    let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+    let mut prepare = admit;
+    let mut sink = Sink { prepare: &mut prepare, blocks: &mut blocks, chunks: &mut chunks };
+    assert_eq!(h.step(&mut w, &mut sink, Budget::UNBOUNDED, 15).as_deref(), Some("Undone: 10 Blocks"));
+    assert_eq!(h.depth(), (1, 1), "the second undo stopped at the budget");
+    // Finishes the second undo, then all of the third within the same 15 writes.
+    assert_eq!(h.step(&mut w, &mut sink, Budget::UNBOUNDED, 15).as_deref(), Some("Undone: 10 Blocks"));
+    assert_eq!(h.depth(), (0, 3));
+    assert_eq!(h.step(&mut w, &mut sink, Budget::UNBOUNDED, 15), None);
+    for _ in 0..MAX_REQUESTS {
+        assert!(h.request(Direction::Redo));
+    }
+    assert!(!h.request(Direction::Redo));
 }

@@ -1191,6 +1191,7 @@ fn cleanup_detached_torches(
     origin: glam::IVec3,
     dirty_blocks: &mut HashSet<glam::IVec3>,
     dirty_chunks: &mut HashSet<glam::IVec3>,
+    mut history: Option<&mut world::edit_history::EditHistory>,
 ) {
     for check in [
         origin + glam::IVec3::Y,
@@ -1205,6 +1206,7 @@ fn cleanup_detached_torches(
             continue;
         }
         world.set(check, BlockId::Air);
+        if let Some(history) = history.as_deref_mut() { history.record(world, check, block, BlockId::Air); }
         dirty_blocks.insert(check);
         mark_chunk_and_neighbors_dirty(dirty_chunks, check);
     }
@@ -1917,8 +1919,8 @@ fn main() -> Result<()> {
                                         w.expedition.say("Paste Cancelled");
                                     } else if creative.locked() {
                                         w.expedition.say("Undo: Creative Only");
-                                    } else if let Err(refused) = edit_history.start(w, direction) {
-                                        w.expedition.say(refused);
+                                    } else if !edit_history.request(direction) {
+                                        w.expedition.say("Edit History Busy");
                                     }
                                 }
                             }
@@ -3966,11 +3968,14 @@ fn main() -> Result<()> {
                                                     &mut dirty_chunks,
                                                     cell,
                                                 );
+                                                // Recorded after the break, so undo puts torches back before their support.
+                                                if !creative.locked() && !spell_blast { edit_history.record(world, cell, previous_block, world.get(cell)); }
                                                 cleanup_detached_torches(
                                                     world,
                                                     cell,
                                                     &mut dirty_blocks,
                                                     &mut dirty_chunks,
+                                                    (!creative.locked() && !spell_blast).then_some(&mut edit_history),
                                                 );
                                             }
                                             creative::BrushMode::Place => {
@@ -4001,7 +4006,7 @@ fn main() -> Result<()> {
                                                 }
                                             }
                                         }
-                                        if world.get(cell) != previous_block && !creative.locked() && !spell_blast {
+                                        if edit_mode == creative::BrushMode::Place && world.get(cell) != previous_block && !creative.locked() {
                                             edit_history.record(world, cell, previous_block, world.get(cell));
                                         }
                                         if !emitted_tool_burst && world.get(cell) != previous_block {
