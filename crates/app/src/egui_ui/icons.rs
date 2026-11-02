@@ -5,7 +5,7 @@ use super::pixel_art::{self, GOLD as PALETTE_GOLD, PAPER as PALETTE_PAPER, TEAL 
 use crate::world::factory::Kind;
 use egui::{Color32 as C, Rect, Vec2, vec2};
 
-mod sprites16;
+pub(crate) mod sprites16;
 pub const GOLD: C = PALETTE_GOLD;
 pub const PAPER: C = PALETTE_PAPER;
 pub const TEAL: C = PALETTE_TEAL;

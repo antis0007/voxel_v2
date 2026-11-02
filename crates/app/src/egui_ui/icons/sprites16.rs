@@ -9,23 +9,29 @@ use std::sync::LazyLock;
 
 const RESOURCES: &str = include_str!("../../../../../assets/icons/resources16.txt");
 const ITEMS: &str = include_str!("../../../../../assets/icons/items16.txt");
+const MACHINES: &str = include_str!("../../../../../assets/icons/machines16.txt");
 pub(super) const SIZE: usize = 16;
 /// First id of foods in the items sheet; foods follow in `FoodKind` order.
 const FOOD_BASE: usize = 10;
+/// First id of armour; four tiers per slot.
+const ARMOR_BASE: usize = 20;
 
 type Pixels = Vec<C>;
 
-static SHEETS: LazyLock<[Vec<Option<Pixels>>; 2]> =
-    LazyLock::new(|| [parse(RESOURCES).unwrap_or_default(), parse(ITEMS).unwrap_or_default()]);
+static SHEETS: LazyLock<[Vec<Option<Pixels>>; 3]> = LazyLock::new(|| {
+    [parse(RESOURCES).unwrap_or_default(), parse(ITEMS).unwrap_or_default(), parse(MACHINES).unwrap_or_default()]
+});
 
 /// Sheet and sprite id for an icon drawn from a sprite sheet.
 fn sprite(icon: Icon) -> Option<(usize, usize)> {
     Some(match icon {
         Icon::Resource(id) => (0, id),
+        Icon::Machine(kind) => (2, kind as usize),
         Icon::Torch => (1, 2),
         Icon::Rod => (1, 4),
         Icon::Boat => (1, 5),
         Icon::Food(kind) => (1, FOOD_BASE + kind as usize),
+        Icon::Armor(slot @ 0..=3, tier @ 1..=4) => (1, ARMOR_BASE + slot as usize * 4 + tier as usize - 1),
         _ => return None,
     })
 }
@@ -92,6 +98,14 @@ pub(super) fn parse(source: &str) -> Result<Vec<Option<Pixels>>, String> {
     Ok(sheet)
 }
 
+/// Sheet texels for the held-item mesh, in `held_art::icon_texels` form.
+pub(crate) fn texels(icon: Icon) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3])>>)> {
+    let (sheet, id) = sprite(icon)?;
+    let pixels = SHEETS[sheet].get(id)?.as_ref()?;
+    let texels = pixels.iter().map(|c| (c.a() == 255).then(|| (b'#', [c.r(), c.g(), c.b()]))).collect();
+    Some((SIZE, SIZE, texels))
+}
+
 /// Draws `icon` at a whole-pixel scale; false if no sheet covers it.
 pub(super) fn paint(p: &Painter, r: Rect, icon: Icon) -> bool {
     let Some((sheet, id)) = sprite(icon) else {
@@ -135,6 +149,7 @@ mod tests {
     fn sheets_parse() {
         parse(RESOURCES).unwrap();
         parse(ITEMS).unwrap();
+        parse(MACHINES).unwrap();
     }
 
     #[test]
@@ -145,6 +160,14 @@ mod tests {
         let tools = [("torch", Icon::Torch), ("rod", Icon::Rod), ("boat", Icon::Boat)];
         for (label, icon) in tools {
             assert_drawn(label, icon);
+        }
+        for kind in crate::world::factory::Kind::ALL {
+            assert_drawn(&format!("{kind:?}"), Icon::Machine(kind));
+        }
+        for slot in 0..4 {
+            for tier in 1..=4 {
+                assert_drawn(&format!("armour {slot} {tier}"), Icon::Armor(slot, tier));
+            }
         }
         for kind in crate::world::inventory::FoodKind::ALL {
             assert_drawn(&format!("food {}", kind as u8), Icon::Food(kind as u8));

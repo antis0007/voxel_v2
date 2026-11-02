@@ -1,0 +1,907 @@
+# Machine icons, one per factory::Kind in declaration order.
+# Casing a-d and interior i are shared; e-h is the family accent ramp.
+outline 141418
+
+sprite 0 generator
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociiiiihhiiiao.
+.ociiiihhiiiiao.
+.ociiihhiiiiiao.
+.ociihhhhhhiiao.
+.ociiiiihhiiiao.
+.ociiiihhiiiiao.
+.ociiihhiiiiiao.
+.ociihhiiiiiiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 1 crusher
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ocifgfiifgfiao.
+.ocgfhfggfhfgao.
+.ocffhffffhffao.
+.ocgfhfggfhfgao.
+.ocifgfiifgfiao.
+.ociiiiiiiiiiao.
+.ociaiaiaiaiaao.
+.ocaiaiaiaiaiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 2 furnace
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocaaaaaaaaaaao.
+.ocaiiiiiiiiaao.
+.ocaiiiigiiiaao.
+.ocaiiggiiiiaao.
+.ocaiighgiiiaao.
+.ocaigghhggiaao.
+.ocaighhhhgiaao.
+.ocaighhhhhgaao.
+.ocaeeeeeeeeaao.
+.ocaaaaaaaaaaao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 3 feeder
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiihhiiiiao.
+.ociiiihhiiiiao.
+.ociiiihhiiiiao.
+.ociihhhhhhiiao.
+.ociiihhhhiiiao.
+.ociiiihhiiiiao.
+.ociiiiiiiiiiao.
+.oceffffffffeao.
+.ocieffffffeiao.
+.ociieeeeeeiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 4 storage
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocffffffffffao.
+.ocfeeeeeeeefao.
+.ocfegeeeegefao.
+.ocfeegeegeefao.
+.ocfeeeggeeefao.
+.ocfeeeggeeefao.
+.ocfeegeegeefao.
+.ocfegeeeegefao.
+.ocfeeeeeeeefao.
+.ocffffffffffao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 5 pipe
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+................
+................
+................
+oooooooooooooooo
+dccccccccccccccd
+dbbbbbbbbbbbbbbd
+dbbeebbeebbeebbd
+dbbbbbbbbbbbbbbd
+daaaaaaaaaaaaaad
+oooooooooooooooo
+................
+................
+................
+................
+................
+end
+
+sprite 6 cable
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+................
+................
+................
+oooooooooooooooo
+dccccccccccccccd
+dbbbbbbbbbbbbbbd
+dbbbbhhhhhhbbbbd
+dbbbbbbbbbbbbbbd
+daaaaaaaaaaaaaad
+oooooooooooooooo
+................
+................
+................
+................
+................
+end
+
+sprite 7 bioreactor
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e461e
+f 3c7828
+g 6eb43c
+h c8f078
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocaaaaaaaaaaao.
+.ocaiiiiiiiiaao.
+.ocaiiiiihiiaao.
+.ocaihiiiiiiaao.
+.ocaiiihiiiiaao.
+.ocaffffffffaao.
+.ocafgfffgffaao.
+.ocaffffgfffaao.
+.ocafgfffffgaao.
+.ocaaaaaaaaaaao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 8 alloy_kiln
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociggiiiiggiao.
+.ocighgiighgiao.
+.ociggiiiiggiao.
+.ociiiggggiiiao.
+.ociiighhgiiiao.
+.ociiiggggiiiao.
+.ociiiiiiiiiiao.
+.oceeeeeeeeeeao.
+.oceaeaeaeaeaao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 9 fabricator
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociiiihhiiiiao.
+.ociiiihhiiiiao.
+.ociiiiggiiiiao.
+.ociffffffffiao.
+.ocifeeeeeefiao.
+.ocifeggggefiao.
+.ocifeeeeeefiao.
+.ociffffffffiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 10 cultivator
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e461e
+f 3c7828
+g 6eb43c
+h c8f078
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociiihhiiiiiao.
+.ociihhghiiiiao.
+.ociiiighhhiiao.
+.ociiiigghhiiao.
+.ociiiigiiiiiao.
+.ociiiigiiiiiao.
+.oceeeeeeeeeeao.
+.oceffeffeffeao.
+.oceeeeeeeeeeao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 11 mining_drill
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociieeeeeeiiao.
+.ociieffffeiiao.
+.ociiieffeiiiao.
+.ociiiegheiiiao.
+.ociiiighgiiiao.
+.ociiiighgiiiao.
+.ociiiiggiiiiao.
+.ociiiighiiiiao.
+.ociiiiihiiiiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 12 pump
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 143c64
+f 2864a0
+g 4696d2
+h a0d2f0
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociiiffffiiiao.
+.ociiffggffiiao.
+.ocifgghhggfiao.
+.ocifghhhhgfiao.
+.ocifghhhhgfiao.
+.ocifgghhggfiao.
+.ociiffggffiiao.
+.ociiiffffiiiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 13 fluid_pipe
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 143c64
+f 2864a0
+g 4696d2
+h a0d2f0
+................
+................
+................
+................
+oooooooooooooooo
+dccccccccccccccd
+dbbbbbbbbbbbbbbd
+dbggggggggggggbd
+dbbbbbbbbbbbbbbd
+daaaaaaaaaaaaaad
+oooooooooooooooo
+................
+................
+................
+................
+................
+end
+
+sprite 14 tank
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 143c64
+f 2864a0
+g 4696d2
+h a0d2f0
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocaaaaaaaaaaao.
+.ocaiiiiiiiiaao.
+.ocaiiiiiiiiaao.
+.ocaiiiiiiiiaao.
+.ocahhhhhhhhaao.
+.ocaggggggggaao.
+.ocaggggggggaao.
+.ocaffffffffaao.
+.ocaffffffffaao.
+.ocaaaaaaaaaaao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 15 washer
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 143c64
+f 2864a0
+g 4696d2
+h a0d2f0
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociihiiiihiiao.
+.ocihhhiihhhiao.
+.ocihghiihghiao.
+.ociihiiiihiiao.
+.ociiiiiiiiiiao.
+.oceffffffffeao.
+.ocefgfgfgffeao.
+.oceffffffffeao.
+.oceeeeeeeeeeao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 16 battery
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiaaiiiiao.
+.ociaaaaaaaaiao.
+.ociahhhhhhaiao.
+.ociahhhhhhaiao.
+.ociaggggggaiao.
+.ociaggggggaiao.
+.ociaffffffaiao.
+.ociaffffffaiao.
+.ociaaaaaaaaiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 17 coke_oven
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiaaaaaaiiao.
+.ociaeeeeeeaiao.
+.ocaeffffffeaao.
+.ocaefggggfeaao.
+.ocaefghhgfeaao.
+.ocaefghhgfeaao.
+.ocaefggggfeaao.
+.ocaeffffffeaao.
+.ocaeeeeeeeeaao.
+.ocaaaaaaaaaaao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 18 blast_furnace
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocaaiiiiiiaaao.
+.ocaeaiiiiaeaao.
+.ocaeeaaaaeeaao.
+.ocaefggggfeaao.
+.ocaeghhhhgeaao.
+.ocaeghhhhgeaao.
+.ocaefggggfeaao.
+.ocaeffffffeaao.
+.ocaeeeeeeeeaao.
+.ocaaaaaaaaaaao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 19 coke_brick
+a 3c2a20
+b 8c4628
+c b4643c
+d 6e321c
+oooooooooooooooo
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+odddadddddddaddo
+oaaaaaaaaaaaaaao
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+oooooooooooooooo
+end
+
+sprite 20 blast_brick
+a 3c3a38
+b 8c847c
+c b4aca4
+d 6c645e
+oooooooooooooooo
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+odddadddddddaddo
+oaaaaaaaaaaaaaao
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+oooooooooooooooo
+end
+
+sprite 21 induction_casing
+a 2c3238
+b 6e7c88
+c a0b0bc
+d 505a64
+oooooooooooooooo
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+odddadddddddaddo
+oaaaaaaaaaaaaaao
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+oooooooooooooooo
+end
+
+sprite 22 induction_port
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ociaaaaaaaaiao.
+.ociaggggggaiao.
+.ociagaiiagaiao.
+.ociagiiiigaiao.
+.ociagiiiigaiao.
+.ociagaiiagaiao.
+.ociaggggggaiao.
+.ociaaaaaaaaiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 23 induction_cell
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ocihhhhhhhhiao.
+.ociffffffffiao.
+.ocihhhhhhhhiao.
+.ociffffffffiao.
+.ocihhhhhhhhiao.
+.ociffffffffiao.
+.ocihhhhhhhhiao.
+.ociffffffffiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 24 induction_provider
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiihhiiiiao.
+.ociiihhhhiiiao.
+.ociihhhhhhiiao.
+.ociiiihhiiiiao.
+.ocggiihhiiggao.
+.ocggiihhiiggao.
+.ociiiihhiiiiao.
+.ociiiiggiiiiao.
+.ociieeeeeeiiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 25 transformer
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1e4664
+f 2882b4
+g 6ec8f0
+h dcf8ff
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiiiiiiiao.
+.ocaaaaaaaaaaao.
+.ocahfaaaahfaao.
+.ocahfaaaahfaao.
+.ocahfiiiihfaao.
+.ocahfiiiihfaao.
+.ocahfaaaahfaao.
+.ocahfaaaahfaao.
+.ocaaaaaaaaaaao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 26 assembler
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 5a3c1e
+f 8c6432
+g c89650
+h f0d28c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiihhiiiiao.
+.ociihhhhhhiiao.
+.ocihhgggghhiao.
+.ocihggiigghiao.
+.ochhgiiiighhao.
+.ochhgiiiighhao.
+.ocihggiigghiao.
+.ocihhgggghhiao.
+.ociihhhhhhiiao.
+.ociiiihhiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 27 seared_brick
+a 28282c
+b 5a5a64
+c 7c7c88
+d 46464e
+oooooooooooooooo
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+odddadddddddaddo
+oaaaaaaaaaaaaaao
+occcccccacccccco
+obbbbbbbabbbbbbo
+odddddddaddddddo
+oaaaaaaaaaaaaaao
+occcacccccccacco
+obbbabbbbbbbabbo
+oooooooooooooooo
+end
+
+sprite 28 smeltery_controller
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocaaaaaaaaaaao.
+.ocaiiiiiiiiaao.
+.ocaiiiiiiiiaao.
+.ocaihhiiiiiaao.
+.ocahhhhhhhiaao.
+.ocaggggggggaao.
+.ocaggggggggaao.
+.ocaffffffffaao.
+.ocaaaaaaaaaaao.
+.ocaeaeaeaeaeao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 29 smeltery_drain
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.oceeeeeeeeeeao.
+.oceaaeaaeaaeao.
+.oceaaeaaeaaeao.
+.oceeeeeeeeeeao.
+.oceaaeaaeaaeao.
+.oceaaeaaeaaeao.
+.oceeeeeeeeeeao.
+.oceaaeaaeaaeao.
+.oceaaeaaeaaeao.
+.oceeeeeeeeeeao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 30 smeltery_faucet
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+................
+oooooooo........
+obccccbo........
+obbbbbbooooooo..
+obbbbbbbbbbbbo..
+oaaaaaaaaaaabo..
+oooooooooooabo..
+...........oho..
+...........oho..
+...........oho..
+...........oho..
+................
+................
+................
+................
+end
+
+sprite 31 casting_table
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+................
+................
+................
+................
+oooooooooooooooo
+occcchhhhhhcccco
+obbbbbbbbbbbbbbo
+oaaaaaaaaaaaaaao
+oooooooooooooooo
+.oao........oao.
+.oao........oao.
+.oao........oao.
+.ooo........ooo.
+................
+................
+end
+
+sprite 32 casting_basin
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 6e2814
+f b4461e
+g f08c28
+h ffe08c
+................
+................
+................
+oooo........oooo
+obco........ocbo
+obcohhhhhhhhocbo
+obcoggggggggocbo
+obcoooooooooocbo
+obbbbbbbbbbbbbbo
+oaaaaaaaaaaaaaao
+oooooooooooooooo
+................
+................
+................
+................
+................
+end

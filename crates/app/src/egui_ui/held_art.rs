@@ -54,6 +54,9 @@ pub(crate) fn block_texel(block: BlockId, top: bool, x: u32, y: u32) -> [f32; 3]
 
 /// Sprite texels row-major with their glyph byte; `None` is transparent. Colours are sRGB.
 pub(crate) fn icon_texels(icon: Icon) -> (usize, usize, Vec<Option<(u8, [u8; 3])>>) {
+    if let Some(sprite) = super::icons::sprites16::texels(icon) {
+        return sprite;
+    }
     let (rows, accent) = super::icons::rows(icon);
     let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     let mut texels = Vec::with_capacity(width * rows.len());
@@ -82,7 +85,8 @@ mod tests {
     fn torch_sprite_has_a_flame_above_its_stick() {
         let (w, h, texels) = icon_texels(Icon::Torch);
         assert_eq!(texels.len(), w * h);
-        let flame = texels.iter().position(|t| t.is_some_and(|(ch, _)| matches!(ch, b'4' | b'5' | b'6'))).unwrap();
+        let light = |t: &Option<(u8, [u8; 3])>| t.map_or(0, |(_, c)| c.iter().map(|&v| v as u32).sum::<u32>());
+        let flame = (0..texels.len()).max_by_key(|&i| light(&texels[i])).unwrap();
         let stick = texels.iter().rposition(|t| t.is_some()).unwrap();
         assert!(flame / w < stick / w);
     }
