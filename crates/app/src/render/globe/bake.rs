@@ -69,6 +69,10 @@ pub fn sample_coord(cfg: &WorldSampleConfig, id: TileId, i: u32, j: u32) -> (i32
     ((p.x / vm).floor() as i32, (p.z / vm).floor() as i32)
 }
 
+fn height_i16(metres: f32) -> i16 {
+    metres.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
 fn unit_byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -92,7 +96,7 @@ pub fn bake_tile(
         let (heat, wet, _) =
             engine_worldgen::landscape::visual_ecology(cfg, x as f32 * vm, z as f32 * vm, height);
         let idx = k as usize;
-        data.height_m[idx] = height.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        data.height_m[idx] = height_i16(height);
         data.material[idx] = material_index(column.surface);
         data.water[idx] = u8::from(column.height < water_level);
         data.climate[idx] = [unit_byte(heat), unit_byte(wet)];
@@ -120,14 +124,35 @@ mod tests {
         let mut data = TileData::empty(id);
         let mut cursor = BakeCursor::default();
         assert!(bake_tile(&cfg(), id, &mut data, &mut cursor, Budget::UNBOUNDED));
+        for j in 0..TILE_SAMPLES {
+            for i in 0..TILE_SAMPLES {
+                let (x, z) = sample_coord(&cfg(), id, i, j);
+                let column = engine_worldgen::sample_column(&cfg(), x, z);
+                let k = (j * TILE_SAMPLES + i) as usize;
+                assert_eq!(data.height_m[k] as i32, cfg().world_y(column.height).round() as i32);
+                assert_eq!(data.material[k], material_index(column.surface));
+                assert_eq!(data.water[k], u8::from(column.height < cfg().water_level()));
+            }
+        }
+        let vm = cfg().voxel_meters();
         for (i, j) in [(0, 0), (64, 64), (17, 41), (64, 0)] {
             let (x, z) = sample_coord(&cfg(), id, i, j);
             let column = engine_worldgen::sample_column(&cfg(), x, z);
+            let (heat, wet, _) = engine_worldgen::landscape::visual_ecology(
+                &cfg(),
+                x as f32 * vm,
+                z as f32 * vm,
+                cfg().world_y(column.height),
+            );
             let k = (j * TILE_SAMPLES + i) as usize;
-            assert_eq!(data.height_m[k] as i32, cfg().world_y(column.height).round() as i32);
-            assert_eq!(data.material[k], material_index(column.surface));
-            assert_eq!(data.water[k], u8::from(column.height < cfg().water_level()));
+            assert_eq!(data.climate[k], [unit_byte(heat), unit_byte(wet)]);
         }
+    }
+
+    #[test]
+    fn heights_beyond_i16_clamp() {
+        assert_eq!(height_i16(40_000.0), i16::MAX);
+        assert_eq!(height_i16(-40_000.0), i16::MIN);
     }
 
     #[test]
@@ -142,9 +167,11 @@ mod tests {
             rounds += 1;
             assert!(rounds < 10_000);
         }
-        assert!(rounds > 0);
+        assert!(rounds >= 2);
         assert_eq!(whole.height_m, pieces.height_m);
         assert_eq!(whole.material, pieces.material);
+        assert_eq!(whole.water, pieces.water);
+        assert_eq!(whole.climate, pieces.climate);
     }
 
     #[test]
