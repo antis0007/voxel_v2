@@ -22,6 +22,7 @@ impl TileId {
     }
 
     pub fn children(self) -> [TileId; 4] {
+        debug_assert!(self.level < MAX_LEVEL);
         let (level, x, y) = (self.level + 1, self.x * 2, self.y * 2);
         let c = |dx, dy| TileId { face: self.face, level, x: x + dx, y: y + dy };
         [c(0, 0), c(1, 0), c(0, 1), c(1, 1)]
@@ -76,8 +77,7 @@ impl TileId {
     pub fn bounding_radius_m(self) -> f64 {
         let c = self.centre_body();
         let reach = self.corners_body().iter().map(|p| p.distance(c)).fold(0.0, f64::max);
-        let slack = if self.level <= 3 { 2_000.0 } else { self.cell_m() * 2.0 };
-        reach + slack
+        reach + 2_000.0
     }
 
     pub fn key(self) -> u64 {
@@ -91,11 +91,15 @@ impl TileId {
 /// Screen-space size of one cell; zero for tiles hidden behind the limb.
 pub fn projected_error_px(id: TileId, eye_body: DVec3, focal_px: f64) -> f64 {
     let centre = id.centre_body();
-    if centre.normalize().dot(eye_body.normalize()) < RADIUS_M / eye_body.length() {
+    let angle = centre.normalize().dot(eye_body.normalize()).clamp(-1.0, 1.0).acos();
+    let tile_reach = (id.bounding_radius_m() / RADIUS_M).min(1.0).asin();
+    let horizon = (RADIUS_M / eye_body.length()).min(1.0).acos();
+    if angle - tile_reach > horizon {
         return 0.0;
     }
-    let dist = (eye_body.distance(centre) - id.bounding_radius_m()).max(1.0);
-    focal_px * id.cell_m() / dist
+    // Centre distance, not the sphere surface: the sphere carries 2 km of height slack
+    // that would otherwise force every fine tile near the eye to split.
+    focal_px * id.cell_m() / eye_body.distance(centre).max(id.cell_m())
 }
 
 #[cfg(test)]
@@ -160,5 +164,18 @@ mod tests {
         let near = projected_error_px(front, eye, 900.0);
         let far = projected_error_px(front, eye * 2.0, 900.0);
         assert!(near > far && far > 0.0);
+    }
+
+    #[test]
+    fn a_tile_straddling_the_limb_keeps_its_error() {
+        let root = TileId::root(0);
+        let c = root.centre_body().normalize();
+        let u = c.cross(DVec3::Y).normalize();
+        let d = RADIUS_M + 100_000.0;
+        let horizon = (RADIUS_M / d).acos();
+        let a = horizon + 0.1;
+        assert!((root.bounding_radius_m() / RADIUS_M).min(1.0).asin() > 0.1);
+        let eye = (c * a.cos() + u * a.sin()) * d;
+        assert!(projected_error_px(root, eye, 900.0) > 0.0);
     }
 }
