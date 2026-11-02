@@ -5,6 +5,7 @@ mod capture;
 mod frame_pacer;
 mod pipeline_cache;
 pub mod coverage;
+pub mod globe;
 pub(crate) fn flush_review_captures() {
     if !capture::flush(std::time::Duration::from_secs(2)) {
         eprintln!("[capture] end-of-review flush timed out");

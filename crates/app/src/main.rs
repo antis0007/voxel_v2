@@ -16,6 +16,7 @@ use winit::{
 
 use engine_audio as audio;
 mod crash_log;
+mod altitude;
 mod comfort;
 mod creative;
 mod gamepad;
