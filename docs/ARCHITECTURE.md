@@ -44,7 +44,9 @@ One world has one `VoxelScalePreset` (1 m, 0.5 m, 0.25 m per cell). Generation i
 
 ## How a voxel change propagates
 
-`World::set` → `ResidentEdits` chunk copy-on-write → water volume map cleared for that cell → activity bits wake the cell and its neighbours (next cellular step reads them) → chunk and halo neighbours marked dirty → streamer rebuilds `GeneratedChunk` → `SolidMesher` → GPU upload → horizon edit overlay refreshed for that column.
+`World::set` → `ResidentEdits` chunk copy-on-write → water volume map cleared for that cell → activity bits wake the cell and its neighbours (next cellular step reads them) → cell appended to `World::changed_cells` → `World::publish_changes` moves it into the dirty block set and marks its chunk halo → streamer rebuilds `GeneratedChunk` → `SolidMesher` → GPU upload → horizon edit overlay refreshed for that column.
+
+Every chunk writer (`set_many_with`, `commit_resident_water_cell`, `set_replica_cell`) appends to `changed_cells`, so a feature that writes through `World` gets meshing without touching the dirty sets. `fixed::finish` publishes after each step and the window publishes again before it rebuilds dirty chunks, which covers edits made by input handlers on frames without a step. Callers that still mark the sets themselves are redundant and are being removed per module; player edits keep their separate chunk set because it carries fast-lane priority, not correctness.
 
 ## Where things live
 

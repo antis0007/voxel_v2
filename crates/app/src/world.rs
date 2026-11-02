@@ -1228,8 +1228,13 @@ pub fn generate_padded(
 }
 
 mod resident;
+#[cfg(test)]
+mod change_tests;
 
 pub struct World {
+    /// Cells committed since the last `publish_changes`, in write order with
+    /// repeats. Every chunk writer appends here so no caller can skip meshing.
+    changed_cells: Vec<IVec3>,
     /// Exact, tick-labelled view used only by the isolated headless CA option.
     pub(crate) ca_view: Option<Arc<crate::simulation::cpu_region::Snapshot>>,
     pub habitats: habitats::State,
@@ -1279,6 +1284,7 @@ impl World {
         let regions = regions::RegionStream::new();
         let region_view = regions.view.clone();
         let mut world = Self {
+            changed_cells: Vec::new(),
             ca_view: None,
             habitats: habitats::State::default(),
             farming: farming::State::default(),
@@ -1685,6 +1691,7 @@ impl World {
             }
         }
         self.regions.mark_dirty(coord);
+        self.changed_cells.push(p);
         coord
     }
 
@@ -2042,6 +2049,7 @@ impl World {
                 propagate_light(self, p, 14);
             }
             changed = true;
+            self.changed_cells.push(p);
             committed(p, current, id);
         }
 
@@ -2090,6 +2098,14 @@ impl World {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Moves committed cells into the mesh consumer's sets with their halo.
+    pub fn publish_changes(&mut self, blocks: &mut HashSet<IVec3>, chunks: &mut HashSet<IVec3>) {
+        for p in self.changed_cells.drain(..) {
+            blocks.insert(p);
+            mark_chunk_and_neighbors_dirty(chunks, p);
+        }
     }
 }
 

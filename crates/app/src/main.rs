@@ -4069,6 +4069,8 @@ fn main() -> Result<()> {
                                 let snapshot_start = Instant::now();
                                 world.set_visual_region_interest(&chunk_cache.edit_proxy_source_coords());
                                 chunk_cache.set_horizon_pins(gpu.horizon_retention_columns());
+                                // Frames without a fixed step still publish edits made by input handlers.
+                                world.publish_changes(&mut dirty_blocks, &mut dirty_chunks);
                                 // Edits inside the near window already invalidate the near snapshot, so
                                 // only dirt outside it needs the full (whole-world clone) snapshot.
                                 let view_chunks = render_distance_settings().view_distance_chunks;

@@ -101,4 +101,5 @@ pub fn finish(
     if advance_day && world.rules.daylight_cycle && sim.authority_error.is_none() {
         day.advance(STEP_SECONDS);
     }
+    world.publish_changes(blocks, chunks);
 }
