@@ -1,5 +1,5 @@
 //! F3 readout: plain text lines on translucent strips, no window chrome.
-use egui::{Align, Align2, Color32, FontId, Layout, Rect, Sense, vec2};
+use egui::{Align, Color32, FontId, Rect, vec2};
 use engine_core::{CHUNK_SIZE, floor_div};
 use glam::{IVec3, Vec3};
 
@@ -29,33 +29,27 @@ pub(super) struct Readout<'a> {
 }
 
 /// Draws both columns; returns the left column's rect for HUD stacking.
+///
+/// Paint only: any egui widget or `Area` here, even hover-only, wins the hit
+/// test over the panels underneath and swallows their clicks.
 pub(super) fn draw(ctx: &egui::Context, r: &Readout) -> Rect {
-    let left = egui::Area::new("debug_overlay_left".into())
-        .anchor(Align2::LEFT_TOP, [4.0, 4.0])
-        .order(egui::Order::Foreground)
-        .interactable(false)
-        .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
-            for (text, color) in left_lines(r) {
-                line(ui, &text, color);
-            }
-        });
-    let right = egui::Area::new("debug_overlay_right".into())
-        .anchor(Align2::RIGHT_TOP, [-4.0, 4.0])
-        .order(egui::Order::Foreground)
-        .interactable(false)
-        .show(ctx, |ui| {
-            ui.with_layout(Layout::top_down(Align::Max), |ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
-                for (text, color) in right_lines(r.perf) {
-                    line(ui, &text, color);
-                }
-                ui.add_space(2.0);
-                frame_graph(ui, r.perf);
-            });
-        });
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(RIGHT_BOTTOM), right.response.rect.bottom()));
-    left.response.rect
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("debug_overlay")));
+    let screen = ctx.content_rect();
+    let mut left = Rect::from_min_size(screen.min + vec2(4.0, 4.0), vec2(0.0, 0.0));
+    for (text, color) in left_lines(r) {
+        let strip = line(&painter, egui::pos2(left.left(), left.bottom()), Align::Min, &text, color);
+        left = left.union(strip);
+        left.max.y += 1.0;
+    }
+    let mut y = screen.top() + 4.0;
+    let right = screen.right() - 4.0;
+    for (text, color) in right_lines(r.perf) {
+        y = line(&painter, egui::pos2(right, y), Align::Max, &text, color).bottom() + 1.0;
+    }
+    let graph = Rect::from_min_size(egui::pos2(right - GRAPH[0], y + 2.0), vec2(GRAPH[0], GRAPH[1]));
+    frame_graph(&painter, graph, r.perf);
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(RIGHT_BOTTOM), graph.bottom()));
+    left
 }
 
 /// Bottom edge of last frame's right column, so the minimap can sit below it.
@@ -164,17 +158,19 @@ fn right_lines(p: &PerfSnapshot) -> Vec<(String, Color32)> {
     out
 }
 
-fn line(ui: &mut egui::Ui, text: &str, color: Color32) {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::monospace(FONT), color);
-    let (rect, _) = ui.allocate_exact_size(galley.size() + vec2(6.0, 2.0), Sense::hover());
-    ui.painter().rect_filled(rect, 0, STRIP);
-    ui.painter().galley(rect.min + vec2(3.0, 1.0), galley, color);
+/// Paints one strip with its top edge at `at`, growing away from `align`.
+fn line(painter: &egui::Painter, at: egui::Pos2, align: Align, text: &str, color: Color32) -> Rect {
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::monospace(FONT), color);
+    let size = galley.size() + vec2(6.0, 2.0);
+    let min = if align == Align::Max { at - vec2(size.x, 0.0) } else { at };
+    let rect = Rect::from_min_size(min, size);
+    painter.rect_filled(rect, 0, STRIP);
+    painter.galley(rect.min + vec2(3.0, 1.0), galley, color);
+    rect
 }
 
 /// Per-frame bars of total frame time against 60 and 30 fps lines.
-fn frame_graph(ui: &mut egui::Ui, p: &PerfSnapshot) {
-    let (rect, _) = ui.allocate_exact_size(vec2(GRAPH[0], GRAPH[1]), Sense::hover());
-    let painter = ui.painter();
+fn frame_graph(painter: &egui::Painter, rect: Rect, p: &PerfSnapshot) {
     painter.rect_filled(rect, 0, STRIP);
     let scale_ms = 50.0;
     let y_of = |ms: f32| rect.bottom() - (ms / scale_ms).min(1.0) * rect.height();
@@ -215,6 +211,46 @@ fn thousands(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readout_leaves_clicks_to_the_panels_beneath() {
+        let ctx = egui::Context::default();
+        let perf = PerfSnapshot::default();
+        let at = egui::pos2(20.0, 10.0);
+        let mut clicked = false;
+        let frame = |events: Vec<egui::Event>, clicked: &mut bool, overlay: bool| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::Area::new("beneath".into()).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
+                    *clicked |= ui.add_sized([200.0, 60.0], egui::Button::new("Slot")).clicked();
+                });
+                let r = Readout {
+                    fps: 60, perf: &perf, pos: Vec3::ZERO, yaw: 0.0, scale_label: "1 m", biome: "Plains",
+                    elevation_m: 0.0, time_label: "Noon", environment_lag: 0, cave_culled: 0,
+                    cursor: String::new(), pending_cells: 0,
+                };
+                if overlay { draw(ctx, &r); }
+            });
+        };
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
+        };
+        for overlay in [false, true] {
+            // Areas skip their first frame, and hit tests read last frame's widgets.
+            for _ in 0..3 {
+                frame(vec![egui::Event::PointerMoved(at)], &mut clicked, overlay);
+            }
+            clicked = false;
+            frame(vec![press(true)], &mut clicked, overlay);
+            frame(vec![press(false)], &mut clicked, overlay);
+            frame(vec![], &mut clicked, overlay);
+            assert!(clicked, "overlay={overlay}");
+        }
+    }
 
     #[test]
     fn facing_matches_minimap_convention() {

@@ -6,10 +6,10 @@
 //! `Job` writes a cell only where the recorded block still stands, so undo never
 //! overwrites a later edit by another player, a machine or the simulation.
 use super::blueprint::{Change, Job, Sink};
-use super::{BlockId, World, WorldSampleConfig, chunk_coord_from_world_block, factory};
+use super::{BlockId, World, WorldSampleConfig, factory};
 use engine_core::Budget;
 use glam::IVec3;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 #[cfg(test)]
 mod tests;
@@ -46,7 +46,6 @@ pub struct EditHistory {
     overflow: bool,
     running: Option<(Direction, Job)>,
     requests: VecDeque<Direction>,
-    touched: HashSet<IVec3>,
     /// An edit sealed while an undo runs makes that undo's redo step stale.
     stale_redo: bool,
 }
@@ -55,6 +54,35 @@ pub struct EditHistory {
 /// cannot restore them.
 pub fn undoable(block: BlockId) -> bool {
     factory::Kind::from_block(block).is_none() && engine_content::fittings::state(block).is_none()
+}
+
+/// Strokes above this size are pastes or fills, which visit each cell once.
+const COALESCE_CELLS: usize = 1 << 16;
+
+/// Folds repeat writes to one cell into its first slot and drops cells that
+/// ended where they started, so a scrubbed stroke undoes in one write per cell.
+fn coalesce(changes: &mut Vec<Change>) {
+    if changes.len() < 2 || changes.len() > COALESCE_CELLS {
+        return;
+    }
+    let mut first: HashMap<IVec3, usize> = HashMap::with_capacity(changes.len());
+    let mut repeats = false;
+    for i in 0..changes.len() {
+        let c = changes[i];
+        match first.get(&c.p) {
+            Some(&j) => {
+                changes[j].new = c.new;
+                changes[i].old = c.new;
+                repeats = true;
+            }
+            None => {
+                first.insert(c.p, i);
+            }
+        }
+    }
+    if repeats {
+        changes.retain(|c| c.old != c.new);
+    }
 }
 
 fn invert(changes: Vec<Change>) -> Vec<Change> {
@@ -72,7 +100,6 @@ impl EditHistory {
             overflow: false,
             running: None,
             requests: VecDeque::new(),
-            touched: HashSet::new(),
             stale_redo: false,
         }
     }
@@ -102,10 +129,11 @@ impl EditHistory {
     /// Closes the open stroke as one undo step; false when it exceeded the cap.
     pub fn seal(&mut self) -> bool {
         let overflow = std::mem::take(&mut self.overflow);
-        let Some(entry) = self.open.take() else { return true };
+        let Some(mut entry) = self.open.take() else { return true };
         if overflow {
             return false;
         }
+        coalesce(&mut entry.changes);
         if entry.changes.is_empty() {
             return true;
         }
@@ -158,12 +186,6 @@ impl EditHistory {
         true
     }
 
-    /// Chunks written by undo or redo since the last call, for the remesh fast lane.
-    #[allow(dead_code, reason = "read by the player-edit streaming lane, which lands separately")]
-    pub fn take_touched(&mut self) -> HashSet<IVec3> {
-        std::mem::take(&mut self.touched)
-    }
-
     fn begin(&mut self, world: &World, direction: Direction) -> Result<(), &'static str> {
         self.seal();
         let cfg = world.sample_config();
@@ -207,9 +229,8 @@ impl EditHistory {
                 self.requests.clear();
                 break;
             }
-            let (written, done) = (job.record().len(), job.progress().0);
+            let done = job.progress().0;
             let finished = job.step(world, sink, budget, left);
-            self.touched.extend(job.record()[written..].iter().map(|c| chunk_coord_from_world_block(c.p)));
             left = left.saturating_sub(job.progress().0 - done);
             if !finished {
                 break;

@@ -78,7 +78,6 @@ fn undo_then_redo_restores_each_stroke_across_chunk_borders() {
     assert_eq!(cells.iter().map(|&p| w.get(p)).collect::<Vec<_>>(), before);
     assert_eq!(h.depth(), (0, 2));
     assert_eq!(run(&mut w, &mut h, Direction::Undo), "Undo History Empty");
-    assert!(!h.take_touched().is_empty());
 
     run(&mut w, &mut h, Direction::Redo);
     run(&mut w, &mut h, Direction::Redo);
@@ -181,4 +180,33 @@ fn rapid_presses_queue_and_share_one_cell_budget() {
         assert!(h.request(Direction::Redo));
     }
     assert!(!h.request(Direction::Redo));
+}
+
+#[test]
+fn a_scrubbed_stroke_undoes_one_write_per_cell() {
+    let mut w = world();
+    let mut h = EditHistory::new(LOCAL_CELLS);
+    let (a, b) = (IVec3::new(-1, 12, -1), IVec3::new(0, 12, -1));
+    let before = (w.get(a), w.get(b));
+    edit(&mut w, Some(&mut h), a, BlockId::Planks);
+    edit(&mut w, Some(&mut h), a, BlockId::StoneBricks);
+    edit(&mut w, Some(&mut h), b, BlockId::Planks);
+    edit(&mut w, Some(&mut h), b, before.1);
+    assert!(h.seal());
+    let held = &h.undo.back().expect("one step").changes;
+    assert_eq!(held, &vec![Change { p: a, old: before.0, new: BlockId::StoneBricks }]);
+    assert_eq!(run(&mut w, &mut h, Direction::Undo), "Undone: 1 Blocks");
+    assert_eq!((w.get(a), w.get(b)), before);
+}
+
+#[test]
+fn a_stroke_that_returns_every_cell_leaves_no_step() {
+    let mut w = world();
+    let mut h = EditHistory::new(LOCAL_CELLS);
+    let p = IVec3::new(31, 12, 31);
+    let before = w.get(p);
+    edit(&mut w, Some(&mut h), p, BlockId::Planks);
+    edit(&mut w, Some(&mut h), p, before);
+    assert!(h.seal());
+    assert_eq!(h.depth(), (0, 0));
 }
