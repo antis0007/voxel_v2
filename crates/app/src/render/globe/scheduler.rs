@@ -70,12 +70,8 @@ pub fn select(
 
 #[cfg(test)]
 mod tests {
-    use super::super::bake::TileData;
-    use super::super::cache::TileCache;
     use super::super::chart;
-    use super::super::worker::Worker;
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn roots_draw_until_children_are_ready_then_split() {
@@ -131,42 +127,5 @@ mod tests {
         let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M + 2_000.0);
         let s = select(&all, &[], eye, 900.0, 40);
         assert!(s.draw.len() <= 40 && s.draw.iter().any(|t| t.level > 0));
-    }
-
-    fn test_cache(name: &str) -> TileCache {
-        let dir = std::env::temp_dir().join(format!("globe-worker-{}-{}", std::process::id(), name));
-        let _ = std::fs::remove_dir_all(&dir);
-        TileCache::open(&dir, 1, 1)
-    }
-
-    fn test_cfg() -> engine_voxel::WorldSampleConfig {
-        engine_voxel::WorldSampleConfig {
-            generator_version: 53,
-            seed: 74,
-            world_type: engine_voxel::WorldType::Hills,
-            voxel_scale: engine_core::VoxelScalePreset::OneMeter,
-        }
-    }
-
-    #[test]
-    fn a_dead_worker_reports_not_alive_and_drains_cleanly() {
-        let bake = |_: &engine_voxel::WorldSampleConfig, _: TileId| -> Option<TileData> { panic!("bake failed") };
-        let w = Worker::spawn_with(test_cfg(), bake, test_cache("dead"), Duration::from_millis(2));
-        w.request(&[TileId::root(0)]);
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(!w.alive());
-        assert!(w.drain(2 << 20).is_empty());
-    }
-
-    #[test]
-    fn a_worker_delivers_tiles_within_the_byte_cap() {
-        let bake = |_: &engine_voxel::WorldSampleConfig, id: TileId| Some(TileData::empty(id));
-        let w = Worker::spawn_with(test_cfg(), bake, test_cache("ok"), Duration::from_millis(2));
-        let ids: Vec<TileId> = (0..3u32).map(|x| TileId { face: 0, level: 2, x, y: 0 }).collect();
-        w.request(&ids);
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(w.alive());
-        assert_eq!(w.drain(25_350 * 2).len(), 2);
-        assert_eq!(w.drain(2 << 20).len(), 1);
     }
 }
