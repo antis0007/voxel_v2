@@ -103,3 +103,9 @@ mod tests {
         assert_eq!(altitude_m(p, false), 777.0);
     }
 }
+
+/// Whether the world is a planet for altitude purposes.
+// Keys on the planet world type once that variant lands; flat worlds until then.
+pub fn planet_world(_world: &crate::world::World) -> bool {
+    false
+}

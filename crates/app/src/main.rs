@@ -1638,6 +1638,7 @@ fn main() -> Result<()> {
     let mut dirty_chunks = HashSet::new();
     let mut physics_enabled = true;
     let mut fps_counter = FpsCounter::new();
+    let mut altitude_state = altitude::TierState::new();
     let mut place_was_down = false;
     let mut break_was_down = false;
     let mut place_repeat_timer = 0.0f32;
@@ -4079,9 +4080,17 @@ fn main() -> Result<()> {
                                 let snapshot = if chunk_cache.has_horizon_pins() || !dirt_in_near_window { world.stream_regions(center_chunk, view_chunks); world.snapshot() } else { world.snapshot_near(center_chunk,view_chunks) };
                                 cpu_stats.snapshot_ms =
                                     snapshot_start.elapsed().as_secs_f32() * 1000.0;
+                                let precise_eye_m = player.precise_eye(world.voxel_scale) * world.voxel_scale.meters() as f64;
+                                let altitude_m = altitude::altitude_m(precise_eye_m, altitude::planet_world(world));
+                                let tier = altitude_state.update(altitude_m);
+                                let orbit = tier == altitude::Tier::Orbit;
+                                chunk_cache.freeze(orbit);
                                 let streaming_start = Instant::now();
-                                let center_changed = chunk_cache
-                                    .update_center_chunk_with_snapshot(center_chunk, &snapshot);
+                                let center_changed = chunk_cache.update_center_chunk_with_snapshot_radius(
+                                    center_chunk,
+                                    &snapshot,
+                                    altitude::resident_radius_chunks(altitude_m, render_distance_settings().view_distance_chunks),
+                                );
                                 if center_changed {
                                     chunk_cache.retain_visible();
                                     if chunk_cache.has_horizon_pins() { chunk_streamer.retain_visible(&chunk_cache.visible_keys); } else { chunk_streamer.retain_within_range(center_chunk); }
@@ -4095,8 +4104,8 @@ fn main() -> Result<()> {
                                     chunk_cache.retire_edit_proxies(&baked,revision);
                                 }
                                 if !proxy_keys.is_empty() { chunk_streamer.push_pending(proxy_keys,chunk_cache.center_chunk); }
-                                let new_keys = chunk_cache
-                                    .expand_visible(&snapshot, chunk_streamer.queued_jobs());
+                                let new_keys = if orbit { Vec::new() } else { chunk_cache
+                                    .expand_visible(&snapshot, chunk_streamer.queued_jobs()) };
                                 if !new_keys.is_empty() {
                                     chunk_streamer.push_pending(new_keys, chunk_cache.center_chunk);
 
@@ -4115,6 +4124,7 @@ fn main() -> Result<()> {
                                 }
 
 
+                                if !orbit {
                                 let quality_eye=player.precise_eye(world.voxel_scale).as_vec3()*world.voxel_scale.meters();
                                 let wanted_quality=gpu.horizon_quality_columns(snapshot.cfg,quality_eye,player.forward_dir(),egui_ui.fov_degrees);
                                 let previous_quality=chunk_cache.quality_columns();
@@ -4127,6 +4137,7 @@ fn main() -> Result<()> {
                                     world.revision(),
                                     &mut chunk_cache,
                                 );
+                                }
                                 for (coord,mask) in chunk_cache.take_simulation_seeds() {fluid_sim.seed(world,player.pos.floor().as_ivec3(),coord,mask);}
                                 let resident_upload_start = Instant::now();
                                 chunk_streamer.upload_finished(
@@ -4334,13 +4345,16 @@ fn main() -> Result<()> {
                                 let sky_motion_rate = 0.55 + day_speed * 0.65;
                                 sky_time = benchmark.as_ref().and_then(|b| b.config.review_sky_time)
                                     .unwrap_or(sky_time + gameplay_dt * sky_motion_rate);
+                                let precise_eye_m = player.precise_eye(world.voxel_scale) * world.voxel_scale.meters() as f64;
+                                let orbit = altitude_state.update(altitude::altitude_m(precise_eye_m, altitude::planet_world(world))) == altitude::Tier::Orbit;
+                                chunk_cache.freeze(orbit);
                                 let streaming_start = Instant::now();
                                 world.set_visual_region_interest(&chunk_cache.edit_proxy_source_coords());
                                 chunk_cache.set_horizon_pins(gpu.horizon_retention_columns()); let snapshot = if chunk_cache.has_horizon_pins() { world.stream_regions(chunk_coord_from_world_block(player.pos.floor().as_ivec3()), render_distance_settings().view_distance_chunks); world.snapshot() } else { world.snapshot_near(chunk_coord_from_world_block(player.pos.floor().as_ivec3()), render_distance_settings().view_distance_chunks) };
                                 chunk_streamer.invalidate_changed_sources(&snapshot,&mut chunk_cache);
                                 let proxy_keys=chunk_cache.update_edit_proxies(&snapshot,&dirty_chunks,world.revision(),gpu.horizon_published_revision());
                                 if !proxy_keys.is_empty() { chunk_streamer.push_pending(proxy_keys,chunk_cache.center_chunk); }
-                                chunk_streamer.enqueue_missing(gpu, &snapshot, world.revision(), &mut chunk_cache);
+                                if !orbit { chunk_streamer.enqueue_missing(gpu, &snapshot, world.revision(), &mut chunk_cache); }
                                 for (coord,mask) in chunk_cache.take_simulation_seeds() {fluid_sim.seed(world,player.pos.floor().as_ivec3(),coord,mask);}
                                 chunk_streamer.upload_finished(
                                     gpu,

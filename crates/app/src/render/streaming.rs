@@ -27,6 +27,8 @@ mod edit_proxies;
 mod quality_proxies;
 #[cfg(test)]
 mod pin_tests;
+#[cfg(test)]
+mod altitude_tests;
 fn edited_mesh_is_stale(last_edit: Option<u64>, mesh_revision: u64) -> bool {
     last_edit.is_some_and(|edited| edited > mesh_revision)
 }
@@ -85,6 +87,16 @@ pub struct ChunkGpuMesh {
     bytes: usize,
     /// Face links of the source blocks for cave culling; `None` reads as open.
     connectivity: Option<crate::mesh::ChunkConnectivity>,
+}
+
+#[cfg(test)]
+impl ChunkCache {
+    /// Unpublished membership-only mesh, so budget eviction may take it.
+    pub(super) fn install_test_mesh(&mut self, coord: IVec3, bytes: usize) {
+        self.gpu_meshes.insert(coord, ChunkGpuMesh::test_mesh(3, 0, false, bytes));
+        self.gpu_bytes += bytes;
+        self.mark_mesh_set_changed();
+    }
 }
 
 #[cfg(test)]
@@ -155,6 +167,11 @@ pub struct ChunkCache {
     expansion_radius: i32,
     /// Whether expansion is complete (reached view distance).
     pub fully_expanded: bool,
+    /// Altitude cap on the visible disc; `None` follows the view distance.
+    radius_cap: Option<i32>,
+    /// While frozen nothing published or sourced is evicted: orbit keeps the
+    /// last surface set because it loads nothing to replace it.
+    frozen: bool,
     pub spawn_ready: bool,
     /// Stable horizon handoff radius. A single chunk that is momentarily
     /// missing (remesh, GPU-budget eviction, or a just-expanded ring) must not
@@ -413,6 +430,8 @@ impl ChunkCache {
             simulation_seeds: Vec::new(),
             expansion_radius: 0,
             fully_expanded: false,
+            radius_cap: None,
+            frozen: false,
             spawn_ready: false,
             coverage_stable_meters: -1.0,
             coverage_drop_since: None,
@@ -735,17 +754,48 @@ impl ChunkCache {
         center_chunk: IVec3,
         snapshot: &WorldSnapshot,
     ) -> bool {
-        if self.center_chunk == center_chunk {
+        let radius = render_distance_settings().view_distance_chunks;
+        self.update_center_chunk_with_snapshot_radius(center_chunk, snapshot, radius)
+    }
+
+    fn radius_target(&self) -> i32 {
+        let view = render_distance_settings().view_distance_chunks;
+        self.radius_cap.map_or(view, |cap| cap.clamp(0, view))
+    }
+
+    pub fn freeze(&mut self, frozen: bool) {
+        self.frozen = frozen;
+    }
+
+    pub fn frozen(&self) -> bool {
+        self.frozen
+    }
+
+    /// Rebuilds the visible disc around `center_chunk` capped at `radius_chunks`.
+    pub fn update_center_chunk_with_snapshot_radius(
+        &mut self,
+        center_chunk: IVec3,
+        snapshot: &WorldSnapshot,
+        radius_chunks: i32,
+    ) -> bool {
+        let cap = Some(radius_chunks.max(0));
+        if self.center_chunk == center_chunk && self.radius_cap == cap {
             return false;
         }
 
         self.center_chunk = center_chunk;
-
-        let settings = render_distance_settings();
-        let target = settings.view_distance_chunks;
+        self.radius_cap = cap;
+        let target = self.radius_target();
+        if target == 0 {
+            self.visible.clear();
+            self.rebuild_visible_sets();
+            self.expansion_radius = 0;
+            self.fully_expanded = true;
+            return true;
+        }
         // Keep requested coverage during movement, including vertical flight.
         // Contracting it discards useful jobs and repeatedly regenerates the edge.
-        let rebuild_radius = self.expansion_radius.max(4).min(target);
+        let rebuild_radius = self.expansion_radius.min(target).max(4.min(target));
 
         self.visible = desired_chunk_keys_with_snapshot_cached(
             center_chunk,
@@ -767,8 +817,7 @@ impl ChunkCache {
         snapshot: &WorldSnapshot,
         queue_pressure: usize,
     ) -> Vec<ChunkKey> {
-        let settings = render_distance_settings();
-        let target = settings.view_distance_chunks;
+        let target = self.radius_target();
         self.column_y_cache
             .set_interest((self.center_chunk.x, self.center_chunk.z), target + 2);
         self.column_y_cache.begin(snapshot.cfg);
@@ -835,6 +884,9 @@ impl ChunkCache {
         std::mem::take(&mut self.simulation_seeds)
     }
     pub fn retain_visible(&mut self) {
+        if self.frozen {
+            return;
+        }
         // Evict chunks that are genuinely too far away rather than anything
         // outside the current (possibly mid-expansion) visible_coords.  Using a
         // hard distance cap prevents "blank world" flicker when the player crosses

@@ -153,6 +153,9 @@ impl ChunkCache {
     /// alone exceed the budget, and protecting them left nothing to evict,
     /// so admission failed and the last ring regenerated forever.
     fn trim_sources_to(&mut self, limit: usize) {
+        if self.frozen {
+            return;
+        }
         let mut victims: Vec<_> = self
             .cpu_chunks
             .iter()
@@ -234,6 +237,10 @@ impl ChunkCache {
             .gpu_bytes
             .saturating_sub(replaced)
             .saturating_add(bytes).saturating_add(pending_growth);
+        if needed > limit && self.frozen {
+            self.budget_deferred.insert(key, bytes);
+            return false;
+        }
         if needed > limit {
             let rank = self.residency_rank(key.coord);
             let mut victims: Vec<_> = self
@@ -297,6 +304,16 @@ impl ChunkCache {
         self.residency_limits = limits;
         self.arena.set_budget(arena_budget(limits.1));
         self.trim_lod_budget();
+        self.evict_meshes_over_budget();
+        if self.cpu_bytes() > self.source_limit() {
+            self.trim_sources_to(self.source_limit());
+        }
+    }
+
+    pub(super) fn evict_meshes_over_budget(&mut self) {
+        if self.frozen {
+            return;
+        }
         if self.gpu_bytes.saturating_add(self.pending_gpu.bytes()) > self.mesh_limit() {
             // Requested membership may grow while the old column is still
             // published. Resource pressure must not silently unpublish it.
@@ -320,9 +337,6 @@ impl ChunkCache {
                 self.gpu_evictions += 1;
                 self.mark_mesh_set_changed();
             }
-        }
-        if self.cpu_bytes() > self.source_limit() {
-            self.trim_sources_to(self.source_limit());
         }
     }
 
