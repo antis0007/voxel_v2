@@ -1,0 +1,164 @@
+//! Cube-sphere LOD tile addressing: ids, chart rectangles, body-space bounds, screen error.
+
+use super::chart::{self, HALF_M, RADIUS_M};
+use engine_core::cube_sphere::Face;
+use glam::{DVec2, DVec3};
+
+pub const TILE_CELLS: u32 = 64;
+pub const TILE_SAMPLES: u32 = 65;
+pub const MAX_LEVEL: u8 = 10;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct TileId {
+    pub face: u8,
+    pub level: u8,
+    pub x: u32,
+    pub y: u32,
+}
+
+impl TileId {
+    pub fn root(face: u8) -> TileId {
+        TileId { face, level: 0, x: 0, y: 0 }
+    }
+
+    pub fn children(self) -> [TileId; 4] {
+        let (level, x, y) = (self.level + 1, self.x * 2, self.y * 2);
+        let c = |dx, dy| TileId { face: self.face, level, x: x + dx, y: y + dy };
+        [c(0, 0), c(1, 0), c(0, 1), c(1, 1)]
+    }
+
+    pub fn parent(self) -> Option<TileId> {
+        (self.level > 0).then(|| TileId {
+            face: self.face,
+            level: self.level - 1,
+            x: self.x / 2,
+            y: self.y / 2,
+        })
+    }
+
+    pub fn cell_m(self) -> f64 {
+        2.0 * HALF_M / (u64::from(TILE_CELLS) << self.level) as f64
+    }
+
+    fn width_m(self) -> f64 {
+        self.cell_m() * f64::from(TILE_CELLS)
+    }
+
+    pub fn chart_min(self) -> DVec2 {
+        let w = self.width_m();
+        DVec2::new(-HALF_M + f64::from(self.x) * w, -HALF_M + f64::from(self.y) * w)
+    }
+
+    pub fn chart_max(self) -> DVec2 {
+        self.chart_min() + DVec2::splat(self.width_m())
+    }
+
+    /// Sample (i, j) lies on the tile's inclusive 65x65 lattice.
+    pub fn sample_chart(self, i: u32, j: u32) -> DVec2 {
+        self.chart_min() + DVec2::new(f64::from(i), f64::from(j)) * self.cell_m()
+    }
+
+    fn body_at(self, p: DVec2) -> DVec3 {
+        let face = Face::ALL[usize::from(self.face) % Face::ALL.len()];
+        chart::to_body(chart::join(face, DVec3::new(p.x, 0.0, p.y)))
+    }
+
+    pub fn centre_body(self) -> DVec3 {
+        self.body_at((self.chart_min() + self.chart_max()) * 0.5)
+    }
+
+    pub fn corners_body(self) -> [DVec3; 4] {
+        let (a, b) = (self.chart_min(), self.chart_max());
+        [a, DVec2::new(b.x, a.y), b, DVec2::new(a.x, b.y)].map(|p| self.body_at(p))
+    }
+
+    /// Terrain height is not in the corners, so a slack term covers it.
+    pub fn bounding_radius_m(self) -> f64 {
+        let c = self.centre_body();
+        let reach = self.corners_body().iter().map(|p| p.distance(c)).fold(0.0, f64::max);
+        let slack = if self.level <= 3 { 2_000.0 } else { self.cell_m() * 2.0 };
+        reach + slack
+    }
+
+    pub fn key(self) -> u64 {
+        u64::from(self.face) << 56
+            | u64::from(self.level) << 48
+            | u64::from(self.x & 0xFF_FFFF) << 24
+            | u64::from(self.y & 0xFF_FFFF)
+    }
+}
+
+/// Screen-space size of one cell; zero for tiles hidden behind the limb.
+pub fn projected_error_px(id: TileId, eye_body: DVec3, focal_px: f64) -> f64 {
+    let centre = id.centre_body();
+    if centre.normalize().dot(eye_body.normalize()) < RADIUS_M / eye_body.length() {
+        return 0.0;
+    }
+    let dist = (eye_body.distance(centre) - id.bounding_radius_m()).max(1.0);
+    focal_px * id.cell_m() / dist
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn face_toward_z(sign: f64) -> u8 {
+        (0..6u8)
+            .find(|f| {
+                let c = TileId::root(*f).centre_body();
+                c.z.signum() == sign && c.z.abs() > RADIUS_M * 0.99
+            })
+            .expect("a face centred on the z axis")
+    }
+
+    #[test]
+    fn levels_halve_the_cell_and_quarter_the_rect() {
+        let root = TileId::root(2);
+        assert_eq!(root.cell_m(), 500.0);
+        let kids = root.children();
+        assert!(kids.iter().all(|k| k.cell_m() == 250.0 && k.parent() == Some(root)));
+        assert_eq!(
+            TileId { face: 2, level: 10, x: 1023, y: 1023 }.cell_m(),
+            32_000.0 / 65_536.0
+        );
+    }
+
+    #[test]
+    fn level_0_corners_land_on_the_sphere_and_meet_across_faces() {
+        for face in 0..6u8 {
+            for p in TileId::root(face).corners_body() {
+                assert!((p.length() - RADIUS_M).abs() < 1e-6, "face {face}");
+            }
+        }
+        let mut pairs_with_two = 0;
+        for fa in 0..6u8 {
+            for fb in (fa + 1)..6 {
+                let a = TileId::root(fa).corners_body();
+                let b = TileId::root(fb).corners_body();
+                let shared = a.iter().filter(|p| b.iter().any(|q| p.distance(*q) < 1e-6)).count();
+                assert!(shared <= 2, "faces {fa},{fb} share {shared}");
+                pairs_with_two += usize::from(shared == 2);
+            }
+        }
+        assert!(pairs_with_two > 0);
+    }
+
+    #[test]
+    fn samples_cover_the_rect_inclusive_and_match_the_chart() {
+        let id = TileId { face: 3, level: 4, x: 5, y: 9 };
+        assert_eq!(id.sample_chart(0, 0), id.chart_min());
+        assert_eq!(id.sample_chart(64, 64), id.chart_max());
+        assert!((id.chart_max().x - id.chart_min().x - 64.0 * id.cell_m()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn projected_error_is_zero_behind_the_limb_and_scales_with_distance() {
+        let eye = DVec3::new(0.0, 0.0, RADIUS_M + 100_000.0);
+        let front = TileId::root(face_toward_z(1.0));
+        let back = TileId::root(face_toward_z(-1.0));
+        assert_eq!(projected_error_px(back, eye, 900.0), 0.0);
+        let near = projected_error_px(front, eye, 900.0);
+        let far = projected_error_px(front, eye * 2.0, 900.0);
+        assert!(near > far && far > 0.0);
+    }
+}
