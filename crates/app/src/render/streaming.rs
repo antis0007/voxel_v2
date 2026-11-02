@@ -89,6 +89,13 @@ pub struct ChunkGpuMesh {
     connectivity: Option<crate::mesh::ChunkConnectivity>,
 }
 
+/// Whether a new altitude cap is far enough from the applied one to rebuild.
+// Altitude moves the cap a fraction of a ring per frame in the transition
+// tier; a two-ring step keeps the O(r^2) rebuild off most frames.
+pub(super) fn cap_changes(applied: i32, wanted: i32, view: i32) -> bool {
+    wanted != applied && (wanted == 0 || wanted >= view || (wanted - applied).abs() >= 2)
+}
+
 #[cfg(test)]
 impl ChunkCache {
     /// Unpublished membership-only mesh, so budget eviction may take it.
@@ -778,7 +785,12 @@ impl ChunkCache {
         snapshot: &WorldSnapshot,
         radius_chunks: i32,
     ) -> bool {
-        let cap = Some(radius_chunks.max(0));
+        let view = render_distance_settings().view_distance_chunks;
+        let wanted = radius_chunks.clamp(0, view);
+        let cap = match self.radius_cap {
+            Some(applied) if !cap_changes(applied.clamp(0, view), wanted, view) => Some(applied),
+            _ => Some(wanted),
+        };
         if self.center_chunk == center_chunk && self.radius_cap == cap {
             return false;
         }
@@ -793,8 +805,9 @@ impl ChunkCache {
             self.fully_expanded = true;
             return true;
         }
-        // Keep requested coverage during movement, including vertical flight.
-        // Contracting it discards useful jobs and repeatedly regenerates the edge.
+        // Expansion never contracts on its own during movement: that would
+        // discard useful jobs and regenerate the edge. The altitude cap does
+        // contract it, and descent regrows ring by ring, which is accepted.
         let rebuild_radius = self.expansion_radius.min(target).max(4.min(target));
 
         self.visible = desired_chunk_keys_with_snapshot_cached(

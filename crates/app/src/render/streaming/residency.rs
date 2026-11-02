@@ -122,6 +122,9 @@ impl ChunkCache {
     }
 
     pub(super) fn trim_lod_budget(&mut self) {
+        if self.frozen {
+            return;
+        }
         self.lod_meshes
             .trim_to(self.mesh_limit().saturating_sub(self.gpu_bytes).saturating_sub(self.pending_gpu.bytes()));
     }
@@ -181,6 +184,10 @@ impl ChunkCache {
         // A rejected regenerated source must not leave an older cache entry
         // which enqueue_missing could stamp with the current revision.
         self.cpu_chunks.remove(&coord);
+        if self.frozen && self.cpu_bytes().saturating_add(bytes) > self.source_limit() {
+            // Deferred, not evicted for: the caller regenerates it after thaw.
+            return false;
+        }
         if self.cpu_bytes().saturating_add(bytes) > self.source_limit() {
             // Evict a batch to a low-water mark: sorting once avoids repeatedly
             // scanning the whole cache per source, or quadratic slider changes.
