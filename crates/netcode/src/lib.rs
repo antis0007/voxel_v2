@@ -3,6 +3,7 @@
 //! Callers pass time in explicitly, so every result is a function of its inputs
 //! and the network simulator replays identically from a seed.
 pub mod body;
+pub mod carrier;
 pub mod cells;
 pub mod chunk_pace;
 pub mod chunk_stream;

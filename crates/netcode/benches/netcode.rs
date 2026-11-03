@@ -43,6 +43,7 @@ fn bodies(tick: u32) -> Vec<(u32, BodyState, f32)> {
                 velocity: [if moving { 180 } else { 0 }, 0, 0],
                 angular: [0; 3],
                 state: id & 3,
+                frame: 0,
             };
             (id, state, 1.0 + (id % 7) as f32)
         })

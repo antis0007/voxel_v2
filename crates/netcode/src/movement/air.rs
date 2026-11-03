@@ -62,6 +62,12 @@ impl Air {
         }
     }
 
+    /// Moves every stored height by `dh` when the frame of measurement changes.
+    pub(super) fn shift(&mut self, dh: f32) {
+        self.peak += dh;
+        self.top += dh;
+    }
+
     pub(super) fn take_landing(&mut self) -> Option<f32> {
         self.landing.take()
     }

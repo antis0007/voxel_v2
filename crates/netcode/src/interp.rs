@@ -8,6 +8,9 @@
 use glam::Vec3;
 use std::collections::VecDeque;
 
+mod parented;
+pub use parented::world_pose;
+
 /// State that can be blended. `t` above 1 extrapolates along `a -> b`.
 pub trait Interpolate: Copy {
     fn lerp(a: &Self, b: &Self, t: f32) -> Self;
@@ -114,7 +117,11 @@ impl<T: Interpolate> SnapshotBuffer<T> {
 
     /// State at the playback time, or `None` before the first snapshot.
     pub fn sample(&self) -> Option<T> {
-        let render = self.render?;
+        self.sample_at(self.render?)
+    }
+
+    /// State at server time `render`, bracketed and extrapolated as `sample` does.
+    pub fn sample_at(&self, render: f64) -> Option<T> {
         let first = self.entries.front()?;
         if render <= first.0 || self.entries.len() == 1 {
             return Some(first.1);

@@ -19,6 +19,7 @@
 use glam::{IVec3, Vec3};
 
 mod air;
+mod frame;
 
 /// Solid-cell query on the server's published world.
 pub trait Solid {
@@ -71,6 +72,8 @@ pub enum Reason {
     Solid,
     /// Non-finite or out of bounds.
     Bound,
+    /// Reported a frame the server has no carrier pose for.
+    Frame,
 }
 
 pub struct Validator {
@@ -84,6 +87,12 @@ pub struct Validator {
     /// Set while the game grants flight or lift (creative, thrusters); skips both air checks.
     pub flying_allowed: bool,
     pub last_reason: Option<Reason>,
+    /// Assembly the accepted pose is in; 0 is the world.
+    frame: u32,
+    /// World up in the current frame; heights, ascent and falls are measured along it.
+    up: Vec3,
+    /// Carrier velocity inherited on leaving, removed from moves until support stops it.
+    drift: Vec3,
 }
 
 impl Validator {
@@ -98,6 +107,9 @@ impl Validator {
             air: air::Air::new(position.y),
             flying_allowed: false,
             last_reason: None,
+            frame: 0,
+            up: Vec3::Y,
+            drift: Vec3::ZERO,
         }
     }
 
@@ -110,7 +122,7 @@ impl Validator {
         self.horizontal += horizontal.max(0.0);
         self.vertical += vertical.max(0.0);
         if vertical > 0.0 {
-            self.air.restart(self.accepted.y);
+            self.air.restart(self.height(self.accepted));
         }
     }
 
@@ -124,8 +136,14 @@ impl Validator {
         self.accepted = position;
         self.horizontal = self.limits.burst;
         self.vertical = self.limits.ascent;
-        self.air = air::Air::new(position.y);
+        self.air = air::Air::new(self.height(position));
+        self.drift = Vec3::ZERO;
         self.correct()
+    }
+
+    /// Height along world up; exactly `p.y` in the world frame.
+    fn height(&self, p: Vec3) -> f32 {
+        p.dot(self.up)
     }
 
     fn correct(&mut self) -> Verdict {
@@ -148,7 +166,7 @@ impl Validator {
     }
 
     fn grounded(&self, world: &impl Solid, feet: Vec3) -> bool {
-        self.overlaps(feet - Vec3::Y * (self.limits.skin + 0.05), 0.0, |c| world.supports(c))
+        self.overlaps(feet - self.up * (self.limits.skin + 0.05), 0.0, |c| world.supports(c))
     }
 
     /// Side contact, which wall runs and climbs need; it restarts the hover clock only.
@@ -159,10 +177,11 @@ impl Validator {
     /// Moves the accepted body down to `floor` or onto whatever stops it first.
     fn drop_toward(&mut self, world: &impl Solid, floor: f32) {
         let start = self.accepted;
-        let floor = floor.max(start.y - air::MAX_DROP).max(-self.limits.bound);
-        let steps =((start.y - floor) / 0.4).ceil().max(1.0) as u32;
+        let h = self.height(start);
+        let floor = floor.max(h - air::MAX_DROP).max(-self.limits.bound);
+        let steps =((h - floor) / 0.4).ceil().max(1.0) as u32;
         for i in 1..=steps {
-            let next = Vec3::new(start.x, start.y + (floor - start.y) * (i as f32 / steps as f32), start.z);
+            let next = start + self.up * ((floor - h) * (i as f32 / steps as f32));
             if self.body_hits(world, next) {
                 break;
             }
@@ -195,11 +214,12 @@ impl Validator {
             return self.correct();
         }
         let delta = position - self.accepted;
-        let run = Vec3::new(delta.x, 0.0, delta.z).length();
+        let own = if self.drift == Vec3::ZERO { delta } else { delta - self.drift * dt };
+        let rising = self.height(own).max(0.0);
+        let run = (own - self.up * self.height(own)).length();
         // Sweep in steps under half a voxel so a fast move cannot pass a wall.
         let steps = (delta.length() / 0.4).ceil().max(1.0) as u32;
         let through_wall = (1..=steps).any(|i| self.body_hits(world, self.accepted + delta * (i as f32 / steps as f32)));
-        let rising = delta.y.max(0.0);
         let grounded = self.grounded(world, position);
         let touching = self.touching(world, position);
         let ceiling = self.air.ceiling(l.gravity, l.terminal, l.hang);
@@ -209,7 +229,7 @@ impl Validator {
             Some(Reason::Speed)
         } else if !self.flying_allowed && rising > self.vertical {
             Some(Reason::Ascent)
-        } else if !self.flying_allowed && !grounded && !touching && position.y > ceiling {
+        } else if !self.flying_allowed && !grounded && !touching && self.height(position) > ceiling {
             Some(Reason::Float)
         } else {
             None
@@ -219,8 +239,8 @@ impl Validator {
             // Any refusal of an airborne body applies gravity to the accepted pose;
             // otherwise a client refused for rising would keep its server body aloft.
             let held = self.grounded(world, self.accepted) || self.touching(world, self.accepted);
-            if !self.flying_allowed && !held && (reason == Reason::Float || self.accepted.y > ceiling) {
-                self.drop_toward(world, ceiling.min(self.accepted.y) - air::SLACK);
+            if !self.flying_allowed && !held && (reason == Reason::Float || self.height(self.accepted) > ceiling) {
+                self.drop_toward(world, ceiling.min(self.height(self.accepted)) - air::SLACK);
             }
             return self.correct();
         }
@@ -230,8 +250,11 @@ impl Validator {
         } else {
             self.vertical -= rising;
         }
+        if grounded && self.drift != Vec3::ZERO {
+            self.land_drift(dt);
+        }
         self.accepted = position;
-        self.air.accept(position.y, grounded || self.flying_allowed, touching);
+        self.air.accept(self.height(position), grounded || self.flying_allowed, touching);
         Verdict::Accept
     }
 }
