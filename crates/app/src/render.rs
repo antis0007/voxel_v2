@@ -6,6 +6,7 @@ mod frame_pacer;
 mod pipeline_cache;
 pub mod coverage;
 pub mod globe;
+pub mod globe_driver;
 pub(crate) fn flush_review_captures() {
     if !capture::flush(std::time::Duration::from_secs(2)) {
         eprintln!("[capture] end-of-review flush timed out");
@@ -1283,6 +1284,7 @@ pub struct Gpu {
     last_world_scale: f32,
     globe: Option<globe::gpu::Globe>,
     globe_visible: bool,
+    globe_driver: globe_driver::GlobeDriver,
     cloud_history_valid: bool,
     cloud_render_scale: u32,
     cloud_governor: cloud_governor::CloudGovernor,
@@ -3127,6 +3129,7 @@ impl GpuPendingInit {
                     globe: globe::active().then(|| globe::gpu::Globe::new(&bootstrap.device, postprocess::SCENE_FORMAT)),
                     // Task 8 drives this from the altitude tier.
                     globe_visible: globe::active(),
+                    globe_driver: globe_driver::GlobeDriver::default(),
                     surface: bootstrap.surface,
                     device: bootstrap.device,
                     queue: bootstrap.queue,
@@ -3893,6 +3896,29 @@ impl Gpu {
         self.capture_path = Some(path);
     }
 
+    pub fn set_tier(&mut self, tier: crate::altitude::Tier) {
+        self.globe_driver.set_tier(tier);
+    }
+
+    /// Drives the globe for this frame; `projection` is the conventional terrain projection.
+    pub fn update_globe(&mut self, world: &crate::world::World, eye_m: glam::DVec3, forward: Vec3, projection: Mat4, focal_px: f32) {
+        if !self.device_usable() { return; }
+        let Some(globe) = self.globe.as_mut() else { return };
+        let view = globe_driver::GlobeView {
+            eye_m,
+            forward,
+            projection: REVERSE_Z * projection,
+            sun_dir: self.current_lighting.sun_dir,
+            focal_px,
+        };
+        let save_dir = crate::world::storage::save_directory();
+        self.globe_driver.update(globe, &self.queue, world.sample_config(), &save_dir, &view);
+    }
+
+    pub fn globe_stats(&self) -> globe_driver::GlobeStats {
+        self.globe_driver.stats()
+    }
+
     pub fn update_horizon(
         &mut self,
         world: &mut crate::world::World,
@@ -4303,6 +4329,11 @@ impl Gpu {
         self.last_weather_upload_stats = stats;
     }
 
+    /// Pixels per unit of tangent for a vertical field of view in radians.
+    pub fn focal_px(&self, fov_radians: f32) -> f32 {
+        self.config.height as f32 / (2.0 * (fov_radians * 0.5).tan())
+    }
+
     pub fn aspect_ratio(&self) -> f32 {
         self.config.width as f32 / self.config.height.max(1) as f32
     }
@@ -4711,7 +4742,7 @@ impl Gpu {
                         terrain_draw_calls += 1;
                     }
                 }
-                if let Some(globe) = self.globe.as_ref().filter(|_| self.globe_visible) {
+                if let Some(globe) = self.globe.as_ref().filter(|_| self.globe_visible && self.globe_driver.running()) {
                     globe.draw(&mut pass);
                     // The globe replaced the pipeline and group 0; the draws below use the world's.
                     pass.set_pipeline(&self.world_pipeline);

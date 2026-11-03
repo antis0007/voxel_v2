@@ -24,7 +24,7 @@ pub struct Worker {
     alive: Arc<AtomicBool>,
 }
 
-fn tile_bytes(t: &TileData) -> usize {
+pub(crate) fn tile_bytes(t: &TileData) -> usize {
     t.height_m.len() * 2 + t.material.len() + t.water.len() + t.climate.len() * 2
 }
 

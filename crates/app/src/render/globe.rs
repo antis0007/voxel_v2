@@ -21,3 +21,10 @@ pub fn active() -> bool {
             || std::env::args().any(|arg| arg == "--benchmark-globe")
     })
 }
+
+/// Whether the flag forces the globe on the surface too, so orbit views measure on any world.
+///
+/// Both switches force today; a planet world type will enable the globe without forcing it.
+pub fn forced() -> bool {
+    active()
+}

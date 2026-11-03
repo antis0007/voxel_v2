@@ -40,7 +40,9 @@ fn render(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32) -> 
     let count = draw.len();
     let sun = eye_body.normalize().as_vec3();
     let eye = eye_body.as_vec3();
-    let stats = globe.frame(&queue, tiles, &Selection { draw, wanted: Vec::new() }, eye_body, GlobeUniform {
+    let mut keep = Vec::new();
+    super::scheduler::keep_set(&draw, &mut keep);
+    let stats = globe.frame(&queue, tiles, &Selection { draw, wanted: Vec::new() }, &keep, eye_body, GlobeUniform {
         eye_body: [eye.x, eye.y, eye.z, 0.0],
         sun_dir_body: [sun.x, sun.y, sun.z, 0.0],
         radius_m: RADIUS_M as f32,
@@ -227,12 +229,13 @@ fn gpu_globe_full_pool_evicts_so_the_next_upload_lands() {
     assert_eq!(globe.free_slots(), 0);
     let extra = TileData::empty(TileId { face: 3, level: 6, x: 0, y: 0 });
     assert_eq!(globe.upload(&queue, std::slice::from_ref(&extra)), 1, "a full pool drops");
-    let keep: Vec<TileId> = all[..100].iter().map(|t| t.id).collect();
+    let mut keep: Vec<TileId> = all[..100].iter().map(|t| t.id).collect();
+    keep.sort_unstable();
     let eye = TileId::root(2).centre_body() * 2.0;
     globe.evict_unused(&keep, MAX_RESIDENT, 1, eye);
     assert!(globe.free_slots() >= MIN_FREE);
     assert_eq!(globe.upload(&queue, &[extra]), 0, "the upload after eviction lands");
-    let stats = globe.frame(&queue, Vec::new(), &Selection { draw: keep.clone(), wanted: Vec::new() }, eye, uniform());
+    let stats = globe.frame(&queue, Vec::new(), &Selection { draw: keep.clone(), wanted: Vec::new() }, &keep, eye, uniform());
     assert_eq!(stats.drawn, keep.len(), "kept tiles survive eviction");
 }
 
@@ -244,7 +247,7 @@ fn gpu_globe_prepare_reuses_its_instance_scratch() {
     let tiles: Vec<TileData> = (0..6).map(|f| TileData::empty(TileId::root(f))).collect();
     let selection = Selection { draw: tiles.iter().map(|t| t.id).collect(), wanted: Vec::new() };
     let eye = DVec3::new(0.0, RADIUS_M * 3.0, 0.0);
-    globe.frame(&queue, tiles, &selection, eye, uniform());
+    globe.frame(&queue, tiles, &selection, &[], eye, uniform());
     let capacity = globe.instance_capacity();
     globe.prepare(&queue, &selection, eye, uniform());
     globe.prepare(&queue, &selection, eye, uniform());

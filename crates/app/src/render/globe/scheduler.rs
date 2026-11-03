@@ -68,6 +68,33 @@ pub fn select(
     Selection { draw, wanted }
 }
 
+/// Fills `out` with `draw` and each draw tile's parent, sorted for binary search.
+///
+/// Parents stay resident so a merge back one level draws at once instead of waiting a bake.
+pub fn keep_set(draw: &[TileId], out: &mut Vec<TileId>) {
+    out.clear();
+    out.extend_from_slice(draw);
+    out.extend(draw.iter().filter_map(|t| t.parent()));
+    out.sort_unstable();
+    out.dedup();
+}
+
+/// Fills `out` with resident tiles outside sorted `keep`, farthest from the eye first.
+pub fn eviction_order(
+    resident: impl Iterator<Item = TileId>,
+    keep: &[TileId],
+    eye_body: DVec3,
+    out: &mut Vec<(f64, TileId)>,
+) {
+    out.clear();
+    out.extend(
+        resident
+            .filter(|t| keep.binary_search(t).is_err())
+            .map(|t| (t.centre_body().distance_squared(eye_body), t)),
+    );
+    out.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::chart;
@@ -127,5 +154,37 @@ mod tests {
         let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M + 2_000.0);
         let s = select(&all, &[], eye, 900.0, 40);
         assert!(s.draw.len() <= 40 && s.draw.iter().any(|t| t.level > 0));
+    }
+
+    #[test]
+    fn eviction_keeps_the_drawn_set_and_their_parents_first() {
+        let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M + 2_000.0);
+        let level6 = |k: u32| TileId { face: 2, level: 6, x: k % 64, y: k / 64 };
+        let draw: Vec<TileId> = (0..300).map(level6).collect();
+        let mut keep = Vec::new();
+        keep_set(&draw, &mut keep);
+        let mut parents: Vec<TileId> = draw.iter().filter_map(|t| t.parent()).collect();
+        parents.sort_unstable();
+        parents.dedup();
+        assert!(parents.iter().all(|p| keep.binary_search(p).is_ok()));
+        let mut resident: Vec<TileId> = (0..2_100 - parents.len() as u32).map(level6).collect();
+        resident.extend(&parents);
+        resident.sort();
+        resident.dedup();
+        assert_eq!(resident.len(), 2_100);
+        let excess = resident.len() - 2_048;
+        let mut order = Vec::new();
+        eviction_order(resident.iter().copied(), &keep, eye, &mut order);
+        let evicted: Vec<TileId> = order.iter().take(excess).map(|e| e.1).collect();
+        assert_eq!(evicted.len(), excess);
+        assert!(evicted.iter().all(|t| keep.binary_search(t).is_err()));
+        let dist = |t: &TileId| t.centre_body().distance_squared(eye);
+        let nearest_evicted = evicted.iter().map(dist).fold(f64::INFINITY, f64::min);
+        let farthest_kept = resident
+            .iter()
+            .filter(|t| keep.binary_search(t).is_err() && !evicted.contains(t))
+            .map(dist)
+            .fold(0.0, f64::max);
+        assert!(nearest_evicted >= farthest_kept, "farthest unused tiles go first");
     }
 }

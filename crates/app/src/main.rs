@@ -1315,7 +1315,7 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
             use std::io::Write;
             std::fs::create_dir_all(&root)?;
             let mut output = std::io::BufWriter::new(std::fs::File::create(root.join("frames.csv"))?);
-            writeln!(output, "frame,total_ms,gameplay_ms,stream_ms,render_cpu_ms,gpu_supported,gpu_pass_ms,cloud_ms,cloud_composite_ms,terrain_ms,render_frame_id,render_config_id,gpu_sample_count,gpu_frame_id,gpu_config_id,acquire_ms,submit_ms,present_ms,gpu_shadow_ms,terrain_draws,terrain_triangles,shadow_draws,chunk_upload_bytes,worker_pending,cpu_resident_bytes,gpu_resident_bytes,horizon_ms,visible_missing,near_missing")?;
+            writeln!(output, "frame,total_ms,gameplay_ms,stream_ms,render_cpu_ms,gpu_supported,gpu_pass_ms,cloud_ms,cloud_composite_ms,terrain_ms,render_frame_id,render_config_id,gpu_sample_count,gpu_frame_id,gpu_config_id,acquire_ms,submit_ms,present_ms,gpu_shadow_ms,terrain_draws,terrain_triangles,shadow_draws,chunk_upload_bytes,worker_pending,cpu_resident_bytes,gpu_resident_bytes,horizon_ms,visible_missing,near_missing,globe_ms,globe_upload_bytes")?;
             for (index, sample) in snapshot.history.iter().enumerate() {
                 let cpu = sample.cpu;
                 let gpu = sample.render;
@@ -1328,12 +1328,13 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
                 let chunk = sample.chunk;
                 let uploaded_bytes = chunk.uploaded_vertices * std::mem::size_of::<mesh::Vertex3>()
                     + chunk.uploaded_indices * std::mem::size_of::<u32>();
-                writeln!(output, ",{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{:.4},{},{}",
+                writeln!(output, ",{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{:.4},{},{},{:.4},{}",
                     gpu.surface_acquire_ms, gpu.submit_ms, gpu.present_ms, gpu.gpu_shadow_ms,
                     gpu.terrain_draw_calls, sample.counters.terrain_triangles, gpu.shadow_draw_calls,
                     uploaded_bytes, chunk.generating + chunk.meshing + chunk.pending_schedule,
                     chunk.cpu_resident_bytes, chunk.gpu_resident_bytes, cpu.horizon_ms,
-                    sample.counters.visible_missing, sample.counters.near_missing)?;
+                    sample.counters.visible_missing, sample.counters.near_missing,
+                    cpu.globe_ms, cpu.globe_upload_bytes as usize)?;
             }
             output.flush()
         };
@@ -4083,6 +4084,7 @@ fn main() -> Result<()> {
                                 let precise_eye_m = player.precise_eye(world.voxel_scale) * world.voxel_scale.meters() as f64;
                                 let altitude_m = altitude::altitude_m(precise_eye_m, altitude::planet_world(world));
                                 let tier = altitude_state.update(altitude_m);
+                                gpu.set_tier(tier);
                                 let orbit = tier == altitude::Tier::Orbit;
                                 chunk_cache.freeze(orbit);
                                 let streaming_start = Instant::now();
@@ -4177,6 +4179,11 @@ fn main() -> Result<()> {
                                     gpu.aspect_ratio(),
                                     0.05 * world_scale,
                                 );
+                                let globe_start = Instant::now();
+                                let globe_fov = view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians();
+                                gpu.update_globe(world, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
+                                cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
+                                cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
                                 let cull_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
@@ -4346,7 +4353,9 @@ fn main() -> Result<()> {
                                 sky_time = benchmark.as_ref().and_then(|b| b.config.review_sky_time)
                                     .unwrap_or(sky_time + gameplay_dt * sky_motion_rate);
                                 let precise_eye_m = player.precise_eye(world.voxel_scale) * world.voxel_scale.meters() as f64;
-                                let orbit = altitude_state.update(altitude::altitude_m(precise_eye_m, altitude::planet_world(world))) == altitude::Tier::Orbit;
+                                let tier = altitude_state.update(altitude::altitude_m(precise_eye_m, altitude::planet_world(world)));
+                                gpu.set_tier(tier);
+                                let orbit = tier == altitude::Tier::Orbit;
                                 chunk_cache.freeze(orbit);
                                 let streaming_start = Instant::now();
                                 world.set_visual_region_interest(&chunk_cache.edit_proxy_source_coords());
@@ -4394,6 +4403,11 @@ fn main() -> Result<()> {
                                     gpu.aspect_ratio(),
                                     0.05 * world_scale,
                                 );
+                                let globe_start = Instant::now();
+                                let globe_fov = view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians();
+                                gpu.update_globe(world, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
+                                cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
+                                cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
                                 let cull_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
@@ -4870,6 +4884,10 @@ fn main() -> Result<()> {
                                                     timing.finish();
                                                 }
                                                 log_benchmark_summary(&summary, &benchmark_state.config, gpu.vsync());
+                                                let globe = gpu.globe_stats();
+                                                let upload_kb = summary.history.iter().map(|s| f64::from(s.cpu.globe_upload_bytes)).sum::<f64>() / 1024.0;
+                                                // The worker does not report bake time yet, so bake_ms is 0.
+                                                println!("[benchmark] globe resident={} drawn={} wanted={} bake_ms=0 upload_kb={upload_kb:.1}", globe.resident, globe.drawn, globe.wanted);
                                                 elwt.exit();
                                             }
                                         }

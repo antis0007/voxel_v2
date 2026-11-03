@@ -173,6 +173,7 @@ impl Globe {
 
     /// The only production entry point: evict, upload, then prepare, in that order.
     ///
+    /// `keep` is sorted (see `scheduler::keep_set`) and protects tiles from eviction.
     /// A slot freed and refilled after `prepare` would make an instance written this
     /// frame draw another tile's data.
     pub fn frame(
@@ -180,10 +181,11 @@ impl Globe {
         queue: &wgpu::Queue,
         incoming: Vec<TileData>,
         selection: &Selection,
+        keep: &[TileId],
         eye_body: DVec3,
         uniform: GlobeUniform,
     ) -> FrameStats {
-        self.evict_unused(&selection.draw, MAX_RESIDENT, incoming.len(), eye_body);
+        self.evict_unused(keep, MAX_RESIDENT, incoming.len(), eye_body);
         let dropped = self.upload(queue, &incoming);
         self.prepare(queue, selection, eye_body, uniform);
         FrameStats {
@@ -244,6 +246,10 @@ impl Globe {
 
     pub fn resident(&self) -> usize {
         self.tiles.resident()
+    }
+
+    pub fn resident_contains(&self, id: TileId) -> bool {
+        self.tiles.slot(id).is_some()
     }
 }
 

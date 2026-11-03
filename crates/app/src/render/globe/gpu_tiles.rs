@@ -3,7 +3,7 @@
 use super::bake::TileData;
 use super::tile::{TILE_SAMPLES, TileId};
 use glam::DVec3;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Slots per atlas row; 46 x 46 = 2116 slots cover `MAX_RESIDENT`.
 pub const ATLAS_COLUMNS: u32 = 46;
@@ -25,7 +25,6 @@ pub struct TilePool {
     slots: HashMap<TileId, u32>,
     free: Vec<u32>,
     // Reused every frame so the steady state does not allocate.
-    keep_scratch: HashSet<TileId>,
     evict_scratch: Vec<(f64, TileId)>,
     height_scratch: Vec<u16>,
     climate_scratch: Vec<u8>,
@@ -55,7 +54,6 @@ impl TilePool {
             slots: HashMap::new(),
             // Popped from the back, so slot 0 is used first.
             free: (0..MAX_RESIDENT as u32).rev().collect(),
-            keep_scratch: HashSet::new(),
             evict_scratch: Vec::new(),
             height_scratch: Vec::with_capacity((TILE_SAMPLES * TILE_SAMPLES * 2) as usize),
             climate_scratch: Vec::with_capacity((TILE_SAMPLES * TILE_SAMPLES * 2) as usize),
@@ -88,7 +86,7 @@ impl TilePool {
         true
     }
 
-    /// Frees non-`keep` tiles, farthest from the eye first, until at most `max_resident`
+    /// Frees tiles outside sorted `keep`, farthest from the eye first, until at most `max_resident`
     /// remain and `incoming.max(MIN_FREE)` slots are free.
     pub fn evict_unused(&mut self, keep: &[TileId], max_resident: usize, incoming: usize, eye_body: DVec3) {
         let want_free = incoming.max(MIN_FREE).min(MAX_RESIDENT);
@@ -96,13 +94,7 @@ impl TilePool {
         if done(self) {
             return;
         }
-        self.keep_scratch.clear();
-        self.keep_scratch.extend(keep.iter().copied());
-        self.evict_scratch.clear();
-        for id in self.slots.keys().filter(|t| !self.keep_scratch.contains(t)) {
-            self.evict_scratch.push((id.centre_body().distance_squared(eye_body), *id));
-        }
-        self.evict_scratch.sort_by(|a, b| b.0.total_cmp(&a.0));
+        super::scheduler::eviction_order(self.slots.keys().copied(), keep, eye_body, &mut self.evict_scratch);
         for i in 0..self.evict_scratch.len() {
             if done(self) {
                 break;
