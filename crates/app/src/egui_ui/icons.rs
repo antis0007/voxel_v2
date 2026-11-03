@@ -1011,6 +1011,8 @@ fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, overr
     if accent.is_none() && override_fx.is_none() && sprites16::paint(p, r, icon) {
         return;
     }
+    // Spells share one backplate so the grimoire reads as a set; the glyph sits inside its border.
+    let r = if matches!(icon, Icon::Spell(_)) && sprites16::paint_spell_frame(p, r) { r.shrink(r.width().min(r.height()) * 0.16) } else { r };
     let (rows, base) = art(icon);
     let color = accent.unwrap_or(base);
     let drawn = paint_rows(p, r, rows, color);

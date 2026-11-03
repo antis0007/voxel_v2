@@ -876,3 +876,28 @@ e f0a028
 ................
 ................
 end
+
+# Backplate drawn behind every spell glyph; the glyph and its effect stay on top.
+sprite 36 spell_frame
+a 1e1a2a
+b 2a2440
+c 4a4264
+d 14101c
+e c8a050
+.oooooooooooooo.
+oecccccccccccceo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+ocbbbbbbbbbbbbdo
+oeddddddddddddeo
+.oooooooooooooo.
+end

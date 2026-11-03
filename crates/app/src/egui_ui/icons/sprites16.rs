@@ -15,6 +15,7 @@ pub(super) const SIZE: usize = 16;
 const FOOD_BASE: usize = 10;
 /// First id of armour; four tiers per slot.
 const ARMOR_BASE: usize = 20;
+const SPELL_FRAME: usize = 36;
 
 type Pixels = Vec<C>;
 
@@ -108,9 +109,15 @@ pub(crate) fn texels(icon: Icon) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3
 
 /// Draws `icon` at a whole-pixel scale; false if no sheet covers it.
 pub(super) fn paint(p: &Painter, r: Rect, icon: Icon) -> bool {
-    let Some((sheet, id)) = sprite(icon) else {
-        return false;
-    };
+    sprite(icon).is_some_and(|(sheet, id)| paint_sprite(p, r, sheet, id))
+}
+
+/// Draws the shared spell backplate; false if the sheet lacks it.
+pub(super) fn paint_spell_frame(p: &Painter, r: Rect) -> bool {
+    paint_sprite(p, r, 1, SPELL_FRAME)
+}
+
+fn paint_sprite(p: &Painter, r: Rect, sheet: usize, id: usize) -> bool {
     let Some(Some(pixels)) = SHEETS[sheet].get(id) else {
         return false;
     };
@@ -150,6 +157,7 @@ mod tests {
         parse(RESOURCES).unwrap();
         parse(ITEMS).unwrap();
         parse(MACHINES).unwrap();
+        assert!(SHEETS[1].get(SPELL_FRAME).is_some_and(Option::is_some));
     }
 
     #[test]
