@@ -23,6 +23,7 @@ mod kepler;
 mod path;
 mod spin;
 mod system;
+mod transfer;
 mod validate;
 
 pub use data::{
@@ -32,4 +33,8 @@ pub use data::{
 pub use kepler::{Elements, G, solve_kepler};
 pub use path::orbit_path;
 pub use system::{BodyId, Snapshot, Spin, System};
+pub use transfer::{
+    Hohmann, Plan, circular_speed, escape_speed, hill_radius, hyperbolic_burn, lead_angle,
+    soi_radius, synodic_period,
+};
 pub use validate::{SystemError, validate};
