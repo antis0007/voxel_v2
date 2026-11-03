@@ -1,6 +1,6 @@
 # ADR 0039: Orbital globe from baked worldgen tiles
 
-2026-11-02. Accepted. Spec: `docs/superpowers/specs/2026-11-02-orbital-planets-design.md`.
+2026-11-02. Accepted, baselines pending. Spec: `docs/superpowers/specs/2026-11-02-orbital-planets-design.md`.
 
 Above a few kilometres the resident chunk disc and the flat horizon sheet stop
 describing the ground. The globe (`crates/app/src/render/globe.rs` driver,
@@ -18,7 +18,8 @@ from the same generator the chunks use. No new dependency.
   8-byte magic, tile id as four little-endian u32 (face, level, x, y), then
   65x65 samples in planes: i16 height (m), u8 material, u8 water, 2-byte climate
   (6 bytes per sample). Any mismatch is a miss and the tile is rebaked; writes
-  go through a temp file.
+  go through a temp file. `VXGT0002` supersedes the plan's `VXGT0001`: the
+  bump came with far-field sampling of coarse tiles in Task 8.
 - Selection splits at 1.5 px projected error and merges at 0.75 px, with at most
   512 draws (256 on the lean tier).
 
@@ -70,8 +71,19 @@ cover and the integration condition becomes
 
 ## Decisions taken during execution
 
+- Ruling 1: `render/globe/chart.rs` mirrors the constants and functions of the
+  peer's uncommitted atlas (a test pins the values). Merge cost: collapse it onto
+  `engine_core::cube_sphere::atlas` when that lands.
+- Ruling 2 (revised before Task 7): adding `WorldType::Planet` on this branch was
+  rejected because it breaks exhaustive matches across crates and collides with
+  the peer's config diff. The globe keys on `globe::active()` and draws on any
+  world type with chart = world coordinates (the Hills world lies on face 0).
 - Ruling 3: the flight-review before captures cannot run on this branch; evidence
   is the Task 12 scenes plus per-task GPU tests until the peer's harness lands.
+- Ruling 4: tests run with `--profile release-fast` in the scratch target
+  because the disk is 96 % full.
+- Task 2: the resident disc rebuilds only when the cap changes by 2 or more
+  rings, or reaches 0 or the full view distance.
 - Task 2: an empty visible set in orbit is intended; the frozen chunk cache
   exists for the return, not for drawing.
 - Task 2: descent regrows the disc ring by ring from 0; cache hits make it fast
@@ -103,11 +115,15 @@ cover and the integration condition becomes
   p95 and p99; the 66.8 ms outlier pass was swapchain wait under peer load.
 - Task 12: the ascent motion uses the wall clock like the existing orbit motion
   (benchmark route, not simulation).
+- Task 13: the ascent p95 miss in the final check (4.24 vs 3.98 ms, +6.6 %, on
+  code identical to the baseline commit) is baseline noise; both new baselines
+  are re-recorded on a quiet machine before merge.
 
 ## Evidence
 
 `target/reviews/orbital-globe-after/` in the main tree, copied from the Task 9
-and Task 10 capture folders:
+and Task 10 capture folders. The 60 km frames have no before counterpart
+because the flight-review harness is absent on this branch (Ruling 3).
 
 | File | Shows |
 |---|---|
@@ -119,6 +135,8 @@ and Task 10 capture folders:
 | `2500m_before.png` | before: resident chunks and horizon at 2.5 km |
 | `2500m_afterback.png` | after, Back culling restored: no cracks, holes or double ground; diff vs before 0.0003 |
 
-Open: globe lighting does not match the world shader where the globe is the
+Open: the orbit-static and ascent baselines are owed a quiet re-record before
+merge; the ascent p95 check currently misses by 6.6 % against its own
+contended baseline. Globe lighting does not match the world shader where the globe is the
 visible ground; `max_frame_ms` is recorded but not enforced by
 `frame-bench-check`.
