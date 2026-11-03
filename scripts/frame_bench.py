@@ -44,6 +44,13 @@ SCENES = {
     "superflat-static": ["--benchmark-world=superflat", "--benchmark-motion=static"],
     # Quarter-metre voxels: 64x the cells per metre of the 1 m world.
     "quarter-static": ["--benchmark-world=hills", "--benchmark-scale=quarter", "--benchmark-motion=static"],
+    # Globe from 60 km; the long warmup lets the horizon build finish first.
+    "orbit-static": ["--benchmark-world=hills", "--benchmark-globe", "--benchmark-motion=static",
+                     "--benchmark-terrain-camera=0,0,60000,0,-1.5", "--benchmark-view-chunks=4",
+                     "--benchmark-warmup=45"],
+    # Straight climb from spawn at 256 m/s toward 40 km: globe tier handover under load.
+    "ascent": ["--benchmark-world=hills", "--benchmark-globe", "--benchmark-motion=ascent",
+               "--benchmark-duration=120"],
 }
 GATED_TIMES = ("p95_frame_ms", "p99_frame_ms")
 TIME_LIMIT = 0.05
@@ -102,7 +109,28 @@ def frame_medians(rows):
     return {"draws": med("terrain_draws") + med("shadow_draws"),
             "frame.stream_ms": med("stream_ms"), "frame.render_cpu_ms": med("render_cpu_ms"),
             "frame.gpu_pass_ms": med("gpu_pass_ms"), "frame.gpu_shadow_ms": med("gpu_shadow_ms"),
-            "frame.terrain_draws": med("terrain_draws"), "frame.shadow_draws": med("shadow_draws")}
+            "frame.terrain_draws": med("terrain_draws"), "frame.shadow_draws": med("shadow_draws"),
+            **globe_frames(rows)}
+
+
+def globe_frames(rows):
+    """Globe cost and the measured second after which no tile is wanted; slowest frame's columns."""
+    if "globe_ms" not in rows[0]:
+        return {}
+    out = {"frame.globe_ms": statistics.median(float(r["globe_ms"]) for r in rows),
+           "frame.globe_ms_max": max(float(r["globe_ms"]) for r in rows)}
+    slow = max(rows, key=lambda r: float(r["total_ms"]))
+    for key in ("total_ms", "gpu_pass_ms", "globe_ms", "globe_upload_bytes", "stream_ms", "acquire_ms"):
+        out[f"slowest.{key}"] = float(slow[key])
+    if "globe_wanted" in rows[0]:
+        elapsed, settled = 0.0, 0.0
+        for r in rows:
+            elapsed += float(r["total_ms"]) / 1000
+            if float(r["globe_wanted"]) > 0:
+                settled = elapsed
+        out["frame.globe_wanted_settled_s"] = settled
+        out["frame.globe_wanted_last"] = float(rows[-1]["globe_wanted"])
+    return out
 
 
 def build_activity():
@@ -188,7 +216,11 @@ def passes(exe, names, count):
                     m = run_scene(exe, name)
                     results[name].append(m)
                     print(f"  pass {index + 1} {name}: p95 {m['p95_frame_ms']:.2f} ms, p99 {m['p99_frame_ms']:.2f} ms, "
-                          f"{m['avg_fps']:.1f} fps, draws {m['draws']:.0f}" + (" (builds running)" if m["contended"] else ""))
+                          f"max {m.get('max_frame_ms', 0):.1f} ms, {m['avg_fps']:.1f} fps, draws {m['draws']:.0f}"
+                          + (f", globe {m['frame.globe_ms']:.2f} ms, wanted settled {m.get('frame.globe_wanted_settled_s', -1):.1f} s"
+                             f", slowest gpu {m['slowest.gpu_pass_ms']:.1f} globe {m['slowest.globe_ms']:.1f}"
+                             f" stream {m['slowest.stream_ms']:.1f} acquire {m['slowest.acquire_ms']:.1f} ms"
+                             if "frame.globe_ms" in m else "") + (" (builds running)" if m["contended"] else ""))
                     break
                 except BenchError as error:
                     print(f"  pass {index + 1} {name} attempt {attempt}: {error}")
@@ -214,7 +246,8 @@ def summarize(runs, meta):
             "gpu_avg_ms.terrain", "gpu_avg_ms.shadow", "gpu_avg_ms.raymarch", "cpu_avg_ms.gameplay",
             "cpu_avg_ms.stream", "cpu_avg_ms.render_call", "latest_scene.terrain_tris",
             "frame.stream_ms", "frame.render_cpu_ms", "frame.gpu_pass_ms", "frame.gpu_shadow_ms",
-            "frame.terrain_draws", "frame.shadow_draws")
+            "frame.terrain_draws", "frame.shadow_draws", "max_frame_ms", "frame.globe_ms",
+            "frame.globe_ms_max", "frame.globe_wanted_settled_s", "frame.globe_wanted_last", "globe.wanted")
     return {"adapter": best["adapter"], "res": best.get("res"), **{k: best[k] for k in keep if k in best},
             "draws": statistics.median(r["draws"] for r in runs), "passes": len(runs),
             "contended_passes": sum(bool(r.get("contended")) for r in runs), **meta}

@@ -156,6 +156,7 @@ enum BenchmarkMotionMode {
     Orbit,
     CloudReview,
     CloudReviewFar,
+    Ascent,
 }
 
 impl BenchmarkMotionMode {
@@ -165,6 +166,7 @@ impl BenchmarkMotionMode {
             Self::Orbit => "orbit",
             Self::CloudReview => "cloud-review",
             Self::CloudReviewFar => "cloud-review-far",
+            Self::Ascent => "ascent",
         }
     }
 }
@@ -581,6 +583,7 @@ fn parse_benchmark_config() -> BenchmarkConfig {
                 "orbit" | "moving" | "move" | "flyover" => BenchmarkMotionMode::Orbit,
                 "cloud-review" => BenchmarkMotionMode::CloudReview,
                 "cloud-review-far" => BenchmarkMotionMode::CloudReviewFar,
+                "ascent" => BenchmarkMotionMode::Ascent,
                 _ => BenchmarkMotionMode::Static,
             };
         }
@@ -743,6 +746,20 @@ fn apply_benchmark_camera_motion(
         return;
     }
     if matches!(state.config.motion, BenchmarkMotionMode::Static) {
+        return;
+    }
+    if state.config.motion == BenchmarkMotionMode::Ascent {
+        // Straight up from spawn at the boosted flight cap, ground kept in view.
+        const ASCENT_SPEED_M_S: f32 = 256.0;
+        const ASCENT_TOP_M: f32 = 40_000.0;
+        let climb_m = (state.motion_started_at.elapsed().as_secs_f32() * ASCENT_SPEED_M_S).min(ASCENT_TOP_M);
+        let anchor = state.motion_anchor_blocks;
+        player.pos = Vec3::new(anchor.x, anchor.y + climb_m / terrain.voxel_scale.meters(), anchor.z);
+        player.pitch = -1.2;
+        player.vel = Vec3::ZERO;
+        player.flying = true;
+        player.fly_mode = FlyMode::Noclip;
+        player.on_ground = false;
         return;
     }
 
@@ -1315,7 +1332,7 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
             use std::io::Write;
             std::fs::create_dir_all(&root)?;
             let mut output = std::io::BufWriter::new(std::fs::File::create(root.join("frames.csv"))?);
-            writeln!(output, "frame,total_ms,gameplay_ms,stream_ms,render_cpu_ms,gpu_supported,gpu_pass_ms,cloud_ms,cloud_composite_ms,terrain_ms,render_frame_id,render_config_id,gpu_sample_count,gpu_frame_id,gpu_config_id,acquire_ms,submit_ms,present_ms,gpu_shadow_ms,terrain_draws,terrain_triangles,shadow_draws,chunk_upload_bytes,worker_pending,cpu_resident_bytes,gpu_resident_bytes,horizon_ms,visible_missing,near_missing,globe_ms,globe_upload_bytes")?;
+            writeln!(output, "frame,total_ms,gameplay_ms,stream_ms,render_cpu_ms,gpu_supported,gpu_pass_ms,cloud_ms,cloud_composite_ms,terrain_ms,render_frame_id,render_config_id,gpu_sample_count,gpu_frame_id,gpu_config_id,acquire_ms,submit_ms,present_ms,gpu_shadow_ms,terrain_draws,terrain_triangles,shadow_draws,chunk_upload_bytes,worker_pending,cpu_resident_bytes,gpu_resident_bytes,horizon_ms,visible_missing,near_missing,globe_ms,globe_upload_bytes,globe_wanted")?;
             for (index, sample) in snapshot.history.iter().enumerate() {
                 let cpu = sample.cpu;
                 let gpu = sample.render;
@@ -1328,13 +1345,13 @@ fn log_benchmark_summary(snapshot: &PerfSnapshot, config: &BenchmarkConfig, vsyn
                 let chunk = sample.chunk;
                 let uploaded_bytes = chunk.uploaded_vertices * std::mem::size_of::<mesh::Vertex3>()
                     + chunk.uploaded_indices * std::mem::size_of::<u32>();
-                writeln!(output, ",{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{:.4},{},{},{:.4},{}",
+                writeln!(output, ",{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{:.4},{},{},{:.4},{},{}",
                     gpu.surface_acquire_ms, gpu.submit_ms, gpu.present_ms, gpu.gpu_shadow_ms,
                     gpu.terrain_draw_calls, sample.counters.terrain_triangles, gpu.shadow_draw_calls,
                     uploaded_bytes, chunk.generating + chunk.meshing + chunk.pending_schedule,
                     chunk.cpu_resident_bytes, chunk.gpu_resident_bytes, cpu.horizon_ms,
                     sample.counters.visible_missing, sample.counters.near_missing,
-                    cpu.globe_ms, cpu.globe_upload_bytes as usize)?;
+                    cpu.globe_ms, cpu.globe_upload_bytes as usize, cpu.globe_wanted as usize)?;
             }
             output.flush()
         };
@@ -4184,6 +4201,7 @@ fn main() -> Result<()> {
                                 gpu.update_globe(world, &day_night, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
                                 cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
                                 cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
+                                cpu_stats.globe_wanted = gpu.globe_stats().wanted as f32;
                                 cpu_stats.globe_bake_ms = gpu.globe_stats().bake_ms;
                                 let cull_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
@@ -4409,6 +4427,7 @@ fn main() -> Result<()> {
                                 gpu.update_globe(world, &day_night, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
                                 cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
                                 cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
+                                cpu_stats.globe_wanted = gpu.globe_stats().wanted as f32;
                                 cpu_stats.globe_bake_ms = gpu.globe_stats().bake_ms;
                                 let cull_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
