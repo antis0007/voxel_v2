@@ -42,9 +42,12 @@ refuse to connect, as today.
 1. `BodyState` gains `frame: u32`. Mask bit `FRAME = 32` writes it only when it
    differs from the baseline. With `frame != 0`, `position`, `velocity` and
    `angular` are in that assembly's local frame. Ordinary bodies pay no bytes.
-2. Cell flushes gain a frame header per run of bricks: `frame` varint, then the
-   assembly `revision` the flush brings the client to. Brick offsets stay
+2. Cell flushes gain a frame header per run of bricks: `frame` varint, then for
+   an assembly the `base` revision the run applies on and the `advance` to the
+   next one; the base lets a client detect a skipped flush. Brick offsets stay
    relative to the run's first brick, so terrain flushes cost one extra byte.
+   The server advances an assembly's revision once per flush, so a client's
+   revision counts flushes received; budget-deferred cells follow later.
 3. New reliable message `AssemblyBaseline { id, revision, bounds, bricks }`:
    sent when an assembly enters a client's interest, through the same budgeted,
    nearest-first sender as chunks. A client drops cell flushes for an assembly
