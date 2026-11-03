@@ -66,6 +66,12 @@ refuse to connect, as today.
 - Snapshot playback draws the carrier and everything parented to it at the same
   playback tick. A passenger never interpolates in world space while parented.
 - Gravity stays in world space; a banked hull does not redefine down.
+- The inherited carrier velocity is drift the validator removes from world
+  moves; support bleeds it (half-life 0.15 s) into burst allowance, so the
+  take-off step of a jump keeps it. The body box stays on the local grid axes.
+- The server samples each assembly from a bounded tick-indexed pose history
+  (`carrier::CarrierHistory`) at the client's reported tick; a report in a
+  frame with no pose there is corrected (`Reason::Frame`).
 
 ## Interest
 
