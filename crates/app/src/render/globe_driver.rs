@@ -9,6 +9,7 @@ use super::globe::{self, chart};
 use crate::altitude::Tier;
 use engine_voxel::WorldSampleConfig;
 use glam::{DVec3, Mat4, Vec3};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Per-frame upload cap; one 2 MB frame stays under a millisecond of copy on any adapter.
@@ -16,8 +17,10 @@ const DRAIN_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DRAW: usize = 512;
 const MAX_REQUEST: usize = 64;
 const BAKE_TURN: Duration = Duration::from_millis(2);
-/// 30 s at 60 Hz; frames rather than wall time keep the drop off `Instant`.
+/// 30 s assuming 60 Hz; frames rather than wall time keep the drop off `Instant`.
 const SURFACE_DROP_FRAMES: u32 = 1_800;
+/// A dead worker is respawned at most this often, so a bake that panics every time cannot spin.
+const RESPAWN_FRAMES: u64 = 600;
 
 /// Globe counters for the last driven frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -25,9 +28,12 @@ pub struct GlobeStats {
     pub resident: usize,
     pub drawn: usize,
     pub wanted: usize,
+    /// Bytes of tiles that reached the GPU this frame.
     pub upload_bytes: usize,
     pub cpu_ms: f32,
     pub dropped: usize,
+    /// Worker bake wall time accumulated since the previous frame.
+    pub bake_ms: f32,
 }
 
 /// Camera inputs for one globe frame, all in chart metres.
@@ -40,6 +46,42 @@ pub struct GlobeView {
     pub focal_px: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Run,
+    Skip,
+    /// Skip and drop the worker so it stops holding the cache open.
+    DropWorker,
+}
+
+/// What the driver does this frame; `surface_frames` counts this frame too.
+pub fn driver_step(tier: Tier, forced: bool, surface_frames: u32) -> Step {
+    match tier {
+        Tier::Surface if !forced && surface_frames >= SURFACE_DROP_FRAMES => Step::DropWorker,
+        Tier::Surface if !forced => Step::Skip,
+        _ => Step::Run,
+    }
+}
+
+/// Whether the globe replaces the flat horizon: only from orbit, and only once it has tiles.
+pub fn hides_horizon(running: bool, tier: Tier, resident: usize) -> bool {
+    running && tier == Tier::Orbit && resident > 0
+}
+
+/// Unready drawn tiles first (a never-baked root would otherwise never be requested), then
+/// `wanted`, deduplicated and cut to `MAX_REQUEST`.
+pub fn request_order(draw: &[TileId], wanted: &[TileId], ready: &dyn Fn(TileId) -> bool, out: &mut Vec<TileId>) {
+    out.clear();
+    for id in draw.iter().copied().filter(|id| !ready(*id)).chain(wanted.iter().copied()) {
+        if out.len() == MAX_REQUEST {
+            break;
+        }
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+}
+
 pub struct GlobeDriver {
     worker: Option<Worker>,
     previous_draw: Vec<TileId>,
@@ -47,6 +89,8 @@ pub struct GlobeDriver {
     request: Vec<TileId>,
     tier: Tier,
     surface_frames: u32,
+    frame: u64,
+    last_spawn: Option<u64>,
     running: bool,
     stats: GlobeStats,
 }
@@ -60,6 +104,8 @@ impl Default for GlobeDriver {
             request: Vec::new(),
             tier: Tier::Surface,
             surface_frames: 0,
+            frame: 0,
+            last_spawn: None,
             running: false,
             stats: GlobeStats::default(),
         }
@@ -76,9 +122,8 @@ impl GlobeDriver {
         self.running
     }
 
-    /// Whether the globe ran this frame from the orbit tier.
     pub fn orbit_view(&self) -> bool {
-        self.running && self.tier == Tier::Orbit
+        hides_horizon(self.running, self.tier, self.stats.resident)
     }
 
     pub fn stats(&self) -> GlobeStats {
@@ -86,45 +131,50 @@ impl GlobeDriver {
     }
 
     /// Drain, select, request, then evict, upload and prepare through `Globe::frame`.
+    ///
+    /// `save_dir` is called only when the worker is spawned.
     pub fn update(
         &mut self,
         globe: &mut Globe,
         queue: &wgpu::Queue,
         cfg: WorldSampleConfig,
-        save_dir: &std::path::Path,
+        save_dir: &dyn Fn() -> PathBuf,
         view: &GlobeView,
     ) {
         let start = Instant::now();
-        self.running = globe::active() && (self.tier != Tier::Surface || globe::forced());
+        self.frame += 1;
+        self.surface_frames = if self.tier == Tier::Surface { self.surface_frames.saturating_add(1) } else { 0 };
+        let step = if globe::active() { driver_step(self.tier, globe::forced(), self.surface_frames) } else { Step::Skip };
+        self.running = step == Step::Run;
         if !self.running {
             self.stats = GlobeStats::default();
-            if self.tier == Tier::Surface {
-                self.surface_frames = self.surface_frames.saturating_add(1);
-                // Dropping the worker closes the cache; a long surface stay should not hold it.
-                if self.surface_frames >= SURFACE_DROP_FRAMES {
-                    self.worker = None;
-                }
+            if step == Step::DropWorker {
+                self.worker = None;
             }
             return;
         }
-        self.surface_frames = 0;
-        let worker = self.worker.get_or_insert_with(|| {
-            Worker::spawn(cfg, TileCache::open(save_dir, cfg.seed, cfg.generator_version), BAKE_TURN)
-        });
-        let incoming = worker.drain(DRAIN_BYTES);
-        let upload_bytes = incoming.iter().map(tile_bytes).sum();
+        if self.worker.as_ref().is_some_and(|w| !w.alive()) {
+            self.worker = None;
+        }
+        let may_spawn = self.last_spawn.is_none_or(|f| self.frame - f >= RESPAWN_FRAMES);
+        if self.worker.is_none() && may_spawn {
+            self.last_spawn = Some(self.frame);
+            let cache = TileCache::open(&save_dir(), cfg.seed, cfg.generator_version);
+            self.worker = Some(Worker::spawn(cfg, cache, BAKE_TURN));
+        }
+        let incoming = self.worker.as_ref().map(|w| w.drain(DRAIN_BYTES)).unwrap_or_default();
+        let bake_nanos = self.worker.as_ref().map_or(0, Worker::take_bake_nanos);
+        let incoming_bytes: usize = incoming.iter().map(tile_bytes).sum();
+        let incoming_count = incoming.len();
         let (eye_body, view_proj) = body_view_proj(view.eye_m, view.forward, view.projection);
         // Tiles drained this frame upload before `prepare`, so they count as ready now.
         let ready = |id: TileId| globe.resident_contains(id) || incoming.iter().any(|t| t.id == id);
         let selection: Selection =
             scheduler::select(&ready, &self.previous_draw, eye_body, f64::from(view.focal_px), MAX_DRAW);
-        // `wanted` holds only missing children; a drawn tile that was never baked (the roots on
-        // the first frame) would otherwise never be requested and the globe would stay empty.
-        self.request.clear();
-        self.request.extend(selection.draw.iter().copied().filter(|id| !ready(*id)));
-        self.request.extend(selection.wanted.iter().copied());
-        self.request.truncate(MAX_REQUEST);
-        worker.request(&self.request);
+        request_order(&selection.draw, &selection.wanted, &ready, &mut self.request);
+        if let Some(worker) = &self.worker {
+            worker.request(&self.request);
+        }
         scheduler::keep_set(&selection.draw, &mut self.keep);
         let frame = chart::frame(view.eye_m);
         let sun = (frame * view.sun_dir.as_dvec3()).normalize_or_zero().as_vec3();
@@ -140,14 +190,21 @@ impl GlobeDriver {
             view_proj: view_proj.to_cols_array_2d(),
         };
         let frame_stats = globe.frame(queue, incoming, &selection, &self.keep, eye_body, uniform);
+        // Every tile has the same fixed size, so dropped bytes are a whole number of tiles.
+        let per_tile = incoming_bytes.checked_div(incoming_count).unwrap_or(0);
         self.stats = GlobeStats {
             resident: frame_stats.resident,
             drawn: frame_stats.drawn,
             wanted: selection.wanted.len(),
-            upload_bytes,
+            upload_bytes: incoming_bytes - per_tile * frame_stats.dropped,
             cpu_ms: start.elapsed().as_secs_f32() * 1000.0,
             dropped: frame_stats.dropped,
+            bake_ms: bake_nanos as f32 / 1.0e6,
         };
         self.previous_draw = selection.draw;
     }
 }
+
+#[cfg(test)]
+#[path = "globe_driver_tests.rs"]
+mod tests;

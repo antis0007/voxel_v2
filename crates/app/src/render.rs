@@ -3911,8 +3911,7 @@ impl Gpu {
             sun_dir: self.current_lighting.sun_dir,
             focal_px,
         };
-        let save_dir = crate::world::storage::save_directory();
-        self.globe_driver.update(globe, &self.queue, world.sample_config(), &save_dir, &view);
+        self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view);
     }
 
     pub fn globe_stats(&self) -> globe_driver::GlobeStats {

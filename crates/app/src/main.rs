@@ -4184,6 +4184,7 @@ fn main() -> Result<()> {
                                 gpu.update_globe(world, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
                                 cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
                                 cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
+                                cpu_stats.globe_bake_ms = gpu.globe_stats().bake_ms;
                                 let cull_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
@@ -4408,6 +4409,7 @@ fn main() -> Result<()> {
                                 gpu.update_globe(world, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
                                 cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
                                 cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
+                                cpu_stats.globe_bake_ms = gpu.globe_stats().bake_ms;
                                 let cull_proj = Mat4::perspective_rh(
                                     view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians(),
                                     gpu.aspect_ratio(),
@@ -4886,8 +4888,7 @@ fn main() -> Result<()> {
                                                 log_benchmark_summary(&summary, &benchmark_state.config, gpu.vsync());
                                                 let globe = gpu.globe_stats();
                                                 let upload_kb = summary.history.iter().map(|s| f64::from(s.cpu.globe_upload_bytes)).sum::<f64>() / 1024.0;
-                                                // The worker does not report bake time yet, so bake_ms is 0.
-                                                println!("[benchmark] globe resident={} drawn={} wanted={} bake_ms=0 upload_kb={upload_kb:.1}", globe.resident, globe.drawn, globe.wanted);
+                                                println!("[benchmark] globe resident={} drawn={} wanted={} bake_ms={:.3} upload_kb={upload_kb:.1}", globe.resident, globe.drawn, globe.wanted, summary.cpu_avg.globe_bake_ms);
                                                 elwt.exit();
                                             }
                                         }

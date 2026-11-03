@@ -20,6 +20,7 @@ pub struct CpuFrameStats {
     /// Globe driver wall time and the tile bytes it uploaded this frame.
     pub globe_ms: f32,
     pub globe_upload_bytes: f32,
+    pub globe_bake_ms: f32,
     pub culling_ms: f32,
     pub torch_ms: f32,
     pub weather_ms: f32,
@@ -220,6 +221,7 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
             acc.horizon_ms += sample.cpu.horizon_ms;
             acc.globe_ms += sample.cpu.globe_ms;
             acc.globe_upload_bytes += sample.cpu.globe_upload_bytes;
+            acc.globe_bake_ms += sample.cpu.globe_bake_ms;
             acc.culling_ms += sample.cpu.culling_ms;
             acc.torch_ms += sample.cpu.torch_ms;
             acc.weather_ms += sample.cpu.weather_ms;
@@ -238,6 +240,7 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
         horizon_ms: sum.horizon_ms / denom,
         globe_ms: sum.globe_ms / denom,
         globe_upload_bytes: sum.globe_upload_bytes / denom,
+        globe_bake_ms: sum.globe_bake_ms / denom,
         culling_ms: sum.culling_ms / denom,
         torch_ms: sum.torch_ms / denom,
         weather_ms: sum.weather_ms / denom,

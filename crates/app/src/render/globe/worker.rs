@@ -8,7 +8,7 @@ use engine_voxel::WorldSampleConfig;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::Duration;
 
@@ -22,6 +22,7 @@ pub struct Worker {
     results: Receiver<TileData>,
     pending: RefCell<VecDeque<TileData>>,
     alive: Arc<AtomicBool>,
+    bake_nanos: Arc<AtomicU64>,
 }
 
 pub(crate) fn tile_bytes(t: &TileData) -> usize {
@@ -32,19 +33,28 @@ impl Worker {
     /// Spawns a worker that bakes with `bake_tile`, one budgeted turn per call.
     pub fn spawn(cfg: WorldSampleConfig, cache: TileCache, budget_per_turn: Duration) -> Worker {
         let mut partial: HashMap<TileId, (TileData, BakeCursor)> = HashMap::new();
+        let bake_nanos = Arc::new(AtomicU64::new(0));
+        let counter = bake_nanos.clone();
         let bake = move |cfg: &WorldSampleConfig, id: TileId| {
             if !partial.contains_key(&id) && partial.len() >= MAX_PARTIAL {
                 partial.clear();
             }
             let (data, cursor) =
                 partial.entry(id).or_insert_with(|| (TileData::empty(id), BakeCursor::default()));
-            if bake_tile(cfg, id, data, cursor, Budget::wall(budget_per_turn)) {
-                partial.remove(&id).map(|(d, _)| d)
-            } else {
-                None
-            }
+            // Wall time on the worker thread only; it feeds the bake_ms stat, never a decision.
+            let start = std::time::Instant::now();
+            let done = bake_tile(cfg, id, data, cursor, Budget::wall(budget_per_turn));
+            counter.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            if done { partial.remove(&id).map(|(d, _)| d) } else { None }
         };
-        Worker::spawn_with(cfg, bake, cache)
+        let mut worker = Worker::spawn_with(cfg, bake, cache);
+        worker.bake_nanos = bake_nanos;
+        worker
+    }
+
+    /// Returns and clears the bake wall time accumulated since the last call.
+    pub fn take_bake_nanos(&self) -> u64 {
+        self.bake_nanos.swap(0, Ordering::Relaxed)
     }
 
     /// Spawns a worker around `bake`, which returns `None` until a tile completes.
@@ -68,7 +78,7 @@ impl Worker {
         if spawned.is_err() {
             alive.store(false, Ordering::Release);
         }
-        Worker { requests, results, pending: RefCell::new(VecDeque::new()), alive }
+        Worker { requests, results, pending: RefCell::new(VecDeque::new()), alive, bake_nanos: Arc::new(AtomicU64::new(0)) }
     }
 
     /// Replaces the queue with `ids`, deduplicated in the caller's nearest-first order.

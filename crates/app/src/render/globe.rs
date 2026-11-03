@@ -22,9 +22,10 @@ pub fn active() -> bool {
     })
 }
 
-/// Whether the flag forces the globe on the surface too, so orbit views measure on any world.
+/// Whether `--benchmark-globe` forces the globe on the surface tier too.
 ///
-/// Both switches force today; a planet world type will enable the globe without forcing it.
+/// `VOXEL_GLOBE=1` only enables the globe; it still skips the surface tier.
 pub fn forced() -> bool {
-    active()
+    static FORCED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FORCED.get_or_init(|| std::env::args().any(|arg| arg == "--benchmark-globe"))
 }
