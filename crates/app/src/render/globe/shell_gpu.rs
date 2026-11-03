@@ -107,8 +107,9 @@ pub fn pipeline(
             compilation_options: Default::default(),
             targets: &[color, receiver],
         }),
-        // Ground tiles draw both faces so a skirt wall shows whichever way it faces the eye.
-        primitive: wgpu::PrimitiveState { cull_mode: if shell { Some(wgpu::Face::Back) } else { None }, ..Default::default() },
+        // Skirt walls face out of their tile, toward the neighbour a seam is seen from. Drawing
+        // back faces too put the inside of the far hemisphere over the sky.
+        primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
         // Same depth state as the world pipeline, so chunks and assets sort against the globe.
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,

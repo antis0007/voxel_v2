@@ -67,6 +67,17 @@ fn gpu_globe_fills_unowned_columns_inside_the_disc_and_fades_past_it() {
 #[test]
 #[ignore = "needs a GPU; run with just test-gpu gpu_globe"]
 fn gpu_globe_level_mismatch_seam_shows_no_background() {
+    level_mismatch_seam(-1.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run with just test-gpu gpu_globe"]
+fn gpu_globe_level_mismatch_seam_shows_no_background_from_the_fine_side() {
+    level_mismatch_seam(1.0);
+}
+
+/// `side` -1 looks from over the coarse tile, +1 from over the fine one.
+fn level_mismatch_seam(side: f64) {
     // A level-1 tile beside a level-2 tile on the shared edge x = 0 of face 2. The fine edge
     // spikes 200 m at odd samples; without skirts the coarse edge leaves slots onto the sky.
     let coarse = TileData::empty(TileId { face: 2, level: 1, x: 0, y: 0 });
@@ -77,8 +88,8 @@ fn gpu_globe_level_mismatch_seam_shows_no_background() {
     }
     let target = chart::join(engine_core::cube_sphere::Face::ALL[2], DVec3::new(0.0, 0.0, -12_000.0));
     let up = chart::to_body(target).normalize();
-    // Over the coarse side, looking across the edge so the slots face the eye.
-    let west = (chart::to_body(target + DVec3::new(-100.0, 0.0, 0.0)) - chart::to_body(target)).normalize();
+    // Looking across the edge so the slots face the eye.
+    let west = (chart::to_body(target + DVec3::new(side * 100.0, 0.0, 0.0)) - chart::to_body(target)).normalize();
     let eye_body = chart::to_body(target) + (up * 0.8 + west * 0.6).normalize() * 3_000.0;
     let frame = render_masked(vec![coarse, fine], eye_body, look(eye_body, chart::to_body(target), 20.0), 256, None);
     let background = frame.color.iter().filter(|px| **px == CLEAR).count();
