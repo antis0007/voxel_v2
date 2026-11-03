@@ -43,3 +43,11 @@ fn only_faces_in_front_of_the_limb_rebake() {
     // On the surface the horizon is at 90 degrees, so the four side faces still reach it.
     assert!(!face_in_front(1, chart::to_body(DVec3::ZERO)));
 }
+
+#[test]
+fn shell_faces_wait_when_tiles_used_the_frame_budget() {
+    let face = 512 * 512;
+    assert_eq!(shell_faces_within(2 * 1024 * 1024, 1_900_000, face, 6), 0);
+    assert_eq!(shell_faces_within(2 * 1024 * 1024, 0, face, 6), 6);
+    assert_eq!(shell_faces_within(2 * 1024 * 1024, 1_000_000, face, 6), 4);
+}

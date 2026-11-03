@@ -21,7 +21,7 @@ const MAX_REQUEST: usize = 64;
 const BAKE_TURN: Duration = Duration::from_millis(2);
 /// 30 s assuming 60 Hz; frames rather than wall time keep the drop off `Instant`.
 const SURFACE_DROP_FRAMES: u32 = 1_800;
-/// Shell and night-light refresh: 30 s of game time at 60 Hz.
+/// Shell and night-light refresh in frames: 30 s of game time at 60 Hz.
 const SHELL_FRAMES: u64 = 1_800;
 /// Angle from a face normal to its corner, `acos(1 / sqrt(3))`.
 const FACE_CORNER_RAD: f64 = 0.955_316_6;
@@ -114,6 +114,8 @@ pub struct GlobeDriver {
     last_shell: Option<u64>,
     light_count: u32,
     march: bool,
+    /// Finished faces waiting for upload budget.
+    shell_pending: std::collections::VecDeque<super::globe::shell_worker::ShellBake>,
 }
 
 impl Default for GlobeDriver {
@@ -133,6 +135,7 @@ impl Default for GlobeDriver {
             last_shell: None,
             light_count: 0,
             march: true,
+            shell_pending: std::collections::VecDeque::new(),
         }
     }
 }
@@ -170,7 +173,7 @@ impl GlobeDriver {
         cfg: WorldSampleConfig,
         save_dir: &dyn Fn() -> PathBuf,
         view: &GlobeView,
-        lights: &dyn Fn() -> Vec<Light>,
+        lights: &dyn Fn(DVec3) -> Vec<Light>,
     ) {
         let start = Instant::now();
         self.frame += 1;
@@ -182,6 +185,10 @@ impl GlobeDriver {
             self.stats = GlobeStats::default();
             if step == Step::DropWorker {
                 self.worker = None;
+                // The next running frame respawns it and rebakes all six faces.
+                self.shell_worker = None;
+                self.last_shell = None;
+                self.shell_pending.clear();
             }
             return;
         }
@@ -210,7 +217,7 @@ impl GlobeDriver {
         scheduler::keep_set(&selection.draw, &mut self.keep);
         let frame = chart::frame(view.eye_m);
         let sun = (frame * view.sun_dir.as_dvec3()).normalize_or_zero().as_vec3();
-        self.refresh_shell(globe, queue, view, eye_body, lights);
+        let shell_bytes = self.refresh_shell(globe, queue, view, eye_body, incoming_bytes, lights);
         let eye = eye_body.as_vec3();
         let uniform = GlobeUniform {
             eye_body: [eye.x, eye.y, eye.z, self.light_count as f32],
@@ -229,7 +236,7 @@ impl GlobeDriver {
             resident: frame_stats.resident,
             drawn: frame_stats.drawn,
             wanted: selection.wanted.len(),
-            upload_bytes: incoming_bytes - per_tile * frame_stats.dropped,
+            upload_bytes: incoming_bytes - per_tile * frame_stats.dropped + shell_bytes,
             cpu_ms: start.elapsed().as_secs_f32() * 1000.0,
             dropped: frame_stats.dropped,
             bake_ms: bake_nanos as f32 / 1.0e6,
@@ -237,17 +244,34 @@ impl GlobeDriver {
         self.previous_draw = selection.draw;
     }
 
-    /// Uploads finished shell faces; every `SHELL_FRAMES` requests the faces in front of the
-    /// limb and rebuilds the night lights. The first round bakes all six so the shell can draw.
-    fn refresh_shell(&mut self, globe: &mut Globe, queue: &wgpu::Queue, view: &GlobeView, eye_body: DVec3, lights: &dyn Fn() -> Vec<Light>) {
+    /// Uploads shell faces within the frame budget, returning their bytes; every `SHELL_FRAMES`
+    /// requests faces in front of the limb (all six the first time) and rebuilds the lights.
+    fn refresh_shell(
+        &mut self,
+        globe: &mut Globe,
+        queue: &wgpu::Queue,
+        view: &GlobeView,
+        eye_body: DVec3,
+        tile_bytes: usize,
+        lights: &dyn Fn(DVec3) -> Vec<Light>,
+    ) -> usize {
+        if self.shell_worker.as_ref().is_some_and(|w| !w.alive()) {
+            self.shell_worker = None;
+        }
         if self.shell_worker.is_none() && self.last_shell.is_none() {
             self.shell_worker = ShellWorker::spawn();
         }
         if let Some(worker) = &self.shell_worker {
-            globe.upload_shell(queue, &worker.drain());
+            self.shell_pending.extend(worker.drain());
         }
+        let face_bytes = self.shell_pending.front().map_or(0, |b| b.coverage.len());
+        let n = shell_faces_within(DRAIN_BYTES, tile_bytes, face_bytes, self.shell_pending.len());
+        let ready: Vec<_> = self.shell_pending.drain(..n).collect();
+        globe.upload_shell(queue, &ready);
+        let uploaded = ready.iter().map(|b| b.coverage.len()).sum();
+        // Frames, not game seconds: 1,800 frames is 30 s only at 60 Hz.
         if self.last_shell.is_some_and(|f| self.frame - f < SHELL_FRAMES) {
-            return;
+            return uploaded;
         }
         let first = self.last_shell.is_none();
         self.last_shell = Some(self.frame);
@@ -257,8 +281,17 @@ impl GlobeDriver {
                 worker.request(cfg, view.sky_time_s, face);
             }
         }
-        self.light_count = globe.upload_lights(queue, &lights());
+        self.light_count = globe.upload_lights(queue, &lights(eye_body));
+        uploaded
     }
+}
+
+/// Faces that fit in what the tile drain left of `budget`; the rest wait a frame.
+pub fn shell_faces_within(budget: usize, tile_bytes: usize, face_bytes: usize, pending: usize) -> usize {
+    if face_bytes == 0 {
+        return pending;
+    }
+    (budget.saturating_sub(tile_bytes) / face_bytes).min(pending)
 }
 
 #[cfg(test)]

@@ -3914,7 +3914,7 @@ impl Gpu {
             clouds: day.cloud_controls(),
             weather_seed: day.weather_seed(),
         };
-        let lights = || globe::shell::night_lights(world);
+        let lights = |eye_body| globe::shell::night_lights(world, eye_body);
         self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &lights);
     }
 
@@ -4837,6 +4837,10 @@ impl Gpu {
             // Above the top slab the globe's cloud shell replaces the march and its composite.
             let march_handoff = !(self.globe_visible && self.globe.is_some()) || self.globe_driver.march_allowed();
             let march = draw_clouds() && march_handoff;
+            if !march_handoff {
+                // History from before the handoff would blend old clouds in on descent.
+                self.cloud_history_valid = false;
+            }
             {
                 let mut cloud_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("cloud raymarch pass"),

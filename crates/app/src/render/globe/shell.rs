@@ -12,6 +12,7 @@ const ANCHORAGE_RADIUS_M: f32 = 1_500.0;
 const FACTORY_INTENSITY: f32 = 0.6;
 const FACTORY_RADIUS_M: f32 = 400.0;
 const NODES_PER_LIGHT: u32 = 64;
+const MIN_CLUSTER_NODES: u32 = 8;
 /// The march's own cutoff margin above the top slab.
 const MARCH_MARGIN_M: f64 = 500.0;
 /// `CLOUD_ADVECTION_SPEED_SCALE * cloud_layer_speed_mult(low)` in cloud_shader.wgsl.
@@ -48,7 +49,7 @@ pub fn wind_offset(controls: &CloudControls, time_s: f32) -> Vec2 {
 }
 
 /// Chart metres of texel centre `i` on a face edge of `resolution` texels.
-fn texel_chart_m(i: u32, resolution: u32) -> f64 {
+pub(crate) fn texel_chart_m(i: u32, resolution: u32) -> f64 {
     -HALF_M + (f64::from(i) + 0.5) * 2.0 * HALF_M / f64::from(resolution)
 }
 
@@ -83,21 +84,24 @@ pub fn volumetric_clouds_enabled(altitude_m: f64, top_slab_m: f64) -> bool {
     altitude_m <= top_slab_m + MARCH_MARGIN_M
 }
 
-/// Caps to `MAX_LIGHTS`, strongest first; equal intensities keep input order.
-pub fn night_lights_from(sites: &[(DVec3, f32)], factory_clusters: &[(DVec3, u32)]) -> Vec<Light> {
-    let light = |body: DVec3, radius_m, intensity| {
+/// Caps to `MAX_LIGHTS`: strongest first, then nearest `eye_body`, so equal lights favour the view.
+/// A chunk with fewer than `MIN_CLUSTER_NODES` nodes gets no light; larger ones get one light
+/// of `0.6 * ceil(n / 64)`.
+pub fn night_lights_from(sites: &[(DVec3, f32)], factory_clusters: &[(DVec3, u32)], eye_body: DVec3) -> Vec<Light> {
+    let mut out: Vec<(f64, Light)> = Vec::with_capacity(sites.len() + factory_clusters.len());
+    let mut push = |body: DVec3, radius_m, intensity| {
         let b = body.as_vec3();
-        Light { body: [b.x, b.y, b.z], radius_m, intensity, pad: [0.0; 3] }
+        out.push((body.distance_squared(eye_body), Light { body: [b.x, b.y, b.z], radius_m, intensity, pad: [0.0; 3] }));
     };
-    let mut out: Vec<Light> = sites.iter().map(|(body, i)| light(*body, ANCHORAGE_RADIUS_M, *i)).collect();
-    for (body, nodes) in factory_clusters {
-        for _ in 0..nodes.div_ceil(NODES_PER_LIGHT) {
-            out.push(light(*body, FACTORY_RADIUS_M, FACTORY_INTENSITY));
-        }
+    for (body, intensity) in sites {
+        push(*body, ANCHORAGE_RADIUS_M, *intensity);
     }
-    out.sort_by(|a, b| b.intensity.total_cmp(&a.intensity));
+    for (body, nodes) in factory_clusters.iter().filter(|(_, n)| *n >= MIN_CLUSTER_NODES) {
+        push(*body, FACTORY_RADIUS_M, FACTORY_INTENSITY * nodes.div_ceil(NODES_PER_LIGHT) as f32);
+    }
+    out.sort_by(|a, b| b.1.intensity.total_cmp(&a.1.intensity).then(a.0.total_cmp(&b.0)));
     out.truncate(MAX_LIGHTS);
-    out
+    out.into_iter().map(|(_, light)| light).collect()
 }
 
 /// Chart point to body space, or `None` outside the six faces.
@@ -107,7 +111,7 @@ fn body_of(world_x: f64, world_z: f64) -> Option<DVec3> {
 }
 
 /// Anchorage sites over the whole chart and factory nodes clustered by chunk.
-pub fn night_lights(world: &World) -> Vec<Light> {
+pub fn night_lights(world: &World, eye_body: DVec3) -> Vec<Light> {
     let cell = f64::from(crate::world::orbital::CELL_M);
     let (x0, x1) = ((-PITCH_M * 0.5 / cell).floor() as i32, ((5.5 * PITCH_M) / cell).ceil() as i32);
     let z_cells = (HALF_M / cell).ceil() as i32;
@@ -133,65 +137,9 @@ pub fn night_lights(world: &World) -> Vec<Light> {
             body_of(centre.x, centre.z).map(|b| (b, n))
         })
         .collect();
-    night_lights_from(&sites, &clusters)
+    night_lights_from(&sites, &clusters, eye_body)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::world::CloudWeatherField;
-
-    #[test]
-    fn shell_coverage_matches_the_weather_field_at_face_centres() {
-        let controls = CloudControls { coverage: 0.7, ..CloudControls::default() };
-        let mut field = CloudWeatherField::new(74);
-        field.update(Vec2::ZERO, 0.0, controls, 74);
-        let res = 512;
-        let cfg = ShellConfig { resolution: res, controls, weather_seed: 74 };
-        let expected = field.coverage_at(Vec2::ZERO) * 255.0;
-        let baked = bake_shell(&cfg, 0.0, 0);
-        // The four texels around the chart centre: what the shader's bilinear tap at uv 0.5 reads.
-        let (lo, hi) = (res / 2 - 1, res / 2);
-        let texel = |i: u32, j: u32| f32::from(baked[(j * res + i) as usize]);
-        let got = (texel(lo, lo) + texel(hi, lo) + texel(lo, hi) + texel(hi, hi)) * 0.25;
-        assert!((got - expected).abs() <= 8.0, "shell {got} field {expected}");
-    }
-
-    #[test]
-    fn shell_drifts_with_the_march_wind() {
-        let controls = CloudControls { coverage: 0.7, ..CloudControls::default() };
-        let cfg = ShellConfig { resolution: 8, controls, weather_seed: 74 };
-        let drift = wind_offset(&controls, 60.0);
-        let x = texel_chart_m(4, 8) as f32;
-        let expected = coverage_at(Vec2::new(x, x) + drift, controls, 74) * 255.0;
-        let got = f32::from(bake_shell(&cfg, 60.0, 0)[4 * 8 + 4]);
-        assert!((got - expected).abs() <= 1.0);
-    }
-
-    #[test]
-    fn night_lights_cap_at_256_strongest_first() {
-        let sites: Vec<(DVec3, f32)> = (0..300).map(|i| (DVec3::new(f64::from(i), 0.0, 0.0), 3.0 - i as f32 * 0.001)).collect();
-        let clusters = [(DVec3::X, 640u32)];
-        let lights = night_lights_from(&sites, &clusters);
-        assert_eq!(lights.len(), 256);
-        assert!(lights.windows(2).all(|w| w[0].intensity >= w[1].intensity));
-        assert_eq!(lights[0].intensity, 3.0);
-        let few = night_lights_from(&sites[..2], &clusters);
-        assert_eq!(few.len(), 2 + 10);
-        assert_eq!(few[2].intensity, FACTORY_INTENSITY);
-    }
-
-    #[test]
-    fn shader_shell_height_matches_the_host() {
-        let source = crate::shader_sources::globe_shader_source();
-        assert!(source.contains(&format!("const GLOBE_SHELL_M: f32 = {SHELL_HEIGHT_M:.1};")));
-    }
-
-    #[test]
-    fn cloud_march_is_off_above_the_top_slab() {
-        assert!(!volumetric_clouds_enabled(5_000.0, 4_000.0));
-        assert!(volumetric_clouds_enabled(4_300.0, 4_000.0));
-        let top = cloud_top_slab_m(&CloudControls::default());
-        assert!(top > 7_000.0 && top < 8_000.0, "{top}");
-    }
-}
+#[path = "shell_tests.rs"]
+mod tests;

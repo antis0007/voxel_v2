@@ -629,10 +629,11 @@ impl CloudWeatherField {
         *self = Self::new(seed);
     }
 
-    /// Coverage at a world point for the controls and seed of the last update.
-    pub fn coverage_at(&self, world_xz_m: Vec2) -> f32 {
-        let level = &self.levels[0];
-        coverage_at(world_xz_m, level.last_controls, level.last_seed)
+    /// World position and stored coverage of one clipmap texel.
+    #[cfg(test)]
+    pub fn stored_coverage(&self, level: usize, x: usize, y: usize) -> (Vec2, f32) {
+        let l = &self.levels[level];
+        (l.texel_world_position(l.region.origin_m, x, y), l.primary_rgba[l.texel_index(x, y)][0])
     }
 
     pub fn gpu_meta(&self) -> [WeatherClipmapGpuMeta; WEATHER_CLIPMAP_LEVEL_COUNT] {

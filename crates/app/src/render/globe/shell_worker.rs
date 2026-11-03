@@ -2,6 +2,8 @@
 //! 262,144-tap bake never preempts tile bakes or their resumption state.
 
 use super::shell::{ShellConfig, bake_shell};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 pub struct ShellBake {
@@ -13,6 +15,7 @@ pub struct ShellBake {
 pub struct ShellWorker {
     requests: Sender<(ShellConfig, f32, u8)>,
     results: Receiver<ShellBake>,
+    alive: Arc<AtomicBool>,
 }
 
 impl ShellWorker {
@@ -20,22 +23,32 @@ impl ShellWorker {
     pub fn spawn() -> Option<ShellWorker> {
         let (requests, request_rx) = channel::<(ShellConfig, f32, u8)>();
         let (result_tx, results) = channel();
+        let alive = Arc::new(AtomicBool::new(true));
+        let flag = alive.clone();
         std::thread::Builder::new()
             .name("globe-shell".into())
             .spawn(move || {
-                while let Ok((cfg, time_s, face)) = request_rx.recv() {
-                    let coverage = bake_shell(&cfg, time_s, face);
-                    if result_tx.send(ShellBake { face, resolution: cfg.resolution, coverage }).is_err() {
-                        return;
+                // A panicking bake leaves the shell at its last faces; the driver sees `alive` drop.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    while let Ok((cfg, time_s, face)) = request_rx.recv() {
+                        let coverage = bake_shell(&cfg, time_s, face);
+                        if result_tx.send(ShellBake { face, resolution: cfg.resolution, coverage }).is_err() {
+                            return;
+                        }
                     }
-                }
+                }));
+                flag.store(false, Ordering::Release);
             })
             .ok()?;
-        Some(ShellWorker { requests, results })
+        Some(ShellWorker { requests, results, alive })
     }
 
     pub fn request(&self, cfg: ShellConfig, time_s: f32, face: u8) {
         let _ = self.requests.send((cfg, time_s, face));
+    }
+
+    pub fn alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
     }
 
     pub fn drain(&self) -> Vec<ShellBake> {
