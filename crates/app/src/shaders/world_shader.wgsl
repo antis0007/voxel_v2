@@ -2039,7 +2039,26 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         // Leaf clumps break flat voxel planes; filtered out before they alias.
         let leaf_cluster = surface_noise_filtered(texel_centre(continuous_uv) * 2.2
             + vec2<f32>(17.0, -9.0), metric_footprint * 2.8);
-        color = mix(broadleaf, needles, pine) * (0.93 + leaf_cluster * 0.14);
+        // Texel leaves: jittered 3-texel clumps with dark gaps between them
+        // and a lit upper rim, so a crown reads as layered leaves, not a
+        // painted cube. Faded by texel footprint before it can alias.
+        let lt = physical_uv * PIXEL_RES;
+        let ltex = floor(lt);
+        let clump_cell = floor(lt / 3.0);
+        let clump_id = surface_hash(clump_cell + vec2<f32>(41.0, -13.0));
+        let clump_c = clump_cell * 3.0 + vec2<f32>(1.5) + (vec2<f32>(
+            surface_hash(clump_cell + vec2<f32>(7.0, 3.0)),
+            surface_hash(clump_cell + vec2<f32>(-2.0, 29.0))) - 0.5) * 1.4;
+        let clump_d = length((ltex + 0.5 - clump_c) * vec2<f32>(1.0, 1.25));
+        let gap = step(1.75 - pine * 0.35, clump_d) * step(0.22, clump_id);
+        let rim = step(0.0, ltex.y + 0.5 - clump_c.y) * step(0.8, clump_d) * (1.0 - gap);
+        let leaf_w = surface_detail_weight(metric_footprint * PIXEL_RES);
+        var leaf_value = 0.90 + surface_hash(ltex + vec2<f32>(5.0, 17.0)) * 0.12 + (clump_id - 0.5) * 0.16;
+        leaf_value = mix(leaf_value, 0.46, gap);
+        leaf_value = mix(leaf_value, leaf_value * 1.14, rim);
+        // Keep the mean near 1 so distant crowns hold their tone after the fade.
+        let leaf_texel = mix(1.0, leaf_value / 0.93, leaf_w);
+        color = mix(broadleaf, needles, pine) * (0.93 + leaf_cluster * 0.14) * leaf_texel;
     } else if kind == 9 {
         color *= 1.0 + mottling * 0.2;
     } else if kind == 11 {
