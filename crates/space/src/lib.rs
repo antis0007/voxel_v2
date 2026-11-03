@@ -17,6 +17,7 @@
 //! Frame: the system frame has +Y north and its root at the origin. Lengths are
 //! metres, times are seconds, and angles in code are radians (degrees in data).
 mod data;
+mod design;
 #[cfg(test)]
 mod fixtures;
 mod kepler;
@@ -30,6 +31,7 @@ pub use data::{
     BinaryDef, BodyDef, BodyKind, OrbitDef, RotationDef, RotationPeriod, SystemDef, SystemsFile,
     parse,
 };
+pub use design::{Issue, Moon, MoonDesign, audit, density, design_moon, roche_limit};
 pub use kepler::{Elements, G, solve_kepler};
 pub use path::orbit_path;
 pub use system::{BodyId, Snapshot, Spin, System};
