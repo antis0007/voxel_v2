@@ -77,16 +77,7 @@ fn tree_plan(ctx: &egui::Context, survival: &SurvivalInventory, bench: bool, ite
     plan
 }
 
-fn amount_text(n: f32) -> String {
-    if (n - n.round()).abs() < 1e-3 {
-        format!("{}", n.round() as i64)
-    } else if n >= 10.0 {
-        format!("{n:.1}")
-    } else {
-        let s = format!("{n:.2}");
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    }
-}
+use super::icons::amount_text;
 
 /// Whole items the player carries, counting partial resource remainders.
 fn stock_of(survival: &SurvivalInventory, item: Item) -> f32 {

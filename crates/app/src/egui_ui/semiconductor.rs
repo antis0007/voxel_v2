@@ -24,13 +24,7 @@ enum Feed {
     Item(Item),
 }
 
-fn amount_text(n: f32) -> String {
-    if (n - n.round()).abs() < 1e-3 {
-        format!("{}", n.round() as i64)
-    } else {
-        format!("{n:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
-    }
-}
+use super::icons::amount_text;
 
 /// One framed cell: sprite, amount at the lower right, `hover` on hover.
 fn cell(ui: &mut egui::Ui, feed: Feed, amount: Option<f32>, edge: Option<Color32>, dim: bool, hover: &str) -> egui::Response {

@@ -1025,6 +1025,14 @@ fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, overr
         super::magic_fx::paint(p, drawn, rows, effect, source);
     }
 }
+/// Slot quantity label: whole, else 1 decimal from 10 up and 2 below, zeros trimmed.
+pub(crate) fn amount_text(n: f32) -> String {
+    if (n - n.round()).abs() < 1e-3 {
+        return format!("{}", n.round() as i64);
+    }
+    let s = if n >= 10.0 { format!("{n:.1}") } else { format!("{n:.2}") };
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
 pub fn frame(p: &egui::Painter, r: Rect, selected: bool) {
     super::grimoire::slot(p, r, selected);
 }
@@ -1040,11 +1048,7 @@ pub fn slot(
     frame(ui.painter(), r, selected);
     paint(ui.painter(), r.shrink(5.0), icon);
     if let Some(n) = quantity {
-        let text = if n % 64 == 0 {
-            format!("{}", n / 64)
-        } else {
-            format!("{:.2}", n as f32 / 64.0)
-        };
+        let text = amount_text(n as f32 / 64.0);
         ui.painter().text(
             r.right_bottom() - vec2(4.0, 2.0),
             egui::Align2::RIGHT_BOTTOM,
