@@ -45,6 +45,7 @@ fn validate() {
         ("sky", sky_shader_source()),
         ("sky probe", sky_probe_shader_source()),
         ("posed assets", posed_assets_shader_source()),
+        ("globe", globe_shader_source()),
         ("cloud", cloud_shader_source()),
         (
             "cloud hardware filtering",

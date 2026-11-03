@@ -20,6 +20,7 @@ const SHADER_INPUTS: &[(&str,&str)] = shader_inputs![
     "shaders/shadow_shader.wgsl", "shaders/ui_shader.wgsl", "shaders/postprocess.wgsl",
     "shaders/present.wgsl", "shaders/color_shared.wgsl", "shaders/weather_clip_shared.wgsl", "fluid_compute.wgsl", "shaders/indirect_shared.wgsl",
     "shaders/indirect_composite.wgsl", "shaders/indirect_gather.wgsl", "shaders/posed_assets.wgsl",
+    "shaders/globe_shader.wgsl",
 ];
 
 #[allow(dead_code)] // Called only by the build-script crate, never by rendering.
@@ -68,6 +69,12 @@ const CLOUD_COMPOSITE_SHADER_BODY: &str = include_str!("shaders/cloud_composite.
 const SKY_SHADER_BODY: &str = include_str!("shaders/sky_shader.wgsl");
 const SKY_PROBE_BODY: &str = include_str!("shaders/sky_probe.wgsl");
 const POSED_ASSETS_BODY: &str = include_str!("shaders/posed_assets.wgsl");
+const GLOBE_SHADER_BODY: &str = include_str!("shaders/globe_shader.wgsl");
+
+/// Globe tiles (`render/globe/gpu.rs`); binds only its own group, so it composes nothing else.
+pub(crate) fn globe_shader_source() -> String {
+    GLOBE_SHADER_BODY.to_owned()
+}
 
 /// Poses resident rigid scene assets (`render/posed_assets.rs`).
 pub(crate) fn posed_assets_shader_source() -> String {

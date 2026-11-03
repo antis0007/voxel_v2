@@ -1281,6 +1281,8 @@ pub struct Gpu {
     last_rotation_view_proj: Mat4,
     last_camera_forward: Vec3,
     last_world_scale: f32,
+    globe: Option<globe::gpu::Globe>,
+    globe_visible: bool,
     cloud_history_valid: bool,
     cloud_render_scale: u32,
     cloud_governor: cloud_governor::CloudGovernor,
@@ -3122,6 +3124,9 @@ impl GpuPendingInit {
                     postprocess,
                     indirect,
                     fxaa_enabled: true,
+                    globe: globe::active().then(|| globe::gpu::Globe::new(&bootstrap.device, postprocess::SCENE_FORMAT)),
+                    // Task 8 drives this from the altitude tier.
+                    globe_visible: globe::active(),
                     surface: bootstrap.surface,
                     device: bootstrap.device,
                     queue: bootstrap.queue,
@@ -4705,6 +4710,15 @@ impl Gpu {
                         pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
                         terrain_draw_calls += 1;
                     }
+                }
+                if let Some(globe) = self.globe.as_ref().filter(|_| self.globe_visible) {
+                    globe.draw(&mut pass);
+                    // The globe replaced the pipeline and group 0; the draws below use the world's.
+                    pass.set_pipeline(&self.world_pipeline);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_bind_group(1, &self.lighting_bind_group, &[]);
+                    pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
+                    pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
                 }
                 if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon) {
                     let planes =
