@@ -835,6 +835,7 @@ dependencies = [
 name = "engine_netcode"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "engine_core",
  "glam",
 ]

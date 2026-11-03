@@ -10,5 +10,12 @@ edition.workspace = true
 engine_core = { path = "../core" }
 glam = "0.32.0"
 
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "netcode"
+harness = false
+
 [lints]
 workspace = true

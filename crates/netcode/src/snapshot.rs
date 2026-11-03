@@ -39,7 +39,10 @@ fn varint_len(v: u64) -> usize {
 pub struct SnapshotWriter {
     sequence: u32,
     tracks: HashMap<u32, Track>,
-    history: VecDeque<(u32, Vec<(u32, BodyState)>)>,
+    /// Sent states per sequence, and whether an ack already applied them; applying
+    /// one twice changes nothing, so later acks skip it.
+    history: VecDeque<(u32, bool, Vec<(u32, BodyState)>)>,
+    due: Vec<(f32, u32, BodyState)>,
     entry: Vec<u8>,
     body: Vec<u8>,
 }
@@ -50,7 +53,8 @@ impl SnapshotWriter {
     pub fn write(&mut self, bodies: &[(u32, BodyState, f32)], budget: usize, out: &mut Vec<u8>) -> usize {
         self.sequence = self.sequence.wrapping_add(1);
         let seq = self.sequence;
-        let mut due: Vec<(f32, u32, BodyState)> = Vec::new();
+        let mut due = std::mem::take(&mut self.due);
+        due.clear();
         for &(id, state, priority) in bodies {
             let track = self.tracks.entry(id).or_insert(Track { born: seq, accumulated: 0.0, baseline: None, run: None });
             let settled = match track.baseline {
@@ -70,7 +74,7 @@ impl SnapshotWriter {
 
         self.body.clear();
         let mut sent = Vec::new();
-        for (_, id, state) in due {
+        for &(_, id, state) in &due {
             let Some(track) = self.tracks.get_mut(&id) else { continue };
             // A baseline older than the client's history goes as a full state.
             let (back, base) = match track.baseline {
@@ -96,7 +100,8 @@ impl SnapshotWriter {
         put_u64(out, u64::from(seq));
         put_u64(out, count as u64);
         out.extend_from_slice(&self.body);
-        self.history.push_back((seq, sent));
+        self.due = due;
+        self.history.push_back((seq, false, sent));
         while self.history.len() > HISTORY as usize {
             self.history.pop_front();
         }
@@ -105,12 +110,13 @@ impl SnapshotWriter {
 
     /// The client received `newest` and each `newest - 1 - i` whose bit `i` is set.
     pub fn acknowledge(&mut self, newest: u32, earlier: u32) {
-        for (seq, states) in &self.history {
+        for (seq, applied, states) in &mut self.history {
             let back = newest.wrapping_sub(*seq);
             let received = back == 0 || (1..=32).contains(&back) && earlier & (1 << (back - 1)) != 0;
-            if !received {
+            if !received || *applied {
                 continue;
             }
+            *applied = true;
             for (id, state) in states {
                 if let Some(track) = self.tracks.get_mut(id)
                     && !newer(track.born, *seq)

@@ -38,9 +38,41 @@ fn cell_at(brick: IVec3, index: u16) -> IVec3 {
     brick * BRICK + IVec3::new(i % BRICK, (i / BRICK) % BRICK, i / (BRICK * BRICK))
 }
 
+/// Newest value per cell of one brick, indexed directly so a repeated write is O(1)
+/// and the flush walks cells in index order without sorting.
+struct Cells {
+    present: [u64; BRICK_CELLS / 64],
+    values: [u32; BRICK_CELLS],
+    len: usize,
+}
+
+impl Cells {
+    fn set(&mut self, index: u16, value: u32) {
+        let (word, bit) = (usize::from(index) / 64, 1u64 << (index % 64));
+        if self.present[word] & bit == 0 {
+            self.present[word] |= bit;
+            self.len += 1;
+        }
+        self.values[usize::from(index)] = value;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u16, u32)> + '_ {
+        self.present.iter().enumerate().flat_map(move |(word, &bits)| {
+            let mut rest = bits;
+            std::iter::from_fn(move || {
+                (rest != 0).then(|| {
+                    let index = word * 64 + rest.trailing_zeros() as usize;
+                    rest &= rest - 1;
+                    (index as u16, self.values[index])
+                })
+            })
+        })
+    }
+}
+
 #[derive(Default)]
 struct Pending {
-    cells: Vec<(u16, u32)>,
+    cells: Option<Box<Cells>>,
     skipped: u16,
     /// Flush the brick turned stale, while it is.
     stale_since: Option<u64>,
@@ -52,6 +84,23 @@ struct Pending {
 pub struct CellStream {
     bricks: HashMap<IVec3, Pending>,
     flushes: u64,
+    /// Cleared cell sets kept for reuse, so steady traffic allocates nothing.
+    #[allow(clippy::vec_box, reason = "boxes move between bricks and this pool without copying 2 KiB")]
+    spare: Vec<Box<Cells>>,
+}
+
+impl CellStream {
+    fn recycle(&mut self, cells: Option<Box<Cells>>) {
+        if let Some(mut c) = cells {
+            c.present = [0; BRICK_CELLS / 64];
+            c.len = 0;
+            self.spare.push(c);
+        }
+    }
+}
+
+fn len(cells: &Option<Box<Cells>>) -> usize {
+    cells.as_ref().map_or(0, |c| c.len)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -69,14 +118,15 @@ impl CellStream {
         if p.stale_since.is_some() {
             return;
         }
-        let index = index_in_brick(cell);
-        match p.cells.iter_mut().find(|(i, _)| *i == index) {
-            Some(entry) => entry.1 = value,
-            None => p.cells.push((index, value)),
-        }
-        if p.cells.len() > STALE_CELLS {
-            p.cells = Vec::new();
+        let spare = &mut self.spare;
+        let cells = p.cells.get_or_insert_with(|| {
+            spare.pop().unwrap_or_else(|| Box::new(Cells { present: [0; BRICK_CELLS / 64], values: [0; BRICK_CELLS], len: 0 }))
+        });
+        cells.set(index_in_brick(cell), value);
+        if cells.len > STALE_CELLS {
+            let dropped = p.cells.take();
             p.stale_since = Some(self.flushes);
+            self.recycle(dropped);
         }
     }
 
@@ -95,7 +145,7 @@ impl CellStream {
             match p.stale_since {
                 Some(since) if now - p.last_change >= QUIET || now - since >= MAX_STALE => resend.push(brick),
                 Some(_) => {}
-                None if !p.cells.is_empty() => {
+                None if len(&p.cells) > 0 => {
                     let d = (brick - home).as_i64vec3();
                     order.push((d.dot(d), brick));
                 }
@@ -103,7 +153,9 @@ impl CellStream {
             }
         }
         for brick in &resend {
-            self.bricks.remove(brick);
+            if let Some(p) = self.bricks.remove(brick) {
+                self.recycle(p.cells);
+            }
         }
         resend.sort_by_key(|b| (b.x, b.y, b.z));
         order.sort_by_key(|&(d, b)| (d, b.x, b.y, b.z));
@@ -112,27 +164,30 @@ impl CellStream {
         let (mut written, mut cells) = (0u64, 0usize);
         for (_, brick) in order {
             let Some(p) = self.bricks.get_mut(&brick) else { continue };
-            if cells + p.cells.len() > budget {
+            let n = len(&p.cells);
+            if cells + n > budget {
                 p.skipped += 1;
                 if p.skipped >= STALE_SKIPS {
-                    p.cells = Vec::new();
+                    let dropped = p.cells.take();
                     p.stale_since = Some(now);
+                    self.recycle(dropped);
                 }
                 continue;
             }
             let rel = brick - home;
             [rel.x, rel.y, rel.z].iter().for_each(|&c| put_i64(&mut body, i64::from(c)));
-            put_u64(&mut body, p.cells.len() as u64);
-            p.cells.sort_unstable_by_key(|(i, _)| *i);
+            put_u64(&mut body, n as u64);
             let mut prev = 0u16;
-            for &(index, value) in &p.cells {
+            for (index, value) in p.cells.iter().flat_map(|c| c.iter()) {
                 put_u64(&mut body, u64::from(index - prev));
                 put_u64(&mut body, u64::from(value));
                 prev = index;
             }
-            cells += p.cells.len();
+            cells += n;
             written += 1;
-            self.bricks.remove(&brick);
+            if let Some(p) = self.bricks.remove(&brick) {
+                self.recycle(p.cells);
+            }
         }
         [home.x, home.y, home.z].iter().for_each(|&c| put_i64(out, i64::from(c)));
         put_u64(out, written);
