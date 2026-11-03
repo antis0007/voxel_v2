@@ -268,7 +268,8 @@ impl Adventure {
                 engine::action_name(enemy)
             } else if enemy.kind == glassweaver::KIND {
                 glassweaver::action_name(enemy)
-            } else if enemy.kind==matron::KIND {matron::action_name(enemy)} else {None},
+            } else if enemy.kind==matron::KIND {matron::action_name(enemy)}
+            else if enemy.kind == thunderhen::KIND { thunderhen::action_name(enemy) } else {None},
             name: bosses::title(enemy),
             health: enemy.health,
             maximum: enemy.max_health(),

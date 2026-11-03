@@ -16,6 +16,8 @@ pub use enemy_review::checkpoint as enemy_review_checkpoint;
 mod bosses;
 mod action;
 mod matron;
+mod conductors;
+mod thunderhen;
 mod engine;
 pub use engine::review::{install as install_ossuary_review, observe as observe_ossuary_review, input as ossuary_review_input, casting as ossuary_review_cast, automatic as ossuary_review_automatic, checkpoint as ossuary_review_checkpoint};
 mod glassweaver;
@@ -155,7 +157,7 @@ pub fn enemy_name(kind: u32) -> &'static str {
     }
 }
 fn is_boss(kind: u32) -> bool {
-    matches!(kind, 6..=8 | tollkeeper::KIND | matron::KIND)
+    matches!(kind, 6..=8 | tollkeeper::KIND | matron::KIND | thunderhen::KIND)
 }
 fn enemy_health(kind: u32) -> f32 {
     if let Some(species) = bestiary::species(kind) {
@@ -239,6 +241,7 @@ pub struct Enemy {
     hart: hart::State,
     toll: tollkeeper::State,
     matron: matron::State,
+    hen: thunderhen::State,
     engine: engine::State,
     glass: glassweaver::State,
     /// Grazer youth: 1 at birth, 0 when grown; the model scales with it.
@@ -293,6 +296,7 @@ impl Enemy {
             hart: hart::State::default(),
             toll: tollkeeper::State::default(),
             matron: matron::State::default(),
+            hen: thunderhen::State::default(),
             engine: engine::State::default(),
             glass: glassweaver::State::default(),
             youth: 0.0,
@@ -348,6 +352,8 @@ impl Enemy {
     pub(crate) fn center(&self) -> Vec3 {
         let height = if self.kind == 8 {
             1.65
+        } else if self.kind == thunderhen::KIND {
+            2.0
         } else if is_boss(self.kind) {
             1.2
         } else if self.kind == 9 {
@@ -792,6 +798,8 @@ fn free(world: &World, pos: Vec3, kind: u32) -> bool {
     let s = world.voxel_scale.meters();
     let (h, width) = if kind==matron::KIND {
         (2.5,1.1)
+    } else if kind == thunderhen::KIND {
+        (3.4, 1.3)
     } else if kind == engine::KIND {
         (1.9, 0.95)
     } else if kind == 8 {

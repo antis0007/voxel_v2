@@ -215,6 +215,9 @@ impl Adventure {
             if e.kind == 8 {
                 hart::telegraph(e, m);
             }
+            if e.kind == thunderhen::KIND {
+                thunderhen::telegraph(e, m);
+            }
             if e.tell > 0.0 && e.attack == 2 {
                 ring(
                     m,

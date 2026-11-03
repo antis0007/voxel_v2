@@ -79,6 +79,8 @@ pub fn install(world: &mut World, player: &mut Player) {
         vec![super::wildlife::SHEEP, super::wildlife::GOAT]
     } else if scenario() == "pack" {
         vec![12, 0, 11]
+    } else if scenario() == "thunderhen" {
+        vec![super::thunderhen::KIND]
     } else {
         single().map_or_else(|| vec![5, 3, 2, 9], |kind| vec![kind])
     };

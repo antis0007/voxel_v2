@@ -14,6 +14,7 @@ pub(super) fn kind(site: u32) -> u32 {
 pub fn name(kind: u32) -> &'static str {
     match kind {
         matron::KIND => "The Orchard Matron",
+        thunderhen::KIND => "Old Copper, the Thunderhen",
         tollkeeper::KIND => "The Last Tollkeeper",
         engine::KIND => "The Ossuary Engine",
         glassweaver::KIND => "The Glassweaver",
@@ -43,10 +44,16 @@ pub(super) fn variant_title(kind: u32, variant: usize) -> &'static str {
         "The Glassweaver — Aurora",
     ];
     const HART: [&str; 3] = ["Rime Hart · Sentinel", "Amethyst Hart · Sentinel", "Verdant Hart · Sentinel"];
+    const HEN: [&str; 3] = [
+        "Old Copper — Copper",
+        "Old Copper — Rust",
+        "Old Copper — Verdigris",
+    ];
     let v = variant.min(2);
     match kind {
         tollkeeper::KIND => TOLL[v],
         matron::KIND => MATRON[v],
+        thunderhen::KIND => HEN[v],
         engine::KIND => ENGINE[v],
         glassweaver::KIND => GLASS[v],
         _ => HART[v],
@@ -79,6 +86,7 @@ pub(super) fn color(kind: u32) -> [f32; 3] {
 pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
     match e.kind {
         matron::KIND => matron::model(e, m, time),
+        thunderhen::KIND => thunderhen::model(e, m, time),
         engine::KIND => engine::model(e, m, time),
         tollkeeper::KIND => tollkeeper::model(e, m, time),
         glassweaver::KIND => glassweaver::model(e, m, time),
@@ -100,6 +108,7 @@ pub(super) fn tick(
 ) -> (f32, Vec3) {
     match e.kind {
         matron::KIND => matron::tick(e, world, feet, eye, dt, shots, sounds, navigation_budget),
+        thunderhen::KIND => thunderhen::tick(e, world, feet, eye, dt, sounds, dirty),
         engine::KIND => engine::tick(e, world, feet, eye, dt, shots, sounds, dirty, navigation_budget),
         tollkeeper::KIND => tollkeeper::tick(e, world, feet, eye, dt, sounds, dirty),
         glassweaver::KIND => glassweaver::tick(e, world, feet, eye, dt, shots, sounds, navigation_budget),
