@@ -13,6 +13,7 @@ pub mod environment;
 pub mod fast_hash;
 pub mod hash;
 pub mod material;
+pub mod planet_frame;
 pub mod reaction;
 pub mod scale;
 pub mod time;
