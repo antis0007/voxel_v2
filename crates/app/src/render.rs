@@ -1285,6 +1285,11 @@ pub struct Gpu {
     globe: Option<globe::gpu::Globe>,
     globe_visible: bool,
     globe_driver: globe_driver::GlobeDriver,
+    tier: crate::altitude::Tier,
+    /// Published resident coverage radius in metres; the globe fades in past it.
+    globe_disc_radius_m: f32,
+    /// Set by `update_horizon` when the horizon is cleared and the globe alone draws distant ground.
+    horizon_globe_only: bool,
     cloud_history_valid: bool,
     cloud_render_scale: u32,
     cloud_governor: cloud_governor::CloudGovernor,
@@ -3130,6 +3135,9 @@ impl GpuPendingInit {
                     // Task 8 drives this from the altitude tier.
                     globe_visible: globe::active(),
                     globe_driver: globe_driver::GlobeDriver::default(),
+                    tier: crate::altitude::Tier::Surface,
+                    globe_disc_radius_m: 0.0,
+                    horizon_globe_only: false,
                     surface: bootstrap.surface,
                     device: bootstrap.device,
                     queue: bootstrap.queue,
@@ -3898,6 +3906,7 @@ impl Gpu {
 
     pub fn set_tier(&mut self, tier: crate::altitude::Tier) {
         self.globe_driver.set_tier(tier);
+        self.tier = tier;
     }
 
     /// Drives the globe for this frame; `projection` is the conventional terrain projection.
@@ -3916,6 +3925,11 @@ impl Gpu {
         };
         let lights = |eye_body| globe::shell::night_lights(world, eye_body);
         self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &lights);
+        if self.globe_driver.running() {
+            let chunk_m = CHUNK_SIZE as f32 * world.voxel_scale.meters();
+            let mask = globe::band::GlobeMask::new(*self.horizon.resident_coverage(), chunk_m, self.globe_disc_radius_m, eye_m);
+            globe.set_mask(&self.queue, &mask);
+        }
     }
 
     pub fn globe_stats(&self) -> globe_driver::GlobeStats {
@@ -3955,6 +3969,17 @@ impl Gpu {
         } else {
             0.0
         };
+        self.globe_disc_radius_m = hidden_radius;
+        if globe::active() {
+            let (clip, keep) = globe::band::horizon_clip(self.tier, eye.as_dvec3());
+            self.horizon.set_chart_clip(clip);
+            self.horizon_globe_only = !keep;
+            if !keep {
+                // Above the load stop the globe alone draws the ground.
+                self.horizon.clear_mesh();
+                return;
+            }
+        }
         self.horizon.update(
             &self.device,
             &self.queue,
@@ -3982,7 +4007,8 @@ impl Gpu {
     pub fn horizon_baked_columns(&self, columns:&[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> { self.horizon.baked_columns(columns) }
 
     pub fn horizon_ready(&self) -> bool {
-        self.horizon.mesh.is_some()
+        // Above the load stop the horizon is cleared on purpose; distant ground is the globe's.
+        if self.horizon_globe_only { self.globe_driver.stats().resident > 0 } else { self.horizon.mesh.is_some() }
     }
 
     pub fn upload_camera(
@@ -4763,9 +4789,10 @@ impl Gpu {
                     for page in &mesh.pages {
                         pass.set_vertex_buffer(0, page.vertices.slice(..));
                         pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        if mesh.cull || page.batches.iter().any(|b|b.conditional()) {
+                        let clip = self.horizon.chart_clip();
+                        if mesh.cull || clip.is_some() || page.batches.iter().any(|b|b.conditional()) {
                             for batch in &page.batches {
-                                if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) {
+                                if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) || clip.is_some_and(|c| !batch.within_clip(c)) {
                                     continue;
                                 }
                                 pass.draw_indexed(batch.indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);

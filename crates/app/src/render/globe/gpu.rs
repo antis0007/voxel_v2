@@ -7,10 +7,15 @@ use super::scheduler::Selection;
 use super::shell::Light;
 use super::shell_gpu::{self, SHELL_FACES, ShellResources};
 use super::shell_worker::ShellBake;
-use super::tile::{TILE_CELLS, TileId};
+use super::band::GlobeMask;
+use super::tile::{TILE_CELLS, TILE_SAMPLES, TileId};
 use glam::{DVec3, Mat3, Mat4, Vec3};
 
-pub const INDEX_COUNT: u32 = TILE_CELLS * TILE_CELLS * 6;
+/// Tile vertex grid edge: the 65x65 lattice plus a skirt ring (`GLOBE_SKIRT_SIDE`).
+pub const SKIRT_SIDE: u32 = TILE_SAMPLES + 2;
+pub const TILE_INDEX_COUNT: u32 = (SKIRT_SIDE - 1) * (SKIRT_SIDE - 1) * 6;
+/// The shell has no skirt; it draws the bare lattice.
+pub const SHELL_INDEX_COUNT: u32 = TILE_CELLS * TILE_CELLS * 6;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -66,8 +71,10 @@ pub struct Globe {
     shell_faces: u8,
     bind_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
+    mask: wgpu::Buffer,
     instances: wgpu::Buffer,
     indices: wgpu::Buffer,
+    shell_indices: wgpu::Buffer,
     tiles: TilePool,
     draw_count: u32,
     instance_scratch: Vec<TileInstance>,
@@ -89,41 +96,7 @@ impl Globe {
             label: Some("globe shader"),
             source: wgpu::ShaderSource::Wgsl(crate::shader_sources::globe_shader_source().into()),
         });
-        let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry { binding, visibility, ty, count: None };
-        let vertex_fragment = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
-        let texture = |sample_type| wgpu::BindingType::Texture {
-            sample_type,
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("globe layout"),
-            entries: &[
-                entry(0, vertex_fragment, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<GlobeUniform>() as u64),
-                }),
-                entry(1, wgpu::ShaderStages::VERTEX, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<TileInstance>() as u64),
-                }),
-                entry(2, wgpu::ShaderStages::VERTEX, texture(wgpu::TextureSampleType::Uint)),
-                entry(3, wgpu::ShaderStages::VERTEX, texture(wgpu::TextureSampleType::Float { filterable: false })),
-                entry(4, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                }),
-                entry(5, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
-                entry(6, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<Light>() as u64),
-                }),
-            ],
-        });
+        let layout = shell_gpu::bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("globe pipeline layout"),
             bind_group_layouts: &[&layout],
@@ -145,10 +118,20 @@ impl Globe {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let indices = wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor {
-            label: Some("globe grid indices"),
-            contents: bytemuck::cast_slice(&grid_indices()),
-            usage: wgpu::BufferUsages::INDEX,
+        let index_buffer = |label, side| {
+            wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(&grid_indices(side)),
+                usage: wgpu::BufferUsages::INDEX,
+            })
+        };
+        let indices = index_buffer("globe grid indices", SKIRT_SIDE);
+        let shell_indices = index_buffer("globe shell indices", TILE_SAMPLES);
+        // Zeroed: no resident map and no fade, so the globe draws everywhere until `set_mask`.
+        let mask = wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor {
+            label: Some("globe resident mask"),
+            contents: bytemuck::bytes_of(&<GlobeMask as bytemuck::Zeroable>::zeroed()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let tiles = TilePool::new(device);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -162,9 +145,10 @@ impl Globe {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&shell.view) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&shell.sampler) },
                 wgpu::BindGroupEntry { binding: 6, resource: shell.lights.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: mask.as_entire_binding() },
             ],
         });
-        Globe { pipeline, shell_pipeline, shell, shell_faces: 0, bind_group, uniform, instances, indices, tiles, draw_count: 0, instance_scratch: Vec::with_capacity(MAX_RESIDENT + SHELL_FACES as usize) }
+        Globe { pipeline, shell_pipeline, shell, shell_faces: 0, bind_group, uniform, mask, instances, indices, shell_indices, tiles, draw_count: 0, instance_scratch: Vec::with_capacity(MAX_RESIDENT + SHELL_FACES as usize) }
     }
 
     /// The only production entry point: evict, upload, then prepare, in that order.
@@ -224,6 +208,11 @@ impl Globe {
         self.draw_count = count as u32;
     }
 
+    /// Writes the resident-chunk mask the opaque tiles discard under.
+    pub fn set_mask(&self, queue: &wgpu::Queue, mask: &GlobeMask) {
+        queue.write_buffer(&self.mask, 0, bytemuck::bytes_of(mask));
+    }
+
     /// Uploads finished shell faces; a face from a stale resolution is ignored.
     pub fn upload_shell(&mut self, queue: &wgpu::Queue, bakes: &[ShellBake]) {
         for bake in bakes {
@@ -264,11 +253,12 @@ impl Globe {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..INDEX_COUNT, 0, 0..self.draw_count);
+        pass.draw_indexed(0..TILE_INDEX_COUNT, 0, 0..self.draw_count);
         if self.shell_ready() {
             let first = MAX_RESIDENT as u32;
             pass.set_pipeline(&self.shell_pipeline);
-            pass.draw_indexed(0..INDEX_COUNT, 0, first..first + SHELL_FACES);
+            pass.set_index_buffer(self.shell_indices.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..SHELL_INDEX_COUNT, 0, first..first + SHELL_FACES);
         }
     }
 

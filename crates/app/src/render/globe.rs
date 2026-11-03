@@ -1,7 +1,10 @@
+pub mod band;
 pub mod bake;
 pub mod cache;
 pub mod chart;
 pub mod gpu;
+#[cfg(test)]
+mod gpu_band_tests;
 #[cfg(test)]
 mod gpu_tests;
 pub mod gpu_tiles;

@@ -1,8 +1,8 @@
 //! Atlas slots for resident globe tiles: upload and eviction.
 
 use super::bake::TileData;
-use super::gpu::{INDEX_COUNT, TileInstance};
-use super::tile::{TILE_CELLS, TILE_SAMPLES, TileId};
+use super::gpu::TileInstance;
+use super::tile::{TILE_SAMPLES, TileId};
 use glam::DVec3;
 use std::collections::HashMap;
 
@@ -149,12 +149,13 @@ pub(crate) fn instance(id: TileId, slot: u32, eye_body: DVec3) -> TileInstance {
     }
 }
 
-/// Two triangles per cell, wound counter-clockwise seen from above the surface.
-pub(crate) fn grid_indices() -> Vec<u16> {
-    let mut out = Vec::with_capacity(INDEX_COUNT as usize);
-    for j in 0..TILE_CELLS {
-        for i in 0..TILE_CELLS {
-            let v = |di: u32, dj: u32| ((j + dj) * TILE_SAMPLES + i + di) as u16;
+/// Two triangles per cell of a `side` x `side` vertex grid, wound counter-clockwise seen from above.
+pub(crate) fn grid_indices(side: u32) -> Vec<u16> {
+    let cells = side - 1;
+    let mut out = Vec::with_capacity((cells * cells * 6) as usize);
+    for j in 0..cells {
+        for i in 0..cells {
+            let v = |di: u32, dj: u32| ((j + dj) * side + i + di) as u16;
             out.extend_from_slice(&[v(0, 0), v(0, 1), v(1, 0), v(1, 0), v(0, 1), v(1, 1)]);
         }
     }

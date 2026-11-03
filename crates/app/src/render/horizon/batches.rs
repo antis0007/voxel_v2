@@ -21,6 +21,11 @@ impl DrawBatch {
     }
     pub fn conditional(&self)->bool {self.variant!=Variant::Common}
 
+    /// Whether the batch centre lies inside the globe's chart clip.
+    pub fn within_clip(&self, clip: super::clip::ChartClip) -> bool {
+        super::clip::within(clip, f64::from(self.center.x), f64::from(self.center.z))
+    }
+
     pub fn visible(&self, eye: Vec3, planes: &[Vec4; 6]) -> bool {
         let center = self.center - eye;
         planes

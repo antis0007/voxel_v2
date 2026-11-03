@@ -1,5 +1,7 @@
 //! Shell coverage array, night-light buffer and the globe's two pipelines.
 
+use super::band::GlobeMask;
+use super::gpu::{GlobeUniform, TileInstance};
 use super::shell::{Light, MAX_LIGHTS};
 use super::shell_worker::ShellBake;
 
@@ -78,7 +80,7 @@ impl ShellResources {
     }
 }
 
-/// Opaque (`fs_main`, depth write) or shell (`vs_shell`/`fs_shell`, alpha over, no depth write).
+/// Ground (`fs_main`, depth write, alpha only in the fade band) or shell (`vs_shell`/`fs_shell`, alpha over, no depth write).
 pub fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -90,7 +92,8 @@ pub fn pipeline(
     let (vs, fs, color, depth_write) = if shell {
         ("vs_shell", "fs_shell", target(Some(wgpu::BlendState::ALPHA_BLENDING), wgpu::ColorWrites::ALL), false)
     } else {
-        ("vs_main", "fs_main", target(Some(wgpu::BlendState::REPLACE), wgpu::ColorWrites::ALL), true)
+        // Blended for the fade band past the resident disc; alpha is 1 elsewhere, so it still reads opaque.
+        ("vs_main", "fs_main", target(Some(wgpu::BlendState::ALPHA_BLENDING), wgpu::ColorWrites::ALL), true)
     };
     // The shell leaves the reflection receiver target to the ground beneath it.
     let receiver = target(None, if shell { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL });
@@ -116,5 +119,49 @@ pub fn pipeline(
         multisample: Default::default(),
         multiview: None,
         cache: None,
+    })
+}
+
+/// Group 0 of both globe pipelines; bindings match the `@binding`s in globe_shader.wgsl and globe_mask.wgsl.
+pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry { binding, visibility, ty, count: None };
+    let vertex_fragment = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
+    let texture = |sample_type| wgpu::BindingType::Texture {
+        sample_type,
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("globe layout"),
+        entries: &[
+            entry(0, vertex_fragment, wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<GlobeUniform>() as u64),
+            }),
+            entry(1, wgpu::ShaderStages::VERTEX, wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<TileInstance>() as u64),
+            }),
+            entry(2, wgpu::ShaderStages::VERTEX, texture(wgpu::TextureSampleType::Uint)),
+            entry(3, wgpu::ShaderStages::VERTEX, texture(wgpu::TextureSampleType::Float { filterable: false })),
+            entry(4, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: false,
+            }),
+            entry(5, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+            entry(6, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<Light>() as u64),
+            }),
+            entry(7, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<GlobeMask>() as u64),
+            }),
+        ],
     })
 }

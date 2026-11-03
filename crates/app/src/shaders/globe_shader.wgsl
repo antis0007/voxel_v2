@@ -47,6 +47,9 @@ struct GlobeLight {
 
 const GLOBE_SAMPLES: u32 = 65u;
 const GLOBE_LAST: u32 = 64u;
+// The 65x65 lattice plus one skirt ring; gpu::SKIRT_SIDE.
+const GLOBE_SKIRT_SIDE: u32 = 67u;
+const GLOBE_PITCH_M: f32 = 65536.0;
 const GLOBE_ATLAS_COLUMNS: u32 = 46u;
 const GLOBE_HALF_M: f32 = 16000.0;
 const GLOBE_FRAC_PI_4: f32 = 0.78539816339;
@@ -137,15 +140,21 @@ struct GlobeVsOut {
     @location(2) wet: f32,
     @location(3) water: f32,
     @location(4) @interpolate(flat) material: u32,
+    // Chart x/z in metres, which equal world metres; the resident mask reads it.
+    @location(5) chart: vec2<f32>,
 };
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> GlobeVsOut {
     let tile = tiles[instance];
-    let i = vertex % GLOBE_SAMPLES;
-    let j = vertex / GLOBE_SAMPLES;
+    let si = vertex % GLOBE_SKIRT_SIDE;
+    let sj = vertex / GLOBE_SKIRT_SIDE;
+    let i = clamp(si, 1u, GLOBE_SAMPLES) - 1u;
+    let j = clamp(sj, 1u, GLOBE_SAMPLES) - 1u;
+    // The skirt ring hangs below the edge, so a coarser neighbour's T-junction never opens onto the sky.
+    let skirt = si == 0u || sj == 0u || si == GLOBE_SKIRT_SIDE - 1u || sj == GLOBE_SKIRT_SIDE - 1u;
     let raw = textureLoad(height_atlas, globe_texel(tile.slot, i, j), 0).xy;
-    let h = globe_surface_m(raw);
+    let h = globe_surface_m(raw) - select(0.0, 2.0 * tile.cell_m, skirt);
     let x = tile.chart_min.x + f32(i) * tile.cell_m;
     let z = tile.chart_min.y + f32(j) * tile.cell_m;
     // Both folds are near the tile centre, so their difference keeps f32 precision.
@@ -171,6 +180,7 @@ fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance
     out.wet = textureLoad(climate_atlas, globe_texel(tile.slot, i, j), 0).y;
     out.water = select(0.0, 1.0, (raw.y & GLOBE_WATER_BIT) != 0u);
     out.material = raw.y & 255u;
+    out.chart = vec2<f32>(f32(tile.face) * GLOBE_PITCH_M + x, z);
     return out;
 }
 
@@ -208,6 +218,11 @@ struct GlobeOutput {
 
 @fragment
 fn fs_main(in: GlobeVsOut) -> GlobeOutput {
+    let fade = globe_mask_alpha(in.chart);
+    // Under resident chunks the chunks draw the ground; a faded-out fragment must not write depth.
+    if fade < 1.0 / 255.0 {
+        discard;
+    }
     let n = normalize(in.normal);
     let dist = length(in.rel);
     let view = -in.rel / max(dist, 1e-3);
@@ -234,5 +249,5 @@ fn fs_main(in: GlobeVsOut) -> GlobeOutput {
     let path = globe_air_path(in.rel);
     let haze = 1.0 - exp(-path / GLOBE_SCATTER_M);
     color = color * (1.0 - haze) + globe.limb.rgb * globe.limb.w * haze * day;
-    return GlobeOutput(vec4<f32>(color, 1.0), vec4<f32>(0.0));
+    return GlobeOutput(vec4<f32>(color, fade), vec4<f32>(0.0));
 }

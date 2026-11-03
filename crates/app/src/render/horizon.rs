@@ -4,6 +4,7 @@ mod collar_contract;
 mod quality;
 pub(crate) mod collar;
 mod batches;
+pub mod clip;
 mod edits;
 mod pages;
 mod reference;
@@ -315,6 +316,7 @@ pub struct Horizon {
     // or `None` to switch the shader's map off.
     detail_update: Option<Option<Arc<detail::DetailMap>>>,
     detail_center: Option<(i32, i32)>,
+    chart_clip: Option<clip::ChartClip>,
 }
 
 impl Drop for Horizon {
@@ -489,7 +491,7 @@ impl Horizon {
         self.update_mesh(device, queue, world, revision, eye, hidden_radius, now);
     }
 
-    fn clear_mesh(&mut self) {
+    pub fn clear_mesh(&mut self) {
         if self.mesh.is_some() { self.shadow_generation=self.shadow_generation.wrapping_add(1); }
         self.mesh = None;
         self.published = None;

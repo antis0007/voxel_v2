@@ -22,10 +22,10 @@ fn wgsl_struct_size(name: &str) -> u32 {
         .expect("struct present")
 }
 
-struct Frame {
-    size: u32,
-    color: Vec<[u8; 4]>,
-    depth: Vec<f32>,
+pub(super) struct Frame {
+    pub size: u32,
+    pub color: Vec<[u8; 4]>,
+    pub depth: Vec<f32>,
 }
 
 fn projection(fov_deg: f32) -> Mat4 {
@@ -33,6 +33,10 @@ fn projection(fov_deg: f32) -> Mat4 {
 }
 
 fn render(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32) -> Frame {
+    render_masked(tiles, eye_body, view_proj, size, None)
+}
+
+pub(super) fn render_masked(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32, mask: Option<super::band::GlobeMask>) -> Frame {
     let adapter = engine_gpu::test_adapter();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mut globe = Globe::new(&device, COLOR);
@@ -53,6 +57,9 @@ fn render(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32) -> 
         view_proj: view_proj.to_cols_array_2d(),
     });
     assert_eq!((stats.uploaded, stats.dropped, stats.drawn, globe.resident()), (count, 0, count, count));
+    if let Some(mask) = mask {
+        globe.set_mask(&queue, &mask);
+    }
     let target = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -131,7 +138,7 @@ fn render(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32) -> 
     Frame { size, color, depth }
 }
 
-fn look(eye_body: DVec3, target: DVec3, fov_deg: f32) -> Mat4 {
+pub(super) fn look(eye_body: DVec3, target: DVec3, fov_deg: f32) -> Mat4 {
     let forward = (target - eye_body).normalize().as_vec3();
     let up = if forward.z.abs() < 0.9 { Vec3::Z } else { Vec3::X };
     projection(fov_deg) * Mat4::look_to_rh(Vec3::ZERO, forward, up)
@@ -142,6 +149,7 @@ fn gpu_globe_uniform_matches_wgsl_size() {
     assert_eq!(wgsl_struct_size("GlobeUniform"), 128);
     assert_eq!(wgsl_struct_size("GlobeUniform") as usize, std::mem::size_of::<GlobeUniform>());
     assert_eq!(wgsl_struct_size("TileInstance") as usize, std::mem::size_of::<super::gpu::TileInstance>());
+    assert_eq!(wgsl_struct_size("GlobeMask") as usize, std::mem::size_of::<super::band::GlobeMask>());
 }
 
 #[test]
