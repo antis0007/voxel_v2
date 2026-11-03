@@ -38,15 +38,26 @@ moves them into the dirty sets with the halo. It runs at the end of
 `fixed::finish` (window and headless, every step) and before the window's
 `rebuild_dirty` (frames with no step). Tests: `world/change_tests.rs`.
 
-Migrated callers: `simulation/springs.rs` (sets parameter and mark removed). That
-file is untracked peer work, so the edit sits in the shared tree and lands with it.
+Migrated callers:
+- `simulation/cellular.rs` water transfers and granular swaps: `commit_transfer`
+  and `transfer` lost their set parameters. `step` keeps them for thermal and
+  drainage. `dam_break_throughput` now publishes per tick like `fixed::finish`.
+- `simulation/springs.rs` (sets parameter and mark removed). That file is
+  untracked peer work, so the edit sits in the shared tree and lands with it.
 
 Remaining callers, in order of independence:
-1. `Commit::publish(world, blocks, chunks)` in `world/effects.rs` to
-   `publish(world)`: callers in tnt, blueprint apply, factory, expedition, mining,
-   smeltery, multiplayer authority. One signature change, ten files.
-2. `simulation::cellular::changed` users (cellular, thermal, rigid, soil,
-   sediment, drainage), then the `blocks, chunks` parameters of `sim.update`.
+1. `simulation::cellular::changed` users (thermal, rigid, soil, sediment,
+   drainage), then the `blocks, chunks` parameters of `cellular::step` and
+   `sim.update`. Thermal goes together with drainage (untracked): dropping only
+   thermal's sets leaves `step`'s unused in HEAD.
+2. `Commit::publish(world, blocks, chunks)` in `world/effects.rs`. Not a plain
+   removal: player paths (`mining::harvest`, `expedition::{harvest, spell_blast,
+   blast_harvest}`, `effects::place`) pass `player_edit_chunks` as `chunks`, and
+   that set carries fast-lane priority. Non-player callers (tnt, blueprint apply,
+   factory extraction, smeltery, multiplayer authority) can drop the sets; player
+   paths need priority to come from the journal first, for
+   example a journal mark taken before the input handlers and published into
+   `player_edit_chunks`.
 3. Input handlers in `main.rs`. Player edits keep `player_edit_chunks` because it
    carries fast-lane priority, not correctness.
 4. Multiplayer replica and replication paths (`multiplayer/*`, untracked).

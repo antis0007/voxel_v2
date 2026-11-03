@@ -222,6 +222,9 @@ fn dam_break_throughput() {
                 }
             }
         }
+        // Per-step publication as in `fixed::finish`; the journal would
+        // otherwise grow for the whole run and its cost go unmeasured.
+        world.publish_changes(&mut blocks, &mut chunks);
         blocks.clear();
         chunks.clear();
     }

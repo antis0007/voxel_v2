@@ -58,8 +58,6 @@ fn commit_transfer(
     target: u8,
     moved: u8,
     visited: &mut HashSet<IVec3>,
-    blocks: &mut HashSet<IVec3>,
-    chunks: &mut HashSet<IVec3>,
 ) -> usize {
     if moved == 0 || !matches!(target_block, B::Air | B::Water) {
         return 0;
@@ -111,8 +109,6 @@ fn commit_transfer(
     // A recipient can receive more mass but cannot transport it again this
     // tick. Otherwise queue order allows water to traverse an entire chunk.
     visited.insert(to);
-    changed(from, blocks, chunks);
-    changed(to, blocks, chunks);
     2
 }
 
@@ -123,8 +119,6 @@ fn transfer(
     to: IVec3,
     max: u8,
     visited: &mut HashSet<IVec3>,
-    blocks: &mut HashSet<IVec3>,
-    chunks: &mut HashSet<IVec3>,
 ) -> usize {
     let Some((B::Water, source)) = sources.read(world, from) else {
         world.activity.wake(from);
@@ -145,8 +139,6 @@ fn transfer(
         target,
         moved,
         visited,
-        blocks,
-        chunks,
     )
 }
 
@@ -347,8 +339,6 @@ pub(super) fn step(
             world.set_water_volume(p, displaced);
         }
         visited.insert(to);
-        changed(p, blocks, chunks);
-        changed(to, blocks, chunks);
         return 2;
     }
     if b != B::Water {
@@ -365,8 +355,6 @@ pub(super) fn step(
             down_volume,
             source_volume.min(8 - down_volume).min(8),
             visited,
-            blocks,
-            chunks,
         ),
         None => {
             world.activity.wake(p);
@@ -419,8 +407,6 @@ pub(super) fn step(
                 target,
                 moved,
                 visited,
-                blocks,
-                chunks,
             );
             motion = world.water_velocity(p);
         } else if source == 1
@@ -442,7 +428,7 @@ pub(super) fn step(
                 .is_some_and(|(id, amount)| id == B::Air || (id == B::Water && amount < 8))
                 && allowed(world, to)
             {
-                updates += transfer(sources, world, p, outlet, 1, visited, blocks, chunks);
+                updates += transfer(sources, world, p, outlet, 1, visited);
             }
         }
     }
@@ -463,7 +449,7 @@ pub(super) fn step(
             // A hydraulic connection is expensive to find, so move a useful
             // packet once found. Two units left deep outlets visibly starved;
             // four still cannot exceed the recipient's remaining capacity.
-            updates += transfer(sources, world, p, outlet, 4, visited, blocks, chunks);
+            updates += transfer(sources, world, p, outlet, 4, visited);
         }
     }
     // Momentum outlives the transfer that created it. Keep the cell in the
