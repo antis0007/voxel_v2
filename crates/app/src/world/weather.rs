@@ -273,7 +273,6 @@ impl WeatherClipmapLevel {
     }
 
     fn evaluate_sample(
-        &self,
         world_xz_m: Vec2,
         _time_s: f32, // reserved for future slow weather evolution; advection is in-shader
         controls: CloudControls,
@@ -530,7 +529,7 @@ impl WeatherClipmapLevel {
             for x in 0..resolution {
                 let index = self.texel_index(x, y);
                 let world_xz_m = self.texel_world_position(origin_m, x, y);
-                let sample = self.evaluate_sample(world_xz_m, time_s, controls, weather_seed);
+                let sample = Self::evaluate_sample(world_xz_m, time_s, controls, weather_seed);
                 self.write_sample(index, sample);
             }
         }
@@ -570,7 +569,7 @@ impl WeatherClipmapLevel {
                     self.shadow_rgba[index] = previous_shadow[source_index];
                 } else {
                     let world_xz_m = self.texel_world_position(origin_m, x as usize, y as usize);
-                    let sample = self.evaluate_sample(world_xz_m, time_s, controls, weather_seed);
+                    let sample = Self::evaluate_sample(world_xz_m, time_s, controls, weather_seed);
                     self.write_sample(index, sample);
                 }
             }
@@ -630,6 +629,13 @@ impl CloudWeatherField {
         *self = Self::new(seed);
     }
 
+    /// World position and stored coverage of one clipmap texel.
+    #[cfg(test)]
+    pub fn stored_coverage(&self, level: usize, x: usize, y: usize) -> (Vec2, f32) {
+        let l = &self.levels[level];
+        (l.texel_world_position(l.region.origin_m, x, y), l.primary_rgba[l.texel_index(x, y)][0])
+    }
+
     pub fn gpu_meta(&self) -> [WeatherClipmapGpuMeta; WEATHER_CLIPMAP_LEVEL_COUNT] {
         std::array::from_fn(|level| self.levels[level].gpu_meta())
     }
@@ -675,6 +681,11 @@ impl CloudWeatherField {
     ) {
         self.levels[level].pack_shadow_upload_bytes(rect, packed_bytes);
     }
+}
+
+/// Coverage the clipmap texels store, without a field: the globe shell bakes from it.
+pub fn coverage_at(world_xz_m: Vec2, controls: CloudControls, weather_seed: u32) -> f32 {
+    WeatherClipmapLevel::evaluate_sample(world_xz_m, 0.0, controls, weather_seed).primary[0]
 }
 
 fn saturate(x: f32) -> f32 {

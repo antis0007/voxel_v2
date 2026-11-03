@@ -47,6 +47,7 @@ pub use collision::{
 pub use weather::{
     CloudWeatherField, CloudWeatherUploadManifest, WEATHER_CLIPMAP_LEVEL_COUNT,
     WEATHER_TEXTURE_RESOLUTION, WeatherClipmapUploadBatch, WeatherRuntimeState, WeatherUploadRect,
+    coverage_at,
 };
 
 /// How deep inside a starlit cosmos chamber a point (in metres) is, 0..1.

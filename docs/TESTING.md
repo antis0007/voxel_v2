@@ -49,6 +49,9 @@ reported UNVERIFIED (exit 3), not failed; draw-call excess always fails. On this
 machine frame times varied up to 3x between passes while per-frame median draws repeated
 within 3 % on static Hills (11 % on orbit, 21 % on superflat); see `docs/perf/audit-08e11ae3.md`. It needs a GPU, so it is not part of `just verify`; run it
 for render changes. A baseline from another adapter is refused, not compared.
+Globe scenes: `orbit-static` (hills, `--benchmark-globe`, static camera at 60 km, `--benchmark-terrain-camera=0,0,60000,0,-1.5`, 4 view chunks, 45 s warmup) holds p95 under 8 ms and `globe_wanted` at 0 within 20 s.
+`ascent` (hills, `--benchmark-globe --benchmark-motion=ascent`, 256 m/s straight climb from spawn toward 40 km, 120 s) holds p99 under 16.6 ms and `max_frame_ms` under 40.
+
 Script tests: `python -I scripts/test_frame_bench.py`.
 
 ## Clone completeness

@@ -10,7 +10,7 @@ pub mod skyhook;
 pub mod meteors;
 pub mod passes;
 
-const CELL_M: f32 = 4096.0;
+pub const CELL_M: f32 = 4096.0;
 pub const SIGHT_RANGE_M: f32 = 6000.0;
 /// Magically supported atmospheric infrastructure, not a ballistic orbit.
 pub const HOLD_CLEARANCE_M: f32 = 360.0;

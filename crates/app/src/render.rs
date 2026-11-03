@@ -5,6 +5,8 @@ mod capture;
 mod frame_pacer;
 mod pipeline_cache;
 pub mod coverage;
+pub mod globe;
+pub mod globe_driver;
 pub(crate) fn flush_review_captures() {
     if !capture::flush(std::time::Duration::from_secs(2)) {
         eprintln!("[capture] end-of-review flush timed out");
@@ -1280,6 +1282,16 @@ pub struct Gpu {
     last_rotation_view_proj: Mat4,
     last_camera_forward: Vec3,
     last_world_scale: f32,
+    globe: Option<globe::gpu::Globe>,
+    globe_visible: bool,
+    globe_driver: globe_driver::GlobeDriver,
+    /// Origin of `GlobeView::clock_s`; render-thread wall time, never simulation time.
+    globe_clock: std::time::Instant,
+    tier: crate::altitude::Tier,
+    /// Published resident coverage radius in metres; the globe fades in past it.
+    globe_disc_radius_m: f32,
+    /// Set by `update_horizon` when the horizon is cleared and the globe alone draws distant ground.
+    horizon_globe_only: bool,
     cloud_history_valid: bool,
     cloud_render_scale: u32,
     cloud_governor: cloud_governor::CloudGovernor,
@@ -3121,6 +3133,14 @@ impl GpuPendingInit {
                     postprocess,
                     indirect,
                     fxaa_enabled: true,
+                    globe: globe::active().then(|| globe::gpu::Globe::new(&bootstrap.device, postprocess::SCENE_FORMAT)),
+                    // Task 8 drives this from the altitude tier.
+                    globe_visible: globe::active(),
+                    globe_driver: globe_driver::GlobeDriver::default(),
+                    globe_clock: std::time::Instant::now(),
+                    tier: crate::altitude::Tier::Surface,
+                    globe_disc_radius_m: 0.0,
+                    horizon_globe_only: false,
                     surface: bootstrap.surface,
                     device: bootstrap.device,
                     queue: bootstrap.queue,
@@ -3887,6 +3907,41 @@ impl Gpu {
         self.capture_path = Some(path);
     }
 
+    pub fn set_tier(&mut self, tier: crate::altitude::Tier) {
+        self.globe_driver.set_tier(tier);
+        self.tier = tier;
+    }
+
+    /// Drives the globe for this frame; `projection` is the conventional terrain projection.
+    pub fn update_globe(&mut self, world: &crate::world::World, day: &crate::world::DayNightCycle, eye_m: glam::DVec3, forward: Vec3, projection: Mat4, focal_px: f32) {
+        if !self.device_usable() { return; }
+        let Some(globe) = self.globe.as_mut() else { return };
+        let view = globe_driver::GlobeView {
+            eye_m,
+            forward,
+            projection: REVERSE_Z * projection,
+            sun_dir: self.current_lighting.sun_dir,
+            focal_px,
+            sky_time_s: self.effect_time,
+            clouds: day.cloud_controls(),
+            weather_seed: day.weather_seed(),
+            clock_s: self.globe_clock.elapsed().as_secs_f64(),
+        };
+        let clusters = || globe::shell::factory_clusters(world);
+        self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &clusters);
+        if self.globe_driver.running() {
+            let chunk_m = CHUNK_SIZE as f32 * world.voxel_scale.meters();
+            // The fade only blends over horizon rings; with them cleared it would show sky.
+            let radius = if self.horizon_globe_only { 0.0 } else { self.globe_disc_radius_m };
+            let mask = globe::band::GlobeMask::new(*self.horizon.resident_coverage(), chunk_m, radius, eye_m);
+            globe.set_mask(&self.queue, &mask);
+        }
+    }
+
+    pub fn globe_stats(&self) -> globe_driver::GlobeStats {
+        self.globe_driver.stats()
+    }
+
     pub fn update_horizon(
         &mut self,
         world: &mut crate::world::World,
@@ -3920,6 +3975,17 @@ impl Gpu {
         } else {
             0.0
         };
+        self.globe_disc_radius_m = hidden_radius;
+        if globe::active() {
+            let (clip, keep) = globe::band::horizon_clip(self.tier, eye.as_dvec3());
+            self.horizon.set_chart_clip(clip);
+            self.horizon_globe_only = !keep;
+            if !keep {
+                // Above the load stop the globe alone draws the ground.
+                self.horizon.clear_mesh();
+                return;
+            }
+        }
         self.horizon.update(
             &self.device,
             &self.queue,
@@ -3947,7 +4013,8 @@ impl Gpu {
     pub fn horizon_baked_columns(&self, columns:&[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> { self.horizon.baked_columns(columns) }
 
     pub fn horizon_ready(&self) -> bool {
-        self.horizon.mesh.is_some()
+        let resident = self.globe.as_ref().map_or(0, globe::gpu::Globe::resident);
+        globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some(), resident)
     }
 
     pub fn upload_camera(
@@ -4295,6 +4362,11 @@ impl Gpu {
         }
         stats.cpu_upload_ms = upload_start.elapsed().as_secs_f32() * 1000.0;
         self.last_weather_upload_stats = stats;
+    }
+
+    /// Pixels per unit of tangent for a vertical field of view in radians.
+    pub fn focal_px(&self, fov_radians: f32) -> f32 {
+        self.config.height as f32 / (2.0 * (fov_radians * 0.5).tan())
     }
 
     pub fn aspect_ratio(&self) -> f32 {
@@ -4705,15 +4777,28 @@ impl Gpu {
                         terrain_draw_calls += 1;
                     }
                 }
-                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon) {
+                if let Some(globe) = self.globe.as_ref().filter(|_| self.globe_visible && self.globe_driver.running()) {
+                    globe.draw(&mut pass);
+                    // The globe replaced the pipeline and group 0; the draws below use the world's.
+                    pass.set_pipeline(&self.world_pipeline);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_bind_group(1, &self.lighting_bind_group, &[]);
+                    pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
+                    pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
+                }
+                // The flat horizon sits at the globe's sea level and occludes all but the disc centre
+                // from orbit; Task 10 replaces this with the full altitude transition.
+                let globe_replaces_horizon = self.globe_visible && self.globe_driver.orbit_view();
+                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon && !globe_replaces_horizon) {
                     let planes =
                         streaming::extract_planes(REVERSE_Z * self.last_rotation_view_proj);
                     for page in &mesh.pages {
                         pass.set_vertex_buffer(0, page.vertices.slice(..));
                         pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        if mesh.cull || page.batches.iter().any(|b|b.conditional()) {
+                        let clip = self.horizon.chart_clip();
+                        if mesh.cull || clip.is_some() || page.batches.iter().any(|b|b.conditional()) {
                             for batch in &page.batches {
-                                if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) {
+                                if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) || clip.is_some_and(|c| !batch.within_clip(c)) {
                                     continue;
                                 }
                                 pass.draw_indexed(batch.indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
@@ -4782,6 +4867,13 @@ impl Gpu {
                 depth_or_array_layers: 1,
             };
 
+            // Above the top slab the globe's cloud shell replaces the march and its composite.
+            let march_handoff = !(self.globe_visible && self.globe.is_some()) || self.globe_driver.march_allowed();
+            let march = draw_clouds() && march_handoff;
+            if !march_handoff {
+                // History from before the handoff would blend old clouds in on descent.
+                self.cloud_history_valid = false;
+            }
             {
                 let mut cloud_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("cloud raymarch pass"),
@@ -4808,13 +4900,13 @@ impl Gpu {
                 cloud_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 cloud_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 cloud_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if draw_clouds() {
+                if march {
                     cloud_pass.draw(0..3, 0..1);
                 }
             }
-            frame_stats.cloud_raymarch_passes = usize::from(draw_clouds());
+            frame_stats.cloud_raymarch_passes = usize::from(march);
 
-            if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid {
+            if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid && march_handoff {
                 let mut temporal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("cloud temporal pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4942,7 +5034,7 @@ impl Gpu {
                 composite_pass.set_bind_group(1, &self.cloud_bind_group, &[]);
                 composite_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 composite_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if !self.underwater {
+                if !self.underwater && march_handoff {
                     composite_pass.draw(0..3, 0..1);
                 }
             }
