@@ -15,6 +15,7 @@ mod cut;
 mod tile;
 
 use crate::mesh::{ChunkMesh, Vertex3};
+use super::clip::{ChartClip, within};
 use crate::world::{BlockId, WorldSampleConfig, distant_surface};
 use glam::{IVec3, Vec3};
 use std::sync::atomic::AtomicBool;
@@ -111,7 +112,25 @@ impl Place {
     }
 }
 
-fn sample(cfg: &WorldSampleConfig, place: Place, center: (f32, f32), scale: f32) -> Option<Sampled> {
+/// Surface height in voxels and block at voxel column (x, z); NaN outside the globe face `clip`.
+pub(super) fn clipped_surface(cfg: &WorldSampleConfig, clip: Option<ChartClip>, x: i32, z: i32) -> (f32, BlockId) {
+    let scale = f64::from(cfg.voxel_meters());
+    if clip.is_some_and(|c| !within(c, f64::from(x) * scale, f64::from(z) * scale)) {
+        return (f32::NAN, BlockId::Air);
+    }
+    distant_surface(cfg, x, z)
+}
+
+/// Whether every knot of the place, border included, lies inside `clip`.
+fn place_within(place: Place, center: (f32, f32), clip: Option<ChartClip>) -> bool {
+    let Some(c) = clip else { return true };
+    let cell = RINGS[place.ring].1;
+    let (x0, z0) = place.origin(center);
+    let far = BORDERED as f32 - 2.0;
+    [(-1.0, -1.0), (far, far)].iter().all(|&(a, b)| within(c, f64::from(x0 + a * cell), f64::from(z0 + b * cell)))
+}
+
+fn sample(cfg: &WorldSampleConfig, clip: Option<ChartClip>, place: Place, center: (f32, f32), scale: f32) -> Option<Sampled> {
     let cell = RINGS[place.ring].1;
     let (x0, z0) = place.origin(center);
     let mut heights = Vec::with_capacity(BORDERED * BORDERED);
@@ -120,7 +139,7 @@ fn sample(cfg: &WorldSampleConfig, place: Place, center: (f32, f32), scale: f32)
         let z = ((z0 + (k as f32 - 1.0) * cell) / scale).floor() as i32;
         for i in 0..BORDERED {
             let x = ((x0 + (i as f32 - 1.0) * cell) / scale).floor() as i32;
-            let (h, block) = distant_surface(cfg, x, z);
+            let (h, block) = clipped_surface(cfg, clip, x, z);
             if !h.is_finite() {
                 return None;
             }
@@ -216,6 +235,7 @@ pub(super) fn apply(
     cfg: &WorldSampleConfig,
     center: (i32, i32),
     cancel: &AtomicBool,
+    clip: Option<ChartClip>,
 ) -> Option<()> {
     if !enabled() {
         return Some(());
@@ -237,9 +257,11 @@ pub(super) fn apply(
     let places: Vec<Place> = (0..RINGS.len())
         .flat_map(|ring| (0..TILES).flat_map(move |tz| (0..TILES).map(move |tx| Place { ring, tx, tz })))
         .filter(|p| in_ring(p.ring, p.tx, p.tz))
+        // Past the face edge the globe draws the ground; a clipped knot would abort the pass.
+        .filter(|p| place_within(*p, center, clip))
         .collect();
     let sampled = super::parallel::map_blocks(&places, 4, super::parallel::workers(8), cancel, |&p| {
-        sample(cfg, p, center, scale)
+        sample(cfg, clip, p, center, scale)
     })?;
 
     // Heights are whole voxels, so every tile shows a voxel of stair error that a

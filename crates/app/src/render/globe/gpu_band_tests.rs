@@ -42,6 +42,30 @@ fn gpu_globe_discards_inside_the_resident_mask_and_draws_outside() {
 
 #[test]
 #[ignore = "needs a GPU; run with just test-gpu gpu_globe"]
+fn gpu_globe_fills_unowned_columns_inside_the_disc_and_fades_past_it() {
+    let mut coverage = ResidentCoverage::default();
+    coverage.header = [-4, -4, 9, 1];
+    assert!(coverage.set_column(0, 0));
+    // The disc reaches x = 128 m: columns (0, 0) through (3, 0); only (0, 0) is owned.
+    let eye_xz = DVec3::new(16.0, 0.0, 16.0);
+    let radius = 112.0;
+    let eye_body = chart::to_body(eye_xz + DVec3::new(0.0, 2_000.0, 0.0));
+    let view_proj = look(eye_body, chart::to_body(eye_xz), 20.0);
+    let size = 512;
+    let mask = GlobeMask::new(coverage, 32.0, radius, eye_xz);
+    let frame = render_masked(vec![TileData::empty(TileId::root(0))], eye_body, view_proj, size, Some(mask));
+    let at = |x: f64| frame.color[pixel(view_proj, eye_body, DVec3::new(x, 0.0, 16.0), size)];
+    assert_eq!(at(16.0), CLEAR, "owned column");
+    let inside = at(80.0);
+    assert_ne!(inside, CLEAR, "unowned column inside the disc must be globe");
+    // Half way through the fade the clear colour and the globe mix about evenly.
+    let half = at(16.0 + f64::from(radius) + 128.0);
+    let mid = (255.0 + f64::from(inside[0])) * 0.5;
+    assert!((f64::from(half[0]) - mid).abs() < 20.0, "fade midpoint {half:?}, globe {inside:?}");
+}
+
+#[test]
+#[ignore = "needs a GPU; run with just test-gpu gpu_globe"]
 fn gpu_globe_level_mismatch_seam_shows_no_background() {
     // A level-1 tile beside a level-2 tile on the shared edge x = 0 of face 2. The fine edge
     // spikes 200 m at odd samples; without skirts the coarse edge leaves slots onto the sky.

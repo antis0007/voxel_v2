@@ -107,7 +107,8 @@ pub fn pipeline(
             compilation_options: Default::default(),
             targets: &[color, receiver],
         }),
-        primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+        // Ground tiles draw both faces so a skirt wall shows whichever way it faces the eye.
+        primitive: wgpu::PrimitiveState { cull_mode: if shell { Some(wgpu::Face::Back) } else { None }, ..Default::default() },
         // Same depth state as the world pipeline, so chunks and assets sort against the globe.
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,

@@ -42,6 +42,12 @@ pub fn horizon_clip(tier: Tier, eye_m: DVec3) -> (Option<(f64, f64, f64, f64)>, 
     }
 }
 
+/// Whether distant ground is ready: off the surface tier the globe is the far field, so the
+/// loading hold never fires mid-flight.
+pub fn horizon_ready(globe_active: bool, tier: Tier, horizon_mesh: bool) -> bool {
+    (globe_active && tier != Tier::Surface) || horizon_mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +66,15 @@ mod tests {
     fn shader_fade_width_matches_the_host() {
         let source = crate::shader_sources::globe_shader_source();
         assert!(source.contains(&format!("const GLOBE_FADE_M: f32 = {FADE_M:.1};")));
+    }
+
+    #[test]
+    fn horizon_is_ready_off_the_surface_tier_with_the_globe() {
+        assert!(horizon_ready(true, Tier::Transition, false));
+        assert!(horizon_ready(true, Tier::Orbit, false));
+        assert!(!horizon_ready(true, Tier::Surface, false));
+        assert!(!horizon_ready(false, Tier::Transition, false));
+        assert!(horizon_ready(false, Tier::Surface, true));
     }
 
     #[test]

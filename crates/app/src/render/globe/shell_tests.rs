@@ -68,17 +68,17 @@ fn shell_drifts_with_the_march_wind() {
 #[test]
 fn night_lights_cap_at_256_strongest_first() {
     let sites: Vec<(DVec3, IVec2)> = (0..300).map(|i| (DVec3::new(f64::from(i), 0.0, 0.0), IVec2::new(i, -i))).collect();
-    let lights = night_lights_from(&sites, &[], DVec3::ZERO);
+    let lights = night_lights_from(74, &sites, &[], DVec3::ZERO);
     assert_eq!(lights.len(), 256);
     assert!(lights.windows(2).all(|w| w[0].intensity >= w[1].intensity));
-    let strongest = sites.iter().map(|s| site_light(s.1).0).fold(0.0, f32::max);
+    let strongest = sites.iter().map(|s| site_light(74, s.1).0).fold(0.0, f32::max);
     assert_eq!(lights[0].intensity, strongest);
 }
 
 #[test]
 fn equal_lights_keep_the_256_nearest() {
     let sites: Vec<(DVec3, IVec2)> = (0..300).map(|i| (DVec3::new(f64::from(299 - i) * 100.0, 0.0, 0.0), IVec2::new(7, 7))).collect();
-    let lights = night_lights_from(&sites, &[], DVec3::ZERO);
+    let lights = night_lights_from(74, &sites, &[], DVec3::ZERO);
     assert_eq!(lights.len(), 256);
     assert!(lights.iter().all(|l| l.body[0] < 256.0 * 100.0));
     assert_eq!(lights[0].body[0], 0.0);
@@ -86,7 +86,7 @@ fn equal_lights_keep_the_256_nearest() {
 
 #[test]
 fn site_lights_vary_in_intensity_and_radius_within_their_bounds() {
-    let lights: Vec<(f32, f32)> = (0..64).map(|i| site_light(IVec2::new(i % 8, i / 8))).collect();
+    let lights: Vec<(f32, f32)> = (0..64).map(|i| site_light(74, IVec2::new(i % 8, i / 8))).collect();
     assert!(lights.iter().all(|&(k, r)| (1.5..=3.0).contains(&k) && (900.0..=1_500.0).contains(&r)));
     let spread = |f: fn(&(f32, f32)) -> f32| lights.iter().map(f).fold(f32::MIN, f32::max) - lights.iter().map(f).fold(f32::MAX, f32::min);
     assert!(spread(|l| l.0) > 0.5 && spread(|l| l.1) > 200.0);
@@ -95,7 +95,7 @@ fn site_lights_vary_in_intensity_and_radius_within_their_bounds() {
 #[test]
 fn factory_chunks_merge_into_one_light_and_small_ones_stay_dark() {
     let clusters = [(DVec3::X, 640u32), (DVec3::Y, 7), (DVec3::Z, 8)];
-    let lights = night_lights_from(&[], &clusters, DVec3::ZERO);
+    let lights = night_lights_from(74, &[], &clusters, DVec3::ZERO);
     assert_eq!(lights.len(), 2);
     assert!((lights[0].intensity - 6.0).abs() < 1e-5);
     assert_eq!(lights[1].intensity, FACTORY_INTENSITY);

@@ -3927,7 +3927,9 @@ impl Gpu {
         self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &lights);
         if self.globe_driver.running() {
             let chunk_m = CHUNK_SIZE as f32 * world.voxel_scale.meters();
-            let mask = globe::band::GlobeMask::new(*self.horizon.resident_coverage(), chunk_m, self.globe_disc_radius_m, eye_m);
+            // The fade only blends over horizon rings; with them cleared it would show sky.
+            let radius = if self.horizon_globe_only { 0.0 } else { self.globe_disc_radius_m };
+            let mask = globe::band::GlobeMask::new(*self.horizon.resident_coverage(), chunk_m, radius, eye_m);
             globe.set_mask(&self.queue, &mask);
         }
     }
@@ -4007,8 +4009,7 @@ impl Gpu {
     pub fn horizon_baked_columns(&self, columns:&[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> { self.horizon.baked_columns(columns) }
 
     pub fn horizon_ready(&self) -> bool {
-        // Above the load stop the horizon is cleared on purpose; distant ground is the globe's.
-        if self.horizon_globe_only { self.globe_driver.stats().resident > 0 } else { self.horizon.mesh.is_some() }
+        globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some())
     }
 
     pub fn upload_camera(

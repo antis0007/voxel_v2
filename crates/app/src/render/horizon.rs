@@ -184,6 +184,8 @@ struct BuildTarget {
     hidden_radius: f32,
     omitted: Arc<edits::Omitted>,
     coverage: Arc<ResidentCoverage>,
+    /// Globe face rect the fine rings stay inside.
+    clip: Option<clip::ChartClip>,
     validation: std::cell::RefCell<[Option<ValidationMemo>;3]>,
 }
 
@@ -239,7 +241,7 @@ impl BuildTarget {
     }
     fn matches(&self, other: &Self) -> bool {
         if !same_collar(self.collar.as_ref(),other.collar.as_ref()) {return false;}
-        if self.range_m != other.range_m || self.center != other.center || self.projection_pixels.to_bits() != other.projection_pixels.to_bits() || self.refinement_eye_y.to_bits() != other.refinement_eye_y.to_bits() { return false; }
+        if self.range_m != other.range_m || self.clip != other.clip || self.center != other.center || self.projection_pixels.to_bits() != other.projection_pixels.to_bits() || self.refinement_eye_y.to_bits() != other.refinement_eye_y.to_bits() { return false; }
         // Desired targets are immutable between coalesced checks. Cache the
         // whole comparison, including the structural scan, across those frames.
         let eye_bits=other.eye.to_array().map(f32::to_bits);
@@ -675,6 +677,7 @@ impl Horizon {
                 hidden_radius,
                 omitted: Arc::default(),
                 coverage: self.desired_resident.clone(),
+                clip: self.chart_clip,
                 validation: Default::default(),
             });
             self.checked_revision = Some(revision);
@@ -875,7 +878,7 @@ impl Horizon {
             }
             let cache_hit = base.is_some();
             let base = if let Some(base) = base { base } else {
-                let Some((mesh, samples, trees, tree_samples)) = build_with_focus(cfg, center, Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), target.projection_pixels, &cancel, samples,(*tree_samples).clone(), target.range_m) else { return; };
+                let Some((mesh, samples, trees, tree_samples)) = build_with_focus(cfg, center, Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), target.projection_pixels, &cancel, samples,(*tree_samples).clone(), target.range_m, target.clip) else { return; };
                 if mesh_bytes(&mesh) > MAX_MESH_BYTES {
                     eprintln!("[horizon] procedural base exceeds publication budget");
                     return;
@@ -1130,7 +1133,7 @@ fn build(cfg: WorldSampleConfig, center: (i32,i32), cancel: &AtomicBool, old: Sa
     trees: vegetation::TreeSamples) -> Option<(ChunkMesh, Samples, Vec<vegetation::TreeSource>, vegetation::TreeSamples)> {
     let scale = cfg.voxel_meters();
     let height = distant_surface(&cfg, (center.0 as f32/scale).floor() as i32, (center.1 as f32/scale).floor() as i32).0 * scale;
-    build_with_focus(cfg, center, Vec3::new(center.0 as f32, ((height+100.0)/64.0).round()*64.0, center.1 as f32), 512.0, cancel, old, trees, horizon_range_m())
+    build_with_focus(cfg, center, Vec3::new(center.0 as f32, ((height+100.0)/64.0).round()*64.0, center.1 as f32), 512.0, cancel, old, trees, horizon_range_m(), None)
 }
 
 fn build_with_focus(
@@ -1144,6 +1147,7 @@ fn build_with_focus(
     // Range of the target being built: read once so one build never mixes values
     // when the setting changes mid-build.
     range_m: u32,
+    chart_clip: Option<clip::ChartClip>,
 ) -> Option<(ChunkMesh, Samples, Vec<vegetation::TreeSource>,vegetation::TreeSamples)> {
     let reach = domain_reach(range_m);
     // Sibling appenders index these SIDE*SIDE grids directly. Keep every grid,
@@ -1420,7 +1424,7 @@ fn build_with_focus(
     columns::apply(&mut mesh, &cfg, center, cancel, fine::HALF_M)?;
     println!("[horizon-timing] split_columns_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
     let split_started = std::time::Instant::now();
-    fine::apply(&mut mesh, &cfg, center, cancel)?;
+    fine::apply(&mut mesh, &cfg, center, cancel, chart_clip)?;
     println!("[horizon-timing] split_fine_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
     let split_started = std::time::Instant::now();
     reference::apply(&mut mesh, &cfg);
@@ -1572,6 +1576,7 @@ mod continuity_contract {
             hidden_radius: 128.0,
             omitted: Arc::default(),
             coverage: Arc::default(),
+            clip: None,
             validation: Default::default(),
         }
     }

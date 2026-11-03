@@ -2,7 +2,7 @@
 
 use super::chart::{self, HALF_M, PITCH_M};
 use crate::world::{CloudControls, World, coverage_at};
-use engine_core::hash::hash01;
+use engine_core::hash::{hash01, hash_u32};
 use glam::{DVec3, IVec2, Vec2};
 
 /// Shell height above `chart::RADIUS_M`; `GLOBE_SHELL_M` in globe_shader.wgsl.
@@ -86,8 +86,8 @@ pub fn volumetric_clouds_enabled(altitude_m: f64, top_slab_m: f64) -> bool {
 }
 
 /// Intensity and radius of the anchorage at integer chart cell `site`; hashed so a grid of sites does not read as one.
-pub fn site_light(site: IVec2) -> (f32, f32) {
-    let key = (site.x as u32).wrapping_mul(0x9e37_79b1) ^ (site.y as u32);
+pub fn site_light(seed: u32, site: IVec2) -> (f32, f32) {
+    let key = hash_u32(hash_u32(seed ^ site.x as u32) ^ site.y as u32);
     let intensity = ANCHORAGE_INTENSITY * (0.5 + 0.5 * hash01(key));
     (intensity, ANCHORAGE_RADIUS_M * (0.6 + 0.4 * hash01(key ^ 0x9e37)))
 }
@@ -95,14 +95,14 @@ pub fn site_light(site: IVec2) -> (f32, f32) {
 /// Caps to `MAX_LIGHTS`: strongest first, then nearest `eye_body`, so equal lights favour the view.
 /// Sites carry their chart cell for `site_light`. A chunk with fewer than `MIN_CLUSTER_NODES` nodes
 /// gets no light; larger ones get one light of `0.6 * ceil(n / 64)`.
-pub fn night_lights_from(sites: &[(DVec3, IVec2)], factory_clusters: &[(DVec3, u32)], eye_body: DVec3) -> Vec<Light> {
+pub fn night_lights_from(seed: u32, sites: &[(DVec3, IVec2)], factory_clusters: &[(DVec3, u32)], eye_body: DVec3) -> Vec<Light> {
     let mut out: Vec<(f64, Light)> = Vec::with_capacity(sites.len() + factory_clusters.len());
     let mut push = |body: DVec3, radius_m, intensity| {
         let b = body.as_vec3();
         out.push((body.distance_squared(eye_body), Light { body: [b.x, b.y, b.z], radius_m, intensity, pad: [0.0; 3] }));
     };
     for (body, site) in sites {
-        let (intensity, radius_m) = site_light(*site);
+        let (intensity, radius_m) = site_light(seed, *site);
         push(*body, radius_m, intensity);
     }
     for (body, nodes) in factory_clusters.iter().filter(|(_, n)| *n >= MIN_CLUSTER_NODES) {
@@ -146,7 +146,7 @@ pub fn night_lights(world: &World, eye_body: DVec3) -> Vec<Light> {
             body_of(centre.x, centre.z).map(|b| (b, n))
         })
         .collect();
-    night_lights_from(&sites, &clusters, eye_body)
+    night_lights_from(world.seed, &sites, &clusters, eye_body)
 }
 
 #[cfg(test)]
