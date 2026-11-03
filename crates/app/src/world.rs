@@ -334,9 +334,9 @@ impl LightingState {
         // removes blue/green at low elevation in sky, cloud and terrain shaders.
         // Tinting the source orange as well made the entire sunset sky brown.
         let sun_color = [1.00, 0.98, 0.95];
-        let moon_color = [0.50, 0.58, 0.74];
+        let moon_color = [0.46, 0.58, 0.84];
 
-        let ambient_night = [0.105, 0.125, 0.185];
+        let ambient_night = [0.100, 0.118, 0.200];
         // Keep midday fill restrained so the sun still shapes slopes and ridges.
         // The previous value flattened the terrain into a pale blue wash.
         let ambient_day = [0.155, 0.195, 0.268];
@@ -469,7 +469,7 @@ impl LightingState {
         );
         sun_intensity *= 1.0 - sun_occlusion * 0.65;
 
-        let moon_base = night * smoothstep(-0.16, 0.26, moon_height) * 0.62;
+        let moon_base = night * smoothstep(-0.16, 0.26, moon_height) * 0.95;
         let moon_occlusion = saturate(
             low_cloudiness * 0.28
                 + mid_cloudiness * 0.16
@@ -491,8 +491,11 @@ impl LightingState {
             // sky being repainted brighter, and settles back by full night.
             (0.465 + daylight * 0.400 + twilight * 0.06 + afterglow_adaptation(sun_height) * 0.42)
                 * (1.0 - overcast * 0.08) + haze * 0.008;
-        let saturation =
-            (0.84 + daylight * 0.16) * (1.0 - overcast * 0.34 - storminess * 0.24 - stratus * 0.08);
+        // Rod vision: moonlit colour fades toward grey, so foliage reads as
+        // cool silhouettes under the blue split tone instead of olive mud.
+        let saturation = (0.84 + daylight * 0.16)
+            * (1.0 - night * 0.70)
+            * (1.0 - overcast * 0.34 - storminess * 0.24 - stratus * 0.08);
 
         let fog_height = WATER_LEVEL_METERS + 14.0 + haze * 9.0 + low_base_factor * 4.0;
         let fog_falloff = 0.036 + night * 0.010 + cloud_mass * 0.008 + haze * 0.006;
