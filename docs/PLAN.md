@@ -148,3 +148,4 @@ Content moved to data: `assets/materials.ron` (83 blocks), `spells.ron` (80), `r
 8. **Mixed CRLF/LF in the working tree**: `.gitattributes` normalises on commit; a one-time `git add --renormalize` plus checkout would make the tree uniform.
 9. **`.codex/hooks.json`** points at an absolute `D:\AI\...` virtualenv; either make it relative or drop it.
 10. **Capture tool, render arena, horizon evidence**: `tools/Review-VisualDirection.ps1` still checks `src/` (gone since the workspace split), so captures throw. The fix, a view-28 render baseline, the chunk mesh arena, multi-draw indirect and horizon agreement tests are planned task by task in `docs/plans/2026-10-22-render-arena-and-horizon-evidence.md`.
+11. **Orbital globe** (2026-11-02, branch `orbital-globe`, ADR 0039): tiers, baked tiles, cloud shell, night lights and the orbit-static/ascent bench gates landed; open are globe lighting vs the world shader and replacing the peer's planet cover when it lands.

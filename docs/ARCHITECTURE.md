@@ -42,6 +42,8 @@ Both `headless::Session::tick` and the window now call executable `simulation::f
 
 One world has one `VoxelScalePreset` (1 m, 0.5 m, 0.25 m per cell). Generation is written in metres and converted with `WorldSampleConfig::blocks_for_height`, so the same seed gives the same landscape at every scale. Near chunks are meshed per voxel (`mesh/solid.rs`); farther chunks use `mesh::coarsened_mesh`; beyond the resident ring the renderer draws a horizon backdrop (`render/horizon/`) built from the generator's distant surface plus authoritative edited columns.
 
+Above the surface tier (`altitude.rs`: transition at 1,500 m, resident load stops at 6,000 m, orbit at 30,000 m, 200 m hysteresis) the orbital globe takes over: `render/globe.rs` drives `render/globe/`, which bakes cube-face quadtree height tiles from worldgen on a worker thread, caches them on disk (`VXGT0002`), and draws them as a sphere with a cloud shell and night lights, discarded under the resident chunk disc. It is on with `VOXEL_GLOBE=1` or `--benchmark-globe`; see `docs/adr/0039-orbital-globe.md`.
+
 ## How a voxel change propagates
 
 `World::set` → `ResidentEdits` chunk copy-on-write → water volume map cleared for that cell → activity bits wake the cell and its neighbours (next cellular step reads them) → chunk and halo neighbours marked dirty → streamer rebuilds `GeneratedChunk` → `SolidMesher` → GPU upload → horizon edit overlay refreshed for that column.
