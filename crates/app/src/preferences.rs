@@ -74,13 +74,24 @@ pub const UI_SCALE_DEFAULT: f32 = 1.5;
 /// Smallest logical screen, in egui points, the fixed-width panels are laid out for.
 pub const UI_MIN_POINTS: [f32; 2] = [800.0, 450.0];
 
-/// Zoom for `ui_scale`, lowered when display scaling would leave fewer than
-/// `UI_MIN_POINTS`; past that the inventory and workbench slide off screen.
+/// Window height, in pixels, at which `ui_scale` is the pixels per point.
+const UI_REFERENCE_HEIGHT: f32 = 1296.0;
+
+/// egui zoom for `ui_scale`, sized from the window like an automatic GUI scale.
+///
+/// Display scaling is divided out, so 150% Windows scaling no longer multiplies
+/// the UI scale: a 1440p window at the default shows 1536 x 864 points, as 1080p
+/// does. Pixels per point never drop below 1 (text stays sharp) and never leave
+/// fewer than `UI_MIN_POINTS`, past which the inventory and workbench slide off.
 pub fn fitted_ui_zoom(ui_scale: f32, physical: [f32; 2], native_ppp: f32) -> f32 {
     let wanted = ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
     let native = native_ppp.max(0.25);
-    let fit = (physical[0] / (native * UI_MIN_POINTS[0])).min(physical[1] / (native * UI_MIN_POINTS[1]));
-    if fit.is_finite() && fit > 0.0 { wanted.min(fit.max(0.5)) } else { wanted }
+    let fit = (physical[0] / UI_MIN_POINTS[0]).min(physical[1] / UI_MIN_POINTS[1]);
+    if !(fit.is_finite() && fit > 0.0) {
+        return wanted;
+    }
+    let ppp = (wanted * physical[1] / UI_REFERENCE_HEIGHT).max(1.0).min(fit.max(0.5));
+    ppp / native
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -651,12 +662,24 @@ mod tests {
     #[test]
     fn ui_zoom_keeps_the_preference_until_the_panels_would_not_fit() {
         // 1080p and 720p at 100% display scaling keep the chosen scale.
-        assert_eq!(fitted_ui_zoom(1.5, [1920.0, 1080.0], 1.0), 1.5);
-        assert_eq!(fitted_ui_zoom(1.5, [1280.0, 720.0], 1.0), 1.5);
-        // 720p at 150% display scaling would leave 569 x 320 points.
-        let zoom = fitted_ui_zoom(1.5, [1280.0, 720.0], 1.5);
-        assert!((1280.0 / (1.5 * zoom) - UI_MIN_POINTS[0]).abs() < 1e-3);
-        assert!(720.0 / (1.5 * zoom) >= UI_MIN_POINTS[1] - 1e-3);
+        let points = |scale: f32, size: [f32; 2], native: f32| {
+            let ppp = fitted_ui_zoom(scale, size, native) * native;
+            [size[0] / ppp, size[1] / ppp]
+        };
+        // The default lays out the same logical screen at 1080p and 1440p,
+        // whatever the display scaling.
+        for native in [1.0, 1.25, 1.5] {
+            for size in [[1920.0, 1080.0], [2560.0, 1440.0]] {
+                let [w, h] = points(UI_SCALE_DEFAULT, size, native);
+                assert!((w - 1536.0).abs() < 0.5 && (h - 864.0).abs() < 0.5, "{size:?} @ {native}: {w} x {h}");
+            }
+        }
+        // Small windows keep one pixel per point, then shrink only to fit.
+        assert_eq!(points(UI_SCALE_DEFAULT, [1280.0, 720.0], 1.0), [1280.0, 720.0]);
+        let [w, h] = points(UI_SCALE_MAX, [1280.0, 720.0], 1.5);
+        assert!(w >= UI_MIN_POINTS[0] - 1e-3 && h >= UI_MIN_POINTS[1] - 1e-3);
+        // A larger scale gives fewer, larger points.
+        assert!(points(2.0, [2560.0, 1440.0], 1.5)[1] < 864.0);
         // A minimised window has no size to fit.
         assert_eq!(fitted_ui_zoom(2.0, [0.0, 0.0], 1.0), 2.0);
     }
