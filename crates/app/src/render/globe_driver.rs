@@ -4,6 +4,8 @@ use super::globe::cache::TileCache;
 use super::globe::gpu::{Globe, GlobeUniform, body_view_proj};
 use super::globe::scheduler::{self, Selection};
 use super::globe::tile::TileId;
+use super::globe::shell::{self, Light, ShellConfig};
+use super::globe::shell_worker::ShellWorker;
 use super::globe::worker::{Worker, tile_bytes};
 use super::globe::{self, chart};
 use crate::altitude::Tier;
@@ -19,6 +21,10 @@ const MAX_REQUEST: usize = 64;
 const BAKE_TURN: Duration = Duration::from_millis(2);
 /// 30 s assuming 60 Hz; frames rather than wall time keep the drop off `Instant`.
 const SURFACE_DROP_FRAMES: u32 = 1_800;
+/// Shell and night-light refresh: 30 s of game time at 60 Hz.
+const SHELL_FRAMES: u64 = 1_800;
+/// Angle from a face normal to its corner, `acos(1 / sqrt(3))`.
+const FACE_CORNER_RAD: f64 = 0.955_316_6;
 /// A dead worker is respawned at most this often, so a bake that panics every time cannot spin.
 const RESPAWN_FRAMES: u64 = 600;
 
@@ -44,6 +50,17 @@ pub struct GlobeView {
     pub projection: Mat4,
     pub sun_dir: Vec3,
     pub focal_px: f32,
+    /// Time base of the cloud march's wind offset.
+    pub sky_time_s: f32,
+    pub clouds: crate::world::CloudControls,
+    pub weather_seed: u32,
+}
+
+/// Whether any of `face` can be in front of the limb seen from `eye_body`.
+pub fn face_in_front(face: u8, eye_body: DVec3) -> bool {
+    let normal = engine_core::cube_sphere::Face::ALL[usize::from(face) % 6].basis().n.as_dvec3();
+    let horizon = (chart::RADIUS_M / eye_body.length().max(chart::RADIUS_M)).acos();
+    eye_body.normalize_or_zero().dot(normal).clamp(-1.0, 1.0).acos() < horizon + FACE_CORNER_RAD
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +110,10 @@ pub struct GlobeDriver {
     last_spawn: Option<u64>,
     running: bool,
     stats: GlobeStats,
+    shell_worker: Option<ShellWorker>,
+    last_shell: Option<u64>,
+    light_count: u32,
+    march: bool,
 }
 
 impl Default for GlobeDriver {
@@ -108,6 +129,10 @@ impl Default for GlobeDriver {
             last_spawn: None,
             running: false,
             stats: GlobeStats::default(),
+            shell_worker: None,
+            last_shell: None,
+            light_count: 0,
+            march: true,
         }
     }
 }
@@ -126,6 +151,11 @@ impl GlobeDriver {
         hides_horizon(self.running, self.tier, self.stats.resident)
     }
 
+    /// Whether the volumetric cloud march and its composite run this frame.
+    pub fn march_allowed(&self) -> bool {
+        self.march
+    }
+
     pub fn stats(&self) -> GlobeStats {
         self.stats
     }
@@ -140,12 +170,14 @@ impl GlobeDriver {
         cfg: WorldSampleConfig,
         save_dir: &dyn Fn() -> PathBuf,
         view: &GlobeView,
+        lights: &dyn Fn() -> Vec<Light>,
     ) {
         let start = Instant::now();
         self.frame += 1;
         self.surface_frames = if self.tier == Tier::Surface { self.surface_frames.saturating_add(1) } else { 0 };
         let step = if globe::active() { driver_step(self.tier, globe::forced(), self.surface_frames) } else { Step::Skip };
         self.running = step == Step::Run;
+        self.march = !self.running || shell::volumetric_clouds_enabled(view.eye_m.y, shell::cloud_top_slab_m(&view.clouds));
         if !self.running {
             self.stats = GlobeStats::default();
             if step == Step::DropWorker {
@@ -178,15 +210,16 @@ impl GlobeDriver {
         scheduler::keep_set(&selection.draw, &mut self.keep);
         let frame = chart::frame(view.eye_m);
         let sun = (frame * view.sun_dir.as_dvec3()).normalize_or_zero().as_vec3();
+        self.refresh_shell(globe, queue, view, eye_body, lights);
         let eye = eye_body.as_vec3();
         let uniform = GlobeUniform {
-            eye_body: [eye.x, eye.y, eye.z, 0.0],
+            eye_body: [eye.x, eye.y, eye.z, self.light_count as f32],
             sun_dir_body: [sun.x, sun.y, sun.z, 0.0],
             radius_m: chart::RADIUS_M as f32,
             sea_level_m: 0.0,
             focal_px: view.focal_px,
-            flags: 0,
-            limb: [0.0; 4],
+            flags: if globe.shell_ready() { 2 } else { 0 } | if self.light_count > 0 { 4 } else { 0 },
+            limb: [0.35, 0.55, 0.95, 1.0],
             view_proj: view_proj.to_cols_array_2d(),
         };
         let frame_stats = globe.frame(queue, incoming, &selection, &self.keep, eye_body, uniform);
@@ -202,6 +235,29 @@ impl GlobeDriver {
             bake_ms: bake_nanos as f32 / 1.0e6,
         };
         self.previous_draw = selection.draw;
+    }
+
+    /// Uploads finished shell faces; every `SHELL_FRAMES` requests the faces in front of the
+    /// limb and rebuilds the night lights. The first round bakes all six so the shell can draw.
+    fn refresh_shell(&mut self, globe: &mut Globe, queue: &wgpu::Queue, view: &GlobeView, eye_body: DVec3, lights: &dyn Fn() -> Vec<Light>) {
+        if self.shell_worker.is_none() && self.last_shell.is_none() {
+            self.shell_worker = ShellWorker::spawn();
+        }
+        if let Some(worker) = &self.shell_worker {
+            globe.upload_shell(queue, &worker.drain());
+        }
+        if self.last_shell.is_some_and(|f| self.frame - f < SHELL_FRAMES) {
+            return;
+        }
+        let first = self.last_shell.is_none();
+        self.last_shell = Some(self.frame);
+        if let Some(worker) = &self.shell_worker {
+            let cfg = ShellConfig { resolution: globe.shell_resolution(), controls: view.clouds, weather_seed: view.weather_seed };
+            for face in (0..6u8).filter(|f| first || face_in_front(*f, eye_body)) {
+                worker.request(cfg, view.sky_time_s, face);
+            }
+        }
+        self.light_count = globe.upload_lights(queue, &lights());
     }
 }
 

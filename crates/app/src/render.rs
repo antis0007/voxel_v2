@@ -3901,7 +3901,7 @@ impl Gpu {
     }
 
     /// Drives the globe for this frame; `projection` is the conventional terrain projection.
-    pub fn update_globe(&mut self, world: &crate::world::World, eye_m: glam::DVec3, forward: Vec3, projection: Mat4, focal_px: f32) {
+    pub fn update_globe(&mut self, world: &crate::world::World, day: &crate::world::DayNightCycle, eye_m: glam::DVec3, forward: Vec3, projection: Mat4, focal_px: f32) {
         if !self.device_usable() { return; }
         let Some(globe) = self.globe.as_mut() else { return };
         let view = globe_driver::GlobeView {
@@ -3910,8 +3910,12 @@ impl Gpu {
             projection: REVERSE_Z * projection,
             sun_dir: self.current_lighting.sun_dir,
             focal_px,
+            sky_time_s: self.effect_time,
+            clouds: day.cloud_controls(),
+            weather_seed: day.weather_seed(),
         };
-        self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view);
+        let lights = || globe::shell::night_lights(world);
+        self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &lights);
     }
 
     pub fn globe_stats(&self) -> globe_driver::GlobeStats {
@@ -4830,6 +4834,9 @@ impl Gpu {
                 depth_or_array_layers: 1,
             };
 
+            // Above the top slab the globe's cloud shell replaces the march and its composite.
+            let march_handoff = !(self.globe_visible && self.globe.is_some()) || self.globe_driver.march_allowed();
+            let march = draw_clouds() && march_handoff;
             {
                 let mut cloud_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("cloud raymarch pass"),
@@ -4856,13 +4863,13 @@ impl Gpu {
                 cloud_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 cloud_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 cloud_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if draw_clouds() {
+                if march {
                     cloud_pass.draw(0..3, 0..1);
                 }
             }
-            frame_stats.cloud_raymarch_passes = usize::from(draw_clouds());
+            frame_stats.cloud_raymarch_passes = usize::from(march);
 
-            if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid {
+            if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid && march_handoff {
                 let mut temporal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("cloud temporal pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4990,7 +4997,7 @@ impl Gpu {
                 composite_pass.set_bind_group(1, &self.cloud_bind_group, &[]);
                 composite_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 composite_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if !self.underwater {
+                if !self.underwater && march_handoff {
                     composite_pass.draw(0..3, 0..1);
                 }
             }

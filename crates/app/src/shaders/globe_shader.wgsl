@@ -1,6 +1,7 @@
 // Globe tiles: 65x65 height samples folded onto the cube sphere (render/globe/gpu.rs).
 
 struct GlobeUniform {
+    // w: night-light count
     eye_body: vec4<f32>,
     sun_dir_body: vec4<f32>,
     radius_m: f32,
@@ -30,6 +31,19 @@ struct TileInstance {
 @group(0) @binding(1) var<storage, read> tiles: array<TileInstance>;
 @group(0) @binding(2) var height_atlas: texture_2d<u32>;
 @group(0) @binding(3) var climate_atlas: texture_2d<f32>;
+// Cloud coverage per face, rows along chart z (render/globe/shell.rs).
+@group(0) @binding(4) var shell_coverage: texture_2d_array<f32>;
+@group(0) @binding(5) var shell_sampler: sampler;
+@group(0) @binding(6) var<storage, read> night_lights: array<GlobeLight>;
+
+struct GlobeLight {
+    body: vec3<f32>,
+    radius_m: f32,
+    intensity: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
+};
 
 const GLOBE_SAMPLES: u32 = 65u;
 const GLOBE_LAST: u32 = 64u;
@@ -46,6 +60,12 @@ const GLOBE_SUN: vec3<f32> = vec3<f32>(1.0, 0.96, 0.9);
 const GLOBE_AMBIENT: f32 = 0.18;
 const GLOBE_NIGHT_FLOOR: vec3<f32> = vec3<f32>(0.016, 0.019, 0.026);
 const GLOBE_DEEP_WATER: vec3<f32> = vec3<f32>(0.02, 0.07, 0.14);
+// shell::SHELL_HEIGHT_M
+const GLOBE_SHELL_M: f32 = 1600.0;
+const GLOBE_SHELL_SUN: vec3<f32> = vec3<f32>(1.0, 0.98, 0.95);
+const GLOBE_CITY: vec3<f32> = vec3<f32>(1.0, 0.72, 0.38);
+// Linear radiance per unit light intensity at the splat centre.
+const GLOBE_CITY_GAIN: f32 = 0.03;
 
 // Linear `render.color.base` of the materials in bake::material_index order; rest grey.
 const GLOBE_PALETTE: array<vec3<f32>, 16> = array<vec3<f32>, 16>(
@@ -193,7 +213,10 @@ fn fs_main(in: GlobeVsOut) -> GlobeOutput {
     let view = -in.rel / max(dist, 1e-3);
     let sun = normalize(globe.sun_dir_body.xyz);
     let up = normalize(globe.eye_body.xyz + in.rel);
-    let ndl = max(dot(n, sun), 0.0);
+    var ndl = max(dot(n, sun), 0.0);
+    if (globe.flags & 2u) != 0u {
+        ndl *= 1.0 - 0.6 * globe_shell_alpha_along(globe.eye_body.xyz + in.rel, sun);
+    }
     var color: vec3<f32>;
     if in.water > 0.5 {
         let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(n, view), 0.0), 5.0);
@@ -205,8 +228,11 @@ fn fs_main(in: GlobeVsOut) -> GlobeOutput {
     }
     let day = smoothstep(-0.05, 0.05, dot(up, sun));
     color = mix(GLOBE_NIGHT_FLOOR, color, day);
+    if (globe.flags & 4u) != 0u {
+        color += globe_city_glow(globe.eye_body.xyz + in.rel) * (1.0 - day);
+    }
     let path = globe_air_path(in.rel);
     let haze = 1.0 - exp(-path / GLOBE_SCATTER_M);
-    color = color * (1.0 - haze) + GLOBE_SKY * haze * day;
+    color = color * (1.0 - haze) + globe.limb.rgb * globe.limb.w * haze * day;
     return GlobeOutput(vec4<f32>(color, 1.0), vec4<f32>(0.0));
 }

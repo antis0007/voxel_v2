@@ -6,6 +6,9 @@ pub mod gpu;
 mod gpu_tests;
 pub mod gpu_tiles;
 pub mod scheduler;
+pub mod shell;
+pub mod shell_gpu;
+pub mod shell_worker;
 pub mod tile;
 pub mod worker;
 

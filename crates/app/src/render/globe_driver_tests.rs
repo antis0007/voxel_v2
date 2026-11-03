@@ -34,3 +34,12 @@ fn requests_put_unready_drawn_tiles_first_then_wanted_without_duplicates() {
     assert_eq!(out[0], C);
     assert_eq!(out[1], many[0]);
 }
+
+#[test]
+fn only_faces_in_front_of_the_limb_rebake() {
+    let eye = chart::to_body(DVec3::new(0.0, 60_000.0, 0.0));
+    let front: Vec<u8> = (0..6).filter(|f| face_in_front(*f, eye)).collect();
+    assert_eq!(front, vec![0, 2, 3, 4, 5]);
+    // On the surface the horizon is at 90 degrees, so the four side faces still reach it.
+    assert!(!face_in_front(1, chart::to_body(DVec3::ZERO)));
+}

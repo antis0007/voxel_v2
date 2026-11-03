@@ -4181,7 +4181,7 @@ fn main() -> Result<()> {
                                 );
                                 let globe_start = Instant::now();
                                 let globe_fov = view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians();
-                                gpu.update_globe(world, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
+                                gpu.update_globe(world, &day_night, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
                                 cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
                                 cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
                                 cpu_stats.globe_bake_ms = gpu.globe_stats().bake_ms;
@@ -4406,7 +4406,7 @@ fn main() -> Result<()> {
                                 );
                                 let globe_start = Instant::now();
                                 let globe_fov = view_zoom.lens(egui_ui.fov_degrees, 0.0).to_radians();
-                                gpu.update_globe(world, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
+                                gpu.update_globe(world, &day_night, precise_eye_m, forward, proj, gpu.focal_px(globe_fov));
                                 cpu_stats.globe_ms = globe_start.elapsed().as_secs_f32() * 1000.0;
                                 cpu_stats.globe_upload_bytes = gpu.globe_stats().upload_bytes as f32;
                                 cpu_stats.globe_bake_ms = gpu.globe_stats().bake_ms;

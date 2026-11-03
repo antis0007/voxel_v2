@@ -1,7 +1,8 @@
 //! Atlas slots for resident globe tiles: upload and eviction.
 
 use super::bake::TileData;
-use super::tile::{TILE_SAMPLES, TileId};
+use super::gpu::{INDEX_COUNT, TileInstance};
+use super::tile::{TILE_CELLS, TILE_SAMPLES, TileId};
 use glam::DVec3;
 use std::collections::HashMap;
 
@@ -131,4 +132,31 @@ fn write(queue: &wgpu::Queue, texture: &wgpu::Texture, slot: u32, bytes: &[u8], 
         },
         wgpu::Extent3d { width: TILE_SAMPLES, height: TILE_SAMPLES, depth_or_array_layers: 1 },
     );
+}
+
+pub(crate) fn instance(id: TileId, slot: u32, eye_body: DVec3) -> TileInstance {
+    let min = id.chart_min();
+    let centre = (min + id.chart_max()) * 0.5;
+    let origin = (id.centre_body() - eye_body).as_vec3();
+    TileInstance {
+        origin_body: [origin.x, origin.y, origin.z, 0.0],
+        chart_min: [min.x as f32, min.y as f32],
+        cell_m: id.cell_m() as f32,
+        face: u32::from(id.face),
+        centre: [centre.x as f32, centre.y as f32],
+        slot,
+        pad: 0,
+    }
+}
+
+/// Two triangles per cell, wound counter-clockwise seen from above the surface.
+pub(crate) fn grid_indices() -> Vec<u16> {
+    let mut out = Vec::with_capacity(INDEX_COUNT as usize);
+    for j in 0..TILE_CELLS {
+        for i in 0..TILE_CELLS {
+            let v = |di: u32, dj: u32| ((j + dj) * TILE_SAMPLES + i + di) as u16;
+            out.extend_from_slice(&[v(0, 0), v(0, 1), v(1, 0), v(1, 0), v(0, 1), v(1, 1)]);
+        }
+    }
+    out
 }
