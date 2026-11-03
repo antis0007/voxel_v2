@@ -1051,6 +1051,10 @@ pub(crate) fn amount_text(n: f32) -> String {
     let s = if n >= 10.0 { format!("{n:.1}") } else { format!("{n:.2}") };
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
+/// Flat single-colour shape of a sheet icon; false if the icon has no sheet sprite.
+pub(crate) fn paint_silhouette(p: &egui::Painter, r: Rect, icon: Icon, tint: C) -> bool {
+    sprites16::paint_silhouette(p, r, icon, tint)
+}
 pub fn frame(p: &egui::Painter, r: Rect, selected: bool) {
     super::grimoire::slot(p, r, selected);
 }

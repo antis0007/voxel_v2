@@ -109,21 +109,31 @@ pub(crate) fn texels(icon: Icon) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3
 
 /// Draws `icon` at a whole-pixel scale; false if no sheet covers it.
 pub(super) fn paint(p: &Painter, r: Rect, icon: Icon) -> bool {
-    sprite(icon).is_some_and(|(sheet, id)| paint_sprite(p, r, sheet, id))
+    sprite(icon).is_some_and(|(sheet, id)| paint_sprite(p, r, sheet, id, None))
 }
 
 /// Draws the shared spell backplate; false if the sheet lacks it.
 pub(super) fn paint_spell_frame(p: &Painter, r: Rect) -> bool {
-    paint_sprite(p, r, 1, SPELL_FRAME)
+    paint_sprite(p, r, 1, SPELL_FRAME, None)
 }
 
-fn paint_sprite(p: &Painter, r: Rect, sheet: usize, id: usize) -> bool {
+/// Draws `icon` as one flat `tint` shape; false if no sheet covers it.
+pub(super) fn paint_silhouette(p: &Painter, r: Rect, icon: Icon, tint: C) -> bool {
+    sprite(icon).is_some_and(|(sheet, id)| paint_sprite(p, r, sheet, id, Some(tint)))
+}
+
+fn paint_sprite(p: &Painter, r: Rect, sheet: usize, id: usize, mask: Option<C>) -> bool {
     let Some(Some(pixels)) = SHEETS[sheet].get(id) else {
         return false;
     };
-    let key = egui::Id::new(("sprite-16", sheet, id));
+    let key = egui::Id::new(("sprite-16", sheet, id, mask.is_some()));
     let texture = p.ctx().data(|d| d.get_temp::<egui::TextureHandle>(key)).unwrap_or_else(|| {
-        let image = ColorImage::new([SIZE, SIZE], pixels.clone());
+        // A mask texture is white where opaque so the draw tint sets its colour.
+        let pixels = match mask {
+            Some(_) => pixels.iter().map(|c| if c.a() == 255 { C::WHITE } else { C::TRANSPARENT }).collect(),
+            None => pixels.clone(),
+        };
+        let image = ColorImage::new([SIZE, SIZE], pixels);
         let texture = p.ctx().load_texture("sprite-16", image, TextureOptions::NEAREST);
         p.ctx().data_mut(|d| d.insert_temp(key, texture.clone()));
         texture
@@ -135,7 +145,7 @@ fn paint_sprite(p: &Painter, r: Rect, sheet: usize, id: usize) -> bool {
     let min = ((r.center() - vec2(side, side) * 0.5) * ppp).round() / ppp;
     let target = Rect::from_min_size(min, vec2(side, side));
     let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-    p.image(texture.id(), target, uv, C::WHITE);
+    p.image(texture.id(), target, uv, mask.unwrap_or(C::WHITE));
     true
 }
 

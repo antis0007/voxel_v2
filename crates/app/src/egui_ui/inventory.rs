@@ -140,6 +140,9 @@ pub(crate) fn draw_item_icon(painter: &egui::Painter, rect: egui::Rect, item: It
 
 fn draw_equipment_silhouette(painter: &egui::Painter, rect: egui::Rect, slot: EquipSlot) {
     let icon = icons::Icon::Armor(slot as u8, 1);
+    if icons::paint_silhouette(painter, rect.shrink(rect.width() * 0.08), icon, egui::Color32::from_rgba_unmultiplied(90, 84, 104, 90)) {
+        return;
+    }
     let r = rect.shrink(rect.width() * 0.22);
     icons::paint(painter, r, icon);
     // Dim overlay so empty equipment slots read as recessed silhouettes
