@@ -21,7 +21,7 @@ const LOW_LAYER_WIND_MULT: f32 = 8.0 * 1.65;
 
 /// Texels per shell face edge: 512, or 256 on the lean tier.
 pub fn shell_resolution() -> u32 {
-    if crate::render::lean_shading() { 256 } else { 512 }
+    crate::render::globe_driver::lean_limits(crate::render::lean_shading()).1
 }
 
 /// Inputs of one shell face bake.

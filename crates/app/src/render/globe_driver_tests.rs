@@ -51,3 +51,9 @@ fn shell_faces_wait_when_tiles_used_the_frame_budget() {
     assert_eq!(shell_faces_within(2 * 1024 * 1024, 0, face, 6), 6);
     assert_eq!(shell_faces_within(2 * 1024 * 1024, 1_000_000, face, 6), 4);
 }
+
+#[test]
+fn lean_tier_halves_draw_count_and_shell_size() {
+    assert_eq!(lean_limits(true), (256, 256));
+    assert_eq!(lean_limits(false), (512, 512));
+}

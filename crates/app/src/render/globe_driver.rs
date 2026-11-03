@@ -16,7 +16,10 @@ use std::time::{Duration, Instant};
 
 /// Per-frame upload cap; one 2 MB frame stays under a millisecond of copy on any adapter.
 const DRAIN_BYTES: usize = 2 * 1024 * 1024;
-const MAX_DRAW: usize = 512;
+/// Draw cap and shell face edge: halved on the lean tier to fit an iGPU frame.
+pub fn lean_limits(lean: bool) -> (usize, u32) {
+    if lean { (256, 256) } else { (512, 512) }
+}
 const MAX_REQUEST: usize = 64;
 const BAKE_TURN: Duration = Duration::from_millis(2);
 /// 30 s assuming 60 Hz; frames rather than wall time keep the drop off `Instant`.
@@ -209,7 +212,7 @@ impl GlobeDriver {
         // Tiles drained this frame upload before `prepare`, so they count as ready now.
         let ready = |id: TileId| globe.resident_contains(id) || incoming.iter().any(|t| t.id == id);
         let selection: Selection =
-            scheduler::select(&ready, &self.previous_draw, eye_body, f64::from(view.focal_px), MAX_DRAW);
+            scheduler::select(&ready, &self.previous_draw, eye_body, f64::from(view.focal_px), lean_limits(crate::render::lean_shading()).0);
         request_order(&selection.draw, &selection.wanted, &ready, &mut self.request);
         if let Some(worker) = &self.worker {
             worker.request(&self.request);
@@ -225,7 +228,7 @@ impl GlobeDriver {
             radius_m: chart::RADIUS_M as f32,
             sea_level_m: 0.0,
             focal_px: view.focal_px,
-            flags: if globe.shell_ready() { 2 } else { 0 } | if self.light_count > 0 { 4 } else { 0 },
+            flags: u32::from(crate::render::lean_shading()) | if globe.shell_ready() { 2 } else { 0 } | if self.light_count > 0 { 4 } else { 0 },
             limb: [0.35, 0.55, 0.95, 1.0],
             view_proj: view_proj.to_cols_array_2d(),
         };
