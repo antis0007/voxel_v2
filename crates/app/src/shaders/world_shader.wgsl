@@ -1153,6 +1153,23 @@ fn surface_detail_weight(footprint_in_cells: f32) -> f32 {
     return 1.0 - smoothstep(0.20, 0.50, max(footprint_in_cells, 0.0));
 }
 
+// Leaf clump value at one lattice scale, mean near 1. `t` is in lattice cells.
+fn leaf_clump_value(t: vec2<f32>, pine: f32, salt: f32) -> f32 {
+    let tex = floor(t);
+    let cell = floor(t / 3.0);
+    let id = surface_hash(cell + vec2<f32>(41.0, -13.0 + salt));
+    let centre = cell * 3.0 + vec2<f32>(1.5) + (vec2<f32>(
+        surface_hash(cell + vec2<f32>(7.0, 3.0 + salt)),
+        surface_hash(cell + vec2<f32>(-2.0, 29.0 + salt))) - 0.5) * 1.4;
+    let d = length((tex + 0.5 - centre) * vec2<f32>(1.0, 1.25));
+    let gap = step(1.75 - pine * 0.35, d) * step(0.22, id);
+    let rim = step(0.0, tex.y + 0.5 - centre.y) * step(0.8, d) * (1.0 - gap);
+    var v = 0.90 + surface_hash(tex + vec2<f32>(5.0, 17.0 + salt)) * 0.12 + (id - 0.5) * 0.16;
+    v = mix(v, 0.46, gap);
+    v = mix(v, v * 1.14, rim);
+    return v / 0.93;
+}
+
 fn surface_noise_filtered(p: vec2<f32>, footprint_in_cells: f32) -> f32 {
     let weight = surface_detail_weight(footprint_in_cells);
     if weight <= 0.0 { return 0.5; }
@@ -1557,7 +1574,18 @@ fn grass_side(soil_col: vec3<f32>, turf: vec3<f32>, p: vec3<f32>, q: vec3<f32>, 
     let lip = step(depth - 1.5, row) * fringe;
     let root = step(depth - 0.5, row) * step(row, depth + 2.5)
         * step(0.84, surface_hash(vec2<f32>(col_i, row) + vec2<f32>(41.0, 3.0)));
-    var col = mix(soil_col, turf * (0.90 + surface_hash(vec2<f32>(col_i, row)) * 0.12) * (1.0 - lip * 0.18), fringe);
+    // Soil texels: grain, 2x2 pebbles and clods, and the turf lip's shadow
+    // on the first soil rows. Mean stays near the soil colour.
+    let clod_cell = floor(vec2<f32>(col_i, row) / 2.0);
+    let clod = surface_hash(clod_cell + vec2<f32>(13.0, floor(p.y) * 7.0));
+    let pebble = step(0.91, clod);
+    let dark_clod = step(clod, 0.07);
+    var soil_v = 0.91 + surface_hash(vec2<f32>(col_i, row) + vec2<f32>(3.0, -71.0)) * 0.16;
+    soil_v *= 1.0 - step(depth - 0.5, row) * step(row, depth + 1.5) * 0.22;
+    var soil_tex = soil_col * soil_v;
+    soil_tex = mix(soil_tex, mix(soil_col, vec3<f32>(dot(soil_col, vec3<f32>(0.33))), 0.55) * 1.28, pebble);
+    soil_tex = mix(soil_tex, soil_col * vec3<f32>(0.66, 0.60, 0.56), dark_clod);
+    var col = mix(soil_tex, turf * (0.90 + surface_hash(vec2<f32>(col_i, row)) * 0.12) * (1.0 - lip * 0.18), fringe);
     col = mix(col, soil_col * vec3<f32>(0.72, 0.66, 0.60), root * (1.0 - fringe));
     // Keep the fringe's mean coverage (about 11 of 20 rows) when texels blur.
     let mean = mix(soil_col, turf, clamp(0.55 / scale, 0.0, 1.0));
@@ -2043,21 +2071,12 @@ fn block_surface(base: vec3<f32>, p: vec3<f32>, normal: vec3<f32>, kind: i32, fo
         // and a lit upper rim, so a crown reads as layered leaves, not a
         // painted cube. Faded by texel footprint before it can alias.
         let lt = physical_uv * PIXEL_RES;
-        let ltex = floor(lt);
-        let clump_cell = floor(lt / 3.0);
-        let clump_id = surface_hash(clump_cell + vec2<f32>(41.0, -13.0));
-        let clump_c = clump_cell * 3.0 + vec2<f32>(1.5) + (vec2<f32>(
-            surface_hash(clump_cell + vec2<f32>(7.0, 3.0)),
-            surface_hash(clump_cell + vec2<f32>(-2.0, 29.0))) - 0.5) * 1.4;
-        let clump_d = length((ltex + 0.5 - clump_c) * vec2<f32>(1.0, 1.25));
-        let gap = step(1.75 - pine * 0.35, clump_d) * step(0.22, clump_id);
-        let rim = step(0.0, ltex.y + 0.5 - clump_c.y) * step(0.8, clump_d) * (1.0 - gap);
-        let leaf_w = surface_detail_weight(metric_footprint * PIXEL_RES);
-        var leaf_value = 0.90 + surface_hash(ltex + vec2<f32>(5.0, 17.0)) * 0.12 + (clump_id - 0.5) * 0.16;
-        leaf_value = mix(leaf_value, 0.46, gap);
-        leaf_value = mix(leaf_value, leaf_value * 1.14, rim);
-        // Keep the mean near 1 so distant crowns hold their tone after the fade.
-        let leaf_texel = mix(1.0, leaf_value / 0.93, leaf_w);
+        let fine_w = surface_detail_weight(metric_footprint * PIXEL_RES);
+        // A 4x coarser clump lattice carries the read out to mid-distance
+        // crowns once the texel layer has filtered away.
+        let coarse_w = surface_detail_weight(metric_footprint * PIXEL_RES * 0.25) * (1.0 - fine_w);
+        let leaf_texel = mix(1.0, leaf_clump_value(lt, pine, 0.0), fine_w)
+            * mix(1.0, leaf_clump_value(lt * 0.25, pine, 37.0), coarse_w * 0.85);
         color = mix(broadleaf, needles, pine) * (0.93 + leaf_cluster * 0.14) * leaf_texel;
     } else if kind == 9 {
         color *= 1.0 + mottling * 0.2;
@@ -2521,6 +2540,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
             let strata = vec3<f32>(value * (1.0 + warmth), value, value * (1.0 - warmth));
             let strata_w = 1.0 - smoothstep(1.5, 3.5, fp_m);
             detail_color *= mix(vec3<f32>(1.0), strata / 0.89, steep * strata_w);
+            // Light each bed as a terrace: a flat tread along its top and a
+            // vertical riser below, so slopes read as stepped blocks. About a third
+            // of beds stay unstepped so cliffs do not read as a ziggurat. The
+            // smooth tread edge keeps the normal continuous between beds.
+            let horizontal = terrain_safe_unit3(vec3<f32>(macro_normal.x, 0.0, macro_normal.z), macro_normal);
+            let tread = smoothstep(0.70, 0.86, fract(layer)) * smoothstep(0.30, 0.45, bed);
+            let stepped = terrain_safe_unit3(mix(horizontal, vec3<f32>(0.0, 1.0, 0.0), tread), macro_normal);
+            macro_normal = terrain_safe_unit3(mix(macro_normal, stepped, steep * strata_w * 0.62), macro_normal);
         }
     } else if orbital_part {
         // A single 5 cm lattice follows the rigid part through every rotation.
