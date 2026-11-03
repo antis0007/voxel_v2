@@ -2503,6 +2503,25 @@ fn fs_main(in: VsOut) -> WorldOutput {
         if terrain_is_column(in.ao_strength) {
             detail_color *= horizon_column_value(in.voxel_pos * scale, geometric_normal);
         }
+        // Steep far rock reads as stacked strata with dark undercut ledges
+        // instead of smooth clay. Bands warp with a broad field so ridges do
+        // not show ruled lines, and fade before a band is under two pixels.
+        let steep = smoothstep(0.30, 0.70, 1.0 - macro_normal.y);
+        if steep > 0.0 {
+            let warp = (surface_noise_filtered(world_pos.xz / 110.0 + vec2<f32>(3.0, -41.0),
+                fp_m / 110.0) - 0.5) * 22.0;
+            let layer = (world_pos.y + warp) / 7.0;
+            // Two band scales give uneven bed thickness: thin beds inside
+            // thick formations, each with its own value and warmth.
+            let bed = surface_hash(vec2<f32>(floor(layer), 71.0));
+            let formation = surface_hash(vec2<f32>(floor(layer * 0.31), 19.0));
+            let ledge = 1.0 - smoothstep(0.0, 0.45, fract(layer));
+            let value = (0.80 + formation * 0.26 + (bed - 0.5) * 0.14) * (1.0 - ledge * 0.20);
+            let warmth = (formation - 0.5) * 0.10;
+            let strata = vec3<f32>(value * (1.0 + warmth), value, value * (1.0 - warmth));
+            let strata_w = 1.0 - smoothstep(1.5, 3.5, fp_m);
+            detail_color *= mix(vec3<f32>(1.0), strata / 0.89, steep * strata_w);
+        }
     } else if orbital_part {
         // A single 5 cm lattice follows the rigid part through every rotation.
         // Filter unresolved pixels to their mean; no world-space crawling grain.
