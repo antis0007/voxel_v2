@@ -63,6 +63,16 @@ pub struct Globe {
     indices: wgpu::Buffer,
     tiles: TilePool,
     draw_count: u32,
+    instance_scratch: Vec<TileInstance>,
+}
+
+/// Per-frame globe counters for the render stats.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameStats {
+    pub uploaded: usize,
+    pub dropped: usize,
+    pub drawn: usize,
+    pub resident: usize,
 }
 
 impl Globe {
@@ -158,32 +168,67 @@ impl Globe {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&tiles.climate_view) },
             ],
         });
-        Globe { pipeline, bind_group, uniform, instances, indices, tiles, draw_count: 0 }
+        Globe { pipeline, bind_group, uniform, instances, indices, tiles, draw_count: 0, instance_scratch: Vec::with_capacity(MAX_RESIDENT) }
     }
 
-    pub fn upload(&mut self, queue: &wgpu::Queue, tiles: Vec<TileData>) {
-        for tile in &tiles {
-            self.tiles.upload(queue, tile);
+    /// The only production entry point: evict, upload, then prepare, in that order.
+    ///
+    /// A slot freed and refilled after `prepare` would make an instance written this
+    /// frame draw another tile's data.
+    pub fn frame(
+        &mut self,
+        queue: &wgpu::Queue,
+        incoming: Vec<TileData>,
+        selection: &Selection,
+        eye_body: DVec3,
+        uniform: GlobeUniform,
+    ) -> FrameStats {
+        self.evict_unused(&selection.draw, MAX_RESIDENT, incoming.len(), eye_body);
+        let dropped = self.upload(queue, &incoming);
+        self.prepare(queue, selection, eye_body, uniform);
+        FrameStats {
+            uploaded: incoming.len() - dropped,
+            dropped,
+            drawn: self.draw_count as usize,
+            resident: self.tiles.resident(),
         }
     }
 
-    pub fn evict_unused(&mut self, keep: &[TileId], max_resident: usize) {
-        self.tiles.evict_unused(keep, max_resident);
+    /// Returns the number of tiles dropped because the pool was full.
+    pub(crate) fn upload(&mut self, queue: &wgpu::Queue, tiles: &[TileData]) -> usize {
+        tiles.iter().filter(|tile| !self.tiles.upload(queue, tile)).count()
+    }
+
+    pub(crate) fn evict_unused(&mut self, keep: &[TileId], max_resident: usize, incoming: usize, eye_body: DVec3) {
+        self.tiles.evict_unused(keep, max_resident, incoming, eye_body);
     }
 
     /// Writes the uniform and one instance per resident tile of `selection.draw`.
-    pub fn prepare(&mut self, queue: &wgpu::Queue, selection: &Selection, eye_body: DVec3, uniform: GlobeUniform) {
-        let instances: Vec<TileInstance> = selection
-            .draw
-            .iter()
-            .filter_map(|id| self.tiles.slot(*id).map(|slot| instance(*id, slot, eye_body)))
-            .take(MAX_RESIDENT)
-            .collect();
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
-        if !instances.is_empty() {
-            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances));
+    pub(crate) fn prepare(&mut self, queue: &wgpu::Queue, selection: &Selection, eye_body: DVec3, uniform: GlobeUniform) {
+        self.instance_scratch.clear();
+        for id in &selection.draw {
+            if self.instance_scratch.len() == MAX_RESIDENT {
+                break;
+            }
+            if let Some(slot) = self.tiles.slot(*id) {
+                self.instance_scratch.push(instance(*id, slot, eye_body));
+            }
         }
-        self.draw_count = instances.len() as u32;
+        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
+        if !self.instance_scratch.is_empty() {
+            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.instance_scratch));
+        }
+        self.draw_count = self.instance_scratch.len() as u32;
+    }
+
+    #[cfg(test)]
+    pub fn instance_capacity(&self) -> usize {
+        self.instance_scratch.capacity()
+    }
+
+    #[cfg(test)]
+    pub fn free_slots(&self) -> usize {
+        self.tiles.free_slots()
     }
 
     /// Replaces the caller's group 0 and pipeline; the caller rebinds its own afterwards.
