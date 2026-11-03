@@ -42,7 +42,7 @@ impl Scene {
         for (cell, value) in read_flush(&out).unwrap() {
             self.client.insert(cell, value);
         }
-        for &brick in &flush.resend {
+        for &(_, brick) in &flush.resend {
             let mut cells = [0u32; BRICK_CELLS];
             for (i, c) in cells.iter_mut().enumerate() {
                 *c = self.server.get(&cell_at(brick, i as u16)).copied().unwrap_or(0);
@@ -130,7 +130,7 @@ fn a_brick_that_never_quiets_is_still_resent() {
 
 #[test]
 fn hostile_flushes_and_bricks_are_refused() {
-    let mut bad = Vec::new();
+    let mut bad = vec![0];
     [0i64, 0, 0].iter().for_each(|&c| put_i64(&mut bad, c));
     put_u64(&mut bad, 1);
     [0i64, 0, 0].iter().for_each(|&c| put_i64(&mut bad, c));
@@ -158,7 +158,7 @@ fn cells_map_to_bricks_by_floor_division() {
 #[test]
 fn overflowing_coordinates_and_gaps_are_refused_not_panics() {
     let flush = |home: i64, rel: i64, gaps: &[u64]| {
-        let mut b = Vec::new();
+        let mut b = vec![0];
         (0..3).for_each(|_| put_i64(&mut b, home));
         put_u64(&mut b, 1);
         (0..3).for_each(|_| put_i64(&mut b, rel));

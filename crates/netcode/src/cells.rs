@@ -8,8 +8,21 @@
 //! caller resends the whole brick once it has been quiet, or after a hard limit if
 //! it never quiets. Sleeping bricks cost nothing.
 //!
+//! Bricks are keyed by frame (ADR 0040): frame 0 is the world grid, any other is an
+//! assembly's local grid. A flush is a sequence of runs, one per frame; a run for an
+//! assembly names the revision the client must hold and the one it reaches, so a
+//! client missing a baseline or a flush can tell and ask for a resend.
+//!
 //! Flushes go on a reliable ordered channel; a lost flush would leave cells behind.
-use crate::wire::{Reader, WireError, put_i64, put_u64};
+mod assembly;
+mod brick;
+mod read;
+
+pub use assembly::AssemblyBaseline;
+pub use brick::{read_brick, write_brick};
+pub use read::{CellReader, Received, read_flush};
+
+use crate::wire::{put_i64, put_u64};
 use glam::IVec3;
 use std::collections::HashMap;
 
@@ -33,7 +46,7 @@ fn index_in_brick(cell: IVec3) -> u16 {
     (l.x + BRICK * (l.y + BRICK * l.z)) as u16
 }
 
-fn cell_at(brick: IVec3, index: u16) -> IVec3 {
+pub(crate) fn cell_at(brick: IVec3, index: u16) -> IVec3 {
     let i = i32::from(index);
     brick * BRICK + IVec3::new(i % BRICK, (i / BRICK) % BRICK, i / (BRICK * BRICK))
 }
@@ -79,14 +92,43 @@ struct Pending {
     last_change: u64,
 }
 
+/// One frame's part of a flush: the client's position in that frame's grid and,
+/// for an assembly, the revision this flush brings the client to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct View {
+    pub frame: u32,
+    pub center: IVec3,
+    pub revision: u32,
+}
+
+impl View {
+    pub fn world(center: IVec3) -> Self {
+        Self { frame: 0, center, revision: 0 }
+    }
+}
+
 /// Server side, one per client.
 #[derive(Default)]
 pub struct CellStream {
-    bricks: HashMap<IVec3, Pending>,
+    bricks: HashMap<(u32, IVec3), Pending>,
+    /// Revision the client holds per assembly; runs are written only for these.
+    sent: HashMap<u32, u32>,
     flushes: u64,
     /// Cleared cell sets kept for reuse, so steady traffic allocates nothing.
     #[allow(clippy::vec_box, reason = "boxes move between bricks and this pool without copying 2 KiB")]
     spare: Vec<Box<Cells>>,
+    runs: Vec<(u64, Vec<u8>)>,
+}
+
+fn len(cells: &Option<Box<Cells>>) -> usize {
+    cells.as_ref().map_or(0, |c| c.len)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Flush {
+    pub cells: usize,
+    /// Bricks (frame, brick) the caller sends whole, on the same ordered channel after this flush.
+    pub resend: Vec<(u32, IVec3)>,
 }
 
 impl CellStream {
@@ -97,23 +139,15 @@ impl CellStream {
             self.spare.push(c);
         }
     }
-}
 
-fn len(cells: &Option<Box<Cells>>) -> usize {
-    cells.as_ref().map_or(0, |c| c.len)
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Flush {
-    pub cells: usize,
-    /// Bricks the caller sends whole, on the same ordered channel after this flush.
-    pub resend: Vec<IVec3>,
-}
-
-impl CellStream {
-    /// Records a cell change inside this client's interest set.
+    /// Records a world cell change inside this client's interest set.
     pub fn changed(&mut self, cell: IVec3, value: u32) {
-        let p = self.bricks.entry(brick_of(cell)).or_default();
+        self.changed_in(0, cell, value);
+    }
+
+    /// Records a cell change in `frame`'s grid.
+    pub fn changed_in(&mut self, frame: u32, cell: IVec3, value: u32) {
+        let p = self.bricks.entry((frame, brick_of(cell))).or_default();
         p.last_change = self.flushes;
         if p.stale_since.is_some() {
             return;
@@ -130,40 +164,71 @@ impl CellStream {
         }
     }
 
+    /// Records that the client was sent `frame`'s baseline at `revision`; pending
+    /// changes for it are covered by the baseline and dropped.
+    pub fn baseline_sent(&mut self, frame: u32, revision: u32) {
+        self.sent.insert(frame, revision);
+        let covered: Vec<_> = self.bricks.keys().filter(|k| k.0 == frame).copied().collect();
+        for key in covered {
+            if let Some(p) = self.bricks.remove(&key) {
+                self.recycle(p.cells);
+            }
+        }
+    }
+
+    /// Forgets an assembly that left the client's interest.
+    pub fn forget(&mut self, frame: u32) {
+        self.baseline_sent(frame, 0);
+        self.sent.remove(&frame);
+    }
+
     pub fn pending_bricks(&self) -> usize {
         self.bricks.len()
     }
 
-    /// Writes up to `budget` cells nearest `center` into `out`.
+    /// Writes up to `budget` world cells nearest `center` into `out`.
     pub fn flush(&mut self, center: IVec3, budget: usize, out: &mut Vec<u8>) -> Flush {
+        self.flush_frames(&[View::world(center)], budget, out)
+    }
+
+    /// Writes up to `budget` cells over `views`, nearest each view's centre first.
+    /// Frames without a view, and assemblies without a sent baseline, stay pending.
+    pub fn flush_frames(&mut self, views: &[View], budget: usize, out: &mut Vec<u8>) -> Flush {
         self.flushes += 1;
         let now = self.flushes;
-        let home = brick_of(center);
-        let mut resend: Vec<IVec3> = Vec::new();
-        let mut order: Vec<(i64, IVec3)> = Vec::new();
-        for (&brick, p) in &mut self.bricks {
+        let view_of = |frame: u32| views.iter().position(|v| v.frame == frame);
+        let mut resend: Vec<(u32, IVec3)> = Vec::new();
+        let mut order: Vec<(i64, usize, IVec3)> = Vec::new();
+        for (&(frame, brick), p) in &mut self.bricks {
+            let Some(at) = view_of(frame).filter(|_| frame == 0 || self.sent.contains_key(&frame)) else { continue };
             match p.stale_since {
-                Some(since) if now - p.last_change >= QUIET || now - since >= MAX_STALE => resend.push(brick),
+                Some(since) if now - p.last_change >= QUIET || now - since >= MAX_STALE => resend.push((frame, brick)),
                 Some(_) => {}
                 None if len(&p.cells) > 0 => {
-                    let d = (brick - home).as_i64vec3();
-                    order.push((d.dot(d), brick));
+                    let d = (brick - brick_of(views[at].center)).as_i64vec3();
+                    order.push((d.dot(d), at, brick));
                 }
                 None => {}
             }
         }
-        for brick in &resend {
-            if let Some(p) = self.bricks.remove(brick) {
+        for key in &resend {
+            if let Some(p) = self.bricks.remove(key) {
                 self.recycle(p.cells);
             }
         }
-        resend.sort_by_key(|b| (b.x, b.y, b.z));
-        order.sort_by_key(|&(d, b)| (d, b.x, b.y, b.z));
+        resend.sort_by_key(|&(f, b)| (f, b.x, b.y, b.z));
+        order.sort_by_key(|&(d, at, b)| (d, at, b.x, b.y, b.z));
 
-        let mut body = Vec::new();
-        let (mut written, mut cells) = (0u64, 0usize);
-        for (_, brick) in order {
-            let Some(p) = self.bricks.get_mut(&brick) else { continue };
+        let mut runs = std::mem::take(&mut self.runs);
+        runs.iter_mut().for_each(|(n, body)| {
+            *n = 0;
+            body.clear();
+        });
+        runs.resize_with(views.len(), Default::default);
+        let mut cells = 0usize;
+        for (_, at, brick) in order {
+            let key = (views[at].frame, brick);
+            let Some(p) = self.bricks.get_mut(&key) else { continue };
             let n = len(&p.cells);
             if cells + n > budget {
                 p.skipped += 1;
@@ -174,105 +239,46 @@ impl CellStream {
                 }
                 continue;
             }
-            let rel = brick - home;
-            [rel.x, rel.y, rel.z].iter().for_each(|&c| put_i64(&mut body, i64::from(c)));
-            put_u64(&mut body, n as u64);
+            let (written, body) = &mut runs[at];
+            let rel = brick - brick_of(views[at].center);
+            [rel.x, rel.y, rel.z].iter().for_each(|&c| put_i64(body, i64::from(c)));
+            put_u64(body, n as u64);
             let mut prev = 0u16;
             for (index, value) in p.cells.iter().flat_map(|c| c.iter()) {
-                put_u64(&mut body, u64::from(index - prev));
-                put_u64(&mut body, u64::from(value));
+                put_u64(body, u64::from(index - prev));
+                put_u64(body, u64::from(value));
                 prev = index;
             }
             cells += n;
-            written += 1;
-            if let Some(p) = self.bricks.remove(&brick) {
+            *written += 1;
+            if let Some(p) = self.bricks.remove(&key) {
                 self.recycle(p.cells);
             }
         }
-        [home.x, home.y, home.z].iter().for_each(|&c| put_i64(out, i64::from(c)));
-        put_u64(out, written);
-        out.extend_from_slice(&body);
+        for (view, (written, body)) in views.iter().zip(&runs) {
+            if view.frame != 0 {
+                let Some(&base) = self.sent.get(&view.frame) else { continue };
+                if *written == 0 && base == view.revision {
+                    continue;
+                }
+                put_u64(out, u64::from(view.frame));
+                put_u64(out, u64::from(base));
+                put_u64(out, u64::from(view.revision.wrapping_sub(base)));
+                self.sent.insert(view.frame, view.revision);
+            } else {
+                put_u64(out, 0);
+            }
+            let home = brick_of(view.center);
+            [home.x, home.y, home.z].iter().for_each(|&c| put_i64(out, i64::from(c)));
+            put_u64(out, *written);
+            out.extend_from_slice(body);
+        }
+        self.runs = runs;
         Flush { cells, resend }
     }
 }
 
-/// Client side: decodes one flush into absolute cells.
-pub fn read_flush(bytes: &[u8]) -> Result<Vec<(IVec3, u32)>, WireError> {
-    let mut r = Reader::new(bytes);
-    // Brick coordinates stay where `brick * BRICK + 7` fits in i32.
-    const LIMIT: i32 = i32::MAX / BRICK - 1;
-    let fits = |c: Option<i32>| c.filter(|c| (-LIMIT..=LIMIT).contains(c)).ok_or(WireError("brick coordinate"));
-    let home = IVec3::new(fits(Some(r.i32()?))?, fits(Some(r.i32()?))?, fits(Some(r.i32()?))?);
-    let bricks = r.u64()?;
-    let mut out = Vec::new();
-    for _ in 0..bricks {
-        let (x, y, z) = (r.i32()?, r.i32()?, r.i32()?);
-        let brick = IVec3::new(fits(home.x.checked_add(x))?, fits(home.y.checked_add(y))?, fits(home.z.checked_add(z))?);
-        let count = r.u64()?;
-        if count > BRICK_CELLS as u64 {
-            return Err(WireError("brick cell count"));
-        }
-        let mut index = 0u64;
-        for n in 0..count {
-            let gap = r.u64()?;
-            if n > 0 && gap == 0 {
-                return Err(WireError("repeated cell"));
-            }
-            index = index.checked_add(gap).ok_or(WireError("cell index"))?;
-            let index = u16::try_from(index).ok().filter(|&i| usize::from(i) < BRICK_CELLS).ok_or(WireError("cell index"))?;
-            out.push((cell_at(brick, index), r.u32()?));
-        }
-    }
-    if !r.done() {
-        return Err(WireError("trailing bytes"));
-    }
-    Ok(out)
-}
-
-/// Whole-brick form for resends: a palette, then (palette index, run length) pairs.
-pub fn write_brick(cells: &[u32; BRICK_CELLS], out: &mut Vec<u8>) {
-    let mut palette: Vec<u32> = Vec::new();
-    let mut runs: Vec<(usize, usize)> = Vec::new();
-    for &value in cells {
-        let slot = palette.iter().position(|&p| p == value).unwrap_or_else(|| {
-            palette.push(value);
-            palette.len() - 1
-        });
-        match runs.last_mut() {
-            Some((s, n)) if *s == slot => *n += 1,
-            _ => runs.push((slot, 1)),
-        }
-    }
-    put_u64(out, palette.len() as u64);
-    palette.iter().for_each(|&p| put_u64(out, u64::from(p)));
-    put_u64(out, runs.len() as u64);
-    for (slot, n) in runs {
-        put_u64(out, slot as u64);
-        put_u64(out, n as u64);
-    }
-}
-
-pub fn read_brick(bytes: &[u8]) -> Result<[u32; BRICK_CELLS], WireError> {
-    let mut r = Reader::new(bytes);
-    let size = r.u64()?;
-    if size == 0 || size > BRICK_CELLS as u64 {
-        return Err(WireError("palette size"));
-    }
-    let palette = (0..size).map(|_| r.u32()).collect::<Result<Vec<_>, _>>()?;
-    let mut cells = [0u32; BRICK_CELLS];
-    let mut at = 0usize;
-    for _ in 0..r.u64()? {
-        let value = *palette.get(r.u64()? as usize).ok_or(WireError("palette index"))?;
-        let n = r.u64()? as usize;
-        let end = at.checked_add(n).filter(|&e| e <= BRICK_CELLS && n > 0).ok_or(WireError("run length"))?;
-        cells[at..end].fill(value);
-        at = end;
-    }
-    if at != BRICK_CELLS || !r.done() {
-        return Err(WireError("brick length"));
-    }
-    Ok(cells)
-}
-
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod frame_tests;

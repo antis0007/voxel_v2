@@ -20,6 +20,7 @@ const ROTATION: u8 = 2;
 const VELOCITY: u8 = 4;
 const ANGULAR: u8 = 8;
 const STATE: u8 = 16;
+const FRAME: u8 = 32;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct BodyState {
@@ -29,10 +30,12 @@ pub struct BodyState {
     pub angular: [i32; 3],
     /// Game-defined bits: animation, health bucket, flags.
     pub state: u32,
+    /// Assembly whose local grid `position`, `velocity` and `angular` are in; 0 is the world.
+    pub frame: u32,
 }
 
 impl BodyState {
-    /// Quantises a body in voxel units; velocities saturate far past any game speed.
+    /// Quantises a world-frame body in voxel units; velocities saturate far past any game speed.
     pub fn quantise(position: Vec3, rotation: Quat, velocity: Vec3, angular: Vec3, state: u32) -> Self {
         let fixed = |v: Vec3, steps: f32| v.to_array().map(|c| (f64::from(c) * f64::from(steps)).round() as i64);
         let small = |v: Vec3, steps: f32| fixed(v, steps).map(|c| c.clamp(-(1 << 20), 1 << 20) as i32);
@@ -42,6 +45,7 @@ impl BodyState {
             velocity: small(velocity, VELOCITY_STEPS),
             angular: small(angular, ANGULAR_STEPS),
             state,
+            frame: 0,
         }
     }
 
@@ -76,6 +80,7 @@ impl BodyState {
             (self.velocity != base.velocity, VELOCITY),
             (self.angular != base.angular, ANGULAR),
             (self.state != base.state, STATE),
+            (self.frame != base.frame, FRAME),
         ]
         .iter()
         .filter(|(changed, _)| *changed)
@@ -96,11 +101,14 @@ impl BodyState {
         if mask & STATE != 0 {
             put_u64(out, u64::from(self.state));
         }
+        if mask & FRAME != 0 {
+            put_u64(out, u64::from(self.frame));
+        }
     }
 
     pub fn read_delta(base: &Self, r: &mut Reader) -> Result<Self, WireError> {
         let mask = r.u8()?;
-        if mask & !(POSITION | ROTATION | VELOCITY | ANGULAR | STATE) != 0 {
+        if mask & !(POSITION | ROTATION | VELOCITY | ANGULAR | STATE | FRAME) != 0 {
             return Err(WireError("unknown body field"));
         }
         let mut s = *base;
@@ -121,59 +129,12 @@ impl BodyState {
         if mask & STATE != 0 {
             s.state = r.u32()?;
         }
+        if mask & FRAME != 0 {
+            s.frame = r.u32()?;
+        }
         Ok(s)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tumbling(t: f32) -> BodyState {
-        let position = Vec3::new(-70_000.25 + t * 3.0, 40.0 - t * t * 4.0, 12_345.5);
-        BodyState::quantise(position, Quat::from_rotation_y(t), Vec3::new(3.0, -8.0 * t, 0.0), Vec3::Y, 7)
-    }
-
-    #[test]
-    fn deltas_rebuild_the_exact_integers() {
-        for (a, b) in [(BodyState::default(), tumbling(0.5)), (tumbling(0.5), tumbling(0.53)), (tumbling(1.0), tumbling(1.0))] {
-            let mut out = Vec::new();
-            b.write_delta(&a, &mut out);
-            let mut r = Reader::new(&out);
-            assert_eq!(BodyState::read_delta(&a, &mut r), Ok(b));
-            assert!(r.done());
-        }
-    }
-
-    #[test]
-    fn a_resting_body_costs_one_byte_and_a_moving_one_stays_small() {
-        let mut out = Vec::new();
-        tumbling(1.0).write_delta(&tumbling(1.0), &mut out);
-        assert_eq!(out.len(), 1);
-        out.clear();
-        // One 30 Hz snapshot of a falling, turning body.
-        tumbling(1.0 + 1.0 / 30.0).write_delta(&tumbling(1.0), &mut out);
-        assert!(out.len() <= 18, "{} bytes", out.len());
-    }
-
-    #[test]
-    fn quantisation_keeps_far_positions_to_half_a_step() {
-        let p = Vec3::new(-1_000_000.5, 300.25, 999_999.75);
-        let back = BodyState::quantise(p, Quat::IDENTITY, Vec3::ZERO, Vec3::ZERO, 0).position();
-        assert!((back - p).abs().max_element() <= 0.0625, "{back}");
-    }
-
-    #[test]
-    fn dead_reckoning_follows_velocity_and_spin() {
-        let s = BodyState::quantise(Vec3::ZERO, Quat::IDENTITY, Vec3::new(2.0, 0.0, -1.0), Vec3::Y * 1.5, 0);
-        let (p, q) = s.extrapolate(0.5);
-        assert!((p - Vec3::new(1.0, 0.0, -0.5)).length() < 1e-3);
-        assert!(q.angle_between(Quat::from_rotation_y(0.75)) < 1e-2);
-    }
-
-    #[test]
-    fn unknown_mask_bits_and_short_input_are_refused() {
-        assert!(BodyState::read_delta(&BodyState::default(), &mut Reader::new(&[0x80])).is_err());
-        assert!(BodyState::read_delta(&BodyState::default(), &mut Reader::new(&[POSITION, 2])).is_err());
-    }
-}
+mod tests;
