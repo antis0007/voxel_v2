@@ -240,7 +240,9 @@ impl State {
         for _ in 0..count {
             let p = get_key(read)?;
             let due = get64(read)?;
-            ensure!(due > state.tick && !state.scheduled.contains_key(&p), "Invalid environmental schedule");
+            // Overdue events are a budget backlog, not corruption: service
+            // advances `tick` before it reaches every event that is due.
+            ensure!(!state.scheduled.contains_key(&p), "Invalid environmental schedule");
             ensure!(state.schedule(p, due), "Environmental schedule capacity");
         }
         Ok(state)

@@ -68,6 +68,34 @@ fn environment_reload_retains_fractional_credit_and_due_work() {
     assert_eq!(bytes, again);
 }
 
+/// A budgeted service pass can leave events at or behind `tick`; a save or a
+/// multiplayer image taken then must still load.
+#[test]
+fn environment_reload_keeps_overdue_events() {
+    let mut state = State { fixed_steps: 600, tick: 5, target_tick: 5, ..Default::default() };
+    assert!(state.schedule((0, 1, 0), 3) && state.schedule((4, 1, 0), 5) && state.schedule((8, 1, 0), 9));
+    let mut bytes = Vec::new();
+    state.encode(&mut bytes);
+    let mut words = bytes.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let loaded = State::decode(
+        &mut || words.next().ok_or_else(|| anyhow::anyhow!("eof")),
+        VoxelScalePreset::QuarterMeter,
+    )
+    .unwrap();
+    assert_eq!(loaded.due, state.due);
+
+    // The same event twice is still corrupt. Events close the record: a count,
+    // then a 12-byte key and an 8-byte due tick each.
+    const EVENT: usize = 20;
+    let mut doubled = bytes.clone();
+    let last = doubled[doubled.len() - EVENT..].to_vec();
+    let count_at = doubled.len() - 3 * EVENT - 4;
+    doubled.extend_from_slice(&last);
+    doubled[count_at..count_at + 4].copy_from_slice(&4u32.to_le_bytes());
+    let mut words = doubled.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    assert!(State::decode(&mut || words.next().ok_or_else(|| anyhow::anyhow!("eof")), VoxelScalePreset::QuarterMeter).is_err());
+}
+
 #[test]
 fn environment_blocked_water_pair_preserves_both_inventories() {
     let mut w = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 92);
