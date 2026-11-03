@@ -1,6 +1,6 @@
 //! Bounded voxel assemblies with swept translation and rotational collision.
 use super::{
-    cellular::{admission, changed},
+    cellular::admission,
     residency::Residency,
     sandbox::{MAX_BODIES, MAX_BODY_VOXELS, RigidBody},
 };
@@ -317,9 +317,6 @@ pub(super) fn tick(
                     }
                     for (&(p, _), state) in proposed.iter().zip(heat) {
                         w.sandbox.set(p, state);
-                    }
-                    for p in positions {
-                        changed(p, blocks, chunks);
                     }
                     body.occupied = proposed;
                 }

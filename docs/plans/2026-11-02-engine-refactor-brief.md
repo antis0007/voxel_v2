@@ -42,12 +42,14 @@ Migrated callers:
 - `simulation/cellular.rs` water transfers and granular swaps: `commit_transfer`
   and `transfer` lost their set parameters. `step` keeps them for thermal and
   drainage. `dam_break_throughput` now publishes per tick like `fixed::finish`.
+- `simulation/rigid.rs` body moves. `tick` keeps its sets for
+  `expedition::drop_log_cells`, the next caller to migrate there.
 - `simulation/springs.rs` (sets parameter and mark removed). That file is
   untracked peer work, so the edit sits in the shared tree and lands with it.
 
 Remaining callers, in order of independence:
-1. `simulation::cellular::changed` users (thermal, rigid, soil, sediment,
-   drainage), then the `blocks, chunks` parameters of `cellular::step` and
+1. `simulation::cellular::changed` users (thermal, soil, sediment, drainage) and
+   `expedition::drop_log_cells`, then the `blocks, chunks` parameters of `cellular::step` and
    `sim.update`. Thermal goes together with drainage (untracked): dropping only
    thermal's sets leaves `step`'s unused in HEAD.
 2. `Commit::publish(world, blocks, chunks)` in `world/effects.rs`. Not a plain
