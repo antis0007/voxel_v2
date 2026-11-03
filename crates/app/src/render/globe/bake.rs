@@ -10,6 +10,10 @@ use glam::DVec3;
 
 const SAMPLE_COUNT: usize = (TILE_SAMPLES * TILE_SAMPLES) as usize;
 const BUDGET_STRIDE: u32 = 64;
+/// Coarser cells use the horizon's far-field evaluator. The exact column builds a
+/// site/drainage plan per region it touches, about 5.6 ms cold for each sample of a
+/// 500 m root tile, so a root took 23 s; the far-field evaluator costs microseconds.
+pub const EXACT_MAX_CELL_M: f64 = 64.0;
 
 /// One tile's baked surface samples in row-major order.
 pub struct TileData {
@@ -91,14 +95,20 @@ pub fn bake_tile(
     while cursor.next_sample < total {
         let k = cursor.next_sample;
         let (x, z) = sample_coord(cfg, id, k % TILE_SAMPLES, k / TILE_SAMPLES);
-        let column = engine_worldgen::sample_column(cfg, x, z);
-        let height = cfg.world_y(column.height);
+        let (column_height, surface) = if id.cell_m() > EXACT_MAX_CELL_M {
+            let (top, surface) = engine_worldgen::landscape::preview_surface_lod(cfg, x, z, id.cell_m() as f32);
+            ((top - 1.0).round() as i32, surface)
+        } else {
+            let column = engine_worldgen::sample_column(cfg, x, z);
+            (column.height, column.surface)
+        };
+        let height = cfg.world_y(column_height);
         let (heat, wet, _) =
             engine_worldgen::landscape::visual_ecology(cfg, x as f32 * vm, z as f32 * vm, height);
         let idx = k as usize;
         data.height_m[idx] = height_i16(height);
-        data.material[idx] = material_index(column.surface);
-        data.water[idx] = u8::from(column.height < water_level);
+        data.material[idx] = material_index(surface);
+        data.water[idx] = u8::from(column_height < water_level);
         data.climate[idx] = [unit_byte(heat), unit_byte(wet)];
         cursor.next_sample += 1;
         if cursor.next_sample % BUDGET_STRIDE == 0 && cursor.next_sample < total && !budget.has_time() {
@@ -116,6 +126,21 @@ mod tests {
 
     fn cfg() -> WorldSampleConfig {
         WorldSampleConfig { generator_version: 53, seed: 74, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
+    }
+
+    #[test]
+    fn coarse_tiles_bake_from_the_far_field_evaluator() {
+        let id = TileId::root(0);
+        assert!(id.cell_m() > EXACT_MAX_CELL_M);
+        let mut data = TileData::empty(id);
+        assert!(bake_tile(&cfg(), id, &mut data, &mut BakeCursor::default(), Budget::UNBOUNDED));
+        for k in [0u32, 2_112, 4_224] {
+            let (x, z) = sample_coord(&cfg(), id, k % TILE_SAMPLES, k / TILE_SAMPLES);
+            let (top, surface) = engine_worldgen::landscape::preview_surface_lod(&cfg(), x, z, id.cell_m() as f32);
+            let h = (top - 1.0).round() as i32;
+            assert_eq!(data.height_m[k as usize] as i32, cfg().world_y(h).round() as i32);
+            assert_eq!(data.material[k as usize], material_index(surface));
+        }
     }
 
     #[test]

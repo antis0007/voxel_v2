@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use super::bake::TileData;
 use super::tile::TileId;
 
-pub const MAGIC: &[u8; 8] = b"VXGT0001";
+pub const MAGIC: &[u8; 8] = b"VXGT0002";
 
 const SAMPLES: usize = 65 * 65;
 const HEADER: usize = 8 + 16;

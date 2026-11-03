@@ -76,6 +76,11 @@ impl GlobeDriver {
         self.running
     }
 
+    /// Whether the globe ran this frame from the orbit tier.
+    pub fn orbit_view(&self) -> bool {
+        self.running && self.tier == Tier::Orbit
+    }
+
     pub fn stats(&self) -> GlobeStats {
         self.stats
     }

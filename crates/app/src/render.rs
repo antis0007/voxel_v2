@@ -4751,7 +4751,10 @@ impl Gpu {
                     pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                     pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
                 }
-                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon) {
+                // The flat horizon sits at the globe's sea level and occludes all but the disc centre
+                // from orbit; Task 10 replaces this with the full altitude transition.
+                let globe_replaces_horizon = self.globe_visible && self.globe_driver.orbit_view();
+                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon && !globe_replaces_horizon) {
                     let planes =
                         streaming::extract_planes(REVERSE_Z * self.last_rotation_view_proj);
                     for page in &mesh.pages {
