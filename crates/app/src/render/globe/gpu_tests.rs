@@ -261,3 +261,22 @@ fn gpu_globe_prepare_reuses_its_instance_scratch() {
     globe.prepare(&queue, &selection, eye, uniform());
     assert_eq!(globe.instance_capacity(), capacity);
 }
+
+#[test]
+#[ignore = "needs a GPU; run with just test-gpu gpu_globe"]
+fn gpu_globe_clear_frees_every_slot_and_the_next_upload_lands() {
+    use super::gpu_tiles::MAX_RESIDENT;
+    let (device, queue) = device();
+    let mut globe = Globe::new(&device, COLOR);
+    let all: Vec<TileData> = (0..MAX_RESIDENT as u32)
+        .map(|k| TileData::empty(TileId { face: 2, level: 6, x: k % 64, y: k / 64 }))
+        .collect();
+    assert_eq!(globe.upload(&queue, &all), 0);
+    globe.clear();
+    assert_eq!(globe.resident(), 0);
+    assert_eq!(globe.free_slots(), MAX_RESIDENT);
+    assert!(!globe.shell_ready());
+    let extra = TileData::empty(TileId { face: 3, level: 6, x: 0, y: 0 });
+    assert_eq!(globe.upload(&queue, &[extra]), 0, "the upload after clear lands");
+    assert_eq!(globe.resident(), 1);
+}

@@ -9,13 +9,31 @@ const SPLIT_PX: f64 = 1.5;
 const MERGE_PX: f64 = 0.75;
 const MAX_WANTED: usize = 256;
 
+#[derive(Default)]
 pub struct Selection {
     pub draw: Vec<TileId>,
     /// Missing children of tiles that want to split, nearest first.
     pub wanted: Vec<TileId>,
 }
 
-/// Breadth-first error-driven selection from the six cube roots.
+/// Buffers `select_into` reuses, so a steady frame allocates nothing.
+#[derive(Default)]
+pub struct SelectScratch {
+    split_last_frame: HashSet<TileId>,
+    frontier: Vec<TileId>,
+    next: Vec<TileId>,
+    children: Vec<TileId>,
+}
+
+impl SelectScratch {
+    #[cfg(test)]
+    pub fn capacities(&self) -> [usize; 4] {
+        [self.split_last_frame.capacity(), self.frontier.capacity(), self.next.capacity(), self.children.capacity()]
+    }
+}
+
+/// `select_into` with fresh buffers; `previous_draw` is last frame's draw list.
+#[cfg(test)]
 pub fn select(
     ready: &dyn Fn(TileId) -> bool,
     previous_draw: &[TileId],
@@ -23,8 +41,26 @@ pub fn select(
     focal_px: f64,
     max_draw: usize,
 ) -> Selection {
-    let mut split_last_frame = HashSet::new();
-    for t in previous_draw {
+    let mut out = Selection { draw: previous_draw.to_vec(), wanted: Vec::new() };
+    select_into(ready, eye_body, focal_px, max_draw, &mut SelectScratch::default(), &mut out);
+    out
+}
+
+/// Breadth-first error-driven selection from the six cube roots.
+///
+/// `out.draw` holds last frame's draw list on entry (it sets the merge hysteresis) and this
+/// frame's on return.
+pub fn select_into(
+    ready: &dyn Fn(TileId) -> bool,
+    eye_body: DVec3,
+    focal_px: f64,
+    max_draw: usize,
+    scratch: &mut SelectScratch,
+    out: &mut Selection,
+) {
+    let SelectScratch { split_last_frame, frontier, next, children } = scratch;
+    split_last_frame.clear();
+    for t in &out.draw {
         let mut p = t.parent();
         while let Some(a) = p {
             if !split_last_frame.insert(a) {
@@ -33,14 +69,16 @@ pub fn select(
             p = a.parent();
         }
     }
+    let (draw, wanted) = (&mut out.draw, &mut out.wanted);
+    draw.clear();
+    wanted.clear();
     let visible = |t: &TileId| projected_error_px(*t, eye_body, focal_px) > 0.0;
-    let mut frontier: Vec<TileId> = (0..6).map(TileId::root).filter(visible).collect();
-    let mut draw = Vec::new();
-    let mut wanted = Vec::new();
+    frontier.clear();
+    frontier.extend((0..6).map(TileId::root).filter(visible));
     while !frontier.is_empty() {
-        let mut next = Vec::new();
+        next.clear();
         let mut pending = frontier.len();
-        for tile in frontier {
+        for &tile in frontier.iter() {
             pending -= 1;
             let err = projected_error_px(tile, eye_body, focal_px);
             let threshold = if split_last_frame.contains(&tile) { MERGE_PX } else { SPLIT_PX };
@@ -48,24 +86,25 @@ pub fn select(
                 draw.push(tile);
                 continue;
             }
-            let children: Vec<TileId> = tile.children().into_iter().filter(visible).collect();
-            let missing: Vec<TileId> = children.iter().copied().filter(|c| !ready(*c)).collect();
+            children.clear();
+            children.extend(tile.children().into_iter().filter(visible));
+            let all_ready = children.iter().all(|c| ready(*c));
             // Splitting past the cap would drop coverage, so the parent stays instead.
             let fits = draw.len() + pending + next.len() + children.len() <= max_draw;
-            if missing.is_empty() && fits {
-                next.extend(children);
+            if all_ready && fits {
+                next.extend_from_slice(children);
             } else {
-                wanted.extend(missing);
+                wanted.extend(children.iter().copied().filter(|c| !ready(*c)));
                 draw.push(tile);
             }
         }
-        frontier = next;
+        std::mem::swap(frontier, next);
     }
     let dist = |t: &TileId| t.centre_body().distance(eye_body);
-    wanted.sort_by(|a, b| dist(a).total_cmp(&dist(b)).then(a.cmp(b)));
+    // Unstable: a stable sort allocates a merge buffer; the id tie-break keeps the order total.
+    wanted.sort_unstable_by(|a, b| dist(a).total_cmp(&dist(b)).then(a.cmp(b)));
     wanted.dedup();
     wanted.truncate(MAX_WANTED);
-    Selection { draw, wanted }
 }
 
 /// Fills `out` with `draw` and each draw tile's parent, sorted for binary search.

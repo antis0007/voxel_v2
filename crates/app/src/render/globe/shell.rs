@@ -119,34 +119,38 @@ fn body_of(world_x: f64, world_z: f64) -> Option<DVec3> {
     (local.x.abs() <= HALF_M && local.z.abs() <= HALF_M).then(|| chart::to_body(DVec3::new(world_x, 0.0, world_z)))
 }
 
-/// Anchorage sites over the whole chart and factory nodes clustered by chunk.
-pub fn night_lights(world: &World, eye_body: DVec3) -> Vec<Light> {
+/// Anchorage sites over the whole chart with their chart cells; the shell worker runs this walk.
+pub fn anchorage_sites(seed: u32) -> Vec<(DVec3, IVec2)> {
     let cell = f64::from(crate::world::orbital::CELL_M);
     let (x0, x1) = ((-PITCH_M * 0.5 / cell).floor() as i32, ((5.5 * PITCH_M) / cell).ceil() as i32);
     let z_cells = (HALF_M / cell).ceil() as i32;
     let mut sites = Vec::new();
     for cz in -z_cells..=z_cells {
         for cx in x0..=x1 {
-            let Some(site) = crate::world::orbital::site(world.seed, glam::IVec2::new(cx, cz)) else { continue };
+            let Some(site) = crate::world::orbital::site(seed, IVec2::new(cx, cz)) else { continue };
             if let Some(body) = body_of(f64::from(site.x), f64::from(site.z)) {
-                sites.push((body, glam::IVec2::new(cx, cz)));
+                sites.push((body, IVec2::new(cx, cz)));
             }
         }
     }
+    sites
+}
+
+/// Factory nodes counted per chunk, at each chunk's body-space centre.
+pub fn factory_clusters(world: &World) -> Vec<(DVec3, u32)> {
     let metres = f64::from(world.voxel_scale.meters());
     let mut chunks: std::collections::BTreeMap<[i32; 3], u32> = std::collections::BTreeMap::new();
     for pos in world.factory.nodes.keys() {
         let chunk = [pos.x.div_euclid(32), pos.y.div_euclid(32), pos.z.div_euclid(32)];
         *chunks.entry(chunk).or_default() += 1;
     }
-    let clusters: Vec<(DVec3, u32)> = chunks
+    chunks
         .into_iter()
         .filter_map(|(c, n)| {
             let centre = (glam::IVec3::from(c).as_dvec3() + 0.5) * 32.0 * metres;
             body_of(centre.x, centre.z).map(|b| (b, n))
         })
-        .collect();
-    night_lights_from(world.seed, &sites, &clusters, eye_body)
+        .collect()
 }
 
 #[cfg(test)]

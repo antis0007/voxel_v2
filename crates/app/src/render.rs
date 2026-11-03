@@ -1285,6 +1285,8 @@ pub struct Gpu {
     globe: Option<globe::gpu::Globe>,
     globe_visible: bool,
     globe_driver: globe_driver::GlobeDriver,
+    /// Origin of `GlobeView::clock_s`; render-thread wall time, never simulation time.
+    globe_clock: std::time::Instant,
     tier: crate::altitude::Tier,
     /// Published resident coverage radius in metres; the globe fades in past it.
     globe_disc_radius_m: f32,
@@ -3135,6 +3137,7 @@ impl GpuPendingInit {
                     // Task 8 drives this from the altitude tier.
                     globe_visible: globe::active(),
                     globe_driver: globe_driver::GlobeDriver::default(),
+                    globe_clock: std::time::Instant::now(),
                     tier: crate::altitude::Tier::Surface,
                     globe_disc_radius_m: 0.0,
                     horizon_globe_only: false,
@@ -3922,9 +3925,10 @@ impl Gpu {
             sky_time_s: self.effect_time,
             clouds: day.cloud_controls(),
             weather_seed: day.weather_seed(),
+            clock_s: self.globe_clock.elapsed().as_secs_f64(),
         };
-        let lights = |eye_body| globe::shell::night_lights(world, eye_body);
-        self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &lights);
+        let clusters = || globe::shell::factory_clusters(world);
+        self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &clusters);
         if self.globe_driver.running() {
             let chunk_m = CHUNK_SIZE as f32 * world.voxel_scale.meters();
             // The fade only blends over horizon rings; with them cleared it would show sky.
@@ -4009,7 +4013,8 @@ impl Gpu {
     pub fn horizon_baked_columns(&self, columns:&[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> { self.horizon.baked_columns(columns) }
 
     pub fn horizon_ready(&self) -> bool {
-        globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some())
+        let resident = self.globe.as_ref().map_or(0, globe::gpu::Globe::resident);
+        globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some(), resident)
     }
 
     pub fn upload_camera(

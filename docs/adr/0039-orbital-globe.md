@@ -13,13 +13,19 @@ from the same generator the chunks use. No new dependency.
   64 m bake exactly through `sample_column`. Tiles with a cell of 64 m or more
   sample the horizon far-field surface, which agrees with the voxel columns to
   p95 1.75 voxels (ADR 0012) and avoids a cold worldgen plan per sample.
-- Disk cache under `<save>/globe/<seed>-g<generator>/`, one `.gtl` file per tile
-  key; seed and generator live in the directory name. Format `VXGT0002`:
+- Disk cache under `<save>/globe/<seed>-g<generator>-<world type>-<voxel scale>/`
+  (Debug names, lowercased), one `.gtl` file per tile key; every
+  `WorldSampleConfig` field lives in the directory name. Format `VXGT0002`:
   8-byte magic, tile id as four little-endian u32 (face, level, x, y), then
   65x65 samples in planes: i16 height (m), u8 material, u8 water, 2-byte climate
   (6 bytes per sample). Any mismatch is a miss and the tile is rebaked; writes
-  go through a temp file. `VXGT0002` supersedes the plan's `VXGT0001`: the
+  go through `<key>.<pid>.tmp`, removed again when the write or rename fails. `VXGT0002` supersedes the plan's `VXGT0001`: the
   bump came with far-field sampling of coarse tiles in Task 8.
+- The driver records the `WorldSampleConfig` it was built for. A different one
+  (another world loaded) drops both workers, the shell queue and every resident
+  tile (`Globe::clear`) before the frame continues.
+- Worker threads are detached: dropping a worker closes its channel, and a bake
+  turn already running (up to 2 ms) finishes before the thread exits.
 - Selection splits at 1.5 px projected error and merges at 0.75 px, with at most
   512 draws (256 on the lean tier).
 
@@ -29,6 +35,11 @@ Altitude tiers in `altitude.rs`: surface below 1,500 m, transition up to
 6,000 m (resident load stops there), orbit above 30,000 m, with 200 m
 hysteresis on every boundary. Per frame the globe may upload 2 MB including
 cloud-shell faces and spend 0.5 ms CPU; the bake worker runs 2 ms turns.
+Timers are seconds of render-thread wall clock (`GlobeView::clock_s`), not
+frames: the worker is dropped after 30 s on the surface tier, the shell and
+lights refresh every 30 s, and a dead worker respawns at most every 10 s. A
+steady frame allocates nothing: selection, request and shell buffers are owned
+by the driver, and an unchanged request list is not resent.
 
 ## Design without spare bind layers
 
@@ -44,7 +55,10 @@ cloud-shell faces and spend 0.5 ms CPU; the bake worker runs 2 ms turns.
 The cloud shell sits at R + 1,600 m, 512² texels per face, rebaked every 30 s
 from `world::weather::coverage_at` on its own thread, and shadows the ground
 below it. Night lights are capped at 256, chosen nearest-first, with per-site
-hashed intensity (1.5 to 3.0) and radius factor (0.6 to 1.0).
+hashed intensity (1.5 to 3.0) and radius factor (0.6 to 1.0). The chart-wide
+anchorage walk runs on the shell thread (cached per seed) and comes back as a
+message; the render thread only counts factory nodes per chunk on a refresh and
+uploads the 256 x 32 B list.
 
 The lean tier only lowers limits (256 draws, 256² shell). The globe shader
 already uses the distance limb approximation without a LUT pass, so there is no
@@ -92,6 +106,9 @@ cover and the integration condition becomes
   the cell size; `bounding_radius_m` keeps 2,000 m slack at every level as the
   cull and limb sphere; the limb test is
   `angle(centre, eye) - asin(bounding_radius / R) > acos(R / |eye|)`.
+- Task 4: in the Transition tier the bake shares the worldgen generation caches
+  with chunk streaming. A hit-rate measurement, or a worker-private cache if
+  the sharing evicts streaming plans, is open.
 - Task 4: the bake cost is accepted (about 3 tiles/s per core in 2 ms turns,
   first visit only thanks to the cache); a height-only sampler is the follow-up
   if tiles arrive late.
@@ -99,7 +116,7 @@ cover and the integration condition becomes
   `sample_column`; fine tiles stay exact.
 - Task 8: `forced()` is true only for `--benchmark-globe`; `VOXEL_GLOBE=1`
   enables the globe but keeps the tier gate.
-- Task 8: a dead worker is dropped and respawned at most once per 600 frames.
+- Task 8: a dead worker is dropped and respawned at most once per 10 s.
 - Task 9: tile cracks are fixed by skirts in Task 10 rather than by reopening the
   Task 7 mesh.
 - Task 9: night lights read as a grid, so each site gets hashed intensity and
@@ -107,8 +124,9 @@ cover and the integration condition becomes
 - Task 10: the 2.5 km darkening was back-face culling turned off; Back culling is
   restored. Matching globe lighting to the world shader is a deferred look item.
 - Task 11: the lean tier is limits-only, as above.
-- Task 12: the ascent route runs 120 s at 256 m/s and ends near 32 km, past the
-  orbit boundary, instead of holding at 40 km.
+- Task 12: the ascent route runs 180 s at 256 m/s and ends near 46 km, so
+  about 60 s of it is in the orbit tier (120 s, ending near 32 km, before the
+  review fix).
 - Task 12: "wanted reaches 0 within 20 s of entering orbit" is measured on
   orbit-static after warmup (13 s), since the ascent scene ends still climbing.
 - Task 12: the ascent max-frame gate takes the best of 3 interleaved passes like

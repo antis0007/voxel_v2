@@ -48,14 +48,14 @@ SCENES = {
     "orbit-static": ["--benchmark-world=hills", "--benchmark-globe", "--benchmark-motion=static",
                      "--benchmark-terrain-camera=0,0,60000,0,-1.5", "--benchmark-view-chunks=4",
                      "--benchmark-warmup=45"],
-    # Straight climb from spawn at 256 m/s toward 40 km: globe tier handover under load.
+    # Straight climb from spawn at 256 m/s for 180 s, about 46 km: tier handover and orbit.
     "ascent": ["--benchmark-world=hills", "--benchmark-globe", "--benchmark-motion=ascent",
-               "--benchmark-duration=120"],
+               "--benchmark-duration=180"],
 }
 GATED_TIMES = ("p95_frame_ms", "p99_frame_ms")
 TIME_LIMIT = 0.05
 DRAW_LIMIT = 0.10
-RUN_TIMEOUT_S = 240
+RUN_TIMEOUT_S = 300
 # Peer sessions build this repo and run review captures at any time; a pass during
 # either measures the peer. Checked before launch, so the pass's own game is not counted.
 BUILD_PROCESSES = ("rustc.exe", "cargo.exe", "rust-lld.exe", "link.exe", "minecraft_style_voxel_prototype.exe")

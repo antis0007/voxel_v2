@@ -106,6 +106,13 @@ impl TilePool {
         }
     }
 
+    /// Returns every slot to the free list; the atlas texels are left to be overwritten.
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.free.clear();
+        self.free.extend((0..MAX_RESIDENT as u32).rev());
+    }
+
     #[cfg(test)]
     pub fn free_slots(&self) -> usize {
         self.free.len()

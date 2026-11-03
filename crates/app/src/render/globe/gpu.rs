@@ -262,6 +262,13 @@ impl Globe {
         }
     }
 
+    /// Drops every resident tile and shell face, as for a different world.
+    pub fn clear(&mut self) {
+        self.tiles.clear();
+        self.shell_faces = 0;
+        self.draw_count = 0;
+    }
+
     pub fn resident(&self) -> usize {
         self.tiles.resident()
     }

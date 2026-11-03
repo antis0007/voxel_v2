@@ -42,10 +42,13 @@ pub fn horizon_clip(tier: Tier, eye_m: DVec3) -> (Option<(f64, f64, f64, f64)>, 
     }
 }
 
-/// Whether distant ground is ready: off the surface tier the globe is the far field, so the
-/// loading hold never fires mid-flight.
-pub fn horizon_ready(globe_active: bool, tier: Tier, horizon_mesh: bool) -> bool {
-    (globe_active && tier != Tier::Surface) || horizon_mesh
+/// Whether distant ground is ready: off the surface tier the globe is the far field once it
+/// has a tile, so the loading hold never fires mid-flight and sky never shows on tier entry.
+pub fn horizon_ready(globe_active: bool, tier: Tier, horizon_mesh: bool, globe_resident: usize) -> bool {
+    if globe_active && tier != Tier::Surface {
+        return globe_resident > 0;
+    }
+    horizon_mesh
 }
 
 #[cfg(test)]
@@ -70,11 +73,14 @@ mod tests {
 
     #[test]
     fn horizon_is_ready_off_the_surface_tier_with_the_globe() {
-        assert!(horizon_ready(true, Tier::Transition, false));
-        assert!(horizon_ready(true, Tier::Orbit, false));
-        assert!(!horizon_ready(true, Tier::Surface, false));
-        assert!(!horizon_ready(false, Tier::Transition, false));
-        assert!(horizon_ready(false, Tier::Surface, true));
+        assert!(horizon_ready(true, Tier::Transition, false, 1));
+        assert!(horizon_ready(true, Tier::Orbit, false, 6));
+        assert!(!horizon_ready(true, Tier::Orbit, false, 0), "no tile resident yet");
+        assert!(!horizon_ready(true, Tier::Transition, true, 0));
+        assert!(!horizon_ready(true, Tier::Surface, false, 6));
+        assert!(horizon_ready(true, Tier::Surface, true, 0));
+        assert!(!horizon_ready(false, Tier::Transition, false, 0));
+        assert!(horizon_ready(false, Tier::Surface, true, 0));
     }
 
     #[test]

@@ -8,8 +8,9 @@ pub const ORBIT_M: f64 = 30_000.0;
 pub const LOAD_STOP_M: f64 = 6_000.0;
 pub const HYSTERESIS_M: f64 = 200.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tier {
+    #[default]
     Surface,
     Transition,
     Orbit,

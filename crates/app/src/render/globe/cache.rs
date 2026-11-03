@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::bake::TileData;
 use super::tile::TileId;
+use engine_voxel::WorldSampleConfig;
 
 pub const MAGIC: &[u8; 8] = b"VXGT0002";
 
@@ -13,19 +14,21 @@ const FILE_LEN: usize = HEADER + SAMPLES * 6;
 
 pub struct TileCache {
     root: PathBuf,
-    #[allow(dead_code)]
-    seed: u32,
-    #[allow(dead_code)]
-    generator_version: u32,
     writable: bool,
 }
 
+/// Folder name for `cfg`: every field of the config changes the baked ground.
+pub fn folder_name(cfg: &WorldSampleConfig) -> String {
+    let name = format!("{}-g{}-{:?}-{:?}", cfg.seed, cfg.generator_version, cfg.world_type, cfg.voxel_scale);
+    name.to_lowercase().replace(' ', "")
+}
+
 impl TileCache {
-    /// Opens `<save_dir>/globe/<seed>-g<version>/`; a failed create leaves it read-only.
-    pub fn open(save_dir: &Path, seed: u32, generator_version: u32) -> TileCache {
-        let root = save_dir.join("globe").join(format!("{seed}-g{generator_version}"));
+    /// Opens `<save_dir>/globe/<folder_name(cfg)>/`; a failed create leaves it read-only.
+    pub fn open(save_dir: &Path, cfg: &WorldSampleConfig) -> TileCache {
+        let root = save_dir.join("globe").join(folder_name(cfg));
         let writable = std::fs::create_dir_all(&root).is_ok();
-        TileCache { root, seed, generator_version, writable }
+        TileCache { root, writable }
     }
 
     fn path(&self, id: TileId) -> PathBuf {
@@ -43,13 +46,17 @@ impl TileCache {
             return false;
         }
         let path = self.path(data.id);
-        let tmp = path.with_extension("gtl.tmp");
-        if std::fs::write(&tmp, encode(data)).is_err() {
-            return false;
+        // The pid keeps two game processes on one save from writing the same temp file.
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+        let written = std::fs::write(&tmp, encode(data)).is_ok() && {
+            // Windows rename does not replace an existing file.
+            let _ = std::fs::remove_file(&path);
+            std::fs::rename(&tmp, &path).is_ok()
+        };
+        if !written {
+            let _ = std::fs::remove_file(&tmp);
         }
-        // Windows rename does not replace an existing file.
-        let _ = std::fs::remove_file(&path);
-        std::fs::rename(&tmp, &path).is_ok()
+        written
     }
 }
 
@@ -90,6 +97,15 @@ fn decode(b: &[u8], id: TileId) -> Option<TileData> {
 mod tests {
     use super::*;
 
+    fn cfg(seed: u32, generator_version: u32) -> WorldSampleConfig {
+        WorldSampleConfig {
+            generator_version,
+            seed,
+            world_type: engine_voxel::WorldType::Hills,
+            voxel_scale: engine_core::VoxelScalePreset::OneMeter,
+        }
+    }
+
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("globe-cache-{}-{}", std::process::id(), name))
     }
@@ -108,7 +124,7 @@ mod tests {
     #[test]
     fn round_trip_restores_every_field() {
         let dir = temp("round_trip");
-        let cache = TileCache::open(&dir, 74, 53);
+        let cache = TileCache::open(&dir, &cfg(74, 53));
         let d = sample_data();
         assert!(cache.store(&d));
         assert!(cache.store(&d), "overwrite must work");
@@ -124,17 +140,44 @@ mod tests {
     #[test]
     fn a_generator_bump_misses_the_old_cache() {
         let dir = temp("bump");
-        let a = TileCache::open(&dir, 74, 53);
+        let a = TileCache::open(&dir, &cfg(74, 53));
         a.store(&sample_data());
-        let b = TileCache::open(&dir, 74, 54);
+        let b = TileCache::open(&dir, &cfg(74, 54));
         assert!(b.load(sample_data().id).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_different_scale_misses_the_same_seed_and_version() {
+        let dir = temp("scale");
+        let a = TileCache::open(&dir, &cfg(74, 53));
+        assert!(a.store(&sample_data()));
+        let mut other = cfg(74, 53);
+        other.voxel_scale = engine_core::VoxelScalePreset::HalfMeter;
+        let b = TileCache::open(&dir, &other);
+        assert!(b.load(sample_data().id).is_none());
+        let mut world = cfg(74, 53);
+        world.world_type = engine_voxel::WorldType::Superflat;
+        assert!(TileCache::open(&dir, &world).load(sample_data().id).is_none());
+        assert!(a.load(sample_data().id).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_store_leaves_no_temp_file_behind() {
+        let dir = temp("tmp");
+        let cache = TileCache::open(&dir, &cfg(74, 53));
+        assert!(cache.store(&sample_data()));
+        let stray = std::fs::read_dir(&cache.root).unwrap().flatten().filter(|e| e.path().to_string_lossy().ends_with(".tmp")).count();
+        assert_eq!(stray, 0);
+        assert!(folder_name(&cfg(74, 53)).ends_with("-g53-hills-onemeter"), "{}", folder_name(&cfg(74, 53)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_truncated_file_is_a_miss_not_a_panic() {
         let dir = temp("trunc");
-        let cache = TileCache::open(&dir, 74, 53);
+        let cache = TileCache::open(&dir, &cfg(74, 53));
         let id = sample_data().id;
         std::fs::write(cache.path(id), [0u8; 20]).unwrap();
         assert!(cache.load(id).is_none());
@@ -143,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_read_only_root_degrades_to_misses() {
-        let cache = TileCache::open(Path::new("Z:/nonexistent/globe"), 74, 53);
+        let cache = TileCache::open(Path::new("Z:/nonexistent/globe"), &cfg(74, 53));
         assert!(!cache.writable);
         assert!(!cache.store(&sample_data()));
         assert!(cache.load(sample_data().id).is_none());

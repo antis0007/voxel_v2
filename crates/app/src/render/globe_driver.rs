@@ -2,17 +2,22 @@
 
 use super::globe::cache::TileCache;
 use super::globe::gpu::{Globe, GlobeUniform, body_view_proj};
-use super::globe::scheduler::{self, Selection};
+use super::globe::scheduler::{self, SelectScratch, Selection};
+use super::globe::shell;
+use super::globe::shell_worker::{ShellBake, ShellWorker};
 use super::globe::tile::TileId;
-use super::globe::shell::{self, Light, ShellConfig};
-use super::globe::shell_worker::ShellWorker;
 use super::globe::worker::{Worker, tile_bytes};
 use super::globe::{self, chart};
 use crate::altitude::Tier;
 use engine_voxel::WorldSampleConfig;
 use glam::{DVec3, Mat4, Vec3};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+#[path = "globe_driver_shell.rs"]
+mod shell_refresh;
+pub use shell_refresh::{face_in_front, shell_faces_within};
 
 /// Per-frame upload cap; one 2 MB frame stays under a millisecond of copy on any adapter.
 const DRAIN_BYTES: usize = 2 * 1024 * 1024;
@@ -22,14 +27,10 @@ pub fn lean_limits(lean: bool) -> (usize, u32) {
 }
 const MAX_REQUEST: usize = 64;
 const BAKE_TURN: Duration = Duration::from_millis(2);
-/// 30 s assuming 60 Hz; frames rather than wall time keep the drop off `Instant`.
-const SURFACE_DROP_FRAMES: u32 = 1_800;
-/// Shell and night-light refresh in frames: 30 s of game time at 60 Hz.
-const SHELL_FRAMES: u64 = 1_800;
-/// Angle from a face normal to its corner, `acos(1 / sqrt(3))`.
-const FACE_CORNER_RAD: f64 = 0.955_316_6;
+/// Seconds on the surface tier before the worker is dropped.
+const SURFACE_DROP_S: f64 = 30.0;
 /// A dead worker is respawned at most this often, so a bake that panics every time cannot spin.
-const RESPAWN_FRAMES: u64 = 600;
+const RESPAWN_S: f64 = 10.0;
 
 /// Globe counters for the last driven frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -57,13 +58,8 @@ pub struct GlobeView {
     pub sky_time_s: f32,
     pub clouds: crate::world::CloudControls,
     pub weather_seed: u32,
-}
-
-/// Whether any of `face` can be in front of the limb seen from `eye_body`.
-pub fn face_in_front(face: u8, eye_body: DVec3) -> bool {
-    let normal = engine_core::cube_sphere::Face::ALL[usize::from(face) % 6].basis().n.as_dvec3();
-    let horizon = (chart::RADIUS_M / eye_body.length().max(chart::RADIUS_M)).acos();
-    eye_body.normalize_or_zero().dot(normal).clamp(-1.0, 1.0).acos() < horizon + FACE_CORNER_RAD
+    /// Render-thread wall seconds; the sky time can be frozen by reviews, this cannot.
+    pub clock_s: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,13 +70,23 @@ pub enum Step {
     DropWorker,
 }
 
-/// What the driver does this frame; `surface_frames` counts this frame too.
-pub fn driver_step(tier: Tier, forced: bool, surface_frames: u32) -> Step {
+/// What the driver does this frame, `surface_s` seconds after the surface tier began.
+pub fn driver_step(tier: Tier, forced: bool, surface_s: f64) -> Step {
     match tier {
-        Tier::Surface if !forced && surface_frames >= SURFACE_DROP_FRAMES => Step::DropWorker,
+        Tier::Surface if !forced && surface_s >= SURFACE_DROP_S => Step::DropWorker,
         Tier::Surface if !forced => Step::Skip,
         _ => Step::Run,
     }
+}
+
+/// Whether the globe was built for another world and must drop everything it holds.
+pub fn config_changed(built_for: Option<WorldSampleConfig>, cfg: WorldSampleConfig) -> bool {
+    built_for.is_some_and(|old| old != cfg)
+}
+
+/// Whether `period` seconds have passed since `last`; a clock that steps back counts as due.
+pub(crate) fn due(last: Option<f64>, now: f64, period: f64) -> bool {
+    last.is_none_or(|t| now - t >= period || now < t)
 }
 
 /// Whether the globe replaces the flat horizon: only from orbit, and only once it has tiles.
@@ -102,45 +108,31 @@ pub fn request_order(draw: &[TileId], wanted: &[TileId], ready: &dyn Fn(TileId) 
     }
 }
 
+#[derive(Default)]
 pub struct GlobeDriver {
     worker: Option<Worker>,
-    previous_draw: Vec<TileId>,
+    /// The world the worker, cache and resident tiles belong to.
+    built_for: Option<WorldSampleConfig>,
+    /// Holds last frame's draw list until `select_into` replaces it.
+    selection: Selection,
+    select_scratch: SelectScratch,
     keep: Vec<TileId>,
     request: Vec<TileId>,
+    /// The list the worker last received; an identical list is not resent.
+    sent: Vec<TileId>,
     tier: Tier,
-    surface_frames: u32,
-    frame: u64,
-    last_spawn: Option<u64>,
+    surface_since: Option<f64>,
+    last_spawn: Option<f64>,
     running: bool,
     stats: GlobeStats,
     shell_worker: Option<ShellWorker>,
-    last_shell: Option<u64>,
+    last_shell: Option<f64>,
     light_count: u32,
+    /// Whether the volumetric march may run; meaningful only while `running`.
     march: bool,
     /// Finished faces waiting for upload budget.
-    shell_pending: std::collections::VecDeque<super::globe::shell_worker::ShellBake>,
-}
-
-impl Default for GlobeDriver {
-    fn default() -> Self {
-        GlobeDriver {
-            worker: None,
-            previous_draw: Vec::new(),
-            keep: Vec::new(),
-            request: Vec::new(),
-            tier: Tier::Surface,
-            surface_frames: 0,
-            frame: 0,
-            last_spawn: None,
-            running: false,
-            stats: GlobeStats::default(),
-            shell_worker: None,
-            last_shell: None,
-            light_count: 0,
-            march: true,
-            shell_pending: std::collections::VecDeque::new(),
-        }
-    }
+    shell_pending: VecDeque<ShellBake>,
+    shell_ready: Vec<ShellBake>,
 }
 
 impl GlobeDriver {
@@ -159,16 +151,50 @@ impl GlobeDriver {
 
     /// Whether the volumetric cloud march and its composite run this frame.
     pub fn march_allowed(&self) -> bool {
-        self.march
+        !self.running || self.march
     }
 
     pub fn stats(&self) -> GlobeStats {
         self.stats
     }
 
+    fn drop_workers(&mut self) {
+        self.worker = None;
+        // The next running frame respawns it and rebakes all six faces.
+        self.shell_worker = None;
+        self.last_shell = None;
+        self.shell_pending.clear();
+        self.sent.clear();
+    }
+
+    /// Forgets everything built for the previous world: workers, queues and resident tiles.
+    fn reset(&mut self, globe: &mut Globe) {
+        self.drop_workers();
+        globe.clear();
+        self.selection.draw.clear();
+        self.selection.wanted.clear();
+        self.last_spawn = None;
+        self.light_count = 0;
+        self.stats = GlobeStats::default();
+    }
+
+    /// Selects tiles, orders requests and fills the keep set; true when the request list changed.
+    fn plan(&mut self, ready: &dyn Fn(TileId) -> bool, eye_body: DVec3, focal_px: f64, max_draw: usize) -> bool {
+        scheduler::select_into(ready, eye_body, focal_px, max_draw, &mut self.select_scratch, &mut self.selection);
+        request_order(&self.selection.draw, &self.selection.wanted, ready, &mut self.request);
+        scheduler::keep_set(&self.selection.draw, &mut self.keep);
+        if self.request == self.sent {
+            return false;
+        }
+        self.sent.clear();
+        self.sent.extend_from_slice(&self.request);
+        true
+    }
+
     /// Drain, select, request, then evict, upload and prepare through `Globe::frame`.
     ///
-    /// `save_dir` is called only when the worker is spawned.
+    /// `save_dir` is called only when the worker is spawned, `factory_clusters` only on a
+    /// light refresh.
     pub fn update(
         &mut self,
         globe: &mut Globe,
@@ -176,33 +202,38 @@ impl GlobeDriver {
         cfg: WorldSampleConfig,
         save_dir: &dyn Fn() -> PathBuf,
         view: &GlobeView,
-        lights: &dyn Fn(DVec3) -> Vec<Light>,
+        factory_clusters: &dyn Fn() -> Vec<(DVec3, u32)>,
     ) {
         let start = Instant::now();
-        self.frame += 1;
-        self.surface_frames = if self.tier == Tier::Surface { self.surface_frames.saturating_add(1) } else { 0 };
-        let step = if globe::active() { driver_step(self.tier, globe::forced(), self.surface_frames) } else { Step::Skip };
+        let now = view.clock_s;
+        if config_changed(self.built_for, cfg) {
+            self.reset(globe);
+        }
+        self.built_for = Some(cfg);
+        let surface_s = if self.tier == Tier::Surface {
+            now - *self.surface_since.get_or_insert(now)
+        } else {
+            self.surface_since = None;
+            0.0
+        };
+        let step = if globe::active() { driver_step(self.tier, globe::forced(), surface_s) } else { Step::Skip };
         self.running = step == Step::Run;
-        self.march = !self.running || shell::volumetric_clouds_enabled(view.eye_m.y, shell::cloud_top_slab_m(&view.clouds));
+        self.march = shell::volumetric_clouds_enabled(view.eye_m.y, shell::cloud_top_slab_m(&view.clouds));
         if !self.running {
             self.stats = GlobeStats::default();
             if step == Step::DropWorker {
-                self.worker = None;
-                // The next running frame respawns it and rebakes all six faces.
-                self.shell_worker = None;
-                self.last_shell = None;
-                self.shell_pending.clear();
+                self.drop_workers();
             }
             return;
         }
         if self.worker.as_ref().is_some_and(|w| !w.alive()) {
             self.worker = None;
         }
-        let may_spawn = self.last_spawn.is_none_or(|f| self.frame - f >= RESPAWN_FRAMES);
-        if self.worker.is_none() && may_spawn {
-            self.last_spawn = Some(self.frame);
-            let cache = TileCache::open(&save_dir(), cfg.seed, cfg.generator_version);
+        if self.worker.is_none() && due(self.last_spawn, now, RESPAWN_S) {
+            self.last_spawn = Some(now);
+            let cache = TileCache::open(&save_dir(), &cfg);
             self.worker = Some(Worker::spawn(cfg, cache, BAKE_TURN));
+            self.sent.clear();
         }
         let incoming = self.worker.as_ref().map(|w| w.drain(DRAIN_BYTES)).unwrap_or_default();
         let bake_nanos = self.worker.as_ref().map_or(0, Worker::take_bake_nanos);
@@ -211,16 +242,15 @@ impl GlobeDriver {
         let (eye_body, view_proj) = body_view_proj(view.eye_m, view.forward, view.projection);
         // Tiles drained this frame upload before `prepare`, so they count as ready now.
         let ready = |id: TileId| globe.resident_contains(id) || incoming.iter().any(|t| t.id == id);
-        let selection: Selection =
-            scheduler::select(&ready, &self.previous_draw, eye_body, f64::from(view.focal_px), lean_limits(crate::render::lean_shading()).0);
-        request_order(&selection.draw, &selection.wanted, &ready, &mut self.request);
-        if let Some(worker) = &self.worker {
-            worker.request(&self.request);
+        let max_draw = lean_limits(crate::render::lean_shading()).0;
+        if self.plan(&ready, eye_body, f64::from(view.focal_px), max_draw)
+            && let Some(worker) = &self.worker
+        {
+            worker.request(&self.sent);
         }
-        scheduler::keep_set(&selection.draw, &mut self.keep);
         let frame = chart::frame(view.eye_m);
         let sun = (frame * view.sun_dir.as_dvec3()).normalize_or_zero().as_vec3();
-        let shell_bytes = self.refresh_shell(globe, queue, view, eye_body, incoming_bytes, lights);
+        let shell_bytes = self.refresh_shell(globe, queue, view, eye_body, incoming_bytes, factory_clusters);
         let eye = eye_body.as_vec3();
         let uniform = GlobeUniform {
             eye_body: [eye.x, eye.y, eye.z, self.light_count as f32],
@@ -232,69 +262,23 @@ impl GlobeDriver {
             limb: [0.35, 0.55, 0.95, 1.0],
             view_proj: view_proj.to_cols_array_2d(),
         };
-        let frame_stats = globe.frame(queue, incoming, &selection, &self.keep, eye_body, uniform);
+        let frame_stats = globe.frame(queue, incoming, &self.selection, &self.keep, eye_body, uniform);
+        if frame_stats.dropped > 0 {
+            // A dropped tile stays unready while the list may not change, so resend next frame.
+            self.sent.clear();
+        }
         // Every tile has the same fixed size, so dropped bytes are a whole number of tiles.
         let per_tile = incoming_bytes.checked_div(incoming_count).unwrap_or(0);
         self.stats = GlobeStats {
             resident: frame_stats.resident,
             drawn: frame_stats.drawn,
-            wanted: selection.wanted.len(),
+            wanted: self.selection.wanted.len(),
             upload_bytes: incoming_bytes - per_tile * frame_stats.dropped + shell_bytes,
             cpu_ms: start.elapsed().as_secs_f32() * 1000.0,
             dropped: frame_stats.dropped,
             bake_ms: bake_nanos as f32 / 1.0e6,
         };
-        self.previous_draw = selection.draw;
     }
-
-    /// Uploads shell faces within the frame budget, returning their bytes; every `SHELL_FRAMES`
-    /// requests faces in front of the limb (all six the first time) and rebuilds the lights.
-    fn refresh_shell(
-        &mut self,
-        globe: &mut Globe,
-        queue: &wgpu::Queue,
-        view: &GlobeView,
-        eye_body: DVec3,
-        tile_bytes: usize,
-        lights: &dyn Fn(DVec3) -> Vec<Light>,
-    ) -> usize {
-        if self.shell_worker.as_ref().is_some_and(|w| !w.alive()) {
-            self.shell_worker = None;
-        }
-        if self.shell_worker.is_none() && self.last_shell.is_none() {
-            self.shell_worker = ShellWorker::spawn();
-        }
-        if let Some(worker) = &self.shell_worker {
-            self.shell_pending.extend(worker.drain());
-        }
-        let face_bytes = self.shell_pending.front().map_or(0, |b| b.coverage.len());
-        let n = shell_faces_within(DRAIN_BYTES, tile_bytes, face_bytes, self.shell_pending.len());
-        let ready: Vec<_> = self.shell_pending.drain(..n).collect();
-        globe.upload_shell(queue, &ready);
-        let uploaded = ready.iter().map(|b| b.coverage.len()).sum();
-        // Frames, not game seconds: 1,800 frames is 30 s only at 60 Hz.
-        if self.last_shell.is_some_and(|f| self.frame - f < SHELL_FRAMES) {
-            return uploaded;
-        }
-        let first = self.last_shell.is_none();
-        self.last_shell = Some(self.frame);
-        if let Some(worker) = &self.shell_worker {
-            let cfg = ShellConfig { resolution: globe.shell_resolution(), controls: view.clouds, weather_seed: view.weather_seed };
-            for face in (0..6u8).filter(|f| first || face_in_front(*f, eye_body)) {
-                worker.request(cfg, view.sky_time_s, face);
-            }
-        }
-        self.light_count = globe.upload_lights(queue, &lights(eye_body));
-        uploaded
-    }
-}
-
-/// Faces that fit in what the tile drain left of `budget`; the rest wait a frame.
-pub fn shell_faces_within(budget: usize, tile_bytes: usize, face_bytes: usize, pending: usize) -> usize {
-    if face_bytes == 0 {
-        return pending;
-    }
-    (budget.saturating_sub(tile_bytes) / face_bytes).min(pending)
 }
 
 #[cfg(test)]
