@@ -82,6 +82,13 @@ cover and the integration condition becomes
 - Task 12 (`scripts/frame_bench.py`, best of 3 interleaved passes):
   orbit-static p95 3.64 / p99 4.94 / max 20.9 ms; ascent p95 3.98 / p99 9.41 /
   max 38.5 ms, globe_ms at most 1.4.
+- Review fix wave (commit 5c4b2710, clean tree, peer cargo/nextest builds
+  running, so contended): 60 km orbit-static single run globe_ms p50 0.056 /
+  p99 0.167 / max 0.92 (the old 1.31-1.36 night-light spike is gone; the
+  remaining outliers are scattered single frames with no upload). Baselines,
+  best of 3 interleaved: orbit-static p95 3.45 / p99 4.09 / max 9.4 ms; ascent
+  (180 s) p95 4.06 / p99 6.72 / max 22.1 ms, wanted settles at 159 s. Two of
+  three ascent passes needed a retry after the 300 s run timeout.
 
 ## Decisions taken during execution
 
@@ -153,8 +160,8 @@ because the flight-review harness is absent on this branch (Ruling 3).
 | `2500m_before.png` | before: resident chunks and horizon at 2.5 km |
 | `2500m_afterback.png` | after, Back culling restored: no cracks, holes or double ground; diff vs before 0.0003 |
 
-Open: the orbit-static and ascent baselines are owed a quiet re-record before
-merge; the ascent p95 check currently misses by 6.6 % against its own
-contended baseline. Globe lighting does not match the world shader where the globe is the
+Open: the baselines were re-recorded from a clean tree but under peer build
+load; a quiet re-record would tighten them. globe_ms max (0.92 ms) still
+exceeds the 0.5 ms budget on isolated frames. Globe lighting does not match the world shader where the globe is the
 visible ground; `max_frame_ms` is recorded but not enforced by
 `frame-bench-check`.
