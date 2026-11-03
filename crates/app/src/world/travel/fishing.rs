@@ -1,6 +1,6 @@
 //! Rod casts: a hashed wait, a bite window, and a weighted catch from `assets/fishing.ron`.
-use super::{ROD, World, water_along};
-use crate::world::inventory::{DroppedStack, Item, ItemStack};
+use super::{ROD, World, give, water_along, weighted};
+use crate::world::inventory::Item;
 use glam::{IVec3, Vec3};
 
 const SECOND: u64 = 120;
@@ -32,7 +32,7 @@ static CATCHES: std::sync::LazyLock<Vec<Catch>> = std::sync::LazyLock::new(|| {
     })
 });
 
-fn roll(seed: u32, cell: IVec3, step: u64, salt: u32) -> u32 {
+pub(super) fn roll(seed: u32, cell: IVec3, step: u64, salt: u32) -> u32 {
     engine_core::hash::hash_u32(seed ^ (cell.x as u32).wrapping_mul(0x9e37_79b9) ^ (cell.y as u32).wrapping_mul(0x85eb_ca6b)
         ^ (cell.z as u32).wrapping_mul(0xc2b2_ae35) ^ (step as u32).wrapping_mul(0x27d4_eb2f) ^ ((step >> 32) as u32) ^ salt)
 }
@@ -48,14 +48,7 @@ pub fn catch(seed: u32, cell: IVec3, bite: u64) -> Option<Catch> {
     if total == 0 {
         return None;
     }
-    let mut pick = roll(seed, cell, bite, 0xf15) % total;
-    CATCHES.iter().copied().find(|c| {
-        if pick < c.weight {
-            return true;
-        }
-        pick -= c.weight;
-        false
-    })
+    weighted(&CATCHES, |c| c.weight, roll(seed, cell, bite, 0xf15) % total)
 }
 
 pub(super) fn use_rod(world: &mut World, eye_m: Vec3, forward: Vec3, slot: usize) {
@@ -64,11 +57,7 @@ pub(super) fn use_rod(world: &mut World, eye_m: Vec3, forward: Vec3, slot: usize
         let landed = (cast.bite..cast.bite + BITE_WINDOW).contains(&clock);
         match landed.then(|| catch(world.seed, cast.cell, cast.bite)).flatten() {
             Some(c) => {
-                let (_, left) = world.inventory.try_insert(ItemStack::new(c.item, c.count));
-                if left > 0 {
-                    world.inventory.dropped.push(DroppedStack { pos: eye_m, stack: ItemStack::new(c.item, left) });
-                }
-                world.sync_from_inventory();
+                give(world, eye_m, c.item, c.count);
                 world.expedition.say(format!("{} × {}", c.item.name(), c.count));
             }
             None => world.expedition.say("Line In"),

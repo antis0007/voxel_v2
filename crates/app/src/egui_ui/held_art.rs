@@ -39,6 +39,7 @@ pub(crate) fn art(item: Item) -> Art {
         Item::Tool(1 | 2) => Art::Icon(Icon::Bore),
         Item::Tool(9) => Art::Icon(Icon::Boat),
         Item::Tool(10) => Art::Icon(Icon::Rod),
+        Item::Tool(18) => Art::Icon(Icon::Pan),
         Item::Tool(t) => Art::Icon(Icon::Wand(t)),
         Item::Wand { look, .. } => Art::Wand(look),
     }

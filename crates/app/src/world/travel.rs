@@ -8,6 +8,7 @@ use glam::{IVec3, Vec3};
 use std::collections::BTreeMap;
 
 pub mod fishing;
+pub mod panning;
 pub(crate) mod sidecar;
 pub mod trades;
 #[cfg(test)]
@@ -46,6 +47,8 @@ pub struct State {
     pub next_boat: u32,
     pub riding: Option<Ride>,
     pub cast: Option<fishing::Cast>,
+    /// Grade of the last pan scoop; session only, never saved.
+    pub last_colour: Option<u32>,
 }
 
 /// What a use action did.
@@ -147,11 +150,36 @@ pub fn water_along(world: &World, eye_m: Vec3, forward: Vec3, range: f32) -> Opt
     None
 }
 
+/// Row at `pick` within the summed weights, or `None` past the end.
+pub(crate) fn weighted<T: Copy>(rows: &[T], weight: impl Fn(&T) -> u32, mut pick: u32) -> Option<T> {
+    rows.iter().copied().find(|r| {
+        let w = weight(r);
+        if pick < w {
+            return true;
+        }
+        pick -= w;
+        false
+    })
+}
+
+/// Adds a haul to the inventory and drops the rest at `pos`.
+fn give(world: &mut World, pos: Vec3, item: Item, count: u32) {
+    let (_, left) = world.inventory.try_insert(ItemStack::new(item, count));
+    if left > 0 {
+        world.inventory.dropped.push(DroppedStack { pos, stack: ItemStack::new(item, left) });
+    }
+    world.sync_from_inventory();
+}
+
 /// Use action: rod casts or reels, a villager opens trade, an empty hand mounts, a boat is placed.
 pub fn interact(world: &mut World, eye_m: Vec3, forward: Vec3, slot: usize) -> Use {
     let held = world.inventory.hotbar.get(slot).copied().flatten().map(|s| s.item);
     if held == Some(ROD) {
         fishing::use_rod(world, eye_m, forward, slot);
+        return Use::Taken;
+    }
+    if held == Some(panning::PAN) {
+        panning::use_pan(world, eye_m, forward);
         return Use::Taken;
     }
     match vehicle::target(world, eye_m, forward, REACH_METRES) {

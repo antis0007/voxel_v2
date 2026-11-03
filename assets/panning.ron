@@ -1,0 +1,31 @@
+// Pan hauls: one row per scoop. Placer rows scale with bed grade (per mille / 100).
+// Edit here, not in Rust. `cargo test panning_ron_round_trips` checks the format.
+(
+    empty: 200,
+    rows: [
+        (
+            item: Resource(2),
+            count: 1,
+            weight: 40,
+            placer: false,
+        ),
+        (
+            item: Resource(1),
+            count: 1,
+            weight: 12,
+            placer: true,
+        ),
+        (
+            item: Resource(0),
+            count: 1,
+            weight: 6,
+            placer: true,
+        ),
+        (
+            item: Block(GoldBlock),
+            count: 1,
+            weight: 1,
+            placer: true,
+        ),
+    ],
+)

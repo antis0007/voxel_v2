@@ -241,6 +241,7 @@ impl Item {
             Self::Tool(4) => "Frost wand",
             Self::Tool(9) => "Boat",
             Self::Tool(10) => "Fishing rod",
+            Self::Tool(18) => "Gold pan",
             Self::Tool(_) => "Resonant wand",
             Self::Wand { look, .. } if look & 1 << 11 != 0 => "Crafted wand",
             Self::Wand { look, .. } => match look & 3 {
@@ -272,6 +273,7 @@ impl Item {
             Self::Tool(1 | 2) => "Excavation tool",
             Self::Tool(9) => "Vehicle",
             Self::Tool(10) => "Fishing tool",
+            Self::Tool(18) => "Panning tool",
             Self::Tool(_) => "Arcane focus",
             Self::Wand { .. } => "Wand",
         }
