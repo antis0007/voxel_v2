@@ -12,6 +12,8 @@ pub use engine_voxel::{
 use glam::{IVec3, Vec3};
 use std::collections::HashSet;
 pub use engine_core::hash::{hash01, hash_u32};
+/// Clumped woodland crowns with resolution-gated leaf relief; dormant.
+pub const TREE_FOLIAGE_VERSION: u32 = trees::foliage::VERSION;
 
 pub mod amberroot;
 pub mod architecture;

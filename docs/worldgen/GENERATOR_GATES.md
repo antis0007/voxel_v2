@@ -56,6 +56,7 @@ below current), `uncommitted` (in the shared tree or a worktree only),
 | 69 | Surface site kind picked by the region's biome (`sites::kind::BIOME_SITES_GENERATOR`) | sites-enum | dormant |
 | 70 | Teaching site stair base only where the ground reaches it (`habitats_region::STAIR_GROUND_GENERATOR`) | habitat-stair-ground | dormant |
 | 71 | Planet terrain from a drainage solve: plate uplift, stream-power erosion, climate, rivers, permafrost (`geo::GEO_GENERATOR`, ADR 0038) | growth-xmb shared tree | dormant |
+| 130 | Generator 52 woodland crowns: each leaf lobe splits into a core clump and 2-4 satellites; continuous broad leaf noise replaces hashed metre cubes; 1.1 m and 0.7 m leaf relief (up to 0.6 m) only where the grid resolves it (`trees::foliage::VERSION`) | growth-xmb shared tree | dormant |
 
 ## Reserved
 

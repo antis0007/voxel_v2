@@ -1,13 +1,16 @@
 //! Generator 52 branching skeletons: tapered wood capsules and clumped leaf
 //! lobes in metres from the tree anchor. Geometry never depends on voxel size;
 //! the sampler only widens wood to stay 6-connected at coarse scales.
-use super::{IVec3, TreeProfile, WorldSampleConfig, distance_to_segment, hash3};
+use super::foliage::{self, Relief};
+use super::{IVec3, TreeProfile, WorldSampleConfig, distance_to_segment, hash2, hash3};
 use glam::{Vec3, Vec3Swizzles};
 use std::cell::RefCell;
 use std::f32::consts::TAU;
 
 const MAX_SEGMENTS: usize = 64;
-const MAX_LOBES: usize = 28;
+/// Generator 52 crowns stop at 28 lobes; clumped crowns split each lobe.
+const PLAIN_LOBES: usize = 28;
+const MAX_LOBES: usize = 64;
 const MAX_GROUPS: usize = 8;
 /// Leaves fill `field < LEAF_CORE + edge * LEAF_EDGE`, so lobes end at sqrt(max).
 const LEAF_CORE: f32 = 0.84;
@@ -67,10 +70,12 @@ pub(super) struct Skeleton {
     segment_count: usize,
     lobes: [Lobe; MAX_LOBES],
     lobe_count: usize,
+    lobe_limit: usize,
     groups: [Group; MAX_GROUPS],
     group_count: usize,
     flare: f32,
     flare_h: f32,
+    relief: Option<Relief>,
 }
 
 pub(super) enum Hit {
@@ -86,11 +91,18 @@ impl Skeleton {
             segment_count: 0,
             lobes: [Lobe::default(); MAX_LOBES],
             lobe_count: 0,
+            lobe_limit: PLAIN_LOBES,
             groups: [Group::default(); MAX_GROUPS],
             group_count: 0,
             flare: 0.0,
             flare_h: 1.0,
+            relief: None,
         }
+    }
+
+    /// Metres leaf relief may push a lobe surface past `LEAF_REACH` radii.
+    fn outset(&self) -> f32 {
+        if self.relief.is_some() { foliage::OUTSET } else { 0.0 }
     }
 
     fn begin(&mut self) {
@@ -114,9 +126,31 @@ impl Skeleton {
     }
 
     fn lobe(&mut self, c: Vec3, r: Vec3, under: f32) {
-        if self.lobe_count < MAX_LOBES {
+        if self.lobe_count < self.lobe_limit {
             self.lobes[self.lobe_count] = Lobe { c, r, under };
             self.lobe_count += 1;
+        }
+    }
+
+    /// One leaf mass at `c`. Clumped crowns split it into a core clump pushed
+    /// toward the branch tip and `satellites` smaller clumps with sky between
+    /// them, shrunk so the cluster spans about the plain lobe's reach.
+    fn leaves(&mut self, rng: &mut Draw, c: Vec3, r: Vec3, under: f32, out: Vec3, satellites: u32) {
+        if self.relief.is_none() {
+            return self.lobe(c, r, under);
+        }
+        let r = r * 0.92;
+        let out = Vec3::new(out.x, 0.0, out.z).normalize_or_zero();
+        // Smaller clumps hang lower so their undersides still sheath the wood
+        // that carries them; the leader lobe, with no outward push, hangs most.
+        let (drop, lift) = if out == Vec3::ZERO { (0.30, (-0.70, 0.10)) } else { (0.22, (-0.45, 0.30)) };
+        self.lobe(c + out * r.x * 0.22 - Vec3::Y * r.y * drop, r * 0.86, under);
+        let spin = rng.next() * TAU;
+        for k in 0..satellites {
+            let a = spin + k as f32 * TAU / satellites as f32 + (rng.next() - 0.5) * 0.8;
+            let lift = rng.range(lift.0, lift.1);
+            let offset = Vec3::new(a.cos() * r.x, lift * r.y, a.sin() * r.z) * 0.50;
+            self.lobe(c + offset, r * rng.range(0.58, 0.74), under);
         }
     }
 
@@ -126,15 +160,17 @@ impl Skeleton {
 
     /// Outermost leaf, metres from the anchor axis.
     pub fn reach(&self) -> f32 {
+        let out = self.outset();
         self.lobes()
             .iter()
-            .map(|l| l.c.xz().length() + l.r.x.max(l.r.z) * LEAF_REACH)
+            .map(|l| l.c.xz().length() + l.r.x.max(l.r.z) * LEAF_REACH + out)
             .fold(0.0, f32::max)
     }
 
     /// Highest leaf, metres above the anchor's ground voxel.
     pub fn top(&self) -> f32 {
-        self.lobes().iter().map(|l| l.c.y + l.r.y * LEAF_REACH).fold(0.0, f32::max)
+        let out = self.outset();
+        self.lobes().iter().map(|l| l.c.y + l.r.y * LEAF_REACH + out).fold(0.0, f32::max)
     }
 
     /// Outermost wood, so the caller's bound covers roots as well as leaves.
@@ -146,8 +182,10 @@ impl Skeleton {
     }
 
     /// Squeezes the crown horizontally and vertically into the given bounds.
+    /// Leaf relief may still reach `outset()` past the horizontal bound, so
+    /// clumped crowns keep their generator 52 spread.
     fn fit(&mut self, reach: f32, top: f32, fork: f32) {
-        let outer = self.reach().max(self.wood_reach());
+        let outer = (self.reach() - self.outset()).max(self.wood_reach());
         if outer > reach {
             let k = reach / outer;
             for s in &mut self.segments[..self.segment_count] {
@@ -159,6 +197,8 @@ impl Skeleton {
                 l.r = Vec3::new(l.r.x * k, l.r.y, l.r.z * k);
             }
         }
+        // Vertically the outset counts: an unsquashed crown lifts the leader
+        // lobe off a bare leader.
         let high = self.top();
         if high > top && high > fork + 1.0 {
             let k = (top - fork) / (high - fork);
@@ -175,6 +215,7 @@ impl Skeleton {
     }
 
     fn finish(&mut self) {
+        let out = self.outset();
         for g in &mut self.groups[..self.group_count] {
             let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             for s in &self.segments[g.segments.0 as usize..g.segments.1 as usize] {
@@ -183,7 +224,7 @@ impl Skeleton {
                 hi = hi.max(s.a.max(s.b) + r);
             }
             for l in &self.lobes[g.lobes.0 as usize..g.lobes.1 as usize] {
-                let r = l.r * LEAF_REACH + 0.5;
+                let r = l.r * LEAF_REACH + out + 0.5;
                 lo = lo.min(l.c - r);
                 hi = hi.max(l.c + r);
             }
@@ -195,7 +236,7 @@ impl Skeleton {
     /// Classifies one voxel centre `q` (metres from the anchor ground voxel).
     pub fn sample(&self, q: Vec3, scale: f32, edge: f32) -> Hit {
         let floor = scale * MIN_WOOD_VOXELS;
-        let mut field = f32::MAX;
+        let (mut field, mut size) = (f32::MAX, 1.0);
         for (index, g) in self.groups[..self.group_count].iter().enumerate() {
             if q.cmplt(g.lo).any() || q.cmpgt(g.hi).any() {
                 continue;
@@ -216,10 +257,18 @@ impl Skeleton {
             for l in &self.lobes[g.lobes.0 as usize..g.lobes.1 as usize] {
                 let d = q - l.c;
                 let ry = if d.y < 0.0 { l.r.y * l.under } else { l.r.y };
-                field = field.min((d / Vec3::new(l.r.x, ry, l.r.z)).length_squared());
+                let f = (d / Vec3::new(l.r.x, ry, l.r.z)).length_squared();
+                if f < field {
+                    field = f;
+                    size = l.r.x.min(ry).min(l.r.z);
+                }
             }
         }
-        if field < LEAF_CORE + edge * LEAF_EDGE { Hit::Leaf } else { Hit::Air }
+        let leaf = match self.relief {
+            Some(relief) => relief.leaf(q, scale, field, size),
+            None => field < LEAF_CORE + edge * LEAF_EDGE,
+        };
+        if leaf { Hit::Leaf } else { Hit::Air }
     }
 }
 
@@ -250,8 +299,22 @@ fn bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
 
 /// Builds the skeleton, then fits it inside `reach_limit` and `top_limit`.
 pub(super) fn build(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, reach_limit: f32, top_limit: f32) -> Skeleton {
+    grow(cfg, tree, d, reach_limit, top_limit, false)
+}
+
+/// `build` with generator 130 leaf clumps and resolution-gated leaf relief.
+pub(super) fn build_clumped(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, reach_limit: f32, top_limit: f32) -> Skeleton {
+    grow(cfg, tree, d, reach_limit, top_limit, true)
+}
+
+fn grow(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, reach_limit: f32, top_limit: f32, clumped: bool) -> Skeleton {
     let mut rng = Draw { cell: (tree.cell_x, tree.cell_z), seed: cfg.seed.wrapping_add(52_101), n: 0 };
     let mut s = Skeleton::empty();
+    if clumped {
+        s.lobe_limit = MAX_LOBES;
+        let cell = (hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(130_011)) * 65535.0) as u32;
+        s.relief = Some(Relief { seed: cfg.seed.wrapping_add(130_007) ^ cell.wrapping_mul(2_654_435_761) });
+    }
     s.flare = d.flare;
     s.flare_h = d.trunk_r * 1.8 + 0.6;
     let rotation = rng.next() * TAU;
@@ -283,7 +346,7 @@ pub(super) fn build(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, rea
     let leader_top = fork + Vec3::Y * ((d.top - d.fork) * 0.62);
     s.segment(fork, leader_top, fork_r * 0.55, fork_r * 0.28);
     let top_r = d.reach * d.lobe;
-    s.lobe(leader_top + Vec3::Y * top_r * 0.15, Vec3::new(top_r, top_r * 0.80, top_r * 0.95), 0.70);
+    s.leaves(&mut rng, leader_top + Vec3::Y * top_r * 0.15, Vec3::new(top_r, top_r * 0.80, top_r * 0.95), 0.70, Vec3::ZERO, 4);
     s.end();
 
     for i in 0..d.limbs {
@@ -302,7 +365,8 @@ pub(super) fn build(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, rea
         s.segment(start, elbow, limb_r, limb_r * 0.82);
         s.segment(elbow, end, limb_r * 0.82, limb_r * 0.66);
         let lobe_r = d.reach * d.lobe * 0.80;
-        s.lobe(end + Vec3::Y * lobe_r * 0.35, Vec3::new(lobe_r, lobe_r * 0.74, lobe_r * 0.90), 0.66);
+        let out = direction(azimuth, elevation);
+        s.leaves(&mut rng, end + Vec3::Y * lobe_r * 0.35, Vec3::new(lobe_r, lobe_r * 0.74, lobe_r * 0.90), 0.66, out, 2);
         let spread = 0.62;
         for j in 0..d.splits {
             let side = j as f32 - (d.splits as f32 - 1.0) * 0.5;
@@ -314,7 +378,8 @@ pub(super) fn build(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, rea
             s.segment(end, tip, twig_r, (twig_r * 0.55).max(0.10));
             let r = d.reach * d.lobe * rng.range(0.85, 1.12);
             let flat = rng.range(0.66, 0.84);
-            s.lobe(tip + Vec3::Y * r * flat * 0.25, Vec3::new(r, r * flat, r * rng.range(0.82, 1.05)), 0.62);
+            let radii = Vec3::new(r, r * flat, r * rng.range(0.82, 1.05));
+            s.leaves(&mut rng, tip + Vec3::Y * r * flat * 0.25, radii, 0.62, direction(a, e), 3);
         }
         s.end();
     }

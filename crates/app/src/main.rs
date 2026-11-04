@@ -1495,7 +1495,7 @@ fn main() -> Result<()> {
     if let Some(value)=std::env::args().find_map(|arg|arg.strip_prefix("--benchmark-generator-version=").map(str::to_owned)) {
         let version=value.parse::<u32>()?;
         // The dormant planet solve is reviewable before it becomes the default.
-        let reviewable = (1..=world::CURRENT_GENERATOR_VERSION).contains(&version) || version == engine_worldgen::geo::GEO_GENERATOR;
+        let reviewable = (1..=world::CURRENT_GENERATOR_VERSION).contains(&version) || version == engine_worldgen::geo::GEO_GENERATOR || version == engine_worldgen::TREE_FOLIAGE_VERSION;
         anyhow::ensure!(benchmark_config.enabled && reviewable,"unsupported benchmark generator version {version}");
         BENCHMARK_GENERATOR_VERSION.store(version,std::sync::atomic::Ordering::Relaxed);
         println!("[benchmark] generator_version={version} current_default={}",world::CURRENT_GENERATOR_VERSION);

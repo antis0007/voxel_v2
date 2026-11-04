@@ -37,14 +37,20 @@ fn design(cfg: &WorldSampleConfig, t: &TreeProfile) -> Design {
 fn build(cfg: &WorldSampleConfig, t: &TreeProfile) -> Skeleton {
     let scale = cfg.voxel_meters();
     let top = (t.trunk_h + t.canopy_height) as f32 * scale;
-    skeleton::build(cfg, t, &design(cfg, t), t.canopy_radius as f32 * scale * 1.35, top)
+    let reach = t.canopy_radius as f32 * scale * 1.35;
+    if cfg.generator_version >= crate::trees::foliage::VERSION {
+        return skeleton::build_clumped(cfg, t, &design(cfg, t), reach, top);
+    }
+    skeleton::build(cfg, t, &design(cfg, t), reach, top)
 }
 
 pub(super) fn block(cfg: &WorldSampleConfig, t: &TreeProfile, p: IVec3) -> B {
     let scale = cfg.voxel_meters();
     let q = (p - IVec3::new(t.anchor_x, t.ground_y, t.anchor_z)).as_vec3() * scale;
-    let reach = t.canopy_radius as f32 * scale * 1.35 + scale;
-    if q.y <= 0.0 || q.y > (t.trunk_h + t.canopy_height) as f32 * scale + scale || q.xz().length_squared() > reach * reach {
+    let outset = if cfg.generator_version >= crate::trees::foliage::VERSION { crate::trees::foliage::OUTSET } else { 0.0 };
+    let reach = t.canopy_radius as f32 * scale * 1.35 + scale + outset;
+    let top = (t.trunk_h + t.canopy_height) as f32 * scale + scale + outset;
+    if q.y <= 0.0 || q.y > top || q.xz().length_squared() > reach * reach {
         return B::Air;
     }
     let edge = skeleton::edge(cfg, p, 52_121);

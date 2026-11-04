@@ -3,6 +3,7 @@ use super::{BlockId, IVec3, TreeProfile, WorldSampleConfig, hash2, hash3, landsc
 use glam::Vec3Swizzles;
 
 mod forms;
+pub(crate) mod foliage;
 pub(crate) mod giant;
 mod skeleton;
 mod woodland;
