@@ -1,5 +1,8 @@
-//! Footstep sounds: a few synthesized renders per walking surface.
-use crate::dsp::{advance, coefficient, sine, Noise, OnePole};
+//! Footstep and block contact sounds: a few synthesized renders per surface.
+use crate::dsp::{advance, sine, Noise, Svf};
+use recipe::{recipe, shaped};
+
+mod recipe;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Surface {
@@ -30,98 +33,106 @@ impl Surface {
     ];
 }
 
-pub(crate) const VARIANTS: usize = 4;
-const MAX_VOICES: usize = 6;
+/// How a body meets a surface; each reshapes the surface's step recipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Contact {
+    Step,
+    /// One strike while a block is being mined.
+    Hit,
+    /// A block coming apart: a longer crumble.
+    Break,
+    /// A block set down: a short, dull seat.
+    Place,
+}
 
-/// Every surface's renders, indexed `surface * VARIANTS + variant`.
+impl Contact {
+    pub const COUNT: usize = 4;
+    pub const ALL: [Contact; Contact::COUNT] = [Contact::Step, Contact::Hit, Contact::Break, Contact::Place];
+}
+
+pub(crate) const VARIANTS: usize = 4;
+const MAX_VOICES: usize = 8;
+
+/// Bank position of one render.
+pub(crate) fn index(contact: Contact, surface: Surface, variant: usize) -> usize {
+    (contact as usize * Surface::COUNT + surface as usize) * VARIANTS + variant % VARIANTS
+}
+
+/// Every contact's and surface's renders, in `index` order.
 pub(crate) fn bank(rate: u32) -> Vec<Vec<f32>> {
-    Surface::ALL
+    Contact::ALL
         .iter()
-        .flat_map(|&surface| (0..VARIANTS).map(move |variant| render(surface, variant, rate)))
+        .flat_map(|&contact| {
+            Surface::ALL.iter().flat_map(move |&surface| {
+                (0..VARIANTS).map(move |variant| render(contact, surface, variant, rate))
+            })
+        })
         .collect()
 }
 
-fn render(surface: Surface, variant: usize, rate: u32) -> Vec<f32> {
+fn render(contact: Contact, surface: Surface, variant: usize, rate: u32) -> Vec<f32> {
     let rate_f = rate as f32;
-    let length = match surface {
-        Surface::Metal => 0.32,
-        Surface::Water => 0.30,
-        Surface::Snow | Surface::Sand => 0.18,
-        Surface::Grass => 0.16,
-        _ => 0.13,
-    };
-    let mut noise = Noise::new(0x5eed_0000 ^ ((surface as u32) << 8) ^ (variant as u32 * 0x9e37));
-    let shift = 1.0 + (variant as f32 - 1.5) * 0.04;
-    let frames = (length * rate_f) as usize;
-    let mut low = OnePole::default();
-    let mut mid = OnePole::default();
-    let mut grain = 0.0f32;
-    let mut phase = [0.0f32; 3];
-    let (a_low, a_mid) = (coefficient(260.0 * shift, rate_f), coefficient(1800.0 * shift, rate_f));
+    let r = shaped(recipe(surface), contact);
+    let mut noise = Noise::new(
+        0x5eed_0000 ^ ((surface as u32) << 8) ^ (variant as u32 * 0x9e37) ^ ((contact as u32) << 20),
+    );
+    let shift = 1.0 + (variant as f32 - 1.5) * 0.05;
+    // Variants also differ in how fast they decay, so repeats do not share one envelope.
+    let speed = 1.0 + (variant as f32 - 1.5) * 0.10;
+    let frames = (r.length * rate_f) as usize;
+    let mut grain = Svf::new(r.band[0], r.q, rate_f);
+    let mut grain_amp = 0.0f32;
+    let grain_decay = (-1.0 / (r.grain_s * rate_f)).exp();
+    let mut body = Svf::new(r.body_hz * shift, 0.6, rate_f);
+    let mut modes: Vec<(Svf, f32)> =
+        r.modes.iter().map(|&(hz, q, gain)| (Svf::new(hz * shift, q, rate_f), gain)).collect();
+    let mut swish = Svf::new(400.0, 1.0, rate_f);
+    let mut ceiling = [Svf::new(r.ceiling * shift, 0.707, rate_f); 2];
+    let mut phase = [0.0f32; 2];
+    let ratio = r.band[1] / r.band[0];
     let mut data = Vec::with_capacity(frames);
     for i in 0..frames {
         let t = i as f32 / rate_f;
-        let u = t / length;
+        let u = t / r.length;
+        // Decay runs on scaled time, so `speed` shortens every envelope at once.
+        let s = t * speed;
         let white = noise.next();
-        let soft = low.low(white, a_low);
-        let mid_v = mid.low(white, a_mid);
-        let band = mid_v - soft;
-        let high = white - mid_v;
-        let attack = (t / 0.003).min(1.0);
-        let tail = (1.0 - u).max(0.0).powi(2);
-        let sample = match surface {
-            Surface::Stone => {
-                advance(&mut phase[0], 140.0 * shift * (1.0 - u * 0.3), rate_f);
-                high * 0.35 * (-t * 120.0).exp() + sine(phase[0]) * 0.5 * (-t * 45.0).exp()
-                    + band * 0.5 * (-t * 60.0).exp()
+        let heel = (-s / r.spread).exp();
+        let toe = r.toe.map_or(0.0, |at| 0.55 * (-((s - at) / (0.6 * r.spread)).powi(2)).exp());
+        // The first grain lands on the first frame so every step has a contact.
+        if i == 0 || noise.unit() < r.grains * (heel + toe) / rate_f {
+            let level = if i == 0 { 1.0 } else { 0.35 + 0.65 * noise.unit() };
+            grain_amp = grain_amp.max(level);
+            grain.tune(r.band[0] * ratio.powf(noise.unit()) * shift, r.q, rate_f);
+        }
+        grain_amp *= grain_decay;
+        let crunch = grain.band(white * grain_amp) * r.crunch;
+        let weight = body.low(white) * r.body * (-s / r.body_s).exp();
+        let strike = white * (-s * 900.0).exp();
+        let ring: f32 = modes.iter_mut().map(|(mode, gain)| mode.ring(strike) * *gain).sum();
+        let mut wet = 0.0;
+        if r.swish > 0.0 {
+            // Water rushes up through the band and settles, with two bubbles closing.
+            if i % 32 == 0 {
+                swish.tune((350.0 + 800.0 * (u * std::f32::consts::PI).sin()) * shift, 1.0, rate_f);
             }
-            Surface::Soil => soft * 4.0 * (-t * 30.0).exp() + band * 0.6 * (-t * 50.0).exp(),
-            Surface::Grass => {
-                let rustle = 0.6 + 0.4 * sine(t * 70.0 * shift);
-                band * 1.1 * rustle * (u * std::f32::consts::PI).sin() + soft * 1.5 * (-t * 40.0).exp()
-            }
-            Surface::Sand | Surface::Snow => {
-                // Granular crunch: sparse noise grains, denser and duller for snow.
-                let density = if surface == Surface::Snow { 0.03 } else { 0.012 };
-                if noise.unit() < density {
-                    grain = 0.7 + noise.unit() * 0.3;
+            let bubble = |p: &mut f32, start: f32, hz: f32| {
+                let local = t - start;
+                if local < 0.0 {
+                    return 0.0;
                 }
-                grain *= if surface == Surface::Snow { 0.993 } else { 0.985 };
-                let body = if surface == Surface::Snow { band * 0.9 + soft * 2.5 } else { high * 0.5 + band * 0.7 };
-                body * grain * (u * std::f32::consts::PI).sin().max(0.0).sqrt()
-            }
-            Surface::Wood => {
-                advance(&mut phase[0], 190.0 * shift, rate_f);
-                advance(&mut phase[1], 433.0 * shift, rate_f);
-                (sine(phase[0]) * 0.55 + sine(phase[1]) * 0.25) * (-t * 38.0).exp()
-                    + high * 0.25 * (-t * 150.0).exp()
-            }
-            Surface::Metal => {
-                advance(&mut phase[0], 520.0 * shift, rate_f);
-                advance(&mut phase[1], 1371.0 * shift, rate_f);
-                advance(&mut phase[2], 2236.0 * shift, rate_f);
-                (sine(phase[0]) * 0.30 + sine(phase[1]) * 0.20 * (-t * 14.0).exp() + sine(phase[2]) * 0.10 * (-t * 22.0).exp())
-                    * (-t * 9.0).exp()
-                    + soft * 2.5 * (-t * 50.0).exp()
-                    + high * 0.2 * (-t * 160.0).exp()
-            }
-            Surface::Water => {
-                // Slosh plus two bubbles whose pitch rises as they close.
-                let bubble = |p: &mut f32, start: f32, hz: f32| {
-                    let local = t - start;
-                    if local < 0.0 {
-                        return 0.0;
-                    }
-                    advance(p, hz * shift * (1.0 + local * 12.0), rate_f);
-                    sine(*p) * (-local * 30.0).exp()
-                };
-                soft * 3.5 * (u * std::f32::consts::PI).sin()
-                    + band * 0.5 * (-t * 12.0).exp()
-                    + bubble(&mut phase[0], 0.03, 620.0) * 0.18
-                    + bubble(&mut phase[1], 0.11, 880.0) * 0.12
-            }
-        };
-        data.push(sample * attack * tail);
+                advance(p, hz * shift * (1.0 + local * 10.0), rate_f);
+                sine(*p) * (local / 0.002).min(1.0) * (-local * 45.0).exp()
+            };
+            wet = swish.band(white) * r.swish * (u * std::f32::consts::PI).sin().powf(1.5)
+                + bubble(&mut phase[0], 0.04, 520.0) * 0.08
+                + bubble(&mut phase[1], 0.12, 740.0) * 0.06;
+        }
+        let attack = (t / 0.0012).min(1.0);
+        let tail = (1.0 - u).max(0.0).powi(2);
+        let dry = (crunch + weight + ring + wet) * attack * tail;
+        let once = ceiling[0].low(dry);
+        data.push(ceiling[1].low(once));
     }
     let peak = data.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(1.0e-6);
     for x in &mut data {
@@ -131,6 +142,7 @@ fn render(surface: Surface, variant: usize, rate: u32) -> Vec<f32> {
 }
 
 pub(crate) struct StepPlay {
+    pub(crate) contact: Contact,
     pub(crate) surface: Surface,
     pub(crate) variant: usize,
     pub(crate) left: f32,
@@ -162,7 +174,7 @@ impl Steps {
     pub(crate) fn frame(&mut self) -> [f32; 2] {
         let mut out = [0.0f32; 2];
         for (play, cursor) in &mut self.voices {
-            let sample = &self.bank[play.surface as usize * VARIANTS + play.variant % VARIANTS];
+            let sample = &self.bank[index(play.contact, play.surface, play.variant)];
             let i = *cursor as usize;
             if i + 1 < sample.len() {
                 let value = sample[i] + (sample[i + 1] - sample[i]) * cursor.fract();
@@ -185,7 +197,7 @@ mod tests {
     #[test]
     fn every_surface_has_distinct_finite_declicked_renders() {
         let bank = bank(48_000);
-        assert_eq!(bank.len(), Surface::COUNT * VARIANTS);
+        assert_eq!(bank.len(), Contact::COUNT * Surface::COUNT * VARIANTS);
         for (index, render) in bank.iter().enumerate() {
             assert!(render.iter().all(|x| x.is_finite() && x.abs() <= 0.81), "render {index}");
             assert!(render.last().is_some_and(|x| x.abs() < 0.02), "render {index} ends in a click");
@@ -200,10 +212,35 @@ mod tests {
     }
 
     #[test]
+    fn firm_surfaces_open_with_a_tap() {
+        let bank = bank(48_000);
+        for surface in [Surface::Stone, Surface::Soil, Surface::Wood, Surface::Metal] {
+            for variant in 0..VARIANTS {
+                let render = &bank[index(Contact::Step, surface, variant)];
+                let onset = render[..48].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                assert!(onset > 0.1, "{surface:?} variant {variant} onset {onset}");
+            }
+        }
+    }
+
+    #[test]
+    fn breaks_crumble_longer_and_places_seat_shorter_than_steps() {
+        let bank = bank(48_000);
+        for surface in Surface::ALL {
+            let len = |contact| bank[index(contact, surface, 0)].len();
+            assert!(len(Contact::Break) > len(Contact::Step), "{surface:?} break");
+            assert!(len(Contact::Place) < len(Contact::Step), "{surface:?} place");
+            assert!(len(Contact::Hit) < len(Contact::Place), "{surface:?} hit");
+            assert_ne!(bank[index(Contact::Break, surface, 0)], bank[index(Contact::Step, surface, 0)]);
+        }
+    }
+
+    #[test]
     fn step_voices_finish_and_are_bounded() {
         let mut steps = Steps::new(48_000);
         for i in 0..10 {
-            steps.start(StepPlay { surface: Surface::ALL[i % 8], variant: i, left: 0.5, right: 0.5, rate: 1.0 });
+            let contact = Contact::ALL[i % Contact::COUNT];
+            steps.start(StepPlay { contact, surface: Surface::ALL[i % 8], variant: i, left: 0.5, right: 0.5, rate: 1.0 });
         }
         assert_eq!(steps.voices.len(), MAX_VOICES);
         for _ in 0..48_000 {

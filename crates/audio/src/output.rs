@@ -43,6 +43,44 @@ unsafe extern "system" {
     fn waveOutWrite(handle: *mut c_void, header: *mut Header, size: u32) -> u32;
     fn waveOutReset(handle: *mut c_void) -> u32;
     fn waveOutClose(handle: *mut c_void) -> u32;
+    fn timeBeginPeriod(period: u32) -> u32;
+    fn timeEndPeriod(period: u32) -> u32;
+}
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetCurrentThread() -> *mut c_void;
+    fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
+}
+/// The mixer sleeps between short bursts, so the top priority cannot starve
+/// other threads; at HIGHEST it still missed its deadline during the startup
+/// burst of horizon and shader work.
+const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+/// Queued output blocks of 512 frames; five hold about 53 ms at 48 kHz.
+const BUFFERS: usize = 5;
+/// Overall mix level. It sits under the final knee, so ordinary stacks of
+/// beds, steps and cues stay in its linear range instead of saturating.
+const MASTER: f32 = 0.5;
+
+/// Holds the 1 ms system timer for the mixer's lifetime. Without it the 2 ms
+/// sleep rounds up to the 15.6 ms default tick, leaving the queued blocks a
+/// few milliseconds from an underrun whenever the game loads every core;
+/// underruns are heard as crackle.
+struct TimerPeriod;
+impl TimerPeriod {
+    fn begin() -> Self {
+        unsafe {
+            timeBeginPeriod(1);
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        }
+        Self
+    }
+}
+impl Drop for TimerPeriod {
+    fn drop(&mut self) {
+        unsafe {
+            timeEndPeriod(1);
+        }
+    }
 }
 struct Buffer {
     data: Box<[i16; 1024]>,
@@ -80,51 +118,24 @@ fn equal_cue_gain(count: u32) -> f32 {
     1.0 / (count.max(1) as f32).sqrt()
 }
 
-/// A tiny ping-pong delay with a damped feedback path. It is not a full
-/// convolution room; it gives rifts, impacts and blooms a believable short
-/// space without adding a dependency or a large allocation.
-struct Reverb {
-    left: Vec<f32>,
-    right: Vec<f32>,
-    index: usize,
-    low_l: f32,
-    low_r: f32,
-}
-
-impl Reverb {
-    fn new(rate: u32) -> Self {
-        let len = ((rate as f32 * 0.071) as usize).max(256);
-        Self {
-            left: vec![0.0; len],
-            right: vec![0.0; len],
-            index: 0,
-            low_l: 0.0,
-            low_r: 0.0,
-        }
-    }
-
-    fn process(&mut self, mono: f32, send: f32) -> (f32, f32) {
-        let i = self.index;
-        let dl = self.left[i];
-        let dr = self.right[i];
-        // Damp the feedback path so the tail settles instead of ringing.
-        self.low_l += (dl - self.low_l) * 0.32;
-        self.low_r += (dr - self.low_r) * 0.32;
-        let wet_l = self.low_l;
-        let wet_r = self.low_r;
-        let input = mono * send;
-        self.left[i] = input + wet_r * 0.34;
-        self.right[i] = input + wet_l * 0.34;
-        self.index = (i + 1) % self.left.len();
-        (wet_l * 0.22, wet_r * 0.22)
+/// Linear to 0.55, then rolls off toward 0.95. The slope is continuous at the
+/// knee, so peaks bend instead of hitting the i16 cast.
+fn soft_knee(value: f32) -> f32 {
+    let abs = value.abs();
+    if abs <= 0.55 {
+        value
+    } else {
+        value.signum() * (0.55 + 0.40 * (1.0 - (-((abs - 0.55) / 0.40)).exp()))
     }
 }
+
 pub(super) fn run(
     rx: mpsc::Receiver<Play>,
     layer_rx: mpsc::Receiver<layers::Command>,
     running: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
 ) {
+    let _timer = TimerPeriod::begin();
     let bank = super::synth::variants();
     let mut layers = layers::Layers::new(synth::RATE);
     let mut gain = 0.0;
@@ -153,9 +164,13 @@ pub(super) fn run(
             continue;
         }
         STATUS.store(1, Ordering::Relaxed);
-        let mut buffers: Vec<_> = (0..3).map(|_| Buffer::new()).collect();
+        let mut buffers: Vec<_> = (0..BUFFERS).map(|_| Buffer::new()).collect();
         let mut voices: Vec<Voice> = Vec::with_capacity(16);
-        let mut reverb = Reverb::new(synth::RATE);
+        let mut reverb = crate::reverb::Reverb::new(synth::RATE);
+        let mut muffle = crate::dsp::Muffle::new();
+        let mut tap = tap::Tap::from_env();
+        let mut started = false;
+        let mut slept = std::time::Instant::now();
         let mut failed = false;
         while running.load(Ordering::Relaxed) && !failed {
             let enabled = active.load(Ordering::Relaxed);
@@ -199,6 +214,8 @@ pub(super) fn run(
                     }
                 }
             }
+            let woke = std::time::Instant::now();
+            let mut refilled = 0;
             for buffer in &mut buffers {
                 if buffer.prepared {
                     let result = unsafe {
@@ -218,15 +235,14 @@ pub(super) fn run(
                     buffer.prepared = false;
                 }
                 let target = if enabled { volume() } else { 0.0 };
-                let send = voices
-                    .iter()
-                    .map(|voice| voice.play.reverb)
-                    .sum::<f32>()
-                    .min(0.42);
+                // About one second to settle into a cave or back out to air.
+                reverb.approach(layers::space(), 0.012);
+                muffle.approach(layers::clarity(), 0.012, synth::RATE as f32);
                 for frame in buffer.data.chunks_exact_mut(2) {
                     let mut stereo = [0.0f32; 2];
                     let mut cue_counts = [0u32; Cue::COUNT];
                     let mut active_count = 0u32;
+                    let mut cue_send = 0.0f32;
                     gain += (target - gain) * 0.002;
                     for voice in &mut voices {
                         let cue = voice.play.cue as usize;
@@ -242,30 +258,34 @@ pub(super) fn run(
                             let norm = equal_cue_gain(cue_counts[cue]);
                             stereo[0] += value * voice.play.left * norm;
                             stereo[1] += value * voice.play.right * norm;
+                            cue_send += value
+                                * (voice.play.left + voice.play.right)
+                                * 0.5
+                                * norm
+                                * voice.play.reverb;
                             voice.cursor += voice.play.rate;
                         } else {
                             voice.cursor = sample.len() as f32;
                         }
                     }
-                    let layered = layers.frame();
-                    let (wet_l, wet_r) = reverb.process((stereo[0] + stereo[1]) * 0.5, send);
-                    stereo[0] += wet_l;
-                    stereo[1] += wet_r;
+                    let (layered, layer_send) = layers.frame();
                     // Recompute from voices that are actually sounding this
                     // frame so quiet tails don't suppress a new cast.
                     let bus_gain = (1.0 / (active_count.max(1) as f32).sqrt()).max(0.42);
+                    // Vacuum has no room to ring; the layers already scale their own send.
+                    let wet = reverb.process(cue_send * bus_gain * gain * muffle.air() + layer_send);
+                    let stereo = muffle.process(stereo);
                     for ch in 0..2 {
                         let limited = stereo[ch] * bus_gain;
-                        // Cubic soft knee is nearly linear at ordinary levels
-                        // and rolls off peaks without the saturated tanh buzz.
-                        let abs = limited.abs();
-                        let shaped = if abs <= 0.55 {
-                            limited
-                        } else {
-                            limited.signum() * (0.55 + 0.40 * (1.0 - (-((abs - 0.55) / 0.40)).exp()))
-                        };
-                        // Layers carry their own volumes; the cast saturates.
-                        frame[ch] = ((shaped * gain + layered[ch]) * 24000.0) as i16;
+                        // Layers carry their own volumes, but they sum without a
+                        // limit. The knee must run on the final sum: a loud bed
+                        // plus footsteps past the i16 cast clips hard, which is
+                        // the crunch.
+                        let sum = (soft_knee(limited) * gain + layered[ch] + wet[ch]) * MASTER;
+                        frame[ch] = (soft_knee(sum) * 24000.0) as i16;
+                    }
+                    if let Some(tap) = tap.as_mut() {
+                        tap.push([frame[0], frame[1]]);
                     }
                 }
                 voices.retain(|v| {
@@ -280,6 +300,7 @@ pub(super) fn run(
                     break;
                 }
                 buffer.prepared = true;
+                refilled += 1;
                 if unsafe { waveOutWrite(device, &mut *buffer.header, size_of::<Header>() as u32) }
                     != 0
                 {
@@ -287,7 +308,23 @@ pub(super) fn run(
                     break;
                 }
             }
+            // Every block came back finished: the device drained the queue
+            // before this pass, which is heard as a gap.
+            if started && refilled == BUFFERS {
+                UNDERRUNS.fetch_add(1, Ordering::Relaxed);
+            }
+            if started {
+                let gap = woke.duration_since(slept).as_micros() as u32;
+                let mix = woke.elapsed().as_micros() as u32;
+                LONGEST_GAP_US.fetch_max(gap, Ordering::Relaxed);
+                LONGEST_MIX_US.fetch_max(mix, Ordering::Relaxed);
+            }
+            started = true;
+            slept = std::time::Instant::now();
             thread::sleep(Duration::from_millis(2));
+        }
+        if let Some(tap) = tap.as_mut() {
+            tap.flush();
         }
         // A driver failure must never free memory it might still own.
         if unsafe { waveOutReset(device) } == 0 {
@@ -333,24 +370,20 @@ mod tests {
     }
 
     #[test]
-    fn reverb_keeps_a_damped_tail_after_the_input_stops() {
-        let mut reverb = Reverb::new(synth::RATE);
-        let delay = reverb.left.len();
-        reverb.process(0.5, 1.0);
-        let mut early_peak = 0.0f32;
-        for _ in 0..delay * 4 {
-            let (left, right) = reverb.process(0.0, 0.0);
-            early_peak = early_peak.max(left.abs()).max(right.abs());
+    fn soft_knee_is_linear_below_the_knee_and_bounded_above() {
+        for step in 0..=55 {
+            let x = step as f32 * 0.01;
+            assert_eq!(soft_knee(x), x);
+            assert_eq!(soft_knee(-x), -x);
         }
-        let mut late_peak = 0.0f32;
-        for _ in 0..delay * 24 {
-            let (left, right) = reverb.process(0.0, 0.0);
-            late_peak = late_peak.max(left.abs()).max(right.abs());
+        let mut last = soft_knee(0.55);
+        for step in 1..=400 {
+            let x = 0.55 + step as f32 * 0.01;
+            let y = soft_knee(x);
+            assert!(y >= last, "soft knee must not fold back at {x}");
+            assert!(y < 0.951, "soft knee output {y} escaped its ceiling");
+            last = y;
         }
-        assert!(early_peak > 0.0, "the impulse should produce a wet tail");
-        assert!(
-            late_peak < early_peak,
-            "feedback must decay, not ring forever"
-        );
+        assert!(soft_knee(4.0) < 0.951);
     }
 }

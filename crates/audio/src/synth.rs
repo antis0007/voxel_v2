@@ -1,6 +1,7 @@
 //! Layered transients, filtered noise, resonant metal and short diffuse tails.
 //! These are original procedural sound assets, not borrowed samples.
 use super::Cue;
+use crate::dsp::Svf;
 pub const RATE: u32 = 48_000;
 pub fn variants() -> Vec<Vec<Vec<f32>>> {
     (0..Cue::COUNT)
@@ -22,6 +23,11 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
         23 => 0.42,
         24 => 0.24,
         25 => 0.75,
+        26 => 0.34,
+        27 => 0.50,
+        28 => 0.30,
+        29 => 0.36,
+        30 => 0.62,
         _ => 0.55,
     };
     let mut seed = 0x7f4a7c15u32
@@ -31,6 +37,10 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
     let mut phase = variant as f32 * 0.7;
     let mut phase_two = variant as f32 * 1.91;
     let mut low_noise = 0.0;
+    // Noise above this ceiling is what made swings, splashes and shatters
+    // hiss like broadband static.
+    let mut top = Svf::new(5500.0, 0.707, RATE as f32);
+    let mut spray = Svf::new(2000.0, 0.9, RATE as f32);
     let frames = (length * RATE as f32) as usize;
     let mut data = Vec::with_capacity(frames);
     for i in 0..frames {
@@ -45,7 +55,7 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
         low_noise += (white - low_noise) * 0.018;
         let noise = low_noise;
         low += (noise - low) * 0.12;
-        let high = white - noise;
+        let high = top.low(white) - noise;
         let soft_noise = noise;
         let slow_boss_windup = matches!(kind, 14 | 16 | 18);
         let attack = (t / if matches!(kind, 3 | 4 | 8 | 21) { 0.012 } else if slow_boss_windup { 0.055 } else { 0.004 }).min(1.0);
@@ -85,6 +95,16 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
             23 => 520.0 - 340.0 * u,
             24 => 170.0 + 100.0 * (-t * 35.0).exp(),
             25 => 110.0 + 40.0 * (-t * 5.0).exp(),
+            // Dash: thruster chirp sweeping up an octave and a half.
+            26 => 180.0 + 520.0 * (1.0 - (-t * 14.0).exp()),
+            // Slide: a low rumble that sags with the slide speed.
+            27 => 70.0 - 22.0 * u,
+            // Air jump: bright rising puff.
+            28 => 260.0 + 340.0 * u.sqrt(),
+            // Land: body drop.
+            29 => 62.0 * (-t * 7.0).exp() + 34.0,
+            // Bleat: voiced, rising then sagging.
+            30 => 290.0 + 40.0 * (std::f32::consts::PI * u).sin() - 30.0 * u,
             _ => 2200.0 - 1700.0 * u,
         };
         phase += std::f32::consts::TAU * pitch / RATE as f32;
@@ -181,10 +201,13 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
             }
             22 => (high * 0.3 + metal * 0.35) * (std::f32::consts::PI * u).sin() + tone * 0.15,
             23 => {
-                // A short white noise burst over a damped low body:
+                // Spray falling through a band over a damped low body:
                 // the small-air-pocket "plip" that follows a body
                 // breaking the surface.
-                high * 0.55 * (-t * 9.0).exp()
+                if i % 32 == 0 {
+                    spray.tune(2000.0 - 1400.0 * u.sqrt(), 0.9, RATE as f32);
+                }
+                spray.band(white) * 0.75 * (-t * 9.0).exp()
                     + low * 1.25 * (-t * 6.0).exp()
                     + tone * 0.18 * (-t * 14.0).exp()
             }
@@ -194,27 +217,47 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
             25 => low * 1.8 * (-t * 3.0).exp()
                 + soft_noise * 0.6 * (-t * 5.0).exp()
                 + tone * 0.09 * (-t * 8.0).exp(),
+            26 => {
+                // Air rushes past: high noise swells then falls away, over a
+                // short tonal thruster chirp and a faint metal ring.
+                let rush = (std::f32::consts::PI * u.powf(0.6)).sin();
+                high * 0.42 * rush
+                    + soft_noise * 0.55 * rush
+                    + (tone * 0.20 + metal * 0.06) * (-t * 11.0).exp()
+            }
+            27 => {
+                // Grit: amplitude-modulated noise like boots on gravel, under a
+                // low rumble. Starts hard, then settles.
+                let grit = 0.55 + 0.45 * (t * 47.0 + (t * 13.0).sin() * 2.0).sin();
+                high * 0.22 * grit * (-t * 3.0).exp()
+                    + low * 1.1 * (-t * 2.2).exp()
+                    + tone * 0.10 * (-t * 4.0).exp()
+            }
+            28 => {
+                // A soft puff of thrust with a rising, rounded tone.
+                soft_noise * 0.75 * (-t * 14.0).exp()
+                    + high * 0.12 * (-t * 30.0).exp()
+                    + (tone * 0.24 + tone_two * 0.08) * (std::f32::consts::PI * u).sin()
+            }
+            29 => {
+                // Thump: a sub hit and a short gritty scuff.
+                tone * 0.70 * (-t * 16.0).exp()
+                    + low * 1.6 * (-t * 12.0).exp()
+                    + high * 0.18 * (-t * 40.0).exp()
+            }
+            30 => {
+                // Fast tremolo and odd harmonics give the nasal, wavering voice.
+                let tremolo = 0.55 + 0.45 * (t * std::f32::consts::TAU * 13.0).sin();
+                let voice = tone * 0.45 + (phase * 3.0).sin() * 0.22 + (phase * 5.0).sin() * 0.12;
+                (voice * tremolo + soft_noise * 0.25) * (std::f32::consts::PI * u.sqrt()).sin()
+            }
             _ => low * 0.8 + tone * 0.3,
         };
         data.push(sample * attack * tail * 0.65);
     }
-    // Spell cues use a short, low-level room tail. Keep it filtered so the
-    // delayed noise never becomes a brittle metallic smear during spam.
-    for i in (0..data.len()).rev() {
-        let reflection_gain = if matches!(kind, 3 | 4 | 8 | 21) {
-            [(1397, 0.055), (2689, 0.025)]
-        } else {
-            [(1397, 0.10), (2689, 0.045)]
-        };
-        for (delay, gain) in reflection_gain {
-            if i >= delay {
-                data[i] += data[i - delay] * gain;
-            }
-        }
-    }
-    // A short cosine release removes the click that a hard sample end leaves
-    // behind, especially after the reflection pass adds energy to the final
-    // frames.
+    // A short cosine release removes the click that a hard sample end leaves.
+    // Room tails come from the mixer's reverb, so cues stay dry here; fixed
+    // baked echoes at 29 and 56 ms combed every cue the same way.
     let release = ((RATE as f32 * 0.012) as usize).min(data.len());
     let len = data.len();
     for i in 0..release {
@@ -251,6 +294,21 @@ mod tests {
             assert_ne!(cue[1], cue[2]);
             assert_eq!(cue[0].len(), cue[1].len());
         }
+    }
+
+    #[test]
+    fn movement_cues_have_their_own_character() {
+        let bank = variants();
+        let energy = |cue: Cue| {
+            let s = &bank[cue as usize][0];
+            s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32
+        };
+        for cue in [Cue::Dash, Cue::Slide, Cue::AirJump, Cue::Land] {
+            assert!(energy(cue) > 1e-3, "{cue:?} is audible");
+        }
+        // The fallback branch would make every new cue the same sound.
+        assert_ne!(bank[Cue::Dash as usize][0], bank[Cue::AirJump as usize][0]);
+        assert_ne!(bank[Cue::Slide as usize][0].len(), bank[Cue::Land as usize][0].len());
     }
 
     #[test]

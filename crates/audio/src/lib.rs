@@ -2,18 +2,24 @@
 //! no network assets, file decoding, or device calls run on the rendering thread.
 mod beds;
 mod dsp;
+mod fauna;
 mod layers;
 mod music;
 #[cfg(windows)]
 mod output;
 mod perform;
+mod reverb;
+#[cfg(test)]
+mod review;
 mod steps;
 mod synth;
+mod tap;
 pub use beds::{Bed, BED_COUNT};
 pub use dsp::hash;
+pub use fauna::{Family, Fauna, Placement};
 pub use layers::{ambience_volume, music_volume, set_ambience_volume, set_music_volume};
 pub use music::{compose, Director, Mood, MusicTable, Note, Piece, PieceDef, Timbre};
-pub use steps::Surface;
+pub use steps::{Contact, Surface};
 use glam::Vec3;
 use std::{
     sync::{
@@ -25,6 +31,15 @@ use std::{
 
 static VOLUME: AtomicU32 = AtomicU32::new(0.65_f32.to_bits());
 static STATUS: AtomicU8 = AtomicU8::new(0);
+static UNDERRUNS: AtomicU32 = AtomicU32::new(0);
+/// Longest sleep-to-wake gap and longest mixing pass of the output thread,
+/// in microseconds; they tell a starved thread from a slow mix.
+static LONGEST_GAP_US: AtomicU32 = AtomicU32::new(0);
+static LONGEST_MIX_US: AtomicU32 = AtomicU32::new(0);
+/// Times the output queue ran dry since start; each is an audible gap.
+pub fn underruns() -> u32 {
+    UNDERRUNS.load(Ordering::Relaxed)
+}
 pub fn volume() -> f32 {
     f32::from_bits(VOLUME.load(Ordering::Relaxed))
 }
@@ -77,11 +92,22 @@ pub enum Cue {
     Splash,
     Mine,
     Smelt,
+    /// Movement kit: an airy rising whoosh with a short thruster chirp.
+    Dash,
+    /// Gritty low friction hiss under a slide start.
+    Slide,
+    /// Soft thruster puff and a rising tone for the mid-air jump.
+    AirJump,
+    /// Heavy-landing thump after a long fall.
+    Land,
+    /// Grazing animal call; pitch scales with body size.
+    Bleat,
 }
 impl Cue {
-    const COUNT: usize = 26;
+    const COUNT: usize = 31;
 }
 #[derive(Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Event {
     pub cue: Cue,
     pub pos: Option<Vec3>,
@@ -114,6 +140,9 @@ pub(crate) fn reverb_send(cue: Cue) -> f32 {
         | Cue::PrismRelease
         | Cue::CinderStrike => 0.22,
         Cue::Spark | Cue::Frost | Cue::Swing | Cue::Ward => 0.08,
+        // Movement is constant and close to the ear: keep it dry.
+        Cue::Dash | Cue::Slide | Cue::AirJump => 0.06,
+        Cue::Land => 0.12,
         _ => 0.24,
     }
 }
@@ -211,7 +240,8 @@ impl Audio {
                 .dot(forward.cross(Vec3::Y).normalize_or_zero())
                 .clamp(-0.9, 0.9);
             (
-                (1.0 - distance / 42.0).max(0.0) / (1.0 + distance * distance * 0.025),
+                (1.0 - distance / 42.0).max(0.0) / (1.0 + distance * distance * 0.025)
+                    * layers::carry(distance),
                 pan,
             )
         } else {

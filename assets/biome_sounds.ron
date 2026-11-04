@@ -1,0 +1,26 @@
+// Animal voice per worldgen biome, keyed by `Biome` variant name.
+// birds/frogs are peak levels; the game scales birds by daylight and frogs by night.
+// family picks the call shape: Whistle, Trill, Chatter or Caw.
+{
+    "Ocean": (birds: 0.15, bird_hz: 1500.0, calls_per_s: 0.4, trill: 0.0, frogs: 0.0, frog_hz: 300.0, family: Caw),
+    "Coast": (birds: 0.45, bird_hz: 2400.0, calls_per_s: 0.9, trill: 0.1, frogs: 0.0, frog_hz: 300.0, family: Whistle),
+    "Marsh": (birds: 0.55, bird_hz: 2800.0, calls_per_s: 1.4, trill: 0.6, frogs: 0.9, frog_hz: 260.0, family: Trill),
+    "Meadow": (birds: 0.85, bird_hz: 3400.0, calls_per_s: 2.2, trill: 0.4, frogs: 0.1, frog_hz: 420.0, family: Trill),
+    "Forest": (birds: 1.0, bird_hz: 3000.0, calls_per_s: 3.0, trill: 0.3, frogs: 0.15, frog_hz: 380.0, family: Whistle),
+    "Taiga": (birds: 0.55, bird_hz: 2600.0, calls_per_s: 1.0, trill: 0.2, frogs: 0.0, frog_hz: 300.0, family: Whistle),
+    "Desert": (birds: 0.12, bird_hz: 1500.0, calls_per_s: 0.3, trill: 0.0, frogs: 0.0, frog_hz: 300.0, family: Caw),
+    "Badlands": (birds: 0.18, bird_hz: 1500.0, calls_per_s: 0.4, trill: 0.1, frogs: 0.0, frog_hz: 300.0, family: Caw),
+    "Tundra": (birds: 0.15, bird_hz: 1500.0, calls_per_s: 0.3, trill: 0.0, frogs: 0.0, frog_hz: 300.0, family: Caw),
+    "Alpine": (birds: 0.1, bird_hz: 2600.0, calls_per_s: 0.2, trill: 0.0, frogs: 0.0, frog_hz: 300.0, family: Whistle),
+    "Savanna": (birds: 0.6, bird_hz: 2500.0, calls_per_s: 1.2, trill: 0.5, frogs: 0.05, frog_hz: 340.0, family: Chatter),
+    "Rainforest": (birds: 1.0, bird_hz: 3800.0, calls_per_s: 5.0, trill: 0.8, frogs: 0.7, frog_hz: 520.0, family: Chatter),
+    "Heathland": (birds: 0.45, bird_hz: 3600.0, calls_per_s: 0.9, trill: 0.5, frogs: 0.0, frog_hz: 300.0, family: Trill),
+    "Fen": (birds: 0.5, bird_hz: 2700.0, calls_per_s: 1.2, trill: 0.5, frogs: 1.0, frog_hz: 230.0, family: Trill),
+    "LostPlateau": (birds: 0.7, bird_hz: 1600.0, calls_per_s: 1.0, trill: 0.2, frogs: 0.4, frog_hz: 180.0, family: Whistle),
+    "CycadMarsh": (birds: 0.6, bird_hz: 1800.0, calls_per_s: 1.2, trill: 0.3, frogs: 0.9, frog_hz: 200.0, family: Whistle),
+    "CloudForest": (birds: 0.9, bird_hz: 4200.0, calls_per_s: 3.5, trill: 0.9, frogs: 0.5, frog_hz: 640.0, family: Chatter),
+    "RedwoodGrove": (birds: 0.6, bird_hz: 2400.0, calls_per_s: 1.2, trill: 0.2, frogs: 0.1, frog_hz: 340.0, family: Whistle),
+    "OvergrownGardens": (birds: 0.9, bird_hz: 3600.0, calls_per_s: 3.0, trill: 0.6, frogs: 0.3, frog_hz: 480.0, family: Chatter),
+    "FungalGrove": (birds: 0.05, bird_hz: 1500.0, calls_per_s: 0.2, trill: 0.0, frogs: 0.3, frog_hz: 150.0, family: Whistle),
+    "LastShore": (birds: 0.2, bird_hz: 1500.0, calls_per_s: 0.4, trill: 0.0, frogs: 0.0, frog_hz: 300.0, family: Caw),
+}
