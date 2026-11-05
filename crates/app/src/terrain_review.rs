@@ -22,6 +22,31 @@ pub fn wind_override() -> Option<f32> {
 }
 
 struct Route { cap: IVec3, last_stage: i32 }
+
+/// Pours a water block into the air ahead of the camera every 20 s after warmup.
+fn flood(player: &Player, world: &mut World, elapsed: f32,
+    dirty_blocks: &mut std::collections::HashSet<IVec3>,
+    dirty_chunks: &mut std::collections::HashSet<IVec3>) {
+    static LAST: Mutex<i32> = Mutex::new(-1);
+    let stage = ((elapsed - 15.0) / 20.0).floor() as i32;
+    let Ok(mut last) = LAST.lock() else { return };
+    if stage < 0 || *last == stage { return; }
+    *last = stage;
+    let scale = world.voxel_scale.meters();
+    let forward = Vec3::new(player.yaw.sin(), 0.0, -player.yaw.cos());
+    let center = (player.pos + forward * (10.0 / scale) + Vec3::Y * (3.0 / scale)).floor().as_ivec3();
+    let r = (4.0 / scale) as i32;
+    let mut placed = 0;
+    for y in 0..r { for z in -r..r { for x in -r..r {
+        let p = center + IVec3::new(x, y, z);
+        if world.get(p) != BlockId::Air { continue; }
+        world.set_water_volume(p, 8);
+        dirty_blocks.insert(p);
+        crate::world::mark_chunk_and_neighbors_dirty(dirty_chunks, p);
+        placed += 1;
+    }}}
+    eprintln!("[cave-flood] stage={stage} center={center:?} placed={placed}");
+}
 /// Called after the fixed camera is reset each frame. Movement is a pure
 /// elapsed-time offset; edit steps use World::set_many and normal remeshing.
 pub fn frame(player: &mut Player, world: &mut World, elapsed: f32,
@@ -29,8 +54,12 @@ pub fn frame(player: &mut Player, world: &mut World, elapsed: f32,
     dirty_chunks: &mut std::collections::HashSet<IVec3>) {
     static ROUTE: OnceLock<bool> = OnceLock::new();
     static EDIT: OnceLock<bool> = OnceLock::new();
+    static FLOOD: OnceLock<bool> = OnceLock::new();
     let route = *ROUTE.get_or_init(|| option("VOXEL_TERRAIN_ROUTE"));
     let edit = *EDIT.get_or_init(|| option("VOXEL_TERRAIN_EDITS"));
+    if *FLOOD.get_or_init(|| option("VOXEL_CAVE_FLOOD")) {
+        flood(player, world, elapsed, dirty_blocks, dirty_chunks);
+    }
     if !route && !edit { return; }
     let scale = world.voxel_scale.meters();
     let t = (elapsed - 15.0).max(0.0);
