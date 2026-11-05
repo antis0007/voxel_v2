@@ -1711,7 +1711,9 @@ fn natural_surface_blended(
             var savanna_col = mix(vec3<f32>(0.260, 0.205, 0.075), vec3<f32>(0.120, 0.150, 0.052), smoothstep(0.52, 0.72, grove) * 0.7);
             savanna_col = mix(savanna_col, vec3<f32>(0.310, 0.235, 0.130), smoothstep(0.62, 0.80, floor_patch) * 0.6);
             // Rainforest: deep saturated green with emerald lights and wet dark soil.
-            var rain_col = mix(vec3<f32>(0.028, 0.095, 0.040), vec3<f32>(0.065, 0.155, 0.048), smoothstep(0.40, 0.70, mottle));
+            // Mottle shifts hue more than value: a 0.6x value swing in 17 m
+            // patches read as cloud shadow across open rainforest clearings.
+            var rain_col = mix(vec3<f32>(0.040, 0.112, 0.040), vec3<f32>(0.062, 0.140, 0.046), smoothstep(0.30, 0.80, mottle));
             rain_col = mix(rain_col, vec3<f32>(0.050, 0.035, 0.020), smoothstep(0.25, 0.45, clumps) * 0.5);
             // Taiga: blue-green moss floor, rust needle litter under crowns, pale lichen specks.
             var taiga_col = mix(vec3<f32>(0.040, 0.072, 0.050), vec3<f32>(0.170, 0.090, 0.040), smoothstep(0.50, 0.68, floor_patch) * 0.85);
@@ -1818,7 +1820,8 @@ fn natural_surface_blended(
         }
         color += sand_color * weights.w;
     }
-    let modulation = 0.92 + mottle * 0.16 + clumps * 0.06;
+    // Broad value swings read as cloud shadow; 17 m mottle stays mostly in hue.
+    let modulation = 0.97 + mottle * 0.06 + clumps * 0.06;
     let mixed = max(base * (1.0 - coverage) + color * modulation, vec3<f32>(0.0));
     // Preserve the authored reflectance; exposure and display grading have
     // their own owners. A second saturation boost made quiet greens acidic.
@@ -3652,6 +3655,13 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let veil_luma = max(dot(veil_sky, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
     let veil_hue = veil_sky * (max(dot(lit, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0) / veil_luma);
     lit = mix(mix(lit, veil_hue, veil * 0.55), veil_sky, veil * 0.15);
+    // Air in front of a dark range scatters skylight toward the eye, so far
+    // shaded slopes rise toward the sky while lit faces keep their value.
+    // Without it backlit ranges at 2-4 km stayed darker than the plain in
+    // front of them and every ridge line read as one flat silhouette. A low
+    // sun's sky outshines all ground, so the lift fades out there.
+    let veil_lift = veil * veil * 0.6 * smoothstep(0.30, 0.60, sun_dir.y);
+    lit = mix(lit, max(lit, veil_sky * 0.85), veil_lift);
     lit = mix(lit, veil_sky, far_close);
     let total_fog_t = 1.0 - atmosphere_transmittance * cloud_transmittance * (1.0 - veil) * (1.0 - far_close);
 
