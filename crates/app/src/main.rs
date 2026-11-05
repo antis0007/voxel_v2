@@ -4611,6 +4611,7 @@ fn main() -> Result<()> {
                                 matches!(mode, AppMode::Playing),
                             ) {
                                 let mut view = render_distance_settings();
+                                let before = (view, render::horizon_range_m());
                                 // A step that changes nothing (already at that setting) is
                                 // skipped at once, so the player never waits for a no-op.
                                 while !step.apply(&mut view) {
@@ -4620,6 +4621,10 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 set_render_distance_settings(view);
+                                crate::quality::record_cut(
+                                    (before.0, render_distance_settings()),
+                                    (before.1, render::horizon_range_m()),
+                                );
                                 egui_ui.quality_notice = Some((step.notice().to_string(), 8.0));
                             }
                             let mut sky_day = day_night;

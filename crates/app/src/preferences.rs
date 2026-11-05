@@ -260,7 +260,7 @@ impl Preferences {
         height: u32,
         fullscreen: bool,
     ) -> Self {
-        let d = render::render_distance_settings();
+        let d = crate::quality::saved_view(render::render_distance_settings());
         let (cpu, _) = render::world_residency_budgets_mib();
         let gpu = render::gpu_residency_limit_mib();
         Self {
@@ -306,7 +306,7 @@ impl Preferences {
             subtitles: crate::egui_ui::subtitles::enabled(),
             music_volume: crate::audio::music_volume(),
             ambience_volume: crate::audio::ambience_volume(),
-            horizon_m: render::horizon_range_m(),
+            horizon_m: crate::quality::saved_horizon_m(render::horizon_range_m()),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
             typography: crate::egui_ui::typography::get(&ui.ctx),
         }

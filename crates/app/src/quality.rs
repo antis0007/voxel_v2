@@ -38,6 +38,9 @@ static AUTO: AtomicBool = AtomicBool::new(true);
 #[cfg(test)]
 #[path = "quality/outdoor_tests.rs"]
 mod outdoor_tests;
+#[cfg(test)]
+#[path = "quality/held_tests.rs"]
+mod held_tests;
 
 pub fn auto_enabled() -> bool {
     AUTO.load(Ordering::Relaxed)
@@ -270,6 +273,59 @@ pub fn horizon_wait_expired() -> bool {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .is_some_and(|started| started.elapsed().as_secs_f32() >= HORIZON_WAIT_S)
+}
+
+/// A cut kept for this session only: the player's value and the value the cut left.
+/// Saving the cut value made every slow session shrink the view for good.
+#[derive(Clone, Copy, Debug)]
+struct Held<T> {
+    chosen: T,
+    cut: T,
+}
+
+impl<T: Copy + PartialEq> Held<T> {
+    /// Fold in a cut that replaced `before` with `after`.
+    fn record(slot: &mut Option<Self>, before: T, after: T) {
+        if before == after {
+            return;
+        }
+        let chosen = match *slot {
+            Some(held) if held.cut == before => held.chosen,
+            _ => before,
+        };
+        *slot = Some(Held { chosen, cut: after });
+    }
+
+    /// The value to save: the player's choice while the cut is still in place.
+    fn saved(slot: Option<Self>, live: T) -> T {
+        match slot {
+            Some(held) if held.cut == live => held.chosen,
+            _ => live,
+        }
+    }
+}
+
+static HELD_VIEW: std::sync::Mutex<Option<Held<RenderDistanceSettings>>> = std::sync::Mutex::new(None);
+static HELD_HORIZON: std::sync::Mutex<Option<Held<u32>>> = std::sync::Mutex::new(None);
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Note a governor step's view and horizon change so preferences keep the choice.
+pub fn record_cut(view: (RenderDistanceSettings, RenderDistanceSettings), horizon_m: (u32, u32)) {
+    Held::record(&mut lock(&HELD_VIEW), view.0, view.1);
+    Held::record(&mut lock(&HELD_HORIZON), horizon_m.0, horizon_m.1);
+}
+
+/// View distance to save, given the live one.
+pub fn saved_view(live: RenderDistanceSettings) -> RenderDistanceSettings {
+    Held::saved(*lock(&HELD_VIEW), live)
+}
+
+/// Far horizon range to save, given the live one.
+pub fn saved_horizon_m(live: u32) -> u32 {
+    Held::saved(*lock(&HELD_HORIZON), live)
 }
 
 /// Marker left when the graphics device was lost, read once at the next start.
