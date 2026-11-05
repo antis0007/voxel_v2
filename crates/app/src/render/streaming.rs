@@ -29,6 +29,14 @@ mod quality_proxies;
 mod pin_tests;
 #[cfg(test)]
 mod altitude_tests;
+#[cfg(test)]
+mod lod_band_tests;
+/// Level to keep for a resident mesh, given the desired level and the inner neighbour's.
+/// Never coarser than desired, so an approaching chunk refines on entering its ring;
+/// finer survives one ring outward, so a receding chunk does not flip back and forth.
+fn resident_lod(resident: u8, desired: u8, inner: u8) -> u8 {
+    if resident <= desired && resident >= inner { resident } else { desired }
+}
 fn edited_mesh_is_stale(last_edit: Option<u64>, mesh_revision: u64) -> bool {
     last_edit.is_some_and(|edited| edited > mesh_revision)
 }
@@ -652,14 +660,7 @@ impl ChunkCache {
         }
         let delta = coord - self.center_chunk;
         let step = IVec3::new(delta.x.signum(), 0, delta.z.signum());
-        // Keep the resident level inside a one-chunk dead band on either side.
-        let near = lod_for_chunk(self.center_chunk, coord - step);
-        let far = lod_for_chunk(self.center_chunk, coord + step);
-        if mesh.lod >= near && mesh.lod <= far {
-            mesh.lod
-        } else {
-            desired
-        }
+        resident_lod(mesh.lod, desired, lod_for_chunk(self.center_chunk, coord - step))
     }
 
     pub fn rebuild_visible(&mut self) {
