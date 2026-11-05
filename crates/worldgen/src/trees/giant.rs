@@ -2,6 +2,7 @@
 //! kilometre. A giant replaces the ordinary tree of one 12 m cell and clears
 //! the ordinary trees under its crown; bushes stay as undergrowth. Like
 //! ordinary trees, giants ignore dungeons, which lie below the surface.
+use super::foliage;
 use super::skeleton::{self, Design, Hit, Skeleton};
 use super::{BlockId, IVec3, TreeForm, TreeProfile, WorldSampleConfig, hash2, landscape};
 use crate::WorldType;
@@ -212,7 +213,10 @@ fn design(cfg: &WorldSampleConfig, tree: &TreeProfile) -> Design {
 fn build(cfg: &WorldSampleConfig, tree: &TreeProfile) -> Skeleton {
     let scale = cfg.voxel_meters();
     let d = design(cfg, tree);
-    skeleton::build(cfg, tree, &d, tree.canopy_radius as f32 * scale, d.top)
+    // Leaf relief may pass the fitted reach, and giants already fill the
+    // 24 m tree search, so the fit gives it room inside the old bound.
+    let room = if cfg.generator_version >= foliage::VERSION { foliage::OUTSET } else { 0.0 };
+    skeleton::build(cfg, tree, &d, tree.canopy_radius as f32 * scale - room, d.top)
 }
 
 pub(super) fn block(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3) -> BlockId {

@@ -2,6 +2,7 @@
 //! skeleton. A flared, leaning bole forks low into 2-4 tapering limbs, each
 //! ending in clumped lobes with open sky between them.
 use super::{B, IVec3, TreeProfile, Vec3Swizzles, WorldSampleConfig, hash2};
+use crate::trees::foliage;
 use crate::trees::skeleton::{self, Design, Hit, Skeleton};
 
 fn design(cfg: &WorldSampleConfig, t: &TreeProfile) -> Design {
@@ -38,7 +39,7 @@ fn build(cfg: &WorldSampleConfig, t: &TreeProfile) -> Skeleton {
     let scale = cfg.voxel_meters();
     let top = (t.trunk_h + t.canopy_height) as f32 * scale;
     let reach = t.canopy_radius as f32 * scale * 1.35;
-    if cfg.generator_version >= crate::trees::foliage::VERSION {
+    if cfg.generator_version >= foliage::VERSION {
         return skeleton::build_clumped(cfg, t, &design(cfg, t), reach, top);
     }
     skeleton::build(cfg, t, &design(cfg, t), reach, top)
@@ -47,7 +48,7 @@ fn build(cfg: &WorldSampleConfig, t: &TreeProfile) -> Skeleton {
 pub(super) fn block(cfg: &WorldSampleConfig, t: &TreeProfile, p: IVec3) -> B {
     let scale = cfg.voxel_meters();
     let q = (p - IVec3::new(t.anchor_x, t.ground_y, t.anchor_z)).as_vec3() * scale;
-    let outset = if cfg.generator_version >= crate::trees::foliage::VERSION { crate::trees::foliage::OUTSET } else { 0.0 };
+    let outset = if cfg.generator_version >= foliage::VERSION { foliage::OUTSET } else { 0.0 };
     let reach = t.canopy_radius as f32 * scale * 1.35 + scale + outset;
     let top = (t.trunk_h + t.canopy_height) as f32 * scale + scale + outset;
     if q.y <= 0.0 || q.y > top || q.xz().length_squared() > reach * reach {

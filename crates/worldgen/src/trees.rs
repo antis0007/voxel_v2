@@ -7,6 +7,8 @@ pub(crate) mod foliage;
 pub(crate) mod giant;
 mod skeleton;
 mod woodland;
+#[cfg(test)]
+mod species_tests;
 pub(crate) use forms::TreeForm;
 
 pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
@@ -174,9 +176,10 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     let crown_h = tree.canopy_height as f32 * scale;
     if woodland::applies(cfg, &tree) { return woodland::block(cfg, &tree, p); }
     // Bound every lobe and limb before doing branch work, including lean.
-    if q.y <= 0.0 || q.y > height + crown_h || q.x.abs().max(q.z.abs()) > radius * 1.55 + 1.0 {
+    if q.y <= 0.0 || q.y > height + crown_h || q.x.abs().max(q.z.abs()) > radius * 1.55 + 1.0 + foliage::pad(cfg) {
         return BlockId::Air;
     }
+    let relief = foliage::Relief::of(cfg, &tree);
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
     let lean = Vec3::new(tree.lean_x as f32, 0.0, tree.lean_z as f32) * (0.3 + age * 0.45);
     let trunk_center = lean * (q.y / height).clamp(0.0, 1.0).powi(2);
@@ -203,6 +206,7 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
         crown_h,
         rotation,
         scale,
+        relief,
     };
     match tree.form {
         TreeForm::Umbrella => return forms::umbrella(cfg, &tree, p, &frame()),
@@ -238,10 +242,13 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
             * (0.62 + shelf * 0.38)
             * (0.91 + variation * 0.16)
             * scallop;
-        if (q - trunk_center).xz().length() <= r.max(scale * 0.56) {
-            return BlockId::PineLeaves;
-        }
-        return BlockId::Air;
+        let whorl_r = r.max(scale * 0.56);
+        let outside = (q - trunk_center).xz().length() - whorl_r;
+        let leaf = match relief {
+            Some(relief) => relief.shell(q, scale, outside, whorl_r, foliage::NEEDLES),
+            None => outside <= 0.0,
+        };
+        return if leaf { BlockId::PineLeaves } else { BlockId::Air };
     }
     let crown = Vec3::new(lean.x, height - 0.1, lean.z);
     let core_width = if open_crown { 0.46 } else { 0.70 };
@@ -253,6 +260,7 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
             radius * core_width,
         ))
     .length_squared();
+    let mut size = (radius * core_width).min(crown_h * core_height);
     for limb in 0..tree.branch_count {
         let variation = hash3(tree.cell_x, limb, tree.cell_z, cfg.seed.wrapping_add(12083));
         let angle = rotation + limb as f32 * 2.399963;
@@ -298,7 +306,19 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
                 radius * (0.40 + variation * (lobe_variation + 0.03)),
             )
         };
-        field = field.min(((q - tip - Vec3::Y * crown_h * 0.12) / lobe).length_squared());
+        let f = ((q - tip - Vec3::Y * crown_h * 0.12) / lobe).length_squared();
+        if f < field {
+            field = f;
+            size = lobe.min_element();
+        }
+    }
+    if let Some(relief) = relief {
+        let leaf = relief.leaf(q, scale, field, size, foliage::OPEN);
+        return match (leaf, tree.conifer) {
+            (false, _) => BlockId::Air,
+            (true, true) => BlockId::PineLeaves,
+            (true, false) => BlockId::Leaves,
+        };
     }
     // Low-frequency edge breakup removes spherical surfaces without noisy
     // per-voxel holes throughout the canopy interior.
@@ -334,11 +354,16 @@ pub(super) fn crown_bounds(cfg: &WorldSampleConfig, tree: &TreeProfile) -> (f32,
 /// can place. Mirrors `block()` limb by limb with the same hashes, so the LOD
 /// proxy can cover exactly the footprint the voxel crown occupies.
 pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
+    if tree.form == TreeForm::Giant { return giant::bounds(cfg, tree).0; }
+    if let Some((reach, _)) = woodland::bounds(cfg, tree) { return reach; }
+    // Skeleton bounds already include relief; every other crown pads its envelope.
+    smooth_reach(cfg, tree) + foliage::pad(cfg)
+}
+
+fn smooth_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     use glam::Vec2;
     let scale = cfg.voxel_meters();
     let radius = tree.canopy_radius as f32 * scale;
-    if tree.form == TreeForm::Giant { return giant::bounds(cfg, tree).0; }
-    if let Some((reach, _)) = woodland::bounds(cfg, tree) { return reach; }
     if woodland::applies(cfg, tree) { return radius * 1.35 + scale; }
     // `block()` offsets the crown by the lean in metres, not voxels.
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
@@ -380,11 +405,15 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
 /// the trunk top, then each crown lobe's vertical extent at its tip. Replaces
 /// the `height + canopy_height` bound, which overshoots by about a voxel.
 pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
+    if tree.form == TreeForm::Giant { return giant::bounds(cfg, tree).1; }
+    if let Some((_, top)) = woodland::bounds(cfg, tree) { return top; }
+    smooth_top(cfg, tree) + foliage::pad(cfg)
+}
+
+fn smooth_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     let scale = cfg.voxel_meters();
     let height = tree.trunk_h as f32 * scale;
     let crown_h = tree.canopy_height as f32 * scale;
-    if tree.form == TreeForm::Giant { return giant::bounds(cfg, tree).1; }
-    if let Some((_, top)) = woodland::bounds(cfg, tree) { return top; }
     if woodland::applies(cfg, tree) { return height + crown_h + scale; }
     if let Some(top) = forms::crown_top(cfg, tree, height, crown_h) {
         return top;
@@ -410,8 +439,8 @@ pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
         } else {
             crown_h * (0.44 + variation * 0.27)
         };
-        // Lobes sit 0.12 crown heights below their tip.
-        let lobe_top = crown_y + tip_height - crown_h * 0.12 + lobe_y * threshold_reach;
+        // `block()` centres each lobe 0.12 crown heights above its tip.
+        let lobe_top = crown_y + tip_height + crown_h * 0.12 + lobe_y * threshold_reach;
         top = top.max(lobe_top);
     }
     // One voxel of margin for the top face, as in `crown_reach`.

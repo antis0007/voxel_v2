@@ -2,6 +2,7 @@
 //! savanna and emergent umbrellas, waterside weeping crowns, high-crowned dry
 //! pines, birch groves and timberline krummholz. Older generator versions keep
 //! `TreeForm::Classic` and generate bit-identically.
+use super::foliage::{self, Relief};
 use super::{BlockId, IVec3, TreeProfile, WorldSampleConfig, distance_to_segment, hash3, landscape};
 use glam::{Vec3, Vec3Swizzles};
 use std::f32::consts::TAU;
@@ -38,6 +39,7 @@ pub(super) struct Frame {
     pub crown_h: f32,
     pub rotation: f32,
     pub scale: f32,
+    pub relief: Option<Relief>,
 }
 
 pub(super) fn choose(
@@ -103,7 +105,12 @@ fn umbrella_limbs(tree: &TreeProfile) -> i32 {
     2 + tree.branch_count.rem_euclid(3)
 }
 
-fn leaf_or_air(cfg: &WorldSampleConfig, p: IVec3, field: f32) -> BlockId {
+/// `field` is the nearest lobe's squared normalised distance; `size` its smallest radius.
+fn leaf_or_air(cfg: &WorldSampleConfig, p: IVec3, f: &Frame, field: f32, size: f32) -> BlockId {
+    if let Some(relief) = f.relief {
+        let leaf = relief.leaf(f.q, f.scale, field, size, foliage::OPEN);
+        return if leaf { BlockId::Leaves } else { BlockId::Air };
+    }
     let grain = cfg.blocks_for_span(0.85).max(1);
     let edge = hash3(
         p.x.div_euclid(grain),
@@ -125,6 +132,7 @@ pub(super) fn umbrella(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f:
     let centre = Vec3::new(f.lean.x, crown_y, f.lean.z);
     let mut field = ((f.q - centre) / Vec3::new(f.radius * 0.55, f.crown_h * 0.5, f.radius * 0.55))
         .length_squared();
+    let mut size = (f.radius * 0.55).min(f.crown_h * 0.5);
     let limbs = umbrella_limbs(tree);
     for limb in 0..limbs {
         let variation = limb_variation(cfg, tree, limb);
@@ -138,9 +146,13 @@ pub(super) fn umbrella(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f:
             return BlockId::Log;
         }
         let pad = f.radius * (0.45 + variation * 0.15);
-        field = field.min(((f.q - tip) / Vec3::new(pad, f.crown_h * 0.5, pad)).length_squared());
+        let lobe = ((f.q - tip) / Vec3::new(pad, f.crown_h * 0.5, pad)).length_squared();
+        if lobe < field {
+            field = lobe;
+            size = pad.min(f.crown_h * 0.5);
+        }
     }
-    leaf_or_air(cfg, p, field)
+    leaf_or_air(cfg, p, f, field, size)
 }
 
 /// Rounded crown whose rim hangs in ragged curtains towards the ground.
@@ -148,6 +160,7 @@ pub(super) fn weeping(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f: 
     let centre = Vec3::new(f.lean.x, f.height, f.lean.z);
     let mut field = ((f.q - centre) / Vec3::new(f.radius * 0.55, f.crown_h * 0.45, f.radius * 0.55))
         .length_squared();
+    let mut size = (f.radius * 0.55).min(f.crown_h * 0.45);
     for limb in 0..tree.branch_count {
         let variation = limb_variation(cfg, tree, limb);
         let angle = f.rotation + limb as f32 * 2.399963;
@@ -160,9 +173,13 @@ pub(super) fn weeping(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f: 
             return BlockId::Log;
         }
         let lobe = Vec3::new(f.radius * 0.28, f.crown_h * 0.30, f.radius * 0.28);
-        field = field.min(((f.q - tip) / lobe).length_squared());
+        let l = ((f.q - tip) / lobe).length_squared();
+        if l < field {
+            field = l;
+            size = lobe.min_element();
+        }
     }
-    let leaf = leaf_or_air(cfg, p, field);
+    let leaf = leaf_or_air(cfg, p, f, field, size);
     if leaf != BlockId::Air || f.q.y > f.height {
         return leaf;
     }
@@ -173,7 +190,13 @@ pub(super) fn weeping(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f: 
     let outer = f.radius * (0.62 + strand * 0.30);
     let thickness = (f.scale * 1.2).max(0.7);
     let d = rel.length();
-    if strand > 0.3 && d <= outer && d >= outer - thickness && f.q.y >= f.height * (0.30 + strand * 0.25) {
+    let hangs = strand > 0.3 && f.q.y >= f.height * (0.30 + strand * 0.25);
+    if let Some(relief) = f.relief {
+        let outside = (d - outer).max(outer - thickness - d);
+        let leaf = hangs && relief.shell(f.q, f.scale, outside, thickness * 0.5, foliage::FRONDS);
+        return if leaf { BlockId::Leaves } else { BlockId::Air };
+    }
+    if hangs && d <= outer && d >= outer - thickness {
         BlockId::Leaves
     } else {
         BlockId::Air

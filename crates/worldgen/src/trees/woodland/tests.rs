@@ -94,6 +94,19 @@ fn roughness(wood: &HashSet<IVec3>, leaves: &HashSet<IVec3>) -> f32 {
     open as f32 / (leaves.len() as f32).powf(2.0 / 3.0)
 }
 
+/// Share of leaf voxels with no 6-connected path through leaves or wood to the ground row.
+fn floating(wood: &HashSet<IVec3>, leaves: &HashSet<IVec3>) -> f32 {
+    let mut reached: HashSet<IVec3> = wood.iter().chain(leaves).filter(|p| p.y == 1).copied().collect();
+    let mut queue: VecDeque<_> = reached.iter().copied().collect();
+    while let Some(p) = queue.pop_front() {
+        for d in SIDES {
+            let n = p + d;
+            if (wood.contains(&n) || leaves.contains(&n)) && reached.insert(n) { queue.push_back(n); }
+        }
+    }
+    leaves.iter().filter(|p| !reached.contains(p)).count() as f32 / leaves.len().max(1) as f32
+}
+
 /// Interleaved timing of whole-crown sampling, plain against clumped.
 #[test]
 #[ignore]
@@ -135,6 +148,8 @@ fn clumped_crowns_are_bounded_grounded_and_rougher_only_where_resolvable() {
             if plain.1.len() >= 200 {
                 assert!((0.6..1.5).contains(&mass), "leaf mass x{mass} at {scale:?} cell={cell}");
             }
+            let (before, after) = (floating(&plain.0, &plain.1), floating(wood, leaves));
+            assert!(after <= before + 0.01, "clumps detached leaves: share {before} -> {after} at {scale:?} cell={cell}");
             gain.push(roughness(wood, leaves) / roughness(&plain.0, &plain.1));
         }
         // Clumps add silhouette at every scale; relief bands add most on the finest grid.

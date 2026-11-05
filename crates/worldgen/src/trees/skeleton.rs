@@ -2,7 +2,7 @@
 //! lobes in metres from the tree anchor. Geometry never depends on voxel size;
 //! the sampler only widens wood to stay 6-connected at coarse scales.
 use super::foliage::{self, Relief};
-use super::{IVec3, TreeProfile, WorldSampleConfig, distance_to_segment, hash2, hash3};
+use super::{IVec3, TreeProfile, WorldSampleConfig, distance_to_segment, hash3};
 use glam::{Vec3, Vec3Swizzles};
 use std::cell::RefCell;
 use std::f32::consts::TAU;
@@ -76,6 +76,7 @@ pub(super) struct Skeleton {
     flare: f32,
     flare_h: f32,
     relief: Option<Relief>,
+    clumped: bool,
 }
 
 pub(super) enum Hit {
@@ -97,6 +98,7 @@ impl Skeleton {
             flare: 0.0,
             flare_h: 1.0,
             relief: None,
+            clumped: false,
         }
     }
 
@@ -136,7 +138,7 @@ impl Skeleton {
     /// toward the branch tip and `satellites` smaller clumps with sky between
     /// them, shrunk so the cluster spans about the plain lobe's reach.
     fn leaves(&mut self, rng: &mut Draw, c: Vec3, r: Vec3, under: f32, out: Vec3, satellites: u32) {
-        if self.relief.is_none() {
+        if !self.clumped {
             return self.lobe(c, r, under);
         }
         let r = r * 0.92;
@@ -265,7 +267,7 @@ impl Skeleton {
             }
         }
         let leaf = match self.relief {
-            Some(relief) => relief.leaf(q, scale, field, size),
+            Some(relief) => relief.leaf(q, scale, field, size, foliage::CLUSTER),
             None => field < LEAF_CORE + edge * LEAF_EDGE,
         };
         if leaf { Hit::Leaf } else { Hit::Air }
@@ -298,11 +300,12 @@ fn bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
 }
 
 /// Builds the skeleton, then fits it inside `reach_limit` and `top_limit`.
+/// From generator 130 its leaf surface carries resolution-gated relief.
 pub(super) fn build(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, reach_limit: f32, top_limit: f32) -> Skeleton {
     grow(cfg, tree, d, reach_limit, top_limit, false)
 }
 
-/// `build` with generator 130 leaf clumps and resolution-gated leaf relief.
+/// `build` with each leaf mass split into clumps from generator 130.
 pub(super) fn build_clumped(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, reach_limit: f32, top_limit: f32) -> Skeleton {
     grow(cfg, tree, d, reach_limit, top_limit, true)
 }
@@ -310,10 +313,10 @@ pub(super) fn build_clumped(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Des
 fn grow(cfg: &WorldSampleConfig, tree: &TreeProfile, d: &Design, reach_limit: f32, top_limit: f32, clumped: bool) -> Skeleton {
     let mut rng = Draw { cell: (tree.cell_x, tree.cell_z), seed: cfg.seed.wrapping_add(52_101), n: 0 };
     let mut s = Skeleton::empty();
-    if clumped {
+    s.relief = Relief::of(cfg, tree);
+    if clumped && s.relief.is_some() {
+        s.clumped = true;
         s.lobe_limit = MAX_LOBES;
-        let cell = (hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(130_011)) * 65535.0) as u32;
-        s.relief = Some(Relief { seed: cfg.seed.wrapping_add(130_007) ^ cell.wrapping_mul(2_654_435_761) });
     }
     s.flare = d.flare;
     s.flare_h = d.trunk_r * 1.8 + 0.6;
