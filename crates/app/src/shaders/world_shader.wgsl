@@ -105,13 +105,13 @@ fn terrain_pixel_uv(p: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
 /// pixels) close to the camera and applies a faint ordered-dither grain on it;
 /// tone itself is never quantised, so lighting gradients stay smooth.
 fn terrain_pixel_albedo(color: vec3<f32>, p: vec3<f32>, n: vec3<f32>, footprint_m: f32) -> vec3<f32> {
-    let uv = terrain_pixel_uv(p, n) * PIXEL_RES;
-    let cell = floor(uv);
     // Fade in texels per screen pixel, like every other 5 cm lattice term.
     // The old 0.22-0.65 m (4-13 texels per pixel) window kept the 4x4 dither
     // alive far past Nyquist, where it aliased into broad moire bands on
     // flat canopy and wall faces.
     let mid = surface_detail_weight(footprint_m * PIXEL_RES);
+    if mid <= 0.0 { return color; }
+    let cell = floor(terrain_pixel_uv(p, n) * PIXEL_RES);
     // No palette quantisation: tone stays continuous so gradients never band.
     // A small ordered-dither lift on the 5 cm lattice keeps the pixel-art
     // texture up close. Multiplicative gain preserves hue.
@@ -1231,6 +1231,9 @@ fn horizon_detail_sample(xz_m: vec2<f32>, lod: f32) -> HorizonDetail {
     out.weight = 0.0;
     if !horizon_detail_on() { return out; }
     let top = HORIZON_DETAIL_LEVELS - 1;
+    let top_edge = horizon_detail_edge(xz_m, top);
+    // Outside the cache, a clamped texture read has zero coverage anyway.
+    if top_edge >= 1.0 { return out; }
     let l = clamp(lod, 0.0, f32(top));
     var level = i32(floor(l));
     var blend = l - floor(l);
@@ -1252,7 +1255,7 @@ fn horizon_detail_sample(xz_m: vec2<f32>, lod: f32) -> HorizonDetail {
     if blend > 0.0 && level < top {
         out.value = mix(out.value, horizon_detail_fetch(xz_m, level + 1), blend);
     }
-    out.weight = 1.0 - horizon_detail_edge(xz_m, top);
+    out.weight = 1.0 - top_edge;
     return out;
 }
 
@@ -1904,11 +1907,12 @@ fn crystal_facets(uv: vec2<f32>) -> vec4<f32> {
 
 // Shared by colour and BRDF: only exposed mineral catches light, never its host rock.
 fn ore_inclusion(uv_m: vec2<f32>, footprint_m: f32) -> f32 {
+    // Preserve average mineral coverage when individual pixels cannot resolve.
+    let resolved = surface_detail_weight(footprint_m * PIXEL_RES);
+    if resolved <= 0.0 { return 0.16; }
     let uv = texel_centre(uv_m);
     let deposit = surface_noise(uv * vec2<f32>(4.0, 2.0));
     let fleck = surface_hash(floor(uv * PIXEL_RES));
-    let resolved = surface_detail_weight(footprint_m * PIXEL_RES);
-    // Preserve average mineral coverage when individual pixels cannot resolve.
     return mix(0.16, smoothstep(0.53, 0.66, deposit)
         * smoothstep(0.22, 0.42, fleck), resolved);
 }
@@ -3400,13 +3404,19 @@ fn fs_main(in: VsOut) -> WorldOutput {
         + sun_albedo * sun_radiance * sun_diffuse_energy * sun_diffuse * 0.318309886
         + albedo * moon_radiance * moon_diffuse_energy * moon_diffuse * 0.318309886 * sky_access;
     // Inter-ridge occlusion comes from the detail-map sun march in `sun_shadow`.
-    let direct_specular = sun_radiance * terrain_directional_specular(n, macro_normal, to_eye, sun_dir,
+    var sun_specular = vec3<f32>(0.0);
+    if light.sun_dir_intensity.w > 0.0 && sun_horizon > 0.0 {
+        sun_specular = sun_radiance * terrain_directional_specular(n, macro_normal, to_eye, sun_dir,
             roughness, f0, in.ao_strength, kind, in.terrain_weights.z)
-            * max(light.sun_dir_intensity.w, 0.0) * sun_trans * sun_shadow * sun_horizon * sky_access
-        + moon_radiance * terrain_directional_specular(n, macro_normal, to_eye, moon_dir,
+            * light.sun_dir_intensity.w * sun_trans * sun_shadow * sun_horizon * sky_access;
+    }
+    var moon_specular = vec3<f32>(0.0);
+    if light.moon_dir_intensity.w > 0.0 && moon_horizon > 0.0 {
+        moon_specular = moon_radiance * terrain_directional_specular(n, macro_normal, to_eye, moon_dir,
             roughness, f0, in.ao_strength, kind, in.terrain_weights.z)
-            * max(light.moon_dir_intensity.w, 0.0) * moon_trans * moon_horizon * sky_access
-        + torch_spec * fire_exposure;
+            * light.moon_dir_intensity.w * moon_trans * moon_horizon * sky_access;
+    }
+    let direct_specular = sun_specular + moon_specular + torch_spec * fire_exposure;
 
     if debug_mode == 23 { // Directional diffuse + specular, linear HDR.
         let direct = sun_albedo * sun_radiance * sun_diffuse_energy * sun_diffuse * 0.318309886
