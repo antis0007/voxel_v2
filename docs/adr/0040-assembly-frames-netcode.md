@@ -85,9 +85,11 @@ as cache-aware chunk delivery does now.
 Assembly physics stays out of lockstep: `f32` rigid bodies are not guaranteed
 identical across machines. Default: the host owns every assembly and sends
 poses; a pilot predicts the craft it controls from its own inputs and corrects
-to host snapshots. Handing an assembly group (carrier, crane load, docked craft)
-to a client is an owner decision; if taken, a handover names the accepted tick,
-state and an authority epoch, and a missed handover leaves the host as owner.
+to host snapshots. In co-op the owner chose (2026-11-05) to let a pilot own the
+assembly group it flies (carrier, crane load, docked craft): the pilot simulates
+and sends poses, the host checks them. A handover names the accepted tick, state
+and an authority epoch; a missed handover or a disconnected pilot leaves the host
+as owner.
 
 Item moves between an assembly and the world (dock, unload, mining output) use
 `operation.rs` receipts, so a retry cannot duplicate items.
@@ -113,6 +115,5 @@ Item moves between an assembly and the world (dock, unload, mining output) use
 
 - Physics solver: Rapier (new dependency, needs a line here) or an in-house
   rigid solver extending `sandbox.rs`.
-- Delegated assembly authority for trusted co-op.
 - Joints and articulated sub-bodies: each moving part becomes its own assembly
   with a parent frame; joint state replication is deferred to its own ADR.
