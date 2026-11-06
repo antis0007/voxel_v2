@@ -5,10 +5,10 @@ use crate::cell::{BRICK_CELLS, BRICKS_PER_CHUNK, Cell};
 use glam::IVec3;
 
 impl BrickStore {
-    /// The cells of a stored brick, for a kernel that works inside one brick. `None` when absent (all empty).
-    pub(crate) fn brick_cells_mut(&mut self, chunk: IVec3, brick: u8) -> Option<&mut [Cell]> {
-        let slot = self.chunks.get(&chunk)?.slots[brick as usize];
-        (slot != NO_SLOT).then(|| &mut self.pool[slot as usize * BRICK_CELLS..][..BRICK_CELLS])
+    /// Every allocated pool slot's cells, indexed by slot: disjoint borrows for kernels that work on many
+    /// bricks at once.
+    pub(crate) fn slot_cells_mut(&mut self) -> std::slice::IterMut<'_, [Cell; BRICK_CELLS]> {
+        self.pool.as_chunks_mut::<BRICK_CELLS>().0.iter_mut()
     }
 
     /// A copy of the chunk's pointer table (all `NO_SLOT` when the chunk is absent).

@@ -54,7 +54,7 @@ pub use matter::{
 pub use matter_jobs::{FineJob, FineJobs, FineJobStats, FineRegion};
 pub use replay::{Action, RunCheckpoint, decode_log, encode_log, run_log};
 pub use store::{BrickStore, NO_SLOT, PoolFull};
-pub use kernel::{StepStats, step, step_skipping, step_with};
+pub use kernel::{StepStats, set_kernel_workers, step, step_skipping, step_with};
 pub use offload::{PhaseBlocks, gather, scatter};
 pub use pinned::{
     Dice, HEAT_DEADBAND, HEAT_RATE, HEAT_TICK_INTERVAL, PHASE_OFFSETS, block_base, block_hash, flow_gate, is_heat_phase,
