@@ -46,6 +46,9 @@ pub struct BakeCursor {
     pub next_sample: u32,
 }
 
+/// Index of a block without a globe colour; the shader draws it in its fallback slot.
+pub const UNMAPPED: u8 = 255;
+
 /// Maps a surface block to the globe material palette.
 pub fn material_index(surface: BlockId) -> u8 {
     match surface {
@@ -55,12 +58,15 @@ pub fn material_index(surface: BlockId) -> u8 {
         BlockId::Sand => 3,
         BlockId::SnowGrass => 4,
         BlockId::Gravel => 5,
-        BlockId::Mud | BlockId::Clay => 6,
+        // Crater lakes report Water; the bed colour shows where shore samples blend.
+        BlockId::Mud | BlockId::Clay | BlockId::Water => 6,
         BlockId::Sandstone => 7,
         BlockId::Leaves | BlockId::PineLeaves => 8,
         BlockId::Log => 9,
         BlockId::Ice => 10,
-        _ => 255,
+        BlockId::Limestone => 15,
+        BlockId::GroveMoss => 16,
+        _ => UNMAPPED,
     }
 }
 
@@ -117,6 +123,11 @@ pub fn bake_tile(
     }
     true
 }
+
+#[cfg(test)]
+#[path = "bake_palette_tests.rs"]
+mod palette_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

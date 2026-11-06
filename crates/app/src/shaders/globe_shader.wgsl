@@ -71,7 +71,9 @@ const GLOBE_CITY: vec3<f32> = vec3<f32>(1.0, 0.72, 0.38);
 const GLOBE_CITY_GAIN: f32 = 0.03;
 
 // Linear `render.color.base` of the materials in bake::material_index order; rest grey.
-const GLOBE_PALETTE: array<vec3<f32>, 16> = array<vec3<f32>, 16>(
+// The last slot draws bake::UNMAPPED; bake_palette_tests pins both lengths.
+const GLOBE_FALLBACK: u32 = 17u;
+const GLOBE_PALETTE: array<vec3<f32>, 18> = array<vec3<f32>, 18>(
     vec3<f32>(0.1065, 0.2049, 0.0732), // grass
     vec3<f32>(0.1193, 0.0637, 0.0363), // dirt
     vec3<f32>(0.1626, 0.1789, 0.1873), // stone
@@ -87,6 +89,8 @@ const GLOBE_PALETTE: array<vec3<f32>, 16> = array<vec3<f32>, 16>(
     vec3<f32>(0.2140, 0.2140, 0.2140),
     vec3<f32>(0.2140, 0.2140, 0.2140),
     vec3<f32>(0.2140, 0.2140, 0.2140),
+    vec3<f32>(0.4200, 0.3801, 0.2429), // limestone
+    vec3<f32>(0.0509, 0.1065, 0.0331), // grove moss
     vec3<f32>(0.2140, 0.2140, 0.2140),
 );
 
@@ -200,7 +204,7 @@ fn globe_air_path(rel: vec3<f32>) -> f32 {
 }
 
 fn globe_albedo(material: u32, wet: f32) -> vec3<f32> {
-    var albedo = GLOBE_PALETTE[material & 15u];
+    var albedo = GLOBE_PALETTE[min(material, GLOBE_FALLBACK)];
     if material == 0u || material == 8u {
         let dry = clamp((0.3 - wet) / 0.3, 0.0, 1.0) * 0.5;
         let lush = clamp((wet - 0.7) / 0.3, 0.0, 1.0) * 0.5;
