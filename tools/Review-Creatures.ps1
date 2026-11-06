@@ -42,7 +42,7 @@ try {
         ConvertTo-Json -Depth 4 | Set-Content "$root/manifest.json"
     $process=Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $repo -WindowStyle Hidden -PassThru -RedirectStandardOutput "$root/stdout.log" -RedirectStandardError "$root/stderr.log"
     $null=$process.Handle
-    if(!$process.WaitForExit(90000)){$process.Kill();$process.WaitForExit();throw 'Capture exceeded 90 seconds'}
+    if(!$process.WaitForExit(240000)){$process.Kill();$process.WaitForExit();throw 'Capture exceeded 240 seconds'}
     if($process.ExitCode -ne 0 -or !(Test-Path "$root/camera.png")){throw "Capture failed: $root"}
     Write-Output $root
 } finally {
