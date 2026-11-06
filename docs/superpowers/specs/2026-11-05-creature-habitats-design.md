@@ -96,3 +96,39 @@ entered. The gate 139 idea from the first draft is withdrawn.
 ## Left to the builder
 
 Body proportions, exact weights, test seeds.
+
+## Husbandry and provoked animals (2026-11-06)
+
+- A neutral brawler grazer fights back once hurt (`wildlife::fights_back`):
+  the Boar row sets `brawler`, `attack_range`, `windup`, `cooldown` and
+  `melee`, and leaves the wildlife flee path for the generic melee path.
+  Peaceful calms provoked residents instead of removing them.
+- `lays` on a grazer drops its product under a grown herd member once per
+  regrowth. It reuses the member's fleece clock, so the herd sidecar keeps
+  its layout and a row cannot have both `shear` and `lays`. Marsh Fowl lays
+  `Food(Egg)` (FoodKind 24, sprite 74) once a day after it is fed.
+- Feathers are resource 24 (save 66, factory format 20); Marsh Fowl drops
+  1-3 on death.
+
+## Creating a creature (panel, agent or by hand)
+
+Kinds from `bestiary::FIRST_GENERATED` (1000) are created rows: the Axiom panel
+(**World → Animals → New animal**, **Creatures → New creature**) appends them,
+and an agent can write the same row. Everything the game needs comes from the
+row and `assets/spawns.ron`.
+
+1. Row: an animal needs `role: Grazer` and `animal_body: Some(49..=52)` to
+   reuse the cow, boar, deer or fowl body; other creatures use the generic
+   body. `bestiary::row_problems` lists rule breaks; `just test
+   creature_contract` runs it over the whole table.
+2. Format: the panel writes one-line rows. Run
+   `cargo test dump_bestiary_ron -- --ignored` before committing, or
+   `bestiary_ron_round_trips` fails on the format.
+3. Spawns: add a `spawns.ron` row (panel: **Add habitat**). Rows whose created
+   kind no longer has a bestiary row are skipped at runtime; the spawns test
+   still fails until they are removed.
+4. Saves: residents and herd members of a removed created kind are dropped on
+   load; an unknown authored kind is still treated as corrupt data.
+5. Playtest: `/summon <name>` places one. Art evidence:
+   `tools/Review-Creatures.ps1 -Creatures 'Name,1000'` (or `-Scene fauna|bestiary`)
+   writes a lineup capture under `target/creature-review/<label>`.
