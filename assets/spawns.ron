@@ -1,0 +1,36 @@
+// Where each creature kind rises: (enemy kind, habitat).
+// weight: share among rows that match one spawn context. biomes: variant names
+// from engine_worldgen::landscape::Biome; empty = every biome. realms: Surface,
+// Underground (roofed, more than 6 m under the terrain), Nether, Shell (Manyfold,
+// Hall). time: Any | Night | Day. Rows are walked in file order for the roll, so
+// append new rows at the end. `cargo test spawns_ron` checks the format.
+[
+    // Hostiles that rose by night before the table existed.
+    (0, (weight: 3, realms: [Surface, Underground, Shell], time: Night)),
+    (4, (weight: 1, realms: [Surface, Underground, Shell], time: Night)),
+    (12, (weight: 1, realms: [Surface, Underground, Shell], time: Night)),
+    (18, (weight: 2, realms: [Surface, Underground], time: Night)),
+    (19, (weight: 3, realms: [Surface, Underground], time: Night)),
+    (21, (weight: 2, realms: [Surface, Underground, Nether], time: Night)),
+    (22, (weight: 2, realms: [Surface, Underground], time: Night)),
+    (23, (weight: 2, realms: [Surface, Underground], time: Night)),
+    (24, (weight: 2, realms: [Surface, Underground], time: Night)),
+    (25, (weight: 1, realms: [Surface, Underground], time: Night)),
+    // Cave dwellers rise under cover at any hour.
+    (0, (weight: 2, realms: [Underground], time: Day)),
+    (12, (weight: 2, realms: [Underground], time: Day)),
+    (55, (weight: 3, realms: [Underground])),
+    (56, (weight: 2, realms: [Underground])),
+    // Resource animals: the grazer pass reads these for its patch.
+    (49, (weight: 3, biomes: ["Meadow", "Savanna", "Heathland"], realms: [Surface])),
+    (50, (weight: 3, biomes: ["Forest", "Taiga", "RedwoodGrove", "CloudForest"], realms: [Surface])),
+    (51, (weight: 3, biomes: ["Forest", "Taiga", "CloudForest", "Meadow"], realms: [Surface])),
+    (52, (weight: 3, biomes: ["Marsh", "Fen", "Coast", "CycadMarsh"], realms: [Surface])),
+    (16, (weight: 2, biomes: ["Meadow", "Heathland", "Alpine", "Tundra"], realms: [Surface])),
+    (17, (weight: 2, biomes: ["Alpine", "Heathland", "Badlands", "Tundra", "Meadow"], realms: [Surface])),
+    // Bestiary creatures by biome.
+    (53, (weight: 2, biomes: ["Forest", "Taiga", "RedwoodGrove"], realms: [Surface], time: Night)),
+    (54, (weight: 3, biomes: ["Savanna", "Badlands", "Desert"], realms: [Surface], time: Night)),
+    (58, (weight: 2, biomes: ["Tundra", "Alpine"], realms: [Surface], time: Night)),
+    (57, (weight: 4, realms: [Nether])),
+]

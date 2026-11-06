@@ -202,6 +202,13 @@ stormstones, loose terrain, a village that disagrees about the solution.
 | Date | Slice | Where |
 |---|---|---|
 | 2026-11-03 | Old Copper kind 48: the Look (follow, lock, strike at the nearest conductor), Peck run, Scratch furrows, Roost on stormstones. Strike landing rule shared in `adventure/conductors.rs`. | `crates/app/src/world/adventure/thunderhen.rs`, bestiary row 48, review scene `VOXEL_ENEMY_REVIEW_SCENE=thunderhen` |
+| 2026-11-05 | Habitat table: `assets/spawns.ron` rows (weight, biomes, realms Surface/Underground/Nether/Shell, time) replace the bestiary `night` weight as the spawn authority. Night, cave and grazer spawners read it. | `adventure/habitat.rs`, `night.rs`, `wildlife.rs` |
+| 2026-11-05 | Resource animals 49-52 (Cow, Boar, Deer, Marsh Fowl: grazers, hide and meat drops) and bestiary creatures 53-58 (Owlbear, Gnoll pack, Stirge, Gelatinous Cube, Hell Hound in the Nether, Yeti). Melee hit is the bestiary `melee` field. | `adventure/fauna.rs`, `adventure/monsters.rs`, bestiary rows 49-58 |
+
+Realm travel (Hell planets, player-built thresholds, multiplayer crossing) is
+the realm session's work in `world/hell_gate/built.rs` and
+`multiplayer/realm.rs`; the habitat table treats every `WorldType::Nether`
+world as the `Nether` realm, so hell hounds rise there without further wiring.
 
 Open: wing shakedown, dust bath, relocation (settled state, replacement nest),
 storm quills, village quest, site placement for the weather station.
