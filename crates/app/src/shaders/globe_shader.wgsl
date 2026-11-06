@@ -214,6 +214,45 @@ fn globe_albedo(material: u32, wet: f32) -> vec3<f32> {
     return albedo;
 }
 
+fn globe_body_hash(c: vec3<f32>) -> f32 {
+    var p = fract(c * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+
+fn globe_body_noise(p: vec3<f32>) -> f32 {
+    let c = floor(p);
+    let f = p - c;
+    let s = f * f * (3.0 - 2.0 * f);
+    let x = vec3<f32>(1.0, 0.0, 0.0);
+    let y = vec3<f32>(0.0, 1.0, 0.0);
+    let z = vec3<f32>(0.0, 0.0, 1.0);
+    let near = mix(mix(globe_body_hash(c), globe_body_hash(c + x), s.x),
+        mix(globe_body_hash(c + y), globe_body_hash(c + x + y), s.x), s.y);
+    let far = mix(mix(globe_body_hash(c + z), globe_body_hash(c + x + z), s.x),
+        mix(globe_body_hash(c + y + z), globe_body_hash(c + x + y + z), s.x), s.y);
+    return mix(near, far, s.z);
+}
+
+// Bare ground had one palette colour per material, so a desert read as a flat
+// shape from altitude. The tone drifts over kilometres in body space, which has
+// no cube-face seams; the finer octave fades once it spans under two pixels.
+fn globe_bare_tone(body: vec3<f32>, footprint_m: f32) -> vec3<f32> {
+    let q = body / 2600.0;
+    let broad = globe_body_noise(q) * 0.6 + globe_body_noise(q * 2.3 + vec3<f32>(17.0, -5.0, 9.0)) * 0.4;
+    let detail = 1.0 - smoothstep(320.0, 1280.0, footprint_m);
+    let fine = mix(0.5, globe_body_noise(body / 640.0 + vec3<f32>(-23.0, 11.0, 3.0)), detail);
+    let v = smoothstep(0.2, 0.8, broad * 0.75 + fine * 0.25);
+    return mix(vec3<f32>(0.80, 0.70, 0.62), vec3<f32>(1.10, 1.08, 1.05), v);
+}
+
+// Stone, sand, gravel, sandstone and limestone take the tone; damp ground is darker.
+fn globe_bare_albedo(albedo: vec3<f32>, material: u32, wet: f32, tone: vec3<f32>) -> vec3<f32> {
+    let bare = material == 2u || material == 3u || material == 5u || material == 7u || material == 15u;
+    if !bare { return albedo; }
+    return albedo * tone * (1.0 - 0.2 * smoothstep(0.1, 0.45, wet));
+}
+
 struct GlobeOutput {
     @location(0) color: vec4<f32>,
     // The terrain pass's reflection receiver target; the globe takes no indirect light.
@@ -228,6 +267,7 @@ fn fs_main(in: GlobeVsOut) -> GlobeOutput {
         discard;
     }
     let n = normalize(in.normal);
+    let tone = globe_bare_tone(globe.eye_body.xyz + in.rel, length(fwidth(in.chart)));
     let dist = length(in.rel);
     let view = -in.rel / max(dist, 1e-3);
     let sun = normalize(globe.sun_dir_body.xyz);
@@ -243,7 +283,8 @@ fn fs_main(in: GlobeVsOut) -> GlobeOutput {
         color = GLOBE_DEEP_WATER * (ndl * GLOBE_SUN + GLOBE_AMBIENT * GLOBE_SKY)
             + fresnel * (GLOBE_SKY * 0.3 + glint * GLOBE_SUN);
     } else {
-        color = globe_albedo(in.material, in.wet) * (ndl * GLOBE_SUN + GLOBE_AMBIENT * GLOBE_SKY);
+        let albedo = globe_bare_albedo(globe_albedo(in.material, in.wet), in.material, in.wet, tone);
+        color = albedo * (ndl * GLOBE_SUN + GLOBE_AMBIENT * GLOBE_SKY);
     }
     let day = smoothstep(-0.05, 0.05, dot(up, sun));
     color = mix(GLOBE_NIGHT_FLOOR, color, day);
