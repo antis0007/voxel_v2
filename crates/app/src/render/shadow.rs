@@ -119,6 +119,17 @@ pub struct ShadowRenderer {
 
     gen_buffers: [wgpu::Buffer; CASCADE_COUNT],
     gen_bind_groups: [wgpu::BindGroup; CASCADE_COUNT],
+    depth_tex: wgpu::Texture,
+    /// Layer `CASCADE_COUNT`: a far layer is drawn here over several frames,
+    /// then copied into its cascade's layer in one step.
+    spare_view: wgpu::TextureView,
+    spare_gen_buffer: wgpu::Buffer,
+    spare_gen_bind_group: wgpu::BindGroup,
+    spare_indirect: super::streaming::indirect_draws::IndirectDraws,
+    spare_slots: Vec<u32>,
+    staged: Option<StagedLayer>,
+    stage_request: Option<usize>,
+    uniform_dirty: bool,
     /// Parent (horizon) casters: the fragment stage discards resident-owned columns.
     pipeline: wgpu::RenderPipeline,
     /// Chunk casters: depth only.
@@ -133,6 +144,8 @@ pub struct ShadowRenderer {
     urgent_cascades: u8,
     frame_cascades: u8,
     far_cursor: usize,
+    /// Frames since creation; paces out-of-rotation redraws.
+    frame_index: u64,
     initialized: bool,
     force_refresh: bool,
     active_light_dirs: [Vec3; CASCADE_COUNT],
@@ -275,6 +288,27 @@ fn frustum_slice(view: &CascadeView, ratio_near: f32, ratio_far: f32, origin_m: 
 
 /// Light-space texel phase of absolute world zero.
 ///
+/// A far cascade being redrawn across frames. Its fit is frozen when staging
+/// starts; the cascade keeps its old map until the copy lands.
+struct StagedLayer {
+    cascade: usize,
+    data: CascadeData,
+    light_dir: Vec3,
+    caster: Mat4,
+    origin: RenderOrigin,
+    draws: Vec<glam::IVec3>,
+    parents: Vec<(usize, std::ops::Range<u32>)>,
+    next: usize,
+    slice: usize,
+    done: bool,
+}
+
+/// Frames a staged far layer is spread over.
+const STAGED_FRAMES: usize = 4;
+/// Below this many draws a far layer redraws in one frame; staging only
+/// delays it.
+const STAGED_MIN_DRAWS: usize = 1024;
+
 /// Snapping the ortho window to it keeps every cascade's texel grid fixed to
 /// the world when the render origin moves.
 pub fn world_locked_texel_offset(view_rel: DMat4, origin_m: DVec3, texel_size: f64) -> DVec2 {
@@ -325,18 +359,30 @@ impl ShadowRenderer {
             size: wgpu::Extent3d {
                 width: SHADOW_MAP_SIZE,
                 height: SHADOW_MAP_SIZE,
-                depth_or_array_layers: CASCADE_COUNT as u32,
+                depth_or_array_layers: CASCADE_COUNT as u32 + 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
+        // The sampled array stops before the spare layer.
         let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
+            base_array_layer: 0,
+            array_layer_count: Some(CASCADE_COUNT as u32),
+            ..Default::default()
+        });
+        let spare_view = depth_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: CASCADE_COUNT as u32,
+            array_layer_count: Some(1),
             ..Default::default()
         });
 
@@ -430,25 +476,28 @@ impl ShadowRenderer {
         // their depth early; the ownership discard is only for parent pages.
         let child_pipeline = pipeline_with("shadow child caster pipeline", None);
 
-        let gen_buffers = std::array::from_fn(|_| {
+        let gen_buffer = || {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("shadow gen buffer"),
                 size: std::mem::size_of::<ShadowGenUniform>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
-        });
-
-        let gen_bind_groups = std::array::from_fn(|i| {
+        };
+        let gen_bind_group = |buffer: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("shadow gen bind group"),
                 layout: &gen_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: gen_buffers[i].as_entire_binding(),
+                    resource: buffer.as_entire_binding(),
                 }],
             })
-        });
+        };
+        let gen_buffers = std::array::from_fn(|_| gen_buffer());
+        let gen_bind_groups = std::array::from_fn(|i| gen_bind_group(&gen_buffers[i]));
+        let spare_gen_buffer = gen_buffer();
+        let spare_gen_bind_group = gen_bind_group(&spare_gen_buffer);
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shadow uniform buffer"),
@@ -463,6 +512,15 @@ impl ShadowRenderer {
             depth_sampler,
             gen_buffers,
             gen_bind_groups,
+            depth_tex,
+            spare_view,
+            spare_gen_buffer,
+            spare_gen_bind_group,
+            spare_indirect: Default::default(),
+            spare_slots: Vec::new(),
+            staged: None,
+            stage_request: None,
+            uniform_dirty: false,
             pipeline,
             child_pipeline,
             layer_views,
@@ -474,6 +532,7 @@ impl ShadowRenderer {
             urgent_cascades: 0,
             frame_cascades: 0,
             far_cursor: 1,
+            frame_index: 0,
             initialized: false,
             force_refresh: true,
             active_light_dirs: [Vec3::ZERO; CASCADE_COUNT],
@@ -627,10 +686,30 @@ impl ShadowRenderer {
         {
             // Tuft shadows only belong to the two near cascades. Refresh both
             // with the same time as color/depth; distant cascades omit tufts.
+            // The second cascade's tufts are far enough that every other frame
+            // keeps up with the wind; it still follows an urgent refit.
             self.pending_cascades |= 3;
-            self.urgent_cascades |= 3;
+            self.urgent_cascades |= 1 | (((self.frame_index & 1) as u8) << 1);
         }
         self.wind_time = [time, wind[0], wind[1]];
+    }
+
+    /// Bit set of layers whose active caster volume reaches any of `columns`.
+    /// A layer without a stored matrix counts as reached.
+    fn layers_reaching(&self, columns: &[(i32, i32)]) -> u8 {
+        let scale = self.active_uniform.world_scale.max(0.25);
+        let mut reached = 0u8;
+        for i in 0..CASCADE_COUNT {
+            let Some(origin) = self.active_origins[i] else {
+                reached |= 1 << i;
+                continue;
+            };
+            let origin_m = origin.voxel.as_dvec3() * f64::from(scale);
+            if columns.iter().any(|&c| column_reaches(self.active_casters[i], origin_m, scale, c)) {
+                reached |= 1 << i;
+            }
+        }
+        reached
     }
 
     pub fn set_horizon_source(&mut self, generation: u64, coverage: &ResidentCoverage) {
@@ -648,46 +727,85 @@ impl ShadowRenderer {
             // changed columns. Every layer whose caster volume reaches one of
             // them would keep the obsolete owner, so it redraws now; layers
             // that cannot see those columns keep their maps.
-            let scale = self.active_uniform.world_scale.max(0.25);
-            let mut reached = 0u8;
-            for i in 0..CASCADE_COUNT {
-                let Some(origin) = self.active_origins[i] else {
-                    reached |= 1 << i;
-                    continue;
-                };
-                let origin_m = origin.voxel.as_dvec3() * f64::from(scale);
-                if changed.iter().any(|&c| column_reaches(self.active_casters[i], origin_m, scale, c)) {
-                    reached |= 1 << i;
-                }
-            }
+            let reached = self.layers_reaching(&changed);
             self.pending_cascades |= reached;
-            self.urgent_cascades |= reached;
+            // Near layers and unfitted layers redraw at once. A fitted far
+            // layer is thousands of draws and the handoff sits hundreds of
+            // metres out, so it goes through the staged rotation instead and
+            // keeps the obsolete owner for a few frames.
+            let unfitted = (0..CASCADE_COUNT).filter(|&i| self.active_origins[i].is_none()).fold(0u8, |m, i| m | 1 << i);
+            self.urgent_cascades |= reached & (0b11 | unfitted);
         }
     }
 
-    pub fn apply_update_if_needed(&mut self, queue: &wgpu::Queue, mesh_revision: u64) -> bool {
+    /// `changed_columns` are the caster columns changed since the revision this
+    /// renderer last applied; `None` means the change is unattributed and every
+    /// layer redraws.
+    pub fn apply_update_if_needed(
+        &mut self,
+        queue: &wgpu::Queue,
+        mesh_revision: u64,
+        changed_columns: Option<&[(i32, i32)]>,
+    ) -> bool {
         const ALL: u8 = (1 << CASCADE_COUNT) - 1;
-        if self.shadow_map_dirty || self.last_mesh_revision != mesh_revision {
+        if self.shadow_map_dirty {
             self.pending_cascades |= ALL;
+        } else if self.last_mesh_revision != mesh_revision {
+            // A layer whose caster volume misses every changed column keeps its
+            // map: its stored depth came from casters that did not change.
+            self.pending_cascades |= match changed_columns {
+                Some(columns) if self.initialized => self.layers_reaching(columns),
+                _ => ALL,
+            };
         }
         self.frame_cascades = 0;
+        self.frame_index = self.frame_index.wrapping_add(1);
+        self.stage_request = None;
+        self.install_staged_if_done();
         if self.pending_cascades == 0 {
-            return false;
+            if self.uniform_dirty {
+                self.uniform_dirty = false;
+                queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.active_uniform));
+            }
+            return self.staged.is_some();
         }
         if !self.initialized || self.force_refresh {
             self.frame_cascades = ALL;
+            self.staged = None;
         } else {
-            // Nearby edits are visible immediately. Fairly rotate the outer
-            // cascades: continuous uploads cannot starve a distant layer.
             self.frame_cascades = self.pending_cascades & (1 | self.urgent_cascades);
-            for _ in 1..CASCADE_COUNT {
-                let i = self.far_cursor;
-                self.far_cursor = 1 + i % (CASCADE_COUNT - 1);
-                if self.pending_cascades & (1 << i) != 0 && self.frame_cascades & (1 << i) == 0 {
-                    self.frame_cascades |= 1 << i;
-                    break;
+            // A staged layer that is now urgent, or whose frame moved, redraws
+            // in full instead; the partial map is dropped.
+            if let Some(staged) = &self.staged
+                && (self.frame_cascades & (1 << staged.cascade) != 0
+                    || staged.origin != self.desired_origin
+                    || self.desired_uniform.world_scale != self.active_uniform.world_scale)
+            {
+                self.staged = None;
+            }
+            // Fairly rotate the outer cascades: continuous uploads cannot
+            // starve a distant layer. While chunks stream in, every upload
+            // reaches the far layers, and a far layer is thousands of draws,
+            // so one far layer at a time is staged across frames instead.
+            if self.staged.is_none() {
+                for _ in 1..CASCADE_COUNT {
+                    let i = self.far_cursor;
+                    self.far_cursor = 1 + i % (CASCADE_COUNT - 1);
+                    if self.pending_cascades & (1 << i) != 0 && self.frame_cascades & (1 << i) == 0 {
+                        if self.initialized && i >= 2 {
+                            self.stage_request = Some(i);
+                            self.pending_cascades &= !(1 << i);
+                            self.urgent_cascades &= !(1 << i);
+                        } else {
+                            self.frame_cascades |= 1 << i;
+                        }
+                        break;
+                    }
                 }
             }
+        }
+        if self.frame_cascades == 0 {
+            return self.stage_request.is_some() || self.staged.is_some();
         }
         self.active_uniform.cascade_count = self.desired_uniform.cascade_count;
         self.active_uniform.world_scale = self.desired_uniform.world_scale;
@@ -717,11 +835,31 @@ impl ShadowRenderer {
         );
         self.pending_cascades &= !self.frame_cascades;
         self.urgent_cascades &= !self.frame_cascades;
+        self.uniform_dirty = false;
         self.shadow_map_dirty = false;
         self.last_mesh_revision = mesh_revision;
         self.initialized = true;
         self.force_refresh = false;
         true
+    }
+
+    /// A finished staged layer's fit becomes its cascade's active fit; the
+    /// copy into the cascade's layer was encoded last frame.
+    fn install_staged_if_done(&mut self) {
+        let Some(staged) = self.staged.take_if(|s| s.done) else { return };
+        let i = staged.cascade;
+        self.active_uniform.cascades[i] = staged.data;
+        self.active_light_dirs[i] = staged.light_dir;
+        self.active_casters[i] = staged.caster;
+        self.active_origins[i] = Some(staged.origin);
+        self.uniform_dirty = true;
+    }
+
+    /// Draws of the slice the staged layer renders this frame.
+    fn staged_slice(&self) -> Option<&[glam::IVec3]> {
+        let staged = self.staged.as_ref().filter(|s| !s.done)?;
+        let end = (staged.next + staged.slice).min(staged.draws.len());
+        Some(&staged.draws[staged.next..end])
     }
 
     pub fn renders_cascade(&self, i: usize) -> bool {
@@ -752,6 +890,27 @@ impl ShadowRenderer {
                 self.indirect[i].prepare_grouped(device, queue, cache, coords, slot_of);
             }
         }
+        if let Some(staged) = self.staged.as_ref().filter(|s| !s.done) {
+            if staged.next == 0 {
+                let gen_uni = ShadowGenUniform {
+                    light_view_proj: staged.data.light_view_proj,
+                    world_scale: self.active_uniform.world_scale,
+                    time: -1.0,
+                    wind: [self.wind_time[1], self.wind_time[2]],
+                    resident_coverage: self.resident_coverage,
+                    render_origin: staged.origin.voxel.extend(0).to_array(),
+                };
+                queue.write_buffer(&self.spare_gen_buffer, 0, bytemuck::bytes_of(&gen_uni));
+            }
+            let end = (staged.next + staged.slice).min(staged.draws.len());
+            let slice = &staged.draws[staged.next..end];
+            let mut slot_of = |c| offsets.slot(c, || transform(c));
+            self.spare_slots.clear();
+            self.spare_slots.extend(slice.iter().map(|&c| slot_of(c)));
+            if self.multidraw {
+                self.spare_indirect.prepare_grouped(device, queue, cache, slice.iter().copied(), slot_of);
+            }
+        }
     }
 
     /// Cascade 0's pipeline and bind group, its uniform set to `light_view_proj`.
@@ -774,18 +933,62 @@ impl ShadowRenderer {
     }
 
     pub fn build_cascade_draw_lists(&mut self, cache: &ChunkCache, horizon: Option<&GpuMesh>) {
+        if let Some(i) = self.stage_request.take() {
+            let data = self.desired_uniform.cascades[i];
+            let matrix = Mat4::from_cols_array_2d(&data.light_view_proj);
+            let origin = self.desired_origin;
+            let (draws, parents) = self.cull_lists(cache, horizon, matrix, self.desired_casters[i], origin);
+            if draws.len() < STAGED_MIN_DRAWS {
+                self.frame_cascades |= 1 << i;
+                self.active_uniform.cascades[i] = data;
+                self.active_light_dirs[i] = self.desired_light_dirs[i];
+                self.active_casters[i] = self.desired_casters[i];
+                self.active_origins[i] = Some(origin);
+                self.uniform_dirty = true;
+            } else {
+                let slice = draws.len().div_ceil(STAGED_FRAMES);
+                self.staged = Some(StagedLayer {
+                    cascade: i,
+                    data,
+                    light_dir: self.desired_light_dirs[i],
+                    caster: self.desired_casters[i],
+                    origin,
+                    draws,
+                    parents,
+                    next: 0,
+                    slice,
+                    done: false,
+                });
+            }
+        }
         // Rebuild and submit lists only for layers selected this frame.
         for i in 0..CASCADE_COUNT {
             if !self.renders_cascade(i) {
                 continue;
             }
-            self.draw_lists[i].clear();
-            self.parent_draw_lists[i].clear();
             let matrix = Mat4::from_cols_array_2d(&self.active_uniform.cascades[i].light_view_proj);
-            // Cull against the caster volume: geometry deeper than every receiver casts nothing here.
-            let planes = crate::render::extract_planes(self.active_casters[i]);
-            // The matrix maps origin-frame metres; offset the chunk in integers first.
             let origin = self.active_origins[i].unwrap_or(self.desired_origin);
+            let (draws, parents) = self.cull_lists(cache, horizon, matrix, self.active_casters[i], origin);
+            self.draw_lists[i] = draws;
+            self.parent_draw_lists[i] = parents;
+        }
+    }
+
+    /// Chunk and parent-page draws inside `caster`'s volume, nearest the light first.
+    fn cull_lists(
+        &self,
+        cache: &ChunkCache,
+        horizon: Option<&GpuMesh>,
+        matrix: Mat4,
+        caster: Mat4,
+        origin: RenderOrigin,
+    ) -> (Vec<glam::IVec3>, Vec<(usize, std::ops::Range<u32>)>) {
+        let mut draws = Vec::new();
+        let mut parents = Vec::new();
+        {
+            // Cull against the caster volume: geometry deeper than every receiver casts nothing here.
+            let planes = crate::render::extract_planes(caster);
+            // The matrix maps origin-frame metres; offset the chunk in integers first.
             let scale = self.active_uniform.world_scale;
             let origin_m = origin.voxel.as_vec3() * scale;
             let chunk_center = |coord| {
@@ -810,41 +1013,43 @@ impl ShadowRenderer {
                     .iter()
                     .any(|p| p.truncate().dot(center) + p.w < -radius)
                 {
-                    self.draw_lists[i].push(coord);
+                    draws.push(coord);
                 }
             }
             // Depth is LessEqual in this pass. Fill the light's nearer surfaces
             // first so buried cave/fluid geometry can fail early depth testing.
             // Hash-map order otherwise changes after resident mesh updates.
             let depth = |coord| (matrix * chunk_center(coord).extend(1.0)).z;
-            self.draw_lists[i].sort_unstable_by(|a, b| depth(*a).total_cmp(&depth(*b))
+            draws.sort_unstable_by(|a, b| depth(*a).total_cmp(&depth(*b))
                 .then_with(|| (a.x, a.y, a.z).cmp(&(b.x, b.y, b.z))));
             if let Some(horizon) = horizon {
                 for (page_index, page) in horizon.pages.iter().enumerate() {
                     if !horizon.cull && !page.batches.iter().any(|b|b.conditional()) {
                         if page.count != 0 {
-                            self.parent_draw_lists[i].push((page_index, 0..page.count));
+                            parents.push((page_index, 0..page.count));
                         }
                     } else {
                         for batch in &page.batches {
                             if batch.selected(horizon.collared) && (!horizon.cull || batch.visible(origin_m, &planes)) {
-                                self.parent_draw_lists[i].push((page_index, batch.indices.clone()));
+                                parents.push((page_index, batch.indices.clone()));
                             }
                         }
                     }
                 }
             }
         }
+        (draws, parents)
     }
     pub fn draw_call_count(&self) -> usize {
         (0..CASCADE_COUNT)
             .filter(|&i| self.renders_cascade(i))
             .map(|i| self.draw_lists[i].len() + self.parent_draw_lists[i].len())
-            .sum()
+            .sum::<usize>()
+            + self.staged_slice().map_or(0, |slice| slice.len())
     }
 
     pub fn render<'a>(
-        &'a self,
+        &'a mut self,
         encoder: &mut wgpu::CommandEncoder,
         cache: &'a ChunkCache,
         horizon: Option<&'a GpuMesh>,
@@ -905,6 +1110,90 @@ impl ShadowRenderer {
                     pass.draw_indexed(indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
                 }
             }
+        }
+        self.render_staged(encoder, cache, horizon, timestamp_query_set, timestamp_queries, draw_offsets);
+    }
+
+    /// One slice of the staged far layer into the spare layer; the last slice
+    /// adds the parent pages and copies the result over the cascade's layer.
+    fn render_staged<'a>(
+        &'a mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        cache: &'a ChunkCache,
+        horizon: Option<&'a GpuMesh>,
+        timestamp_query_set: Option<&'a wgpu::QuerySet>,
+        timestamp_queries: &[Option<(u32, u32)>; CASCADE_COUNT],
+        draw_offsets: &wgpu::Buffer,
+    ) {
+        let Some(staged) = self.staged.as_mut().filter(|s| !s.done) else { return };
+        let end = (staged.next + staged.slice).min(staged.draws.len());
+        let last = end == staged.draws.len();
+        let slice = &staged.draws[staged.next..end];
+        let i = staged.cascade;
+        debug_assert!(self.frame_cascades & (1 << i) == 0, "a staged layer is not also redrawn");
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow staged pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.spare_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if staged.next == 0 { wgpu::LoadOp::Clear(1.0) } else { wgpu::LoadOp::Load },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: timestamp_query_set.zip(timestamp_queries[i]).map(
+                    |(query_set, (begin, end))| wgpu::RenderPassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: Some(begin),
+                        end_of_pass_write_index: Some(end),
+                    },
+                ),
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.child_pipeline);
+            pass.set_bind_group(0, &self.spare_gen_bind_group, &[]);
+            pass.set_vertex_buffer(1, draw_offsets.slice(..));
+            if self.multidraw {
+                self.spare_indirect.draw(&mut pass, cache);
+            } else {
+                let mut bound_page = None;
+                for (coord, &slot) in slice.iter().zip(&self.spare_slots) {
+                    if let Some(slice) = cache.draw_slice(*coord) {
+                        if bound_page != Some(slice.page) {
+                            pass.set_vertex_buffer(0, slice.vertices.slice(..));
+                            pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            bound_page = Some(slice.page);
+                        }
+                        pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
+                    }
+                }
+            }
+            if last && let Some(horizon) = horizon && !staged.parents.is_empty() {
+                pass.set_pipeline(&self.pipeline);
+                for (page_index, indices) in &staged.parents {
+                    let page = &horizon.pages[*page_index];
+                    pass.set_vertex_buffer(0, page.vertices.slice(..));
+                    pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
+                }
+            }
+        }
+        staged.next = end;
+        if last {
+            let layer = |z: u32| wgpu::TexelCopyTextureInfo {
+                texture: &self.depth_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z },
+                aspect: wgpu::TextureAspect::DepthOnly,
+            };
+            encoder.copy_texture_to_texture(
+                layer(CASCADE_COUNT as u32),
+                layer(i as u32),
+                wgpu::Extent3d { width: SHADOW_MAP_SIZE, height: SHADOW_MAP_SIZE, depth_or_array_layers: 1 },
+            );
+            staged.done = true;
         }
     }
 }

@@ -4626,7 +4626,11 @@ impl Gpu {
             && shadow::enabled()
             && self
                 .shadow_renderer
-                .apply_update_if_needed(&self.queue, chunk_cache.shadow_caster_revision);
+                .apply_update_if_needed(
+                    &self.queue,
+                    chunk_cache.shadow_caster_revision,
+                    chunk_cache.shadow_caster_columns_since(self.shadow_renderer.last_mesh_revision).as_deref(),
+                );
 
         // The main pass and every shadow cascade draw in the render-origin frame.
         let origin = self.render_origin.unwrap_or(RenderOrigin { voxel: IVec3::ZERO });

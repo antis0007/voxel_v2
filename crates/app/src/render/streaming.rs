@@ -169,6 +169,10 @@ pub struct ChunkCache {
     pub gpu_mesh_revision: u64,
     /// Only validated, exactly unchanged caster inputs may retain this revision.
     pub shadow_caster_revision: u64,
+    /// Columns whose casters changed, tagged with the revision that change
+    /// produced; covers `caster_log_floor + 1 ..= shadow_caster_revision`.
+    caster_log: Vec<(u64, (i32, i32))>,
+    caster_log_floor: u64,
     shadow_casters: shadow_casters::Cache,
     dirty_meshes: FastSet<IVec3>,
     pub cpu_chunks: HashMap<IVec3, Arc<ResidentChunk>>,
@@ -437,6 +441,8 @@ impl ChunkCache {
             arena: arena::MeshArena::new(arena_budget(residency::limits().1)),
             gpu_mesh_revision: 0,
             shadow_caster_revision: 0,
+            caster_log: Vec::new(),
+            caster_log_floor: 0,
             shadow_casters: shadow_casters::Cache::default(),
             dirty_meshes: FastSet::default(),
             cpu_chunks: HashMap::new(),
@@ -949,6 +955,31 @@ impl ChunkCache {
     fn mark_mesh_set_changed(&mut self) {
         self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
         self.shadow_caster_revision = self.shadow_caster_revision.wrapping_add(1);
+        // A membership change is not attributed to columns: every layer redraws.
+        self.caster_log.clear();
+        self.caster_log_floor = self.shadow_caster_revision;
+    }
+
+    fn log_caster_change(&mut self, coord: IVec3) {
+        self.shadow_caster_revision = self.shadow_caster_revision.wrapping_add(1);
+        const KEEP: usize = 1024;
+        if self.caster_log.len() >= 2 * KEEP {
+            let drop = self.caster_log.len() - KEEP;
+            self.caster_log_floor = self.caster_log[drop - 1].0;
+            self.caster_log.drain(..drop);
+        }
+        self.caster_log.push((self.shadow_caster_revision, (coord.x, coord.z)));
+    }
+
+    /// Caster columns changed after `revision`, or `None` when that span includes
+    /// a change this log does not attribute to columns (bulk membership change,
+    /// or older than the retained log).
+    pub fn shadow_caster_columns_since(&self, revision: u64) -> Option<Vec<(i32, i32)>> {
+        if revision < self.caster_log_floor || revision > self.shadow_caster_revision {
+            return None;
+        }
+        let start = self.caster_log.partition_point(|(rev, _)| *rev <= revision);
+        Some(self.caster_log[start..].iter().map(|(_, column)| *column).collect())
     }
 
     fn install_mesh(&mut self, coord: IVec3, mesh: ChunkGpuMesh) {
@@ -1018,7 +1049,7 @@ impl ChunkCache {
         }
         self.gpu_mesh_revision = self.gpu_mesh_revision.wrapping_add(1);
         if !unchanged_casters {
-            self.shadow_caster_revision = self.shadow_caster_revision.wrapping_add(1);
+            self.log_caster_change(coord);
         }
         self.publication_dirty |= ownership_changed;
         self.trim_lod_budget();
@@ -2202,5 +2233,41 @@ fn apply_snapshot_edits_cubic(chunk_data: &mut GeneratedChunk, snapshot: &WorldS
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod caster_log_tests {
+    use super::ChunkCache;
+    use glam::IVec3;
+
+    #[test]
+    fn caster_changes_are_attributed_to_columns_since_a_revision() {
+        let mut cache = ChunkCache::new(IVec3::ZERO);
+        let start = cache.shadow_caster_revision;
+        cache.log_caster_change(IVec3::new(3, 1, -2));
+        cache.log_caster_change(IVec3::new(-7, 0, 4));
+        assert_eq!(cache.shadow_caster_columns_since(start).as_deref(), Some(&[(3, -2), (-7, 4)][..]));
+        assert_eq!(cache.shadow_caster_columns_since(start + 1).as_deref(), Some(&[(-7, 4)][..]));
+        assert_eq!(cache.shadow_caster_columns_since(start + 2).as_deref(), Some(&[][..]));
+        assert!(cache.shadow_caster_columns_since(start + 3).is_none(), "a future revision is unattributed");
+    }
+
+    #[test]
+    fn membership_changes_and_a_trimmed_log_are_unattributed() {
+        let mut cache = ChunkCache::new(IVec3::ZERO);
+        let start = cache.shadow_caster_revision;
+        cache.log_caster_change(IVec3::new(1, 0, 1));
+        cache.mark_mesh_set_changed();
+        assert!(cache.shadow_caster_columns_since(start).is_none());
+        assert!(cache.shadow_caster_columns_since(start + 1).is_none());
+        let after_bulk = cache.shadow_caster_revision;
+        assert_eq!(cache.shadow_caster_columns_since(after_bulk).as_deref(), Some(&[][..]));
+        for i in 0..2100 {
+            cache.log_caster_change(IVec3::new(i, 0, 0));
+        }
+        assert!(cache.shadow_caster_columns_since(after_bulk).is_none(), "older than the retained log");
+        let recent = cache.shadow_caster_revision - 1;
+        assert_eq!(cache.shadow_caster_columns_since(recent).as_deref(), Some(&[(2099, 0)][..]));
     }
 }
