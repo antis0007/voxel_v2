@@ -1094,8 +1094,11 @@ fn sample_segment_medium(
             let tap_index = query - view_taps;
             let u0 = f32(tap_index) / f32(light_taps);
             let u1 = f32(tap_index + 1) / f32(light_taps);
-            let start_t = u0 * u0 * reach;
-            let end_t = u1 * u1 * reach;
+            // Cubic spacing: a 100 m first segment (quadratic) gave even a
+            // sun-facing surface an optical depth near 2, so no face was lit
+            // more than its shade side. The first segment is now about 4%.
+            let start_t = u0 * u0 * u0 * reach;
+            let end_t = u1 * u1 * u1 * reach;
             let tap = sample_shadow_tap_context(p + light_dir * ((start_t + end_t) * 0.5), layer_id);
             if !cell_aabb_valid(tap.aabb) { continue; }
             let hit = slab_intersection(p, light_dir, tap.aabb.y_min, tap.aabb.y_max);
@@ -1127,6 +1130,22 @@ fn sample_segment_medium(
         else { density_second = density; }
     }
     return vec2<f32>(mix(density_first, density_second, quadrature * 0.5), optical_depth);
+}
+
+// Sun reaching a cloud at twilight, with its luminance lifted toward 0.30.
+// Transmittance a few degrees up leaves the lit face no brighter than the
+// lilac sky fill, and the two mixed to brown. A photographed sunset cloud
+// glows well above the sky behind it. The hue stays physical, and the lift
+// ends once the cloud itself is in the earth's shadow.
+fn cloud_twilight_sun(sun_height: f32, altitude_m: f32) -> vec3<f32> {
+    let sun = photographic_cloud_sun(sun_height, altitude_m);
+    let local_sun = sun_height + sqrt(2.0 * max(altitude_m, 0.0) / 6360000.0);
+    let lit = smoothstep(-0.03, 0.02, local_sun);
+    let storm = saturate1(light.weather_clip_summaries[0].z);
+    let w = photographic_twilight(sun_height) * lit * (1.0 - storm);
+    let l = dot(sun, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let lifted = mix(l, max(l, 0.30), w);
+    return sun * (lifted / max(l, 1e-4));
 }
 
 fn march_layer_core(
@@ -1210,8 +1229,8 @@ fn march_layer_core(
 
     // Interpolate bottom/top sunlight: raised turrets can remain peach-lit
     // after the low deck has entered the planet's shadow.
-    let sun_trans_base = photographic_cloud_sun(sun_dir.y, base_y);
-    let sun_trans_top = photographic_cloud_sun(sun_dir.y, top_y);
+    let sun_trans_base = cloud_twilight_sun(sun_dir.y, base_y);
+    let sun_trans_top = cloud_twilight_sun(sun_dir.y, top_y);
     let twilight_light = photographic_twilight(sun_dir.y);
     // The terrain sun is already dimmed by global cloud cover and daylight.
     // A cloud samples its own solar path and occluders; applying that dimmed
@@ -1226,11 +1245,13 @@ fn march_layer_core(
     let shadow_dir = select(sun_dir, moon_dir, night > 0.7);
     // Undersides pick up the ground. Clear days bounce green, low sun bounces
     // warm earth, and a storm bounce goes dull so the deck does not glow.
-    let ground_tint = mix(vec3<f32>(0.30, 0.36, 0.18), vec3<f32>(0.58, 0.32, 0.16), twilight_light);
+    let ground_tint = mix(vec3<f32>(0.30, 0.33, 0.25), vec3<f32>(0.46, 0.34, 0.24), twilight_light);
     let ground_tint_w = mix(ground_tint, vec3<f32>(0.16, 0.18, 0.17),
         saturate1(light.weather_clip_summaries[0].z));
+    // Bounce needs a sunlit ground. A floor on the sun height kept warm
+    // underlight on every cloud after sunset.
     let ground_base = vec3<f32>(dot(sun_trans_base, vec3<f32>(0.2126, 0.7152, 0.0722)))
-                    * daylight * max(sun_dir.y, 0.05) * ground_tint_w * 0.62;
+                    * daylight * max(sun_dir.y, 0.0) * ground_tint_w * 0.62;
 
     // max_dist is measured from the slab entry, but density LOD and distance
     // fading use distances from the camera. Mixing those spaces made a raised
@@ -1273,6 +1294,7 @@ fn march_layer_core(
     let fine_dt = mix(layer_dt_min, layer_dt_max, grazing_f);
 
     var march_t = env_enter;
+    let grazing_sun = 1.0 - smoothstep(0.0, 0.45, sun_dir.y);
     for (var i: i32 = 0; i < global_step_budget; i = i + 1) {
         if trans <= 0.02 || march_t >= env_exit { break; }
         let steps_left = max(global_step_budget - i, 1);
@@ -1445,6 +1467,12 @@ fn march_layer_core(
             let fringe = mix(0.25, 1.0, smoothstep(0.08, 0.70, sample_density));
             // The 900 m local taps at a low sun cross the whole body too.
             shadow_d *= mix(1.0, fringe, toward_sun_view);
+            // A grazing sun spreads three point taps over 100-500 m segments,
+            // each counted as solid cloud. Every low cloud then reached an
+            // optical depth above 8 (debug view cloud-shadow) and lost its
+            // sunlit face at golden hour, reading brown. Light entering the
+            // sides between taps bounds the depth; noon is unchanged.
+            shadow_d = shadow_d / (1.0 + shadow_d * 0.20 * grazing_sun);
             debug_shadow_max = max(debug_shadow_max, shadow_d);
 
             let h_frac     = saturate1(remap01(p.y, step_base_y, step_top_y));
@@ -1466,8 +1494,11 @@ fn march_layer_core(
             let albedo = mix(0.90, 0.46, step_weather.storm);
             let beer0 = exp(-shadow_d);
             let beer1 = exp(-shadow_d * 0.50);
-            let beer2 = exp(-shadow_d * 0.22);
-            let beer3 = exp(-shadow_d * 0.08);
+            // Octave extinction roughly halves per order (Hillaire). 0.08 on the last
+            // order lit a thick core almost as brightly as its sunlit face, so
+            // cumulus read as flat white cut-outs with no billow shading.
+            let beer2 = exp(-shadow_d * 0.25);
+            let beer3 = exp(-shadow_d * 0.10);
             // Powder is the sun-facing edge brightening. It weakens as the sun
             // drops: a low sun crosses the whole cloud thickness, so there is
             // no thin lit edge to brighten.
@@ -1525,7 +1556,10 @@ fn march_layer_core(
                 // Dusk shade leans further cool so occluded mass separates
                 // from the warm lit crowns instead of reading brown.
                 (1.0 - amb_trans) * mix(0.65, 0.90, twilight_light));
-            let sky_amb = shaded_sky * amb_trans * (0.30 + ambient_gain * 0.58) * core_shade;
+            // Sky fill arrives mostly from above, so it falls toward the base
+            // (Nubis). Uniform fill washed the underside to the crown's tone.
+            let amb_height = mix(select(0.66, 0.85, cirrus_layer), 1.0, smoothstep(0.0, 0.85, h_frac));
+            let sky_amb = shaded_sky * amb_trans * (0.30 + ambient_gain * 0.58) * core_shade * amb_height;
             let ground_bounce = ground_base * saturate1(1.0 - h_frac * 1.45)
                 * exp(-ambient_od * 0.10) * mix(1.0, 1.40, twilight_light);
             let ambient = sky_amb + ground_bounce

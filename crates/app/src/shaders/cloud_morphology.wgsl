@@ -466,8 +466,8 @@ fn photographic_low_density(
         let far = smoothstep(1.0, 6.0, footprint);
         let erosion_w = mix(vec3<f32>(0.62, 0.30, 0.08), vec3<f32>(0.90, 0.10, 0.0), far);
         let erosion = (1.0 - dot(detail.rgb, erosion_w))
-            * light.weather_globals[1].w * light.weather_globals[2].y * 0.26
-            * (1.0 + 0.5 * far);
+            * light.weather_globals[1].w * light.weather_globals[2].y * 0.34
+            * (1.0 + 0.35 * far);
         field -= erosion * detail_keep;
     }
     // At range the mip-filtered textures above average to a constant, so a
@@ -478,7 +478,8 @@ fn photographic_low_density(
         let far_w = smoothstep(1.0, 6.0, footprint);
         field -= (0.55 - floor_noise) * 0.60 * far_w;
     }
-    let softness = 0.15 + smoothstep(8.0, 90.0, footprint) * 0.22;
+    // A 0.15 ramp blurred near cumulus into cotton with no defined billows.
+    let softness = 0.10 + smoothstep(8.0, 90.0, footprint) * 0.25;
     // Sheets thin out over hundreds of metres; a narrow ramp cut stratus into
     // flat, hard-edged cut-outs that read as a map pasted on the sky.
     let sheet_ramp = (1.0 - convective) * 0.55;

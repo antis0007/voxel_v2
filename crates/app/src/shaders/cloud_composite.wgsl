@@ -289,8 +289,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 // Art grade for clouds, applied to straight (unpremultiplied) radiance.
 // The marched result is physically plausible but reads as dull grey lumps next
 // to chunky, saturated voxel terrain. This lifts shade toward a sky-tinted
-// lavender, keeps sunlit crowns cream, steps the light ramp softly like the
-// terrain's cell shading, and firms the silhouette. It fades out at night and
+// lavender and keeps sunlit crowns cream. It fades out at night and
 // twilight, where the marched colours are already doing the art direction.
 fn stylise_cloud(premul: vec3<f32>, alpha: f32) -> vec4<f32> {
     let a = max(alpha, 1e-3);
@@ -305,16 +304,8 @@ fn stylise_cloud(premul: vec3<f32>, alpha: f32) -> vec4<f32> {
     // relative to it so the ramp holds from morning to afternoon.
     let crown = (mix(0.62, 1.20, smoothstep(0.0, 0.7, sun_h)) * (1.0 - storm * 0.55)) * max(day, 0.05) + 0.06;
     let t = clamp(l / crown, 0.0, 2.0);
-    let lifted = pow(t, 0.80);
-    // Soft cell-shading: a plain floor() gave the ramp hard steps, which
-    // read as contour bands once the cloud was already denoised. The eased
-    // half-cell keeps flat plateaus but joins them continuously.
-    let bands = 4.0;
-    let band_pos = lifted * bands;
-    let band_i = floor(band_pos);
-    let band_f = fract(band_pos);
-    let stepped = (band_i + smoothstep(0.15, 0.85, band_f)) / bands;
-    let ramp = mix(lifted, stepped, 0.08 * (1.0 - storm));
+    // Continuous ramp: stepped plateaus posterised the marched shading.
+    let ramp = pow(t, 0.80);
     let sky = light.sky_top_saturation.rgb;
     let lit_col = mix(vec3<f32>(1.0, 0.975, 0.92), light.sun_color_daylight.rgb, 0.45);
     let shade_col = mix(vec3<f32>(0.44, 0.51, 0.72), sky * 1.3 + vec3<f32>(0.06), 0.40);
@@ -323,7 +314,9 @@ fn stylise_cloud(premul: vec3<f32>, alpha: f32) -> vec4<f32> {
     let tone = mix(base_shade, lit_col, smoothstep(0.16, 1.05, ramp));
     let recoloured = tone * crown * ramp * 1.40;
     // Marched colour survives wherever it is doing real work.
-    let strength = smoothstep(0.10, 0.50, day) * (1.0 - twilight * 0.88) * (1.0 - storm * 0.92) * 0.62;
+    // A light hand: at 0.62 the fixed palette replaced the marched light and
+    // flattened every cloud to the same two tones.
+    let strength = smoothstep(0.10, 0.50, day) * (1.0 - twilight * 0.88) * (1.0 - storm * 0.92) * 0.30;
     let graded = mix(c, recoloured, strength);
     // Colour direction must not reshape optical coverage. In particular, a
     // passing station should reveal the same thin veil as the adjacent sky.
