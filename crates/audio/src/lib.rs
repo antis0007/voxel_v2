@@ -12,6 +12,7 @@ mod reverb;
 #[cfg(test)]
 mod review;
 mod steps;
+mod suit;
 mod synth;
 mod tap;
 pub use beds::{Bed, BED_COUNT};

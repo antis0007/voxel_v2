@@ -1,5 +1,6 @@
 //! Continuous ambience beds, each cross-faded toward a level the game sets.
 use crate::dsp::{advance, coefficient, sine, Noise, OnePole, Svf};
+use crate::suit::Suit;
 
 pub const BED_COUNT: usize = 7;
 
@@ -64,10 +65,7 @@ pub(crate) struct Beds {
     insect: [f32; 4],
     /// Hurt or exerted, 0 calm to 1; breathing quickens and roughens with it.
     pub(crate) strain: f32,
-    /// Breath cycle and hum phases in turns.
-    suit: [f32; 3],
-    /// Fan wash per channel, then inhale and exhale bands.
-    suit_bands: [Svf; 4],
+    suit: Suit,
     /// Fixed filter coefficients: cave rumble, water swell.
     cuts: [f32; 2],
     /// Lift speed and signed drive load, each -1..1 or 0..1, set by the game.
@@ -143,13 +141,7 @@ impl Beds {
             drive: [0.0, 0.0, 0.0],
             drive_bands: [Svf::new(400.0, 1.2, rate), Svf::new(420.0, 1.2, rate), Svf::new(2400.0, 6.0, rate)],
             drive_smooth: [0.0; 2],
-            suit: [0.0; 3],
-            suit_bands: [
-                Svf::new(380.0, 0.7, rate),
-                Svf::new(410.0, 0.7, rate),
-                Svf::new(1100.0, 1.4, rate),
-                Svf::new(700.0, 1.2, rate),
-            ],
+            suit: Suit::new(rate),
             cuts: [90.0, 7.0].map(|hz| coefficient(hz, rate)),
         }
     }
@@ -197,7 +189,7 @@ impl Beds {
         }
         if suit > AUDIBLE {
             // Inside the helmet: dry, never in the room.
-            add(suit, self.suit(l, r), false);
+            add(suit, self.suit.frame(self.strain), false);
         }
         if drive > AUDIBLE {
             add(drive, self.drive(l, r), true);
@@ -337,29 +329,6 @@ impl Beds {
 }
 
 impl Beds {
-    fn suit(&mut self, l: f32, r: f32) -> [f32; 2] {
-        let strain = self.strain.clamp(0.0, 1.0);
-        // About 13 breaths a minute at rest, 33 when badly hurt.
-        advance(&mut self.suit[0], 0.22 + 0.33 * strain, self.rate);
-        advance(&mut self.suit[1], 118.0, self.rate);
-        advance(&mut self.suit[2], 0.09, self.rate);
-        let fan = [self.suit_bands[0].band(l), self.suit_bands[1].band(r)];
-        let wobble = 1.0 + 0.04 * sine(self.suit[2]);
-        let hum = (sine(self.suit[1]) * 0.6 + sine(self.suit[1] * 2.0) * 0.25) * 0.035 * wobble;
-        // Inhale over the first 40 % of the cycle, exhale after a short hold.
-        let p = self.suit[0];
-        let swell = |from: f32, to: f32| {
-            if p < from || p > to { return 0.0; }
-            let s = sine((p - from) / (to - from) * 0.5);
-            s * s
-        };
-        let noise = (l + r) * 0.5;
-        let inhale = self.suit_bands[2].band(noise) * swell(0.0, 0.4) * (0.5 + 0.4 * strain);
-        let exhale = self.suit_bands[3].band(noise) * swell(0.48, 0.92) * (0.7 + 0.5 * strain);
-        let breath = inhale + exhale;
-        [fan[0] * 0.09 + hum + breath * 0.55, fan[1] * 0.09 + hum + breath * 0.55]
-    }
-
     /// Lift drive. The hum sits an octave lower at rest and climbs two octaves
     /// with speed; the wash follows load magnitude; braking adds a thin whine.
     fn drive(&mut self, l: f32, r: f32) -> [f32; 2] {
@@ -423,9 +392,10 @@ mod tests {
             let mut wraps = 0;
             let mut last = 0.0;
             for _ in 0..48_000 * 10 {
-                beds.suit(0.0, 0.0);
-                if beds.suit[0] < last { wraps += 1; }
-                last = beds.suit[0];
+                beds.suit.frame(beds.strain);
+                let phase = beds.suit.breath_phase();
+                if phase < last { wraps += 1; }
+                last = phase;
             }
             wraps
         };
