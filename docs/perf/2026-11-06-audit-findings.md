@@ -12,8 +12,8 @@ numbers are from the shared tree on 2026-11-06 and move as peers edit.
 | 1 | High | Streaming | Exact-LOD mesh planning (`MeshPlan::for_chunk`) runs under one global permit, so up to 8 mesh workers plan one chunk at a time; each job also reserves 24 MiB against a 256 MiB budget while real scratch is about 3 MiB. Likely cause of "300 pending, 0 to 16 generating". | `render/streaming.rs` 1522, `streaming/mesh_budget.rs` 42-58, `mesh/memory.rs` 4 | yes |
 | 2 | High | Worldgen | Workers sharing a footprint wait on one mutex while one worker samples all 1,156 columns; a cancelled builder discards its rows. | `worldgen/src/generation_cache.rs` 136-151 | yes |
 | 3 | High | Worldgen | Horizon `map_blocks` spawns fresh scoped threads per stage, so every thread-local plan cache (sites, homes, drainage, columns) starts cold on every stage and rebuild. | `render/horizon/parallel.rs` 86 | yes |
-| 4 | High | Water | A cell whose cell below is "not full" wakes itself and returns even when the move can never happen (rounds to 0, fraction table full), so it spins awake forever. | `simulation/cellular/drainage.rs` 197-205 | yes |
-| 5 | High | Water | Pressure outlet triggers at a 2/8 head difference but always moves `volume / 2`, overshooting and flowing back every 8 ticks. | `simulation/cellular/drainage.rs` 284-295 | yes |
+| 4 | Fixed 2026-11-08 | Water | A cell whose cell below is "not full" wakes itself and returns even when the move can never happen (rounds to 0, fraction table full), so it spins awake forever. | `simulation/cellular/drainage.rs` 197-205 | yes |
+| 5 | Fixed 2026-11-08 | Water | Pressure outlet triggers at a 2/8 head difference but always moves `volume / 2`, overshooting and flowing back every 8 ticks. | `simulation/cellular/drainage.rs` 284-295 | yes |
 | 6 | High | Render | Any wind marks shadow cascade 0 urgent every frame and cascade 1 every other frame, re-culling and sorting every published chunk, only to animate tuft shadows. | `render/shadow.rs` 703-714 | yes |
 | 7 | High | Render | A horizon shadow generation change forces all 5 cascades in one frame (bypassing far-layer staging); generation bumps on every horizon publish and collar flip. | `render/shadow.rs` 736-798, `render/horizon.rs` 397, 873 | no |
 | 8 | High | Render | `models::build` rebuilds orbital braid struts and re-uploads the scene every frame, including while the loader shows or the game is paused. | `mesh/models/orbital.rs` 272, `main.rs` 6207 | no |
@@ -49,3 +49,8 @@ numbers are from the shared tree on 2026-11-06 and move as peers edit.
 - No NaN path, cell duplication or hash-order leak was found in the rigid
   solver; no integer overflow in water uL maths; content floats convert to
   integers once.
+
+## Recheck 2026-11-08 (HEAD 532cf9c3 plus shared tree)
+
+- Fixed by the drainage rewrite: 4 (a refused fall now returns without waking), 5 (outlet moves `min(head / 2, volume / 2)`), and the diagonal-below read now requests the chunk and wakes.
+- Still present: 1, 2, 3, 6, 9, 11 and 26, at the same code; line numbers shifted (planning permit now `streaming.rs` 1570, wind refresh `shadow.rs` 725).
