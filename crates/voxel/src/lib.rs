@@ -5,6 +5,8 @@
 mod bricks;
 mod chunk;
 mod config;
+mod packed;
+pub use packed::{MAX_PALETTE, PackedBlocks};
 
 pub use bricks::{load_chunk, read_chunk};
 pub use chunk::ChunkData;
