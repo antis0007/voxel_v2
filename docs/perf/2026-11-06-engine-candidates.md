@@ -49,6 +49,15 @@ collision with files other sessions are editing on 2026-11-06.
   under active edit. A palette with more than about 256 ids is worse than dense
   (voxel-forge), so a dense fallback is required.
 - Verdict: winner after measuring the one-value fraction at view 28.
+- Measured 2026-11-11 (`crates/worldgen/tests/source_census.rs`, Hills,
+  generator 241, seed 424242, radius 28 at stride 4, 2,682 padded sources):
+  1,980 are one-value, and the streamer already skips those before the cache
+  (`streaming.rs`, uniform volume bypass). Of the 702 that reach the cache, 12
+  need 1 bit, 65 need 2, 517 need 4 and 108 hold more than 16 ids. Packed size
+  is 0.548 of dense, a 1.8x gain, not the 4 to 8x assumed above.
+- Revised verdict: not worth changing `GeneratedChunk::blocks` for the source
+  cache. The codec is `engine_voxel::PackedBlocks`, unwired; candidates for it
+  are chunk transfer and saves, each after its own measurement.
 
 ### 3. Streaming scheduler saturation
 - Gain: C2ME runs the same generator 10 to 30x faster than vanilla by removing
@@ -57,6 +66,30 @@ collision with files other sessions are editing on 2026-11-06.
 - Critique: cause unmeasured; could be a dispatch cap, a cache lock or a
   dependency gate. Streaming files are under active edit.
 - Verdict: measure first (per-second pending, in flight, idle workers).
+- Measured 2026-11-12, `--benchmark-motion=lod-travel`, seed 74, Hills,
+  current generator, 12 terrain workers on 24 logical cores: `generating`
+  holds at 36 whenever work is pending, which is 12 running plus 24 queued
+  (`QUEUED_PER_WORKER = 2` in `streaming/terrain.rs`). The workers are
+  saturated; the scheduler is not the limit. The first 1,334 chunks took
+  about 9 s. A 26-chunk remainder stays `missing` with nothing generating,
+  which matches off-screen parking (`streaming.rs`, `parked`); the profile
+  line does not print `parked_offscreen`, so this is unconfirmed.
+- Generation cost per padded chunk, same census region (2,682 chunks, 8
+  threads): 70 to 135 ms in the surface rows, 25 ms for an all-air chunk far
+  above the terrain. Column samples are shared by vertical siblings
+  (`generation_cache::footprint`), so the air floor is the per-voxel chain:
+  about 470 ns per air voxel. Stage split for one air chunk (14.45 ms):
+  `structure_block` 4.48 ms (25 tree cells per voxel), `sites::block` 2.89,
+  `vistas::priority_block` plus `vistas::block` 2.14, every other stage under
+  0.5 ms. Probes: `gen_probe_air_chunk_stages` in `worldgen/src/gen_probe.rs`
+  and `air_chunk_cost_split` in `worldgen/tests/source_census.rs`.
+- Revised verdict: the lever is a per-chunk broadphase in worldgen. Each
+  authored feature (tree families, sites, ruins, vistas, valley) reports a
+  conservative box once per chunk; the per-voxel chain then tests only the
+  features whose box holds the voxel. Output must stay byte-identical, proven
+  by hashing the census region at the oldest and newest generators before and
+  after. Every module involved has uncommitted edits by other sessions, so it
+  needs an owner slot, not a drive-by change.
 
 ### 4. Live water quality: brick sleep, integer dead-band, water bodies
 - Gain: settled lakes cost 0 cells per tick; no surface jitter; no per-cell
