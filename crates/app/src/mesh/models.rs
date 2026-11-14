@@ -646,13 +646,18 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                     mesh.cuboid(c, Vec3::splat(0.5), Quat::IDENTITY, core, 0.4 + 1.4 * glow);
                 }
                 _ => {
-                    mesh.cuboid(c, Vec3::splat(0.996), Quat::IDENTITY, [0.26, 0.29, 0.32], 0.0);
-                    // Corner posts and a recessed seam band on each course.
-                    for x in [0.06, 0.94] {
-                        for z in [0.06, 0.94] {
+                    // Neighbouring casings overlap by 0.004: butted cubes crack
+                    // into see-through dots along shared edges, and a 0.996 body
+                    // leaves slits. Posts and the seam band stand well clear of
+                    // the body (a step under a pixel shimmers as dashes), and the
+                    // band stands proud of the posts so the glowing line runs
+                    // unbroken across a course.
+                    mesh.cuboid(c, Vec3::splat(1.004), Quat::IDENTITY, [0.26, 0.29, 0.32], 0.0);
+                    for x in [0.04, 0.96] {
+                        for z in [0.04, 0.96] {
                             mesh.cuboid(
                                 o + Vec3::new(x, 0.5, z),
-                                Vec3::new(0.13, 1.0, 0.13),
+                                Vec3::new(0.16, 1.004, 0.16),
                                 Quat::IDENTITY,
                                 metal,
                                 0.0,
@@ -661,7 +666,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                     }
                     mesh.cuboid(
                         c,
-                        Vec3::new(1.004, 0.05, 1.004),
+                        Vec3::new(1.12, 0.05, 1.12),
                         Quat::IDENTITY,
                         [0.25, 0.80, 0.95],
                         0.9 * glow,
