@@ -10,7 +10,8 @@ engine_core = { path = "../core" }
 engine_content = { path = "../content" }
 engine_voxel = { path = "../voxel" }
 anyhow = "1"
-glam = "0.32.0"
+sha2 = "0.10.9"
+glam = "0.34.2"
 
 [lints]
 workspace = true

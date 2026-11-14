@@ -6,7 +6,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-glam = "0.32.0"
+glam = "0.34.2"
 serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]

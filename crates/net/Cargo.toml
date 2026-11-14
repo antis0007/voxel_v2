@@ -1,0 +1,28 @@
+[package]
+name = "engine_net"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+steam = ["dep:gns"]
+steamworks = ["dep:steamworks"]
+
+[dependencies]
+gns = { package = "game-networking-sockets", version = "=0.3.0", optional = true }
+steamworks = { version = "=0.13.1", features = ["raw-bindings"], optional = true }
+ed25519-dalek = "2.1"
+getrandom = "0.3"
+
+[[bin]]
+name = "voxel-net"
+path = "src/main.rs"
+required-features = ["steam"]
+
+[[bin]]
+name = "voxel-steam"
+path = "src/steam_probe.rs"
+required-features = ["steamworks"]
+
+[lints]
+workspace = true

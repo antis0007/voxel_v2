@@ -10,7 +10,7 @@ edition.workspace = true
 engine_core = { path = "../core" }
 engine_content = { path = "../content" }
 engine_sim = { path = "../sim" }
-glam = "0.32.0"
+glam = "0.34.2"
 serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]

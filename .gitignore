@@ -41,3 +41,15 @@ __pycache__/
 
 # Local classifier logs and cached advisory results
 .code-advisor/
+
+# Local-only trees (kept on disk, never committed)
+/MC-RS/
+/artifacts/
+/minecraft_style_voxel_prototype-*/
+/.playwright-mcp/
+/.worktrees/
+/C
+*.blend1
+*.edit-tmp
+**/geology-cache/
+/assets/source/reference/quaternius/*.zip

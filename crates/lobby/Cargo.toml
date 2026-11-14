@@ -1,0 +1,17 @@
+[package]
+name = "engine_lobby"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "voxel-lobby"
+path = "src/main.rs"
+
+[dependencies]
+engine_net = { path = "../net" }
+
+[dev-dependencies]
+anyhow = "1.0"
+
+[lints]
+workspace = true

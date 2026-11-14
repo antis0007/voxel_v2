@@ -10,7 +10,7 @@ edition.workspace = true
 [dependencies]
 engine_core = { path = "../core" }
 bytemuck = { version = "1", features = ["derive"] }
-glam = "0.32.0"
+glam = "0.34.2"
 
 [dev-dependencies]
 # Test-only: the lockstep proof drives worlds through the netcode link simulator.

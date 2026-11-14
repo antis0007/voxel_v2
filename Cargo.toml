@@ -6,12 +6,21 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 
+[patch.crates-io]
+# Adds an explicit, offline native-library path to the pinned upstream binding.
+game-networking-sockets-sys = { path = "vendor/game-networking-sockets-sys" }
+
 [profile.dev]
 opt-level = 1
 debug = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# gns-sys 0.3.0 searches Debug for development builds. Force CMake's Debug
+# configuration instead of the RelWithDebInfo inferred from opt-level=3.
+[profile.dev.package.game-networking-sockets-sys]
+opt-level = 0
 
 [profile.release]
 opt-level = 3

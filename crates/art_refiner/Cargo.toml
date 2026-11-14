@@ -1,0 +1,20 @@
+# Texture refiner (docs/ART_WORKFLOW.md): renders the world surface shaders to a
+# PNG sheet without the game, a window or the app crate's build script.
+[package]
+name = "art_refiner"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine_content = { path = "../content" }
+anyhow = "1"
+glam = "0.34.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+pollster = "1.0.1"
+wgpu = "30.0.1"
+
+[dev-dependencies]
+engine_gpu = { path = "../gpu" }
+
+[lints]
+workspace = true

@@ -8,15 +8,15 @@ edition.workspace = true
 [dependencies]
 engine_core = { path = "../core" }
 engine_sim = { path = "../sim" }
-wgpu = "27.0.1"
+wgpu = "30.0.1"
 bytemuck = "1"
-glam = "0.32.0"
+glam = "0.34.2"
 
 [dev-dependencies]
 engine_content = { path = "../content" }
 engine_gpu = { path = "../gpu" }
-naga = { version = "27.0.3", features = ["wgsl-in"] }
-pollster = "0.4.0"
+naga = { version = "30.0.1", features = ["wgsl-in"] }
+pollster = "1.0.1"
 
 [lints]
 workspace = true

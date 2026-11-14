@@ -1,0 +1,20 @@
+# Headless civilization kernel: integer time, ordered agenda, keyed draws,
+# propose/commit ledger and versioned world facts. No runtime dependencies, no
+# World, no wall clock, no files, so every rule runs in plain unit tests
+# (docs/adr/0046-civilization-kernel-crate.md).
+[package]
+name = "engine_civ"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "civ"
+harness = false
+
+[lints]
+workspace = true

@@ -7,9 +7,13 @@ edition.workspace = true
 
 [dependencies]
 engine_core = { path = "../core" }
-glam = "0.32.0"
+glam = "0.34.2"
 serde = { version = "1.0.229", features = ["derive"] }
 ron = "0.12.2"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+engine_audio = { path = "../audio" }
+serde_json = "1"

@@ -8,7 +8,7 @@ edition.workspace = true
 
 [dependencies]
 engine_core = { path = "../core" }
-glam = "0.32.0"
+glam = "0.34.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
