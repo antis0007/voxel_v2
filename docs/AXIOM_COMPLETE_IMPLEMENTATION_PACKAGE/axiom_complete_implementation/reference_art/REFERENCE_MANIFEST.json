@@ -1,0 +1,312 @@
+{
+  "purpose": "User-supplied reference art for analysis and direction, not licensed production game assets. Exact duplicate uploads are stored once. No image modifications are made.",
+  "original_upload_count": 29,
+  "unique_image_count": 23,
+  "images": [
+    {
+      "file": "721.jpg",
+      "description": "Pale distant city above green terrain; dark foreground traveller and strong cloth/weapon accents.",
+      "sha256": "f0d7829ba2775fab1c9ade3717a707ee32d5e763e2fa08e857fb432457a2e41b",
+      "bytes": 134470,
+      "dimensions_px": [
+        1536,
+        922
+      ],
+      "original_upload_aliases": [
+        "721.jpg",
+        "1000021697.jpg"
+      ]
+    },
+    {
+      "file": "hyper-light-drifter.0.1487764083.jpg",
+      "description": "Dynamic equipment-and-garment composition with strong diagonals and negative space.",
+      "sha256": "326940842851f1bd1d8e51b1eb4c30c2bdafda1400ce1d972c1bcf9be378a83d",
+      "bytes": 106176,
+      "dimensions_px": [
+        1536,
+        865
+      ],
+      "original_upload_aliases": [
+        "hyper-light-drifter.0.1487764083.jpg",
+        "1000021696.jpg"
+      ]
+    },
+    {
+      "file": "hyper_light_drifter.jpg.png",
+      "description": "Armoured figure and accompanying beast; shared design language and legible relationship.",
+      "sha256": "2e81708d7cc2c3737a03742561e8de1aa0826b621e8fdd6c2adee37194e8ca9d",
+      "bytes": 170714,
+      "dimensions_px": [
+        1536,
+        1152
+      ],
+      "original_upload_aliases": [
+        "hyper_light_drifter.jpg.png",
+        "1000021695.png"
+      ]
+    },
+    {
+      "file": "images(35).jpg",
+      "description": "Expressive creature and character ensemble with concentrated colour and contrasting silhouettes.",
+      "sha256": "f5bb2b6607526c5425e533585035d0a6fc5845a395d5a3d4f71e9d66735bce12",
+      "bytes": 310854,
+      "dimensions_px": [
+        1223,
+        1536
+      ],
+      "original_upload_aliases": [
+        "images(35).jpg"
+      ]
+    },
+    {
+      "file": "djS8kNgj67ov7zLETw27va.jpg",
+      "description": "Snowbound monumental towers, weathered edges, restrained palette and human-scale foreground.",
+      "sha256": "07dde9a365bf238514100a745c1f6b58ec4f55567d11628b30fba1ed53c4af0b",
+      "bytes": 431476,
+      "dimensions_px": [
+        1536,
+        1536
+      ],
+      "original_upload_aliases": [
+        "djS8kNgj67ov7zLETw27va.jpg"
+      ]
+    },
+    {
+      "file": "hyper-light-breaker-exclusive-concept-art_46ek.jpg",
+      "description": "Luminous forest stream, grouped canopies, quiet ground and distant structure.",
+      "sha256": "4f037457eda82f56fc994a219ee8b43fcc99de8dfab763187ae568dd6efa20a4",
+      "bytes": 287105,
+      "dimensions_px": [
+        1536,
+        854
+      ],
+      "original_upload_aliases": [
+        "hyper-light-breaker-exclusive-concept-art_46ek.jpg",
+        "1000021692.jpg"
+      ]
+    },
+    {
+      "file": "hyper-light-breakers-game-rant-advance-illness-feature.jpg",
+      "description": "Immense broken civic remnant inside a layered, illuminated interior.",
+      "sha256": "6dcc87f4e442c51f2468c3811ee63a7b645db2ea7d41dbe715d20efdfacb8f1f",
+      "bytes": 331762,
+      "dimensions_px": [
+        1536,
+        768
+      ],
+      "original_upload_aliases": [
+        "hyper-light-breakers-game-rant-advance-illness-feature.jpg",
+        "1000021691.jpg"
+      ]
+    },
+    {
+      "file": "257850.png",
+      "description": "Highly graphic black/violet/magenta cover composition; selective intensity and symbols.",
+      "sha256": "698c2fd90a1553eb2e7581c942e207e20f9fc82d7b758bdf6b03aa9e1b432cba",
+      "bytes": 166115,
+      "dimensions_px": [
+        1282,
+        1536
+      ],
+      "original_upload_aliases": [
+        "257850.png",
+        "1000021690.png"
+      ]
+    },
+    {
+      "file": "HyperLightDrifterBoxArt.png",
+      "description": "Compact graphic cover composition emphasizing silhouette, energy and visual hierarchy.",
+      "sha256": "a229a04187e090ada7fb48ede1cd265dc654518bceef5a5bbe00e10d1bd3c6de",
+      "bytes": 160114,
+      "dimensions_px": [
+        282,
+        352
+      ],
+      "original_upload_aliases": [
+        "HyperLightDrifterBoxArt.png"
+      ]
+    },
+    {
+      "file": "1000021714.jpg",
+      "description": "Large engineered spacecraft in orbit with distinct hull masses and deep intercomponent gaps.",
+      "sha256": "8216764749ba9dce5a7bf6cc878892929e92155315d6137e7e9538616a34af9c",
+      "bytes": 162562,
+      "dimensions_px": [
+        1536,
+        615
+      ],
+      "original_upload_aliases": [
+        "1000021714.jpg"
+      ]
+    },
+    {
+      "file": "1000021713.jpg",
+      "description": "Landed industrial vessel and working dock with loading, support and servicing scale.",
+      "sha256": "a81ef754559c4e9087c4e83f42f8b69bd642a201190ec00239ff9cc6f7b496b0",
+      "bytes": 239181,
+      "dimensions_px": [
+        1536,
+        864
+      ],
+      "original_upload_aliases": [
+        "1000021713.jpg"
+      ]
+    },
+    {
+      "file": "1000021712.jpg",
+      "description": "Dense vertical civic district, everyday foreground and coherent tower families.",
+      "sha256": "034e6a60ef734ed0878f230607f941698d288f5d9d89515541d0e9d4d5515dbc",
+      "bytes": 431406,
+      "dimensions_px": [
+        1536,
+        1536
+      ],
+      "original_upload_aliases": [
+        "1000021712.jpg"
+      ]
+    },
+    {
+      "file": "1000021711.jpg",
+      "description": "Layered elevated transport and landing infrastructure throughout a large city.",
+      "sha256": "758d67ce13dafba6858788197eb9a10cc1243e3481cc64a0aa0f8be97db2bbb1",
+      "bytes": 178159,
+      "dimensions_px": [
+        1536,
+        829
+      ],
+      "original_upload_aliases": [
+        "1000021711.jpg"
+      ]
+    },
+    {
+      "file": "1000021710.jpg",
+      "description": "Waterfront civilization, open water, surviving remnants and concentrated inhabitation.",
+      "sha256": "67e7aa9ef6436dd6b6a14a08237adf3577872013352bf4ab1af55f7c90153ea6",
+      "bytes": 262952,
+      "dimensions_px": [
+        1536,
+        733
+      ],
+      "original_upload_aliases": [
+        "1000021710.jpg"
+      ]
+    },
+    {
+      "file": "1000021709.jpg",
+      "description": "Metropolitan hierarchy, smaller ordinary buildings, exceptional towers and connected waterfront.",
+      "sha256": "567e4e8a49c5e17483a43b8c445173408086093902c3fec9a32253da155fe547",
+      "bytes": 448463,
+      "dimensions_px": [
+        1536,
+        1536
+      ],
+      "original_upload_aliases": [
+        "1000021709.jpg"
+      ]
+    },
+    {
+      "file": "1000021704.jpg",
+      "description": "Industrial facility integrated with mineral terraces, weather, water and human scale.",
+      "sha256": "cef5fab6b04fd46a879aea0e996a39337799ce55605f19743274e01745c53bfb",
+      "bytes": 246781,
+      "dimensions_px": [
+        1536,
+        911
+      ],
+      "original_upload_aliases": [
+        "1000021704.jpg"
+      ]
+    },
+    {
+      "file": "1000021706.jpg",
+      "description": "Freight/industrial hall organized around working volume, handling and service routes.",
+      "sha256": "faf4d570c9bf6265d3ffe08b662f3386ab8ceba41dadb28aaa1e21e0ac7835aa",
+      "bytes": 221762,
+      "dimensions_px": [
+        1536,
+        928
+      ],
+      "original_upload_aliases": [
+        "1000021706.jpg"
+      ]
+    },
+    {
+      "file": "1000021715.jpg",
+      "description": "Servicing gantry and parked vessel framed against a larger landscape.",
+      "sha256": "760eb57a4697eb4b4795344d588ca2340cc3d68f9b3be72fb16117769b63f7f3",
+      "bytes": 186562,
+      "dimensions_px": [
+        1536,
+        863
+      ],
+      "original_upload_aliases": [
+        "1000021715.jpg"
+      ]
+    },
+    {
+      "file": "1000021703.jpg",
+      "description": "Large industrial installation in a localized dramatic emergency state.",
+      "sha256": "c1cc12e6a5c1b57cfc4a9782ab3440c4ea2707a818bc494809d855d92d2e179c",
+      "bytes": 152209,
+      "dimensions_px": [
+        1536,
+        960
+      ],
+      "original_upload_aliases": [
+        "1000021703.jpg"
+      ]
+    },
+    {
+      "file": "1000021702.jpg",
+      "description": "Red-water basin and salvage landscape pair with travellers, machines and layered remnants.",
+      "sha256": "f6f5c36c794c9be38a3c8d86b6d9f4571525a0a30ab7853f6f1f65ff15c7bb31",
+      "bytes": 217822,
+      "dimensions_px": [
+        1370,
+        1536
+      ],
+      "original_upload_aliases": [
+        "1000021702.jpg"
+      ]
+    },
+    {
+      "file": "1000021701.jpg",
+      "description": "Mountain expedition with readable major rock planes, traversable slopes and small machines.",
+      "sha256": "963ba8548bcc29d0ffa2f8484cbf99caaf41fb3c0e02cf0a9db6f674fce1878b",
+      "bytes": 539256,
+      "dimensions_px": [
+        1536,
+        1421
+      ],
+      "original_upload_aliases": [
+        "1000021701.jpg"
+      ]
+    },
+    {
+      "file": "1000021700.jpg",
+      "description": "Facility approach and wider ridge overlook; local destination connected to regional geography.",
+      "sha256": "5028b2f632d083cd34cefbe07deb35e9f4709d9ea871e9cf30817648f0aa7acf",
+      "bytes": 199471,
+      "dimensions_px": [
+        1370,
+        1536
+      ],
+      "original_upload_aliases": [
+        "1000021700.jpg"
+      ]
+    },
+    {
+      "file": "1000021699.jpg",
+      "description": "Receding annular infrastructure beneath extraordinary celestial scenery.",
+      "sha256": "b9950f98a5355e5498d8002c7ffbdb995a2ae975ef81e3fea9e30005b9953625",
+      "bytes": 234842,
+      "dimensions_px": [
+        1536,
+        835
+      ],
+      "original_upload_aliases": [
+        "1000021699.jpg"
+      ]
+    }
+  ]
+}

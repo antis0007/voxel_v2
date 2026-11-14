@@ -1,0 +1,918 @@
+system-RAM pressure limits as well as GPU accounting
+
+
+For example, if the OS currently assigns the game a 6 GiB budget, those starting values would target about 4.2 GiB and stop admitting additional growth around 4.8 GiB. That is illustrative arithmetic, not a claim about what any particular GPU will safely support.
+
+A sudden budget reduction can put existing allocations above the new target. The controller therefore needs immediate admission control and staged reclamation; a percentage alone cannot prevent every possible stall.
+Count the entire footprint
+The controller must include:
+- Current terrain and object geometry.
+- Textures, mip chains, arrays, and atlases.
+- Depth buffers, frame targets, shadows, and temporal histories.
+- Compute scratch space and indirect-draw data.
+- Upload staging and pending transfers.
+- Replacement resources while their predecessors are still in use.
+- Allocator backing blocks, fragmentation, and delayed retirement.
+A “terrain cache limit” is insufficient if the rest of the renderer can allocate without bounds.
+
+Suppose a region has an existing mesh, a worker produces its replacement, and an upload is pending. The peak may contain the old mesh, the new mesh, CPU output, staging memory, and scratch buffers simultaneously. Admission needs to reserve that peak before starting the operation.
+Reclamation must free or reuse actual backing memory
+There are two easy mistakes to avoid.
+
+First, deleting logical mesh records does not necessarily release their allocator’s backing blocks. WGPU’s allocator reporting distinguishes bytes used by live allocations from bytes reserved by memory blocks, including unallocated space. Track both. Rust
+
+Second, selecting a lower texture mip or drawing fewer chunks does not automatically release their existing GPU allocations. Actual reclamation requires appropriately paged resources or a bounded replacement with smaller resources, followed by safe retirement.
+
+The implementation should retain a compact, correct rendering fallback so a memory-pressure response does not require another huge allocation before it can become cheaper.
+Degrade optional visual work before essential interaction
+The proposed pressure response is:
+1. Stop speculative prefetch and optional refinement.
+2. Cancel obsolete derived work.
+3. Reclaim unused distant geometry and genuinely reclaimable texture data.
+4. Reduce optional shadow, reflection, and lighting allocations.
+5. Shorten high-detail distances while retaining distant coarse scenery.
+6. Reduce resolution-dependent visual costs through a controlled transition.
+7. Restore quality gradually after sustained headroom returns.
+Collision, inventory, accepted destruction, nearby actors, and shared PvP cover retain their common rules.
+
+This preserves the impressive world: a distant city can retain its silhouette while its individual windows and interior props are absent from GPU memory.
+WGPU settings help, but do not replace this controller
+The current WGPU documentation makes several distinctions that matter:
+- MemoryHints::Performance is the default allocation preference.
+- MemoryUsage favors footprint.
+- Manual controls suballocation block-size ranges.
+- These are hints, some backends may ignore them, and they are not total-memory limits. Rust
+Current WGPU also exposes MemoryBudgetThresholds on supported backends. These can cause resource-creation errors or device loss under pressure. They belong behind the normal controller as handled emergency boundaries. Deliberately triggering device loss is not a way to achieve smooth play. The actual pinned version in Axiom must be checked before using these APIs. Rust
+3. Significant CPU and world-processing optimizations
+The biggest opportunities are likely to involve avoiding unnecessary work and reducing the cost of repeated edits.
+Use compact cold storage and efficient active bricks
+The proposed representation separates:
+- Cold world data: compressed uniform or palette-based records.
+- Active editing data: compact working bricks suited to contiguous scans and bulk changes.
+- Derived products: render geometry, lighting caches, navigation products, and other rebuildable data.
+An empty region should not require a full dense voxel array, a mesh allocation, and a physics object. A large uniform solid interior should remain compact until an operation requires its detailed boundary.
+
+The same distinction helps memory use, loading, CPU cache behavior, and destruction.
+Maintain useful occupancy masks incrementally
+For suitable cube terrain, bit masks can answer many occupancy and face-visibility questions in one operation.
+
+The proposed path is:
+1. Apply an accepted edit to its affected brick.
+2. Update relevant occupancy and material summaries.
+3. Mark the required dependency region dirty.
+4. Generate visible faces and merge compatible surfaces.
+5. Publish a revision-checked result.
+6. Upload within the renderer’s budget.
+Masks have their own memory cost. Retaining them for every cold region on a planet would be wasteful; keep them where repeated processing justifies them.
+
+Visual opacity, physical solidity, and fluid permeability also need separate meanings. Glass cannot become physically empty because an opaque-face mask excludes it.
+Make invalidation precise
+A machine’s inventory changing should not rebuild its hull.
+
+An illuminated display changing may require a texture update. A lamp changing may require lighting work. Removing a wall requires geometry, collision, and other relevant updates.
+
+The engine should classify these dependencies explicitly, then invalidate the smallest correct set. That can eliminate more work than merely accelerating a mesher that is invoked too often.
+Coalesce repeated edits into useful work
+For each region and derived subsystem, maintain one pending record describing the latest required revision.
+
+A burst of a thousand nearby edits should not create a thousand independent remesh jobs. Workers consume coherent inputs; publication verifies that the result is still applicable.
+
+This must include an anti-starvation rule. Continually canceling the same mesh job can leave a region permanently unfinished even when the queue remains short. Required work needs a valid incremental path or a bounded revision boundary that allows it to finish and publish.
+Choose meshing strategy by lifetime and update frequency
+A frequently changing surface may benefit from a quick, correct mesh followed by refinement. A stable visible structure may justify more expensive merging because the smaller result will be rendered for many frames.
+
+The comparison must include:
+\[
+\text{rebuild frequency}
+\times
+\text{preparation, meshing, upload, and retirement cost}
+\]
+alongside rendering cost, response latency, and memory peaks.
+
+That does not mean CPU and GPU timings simply add into one frame; their overlap must be measured.
+Keep automation from becoming a per-block update tax
+For factories and scientific systems, the plan requires:
+- Scheduling the next meaningful event for dormant processes.
+- Updating affected network components when connections or inputs change.
+- Batching equivalent processing while preserving quantities and thresholds.
+- Using appropriate aggregate records for distant operations.
+- Reusing valid circuit/network setup work.
+- Bounding feedback loops and solver iterations.
+This preserves the science and automation ambitions. It requires proving that a shortcut represents the intended process correctly, especially when pressure, power, inventories, or physical feedback change.
+4. Significant GPU render-pipeline optimizations
+The renderer should accept compact, versioned products from world processing and keep its own work bounded.
+A. Compare packed quads with conventional indexed meshes
+Packed quad records are promising for block terrain because the vertex shader can reconstruct the surface from a smaller representation.
+
+Potential benefits include fewer uploaded bytes and lower geometry residency. The costs include shader decoding and storage-buffer reads. The winner can vary by hardware and scene, so compare both representations using identical materials, lighting, and camera paths.
+
+Keep arbitrary machinery meshes, fine shapes, and smooth density surfaces on suitable separate paths. A single cube-face encoding should not dictate every asset in the game.
+B. Use bounded shared geometry pools
+Avoid creating a new GPU buffer for every small update.
+
+Use shared arenas or pages with stable logical handles. Upload changed ranges, retain old ranges until their final GPU use completes, and reclaim them incrementally.
+
+Compaction also needs a budget. Moving every allocation because a buffer is nearly full can cause a new stall and temporarily increase memory use. Reserve its copy space and execute it over bounded steps.
+C. Remove invisible work before increasing shader complexity
+Prioritize:
+- Frustum culling.
+- Planet-horizon culling.
+- Back-face removal where applicable.
+- Coarse-to-fine detail selection.
+- Sensible opaque ordering.
+- Conservative occlusion culling in dense cities.
+Destroyed walls, sudden camera movement, and teleports invalidate assumptions used by temporal visibility systems. Newly exposed objects must become visible promptly; an old wall must not remain an invisible occluder that hides an opponent.
+
+Compute culling and indirect draws are worth adding when CPU draw preparation is a measured bottleneck. They still consume GPU time and memory. A GPU-driven renderer is not automatically faster merely because more decisions happen on the GPU.
+D. Control pixel work as well as triangles
+A compact mesh can still render slowly because of overlapping transparent surfaces, foliage, fog, particles, expensive materials, shadows, or lighting.
+
+Separate opaque, cutout, and blended paths. Measure their GPU times individually. Bound the number, resolution, and update scope of expensive visual effects.
+
+For the reference-art direction, this means the city can retain its strong silhouettes, material hierarchy, warm interiors, and selective emissions without evaluating every distant light or filling the GPU with a planet-wide lighting volume.
+E. Prevent upload and retirement bursts
+WGPU’s native Queue::write_buffer path currently creates staging allocations whose transfers occur on a later submission; those allocations remain until the relevant submission finishes. An uncontrolled producer can therefore accumulate memory before its work has completed. Rust
+
+The specification adds:
+- A byte budget for optional uploads.
+- A wall-time token budget, so higher FPS does not multiply upload pressure.
+- A cap on in-flight staging.
+- Bounded outstanding submissions.
+- Separate reserved capacity for critical updates.
+- Incremental resource retirement.
+The proposed 4 MiB per presented frame and up to 64 MiB of in-flight staging, further limited by the memory budget, are starting experiments. They need calibration on target hardware.
+F. Prepare shaders and pipelines before their first encounter
+Keep a manageable set of material and shader families. Prepare essential pipelines before interactive play, and schedule optional variants before they become necessary.
+
+The current WGPU PipelineCache documentation lists Vulkan only. A Windows DX12 build therefore needs an explicit preparation and fallback strategy rather than assuming a portable cache switch eliminates compilation stalls. Rust
+
+Likewise, avoid blocking GPU waits in the interactive path. WGPU explicitly documents that Device::poll blocks when called with PollType::Wait. Rust
+5. Deterministic networking should reduce traffic substantially
+Your earlier request remains central: every relevant client should run real physics locally, and healthy synchronized simulation should primarily exchange accepted commands rather than repeated body transforms.
+
+The revised plan promotes that to the preferred implementation path.
+What has to match
+Determinism requires matching:
+- Initial state and all future-affecting solver state.
+- Accepted command order and tick.
+- Collision geometry and topology revisions.
+- Body and constraint creation order.
+- Numerical rules and solver configuration.
+- Random-number streams.
+- Controller, machine, and gameplay behavior.
+The current Rapier Rust guide supports cross-platform determinism under specified conditions. Its enhanced-determinism mode can work with parallel solving; simd8 belongs to a different compatibility configuration. The rest of Axiom still has to satisfy the same reproducibility contract. Rapier
+Replicate complete interacting domains
+Clients should not reproduce arbitrary subsets of one enormous host physics world and assume they will get identical results.
+
+A deterministic domain needs the complete state and inputs that can influence its simulation. That includes connected bodies, cargo, constraints, relevant geometry, and incoming interactions.
+
+When two domains begin affecting each other, the authority prepares their transition before the coupling takes effect. If a case cannot meet the exact-domain contract, it uses an explicit state-synchronization mode while retaining actual client physics.
+
+That fallback is measurable. It must not quietly become the permanent normal path for everything.
+Keep slow clients from stopping the session
+The host validates and sequences accepted actions without waiting for every participant’s acknowledgment.
+
+Clients maintain bounded prediction and replay. A missing command frame is distinguishable from a genuinely empty tick. After its prediction allowance is exhausted, a delayed client needs recovery; the host and other players continue.
+
+Factorio’s developers describe authoritative action sequencing that isolates missing client inputs. They also document a cascading failure caused by accumulated input messages—evidence that command replication still needs bounded histories and retries. Factorio
+
+We still need initial snapshots, domain transfers, acknowledgments, verification, and exceptional repair. Determinism reduces recurring state traffic; it does not eliminate authoritative host computation or make clients trustworthy.
+6. Loading should start from current state, with a short path to interaction
+There are several distinct loading problems:
+Situation	Proposed approach
+Creating a new world	Generate and validate the necessary global geological, drainage, climate, and settlement decisions; persist them.
+Opening a saved world	Read indexed current regional state and a bounded journal suffix.
+Joining a live session	Receive the relevant domain checkpoint and ordered commands needed to catch up.
+Rejoining	Reuse compatible cached content and fetch missing state.
+Travelling into a new region	Prefetch according to time until interaction, then refine visual detail.
+
+
+Ordinary loading should not rerun global erosion or civilization history. A neighborhood should not require replaying every edit since world creation.
+
+The minimum playable set includes coherent terrain edits, collision, domain state, required commands, essential assets, and an accurate minimal view. Once those are ready, distant detail can stream.
+Prevent a second doom loop during joining
+A joining client cannot catch up indefinitely if its replay capacity is no greater than the rate at which new simulation work is being committed.
+
+For an idealized example, if its snapshot is \(D\) simulated seconds old and it can replay at \(r\) times real time, catch-up takes approximately:
+\[
+t_{\text{catch-up}}=\frac{D}{r-1}
+\]
+This only converges for \(r>1\).
+
+The implementation therefore needs recent coherent checkpoints, bounded command suffixes, limited retries, and an initial domain the client can actually handle. It must not repeatedly restart an ever-larger download or freeze everyone while one machine catches up.
+7. How we prove “significantly faster”
+I added proposed improvement goals of:
+- At least 30% lower p99 frame time in the identified problematic native scene.
+- At least 50% shorter median warm-world time to first safe interaction against the recorded current build.
+- Separate absolute limits for cold loading, first join, simulation delay, and recovery.
+- Stable GPU commitment through prolonged travel and destruction.
+- No increasing simulation backlog concealed by smooth camera rendering.
+These are engineering goals, not achieved or guaranteed speedups. The comparison must retain the same gameplay, scene, and relevant visual quality.
+Implementation priority
+Priority	Work	Required evidence
+1	Reproduce the default freeze; add native memory telemetry and allocation accounting.	A trace identifies the cause and explains growth, waiting, or stalled work.
+2	Enforce conservative default residency, upload, and retirement budgets.	Memory stabilizes and pressure causes controlled trimming.
+3	Remove observed blocking operations and excessive rebuild scope.	Better frame-time tails during actual edits and travel.
+4	Compare meshing, packed geometry, arenas, and culling.	End-to-end improvement, including preparation, upload, rendering, and memory.
+5	Implement indexed loading and bounded live-session bootstrap.	Faster safe interaction with all edits preserved.
+6	Prove deterministic replay, then remove unnecessary routine state streams.	Cross-machine agreement, correct restore, lower total session traffic.
+7	Expand to large cities, factories, ships, and optional advanced rendering.	The combined workload remains inside the supported limits.
+
+
+The main acceptance scene should include four players doing different things simultaneously: exploration, factory operation, combat/destruction, and joining or reconnecting.
+
+It should run on a low-memory discrete GPU and an integrated-memory profile as well as the development machine. Measure the listen host while it is also rendering. Record p99.9 and worst stalls, native memory usage, pending uploads, unreclaimed versions, command/replay age, and post-burst recovery—not just average FPS.
+
+The two existing technical briefs were also updated so the new requirements are consistent across the plan:
+- AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt
+- AXIOM_Planetary_Simulation_And_Coop_Architecture.txt
+The default engine now has an explicit design requirement: world size, travel, destruction, and faster background generation must never be allowed to create unrestricted GPU allocation or an ever-growing queue of unfinished work. The next implementation milestone is to demonstrate that behavior in the native game with traces and repeatable tests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Improve performance and voxel optimization further
+
+
+
+
+
+
+
+
+
+
+
+
+Worked for 12m 51s
+
+
+
+
+
+
+I’ve updated the Axiom/Meridian optimization prompt with a further implementation pass focused on reducing unnecessary voxel work, controlling memory throughout the entire pipeline, and keeping complex worlds within predictable frame and simulation budgets.
+
+AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt
+
+The native engine repository is not available in this workspace, so these are researched implementation requirements and acceptance criteria, not applied engine patches or measured speedups. The existing Rust/WGPU, local physics, deterministic multiplayer, destructible worlds, and low hosting cost requirements remain intact.
+
+The most valuable addition is a stricter definition of what “optimized” means: a small change should trigger a small amount of necessary work, and every piece of unfinished work must retain an accountable, bounded lifetime.
+1. Close the memory-growth paths that survive ordinary cache limits
+A terrain cache can stay within its limit while the process still exhausts memory. Generated voxel data, completed meshes awaiting upload, staging buffers, replacement textures, old meshes still referenced by the GPU, and retained checkpoints all consume space outside a simple “resident terrain bytes” counter.
+
+The revised prompt makes these stages part of one admission and ownership system.
+Reserve the complete job before producing expensive output
+Before a generation or meshing job starts, it must acquire capacity for its peak overlapping allocations and the queue slots it will need downstream.
+Stage	What remains accounted for
+Waiting to start	A small, bounded request descriptor
+Producing	Required input retention, scratch space, output capacity, and reserved downstream capacity
+Ready for upload	Completed output and its destination reservation
+Submitted	Staging and destination allocations until their actual GPU lifetimes permit release
+Resident	The installed resource and any backing allocation it occupies
+Retiring	Resources still referenced by earlier submissions
+Reclaimed	Reusable ranges or backing that has actually been released
+
+
+This prevents a fast mesher from generating hundreds of megabytes of output while the GPU is already struggling to consume uploads.
+
+The accounting also distinguishes ownership from physical allocation. Moving a buffer from a worker to the ready queue does not create a second copy. Retaining an existing shared input adds a pin, not another allocation. Copying that output into a separate staging buffer does create an overlapping allocation, which must be counted.
+
+The practical rule is:
+No producer starts work whose supported completion path cannot fit.
+
+This is a proposed engine contract. Its value is that memory pressure can stop speculative work before that work produces a large, unusable result.
+Audit canceled upload encoders first
+There is a particularly relevant WGPU lifecycle issue to inspect. The current StagingBelt::finish_and_recall_on_submit documentation warns that if its encoder is never submitted, closed staging chunks are not returned for reuse and continued use can allocate new buffers indefinitely. That is a concrete failure path for canceled frames or superseded voxel uploads. It is not yet a diagnosis of Axiom’s freeze. Rust
+
+The updated requirements explicitly cover:
+- A mesh becoming obsolete before encoding.
+- A mesh becoming obsolete after encoding.
+- A frame being abandoned or the window being minimized.
+- Valid offscreen upload completion when presentation is paused.
+- Device loss, where waiting indefinitely for an old completion callback cannot be the recovery strategy.
+This deserves attention before switching meshers or increasing thread counts.
+Make completion delivery nonblocking and lossless
+Even a bounded completion queue can cause a freeze if a GPU callback blocks while sending into a full queue whose consumer is the same polling thread.
+
+The contract now requires either reserved notification capacity or a coalesced completion watermark for the relevant ordered queue and device epoch. Cleanup happens outside the callback. Notifications required to release resources cannot be silently dropped.
+Treat the memory thresholds as ceilings
+The earlier proposed 70% soft threshold and 80% admission ceiling remain starting values to validate on hardware. They must never cause the engine to allocate until it reaches those percentages.
+
+A small scene should stay small on a 24 GB GPU. Extra capacity should be used only when visible content, imminent interaction, or measured reuse justifies it.
+
+The operating system’s process budget matters more than the card’s advertised capacity: Microsoft explicitly associates exceeding the reported video-memory budget with paging and stuttering. learn.microsoft.com
+2. Make one voxel edit invalidate only the products that depend on it
+“Chunk changed” is too broad a reason to rebuild everything associated with that chunk.
+
+The updated design separates the information consumed by geometry, collision, lighting, structural support, materials, and machines.
+Change	Work that may be necessary
+Inventory quantity changes	Inventory and dependent machine state
+Display contents change	A texture or material-data update
+Paint changes without changing opacity or shape	Relevant visual material data
+Friction or density changes	Relevant physical material or mass properties
+A voxel changes from solid to empty	Local occupancy, exposed surfaces, collision, and affected support or lighting dependencies
+A lamp changes	Its lighting dependencies and any gameplay systems that explicitly observe it
+A boundary voxel changes	The outputs whose actual neighbor reads include that voxel
+
+
+Each derived product receives a precise dependency description:
+- Which fields it reads.
+- Which spatial neighbors it reads.
+- Which configuration version it uses.
+- Which input revisions produced the result.
+Publication checks those dependencies. An unrelated inventory update should not invalidate a completed terrain mesh.
+
+This also improves correctness. A result built against an outdated neighboring boundary cannot be installed as the current seam simply because the owning chunk still exists.
+
+One subtle correction from the review is now explicit: invalidation follows the reverse of the read dependency. If an output at position x reads an input at x + 1, changing input y affects output y − 1. Symmetric neighbor tests would hide an implementation error here.
+
+The acceptance test compares optimized invalidation against an exhaustive reference, including asymmetric dependencies, boundaries, and mixed voxel scales. It measures both missed rebuilds and excessive rebuilds.
+3. Stop automatically building two meshes after every edit
+A fast initial mesh followed by a more efficient refined mesh can help responsiveness. It can also double the work in a continuously edited area.
+
+The revised policy makes refinement conditional on whether the result is likely to remain useful.
+
+A heavily edited construction site can keep a correct, inexpensive representation while a stable, frequently visible city wall earns more expensive optimization. Both must show the current world correctly.
+
+The engine should record:
+- CPU time spent on refinement that never gets published.
+- Uploaded geometry superseded before it is drawn.
+- Time until the first correct visual result.
+- How long a refined mesh remains useful.
+- Rendering work saved during that lifetime.
+A short queue is not proof of efficiency if workers are constantly completing results that are immediately discarded.
+Keep mutation local even when rendering is heavily batched
+Large rendering batches do not require large rebuild units.
+
+The prompt now requires bounded edit and mesh tiles inside larger storage or rendering structures. Unchanged segments should retain stable descriptors and allocations.
+
+Removing a small voxel should not require copying and uploading a district-sized mesh because that district happens to share a draw batch.
+
+The important measurements become:
+\[
+\text{edit amplification}
+=
+\frac{\text{bytes inspected, copied, generated, or uploaded}}
+{\text{accepted edit}}
+\]
+These are separate measurements, rather than one combined score. They reveal whether a seemingly small edit causes excessive source copying, boundary processing, mesh generation, or upload traffic.
+
+Tile size still needs measurement: making tiles extremely small increases borders, bookkeeping, allocations, and draw metadata. The goal is a favorable balance between local editing and efficient rendering.
+4. Budget actual surface complexity, including complexity that persists
+Voxel count alone is a weak performance specification.
+
+Greedy meshing is highly effective when many adjacent faces can merge. Highly perforated or alternating geometry can retain a large amount of exposed surface. Lysenko’s original meshing analysis identifies checkerboard geometry as a worst case for face culling. 0 FPS
+
+Consider this illustrative calculation for isolated, single-material cubes with no additional lighting or material splits:
+A 32 × 32 × 32 region	Possible quad output
+Completely solid, with ideal greedy merging	6 quads
+Alternating occupied and empty cells in all three axes	98,304 unit quads
+
+
+The checkerboard contains 16,384 occupied cells, each exposing six faces. At a hypothetical eight bytes per quad, that is 786,432 bytes of quad records, before metadata and allocation overhead. The solid case needs only 48 bytes under that same deliberately simplified format.
+
+This is arithmetic, not a benchmark, but it explains why a mesher that looks excellent on solid terrain can struggle with fine machinery, fragmented ruins, or dense decorative geometry.
+
+The updated prompt therefore tracks:
+- Exposed surface primitives.
+- Material and shading splits.
+- Output bytes.
+- Collision complexity.
+- Persistent regional rendering cost.
+- Temporary replacement cost.
+Account for the world left behind after editing stops
+Rate-limiting edits does not bound the final scene.
+
+Many individually affordable edits can gradually create a permanently expensive region. The engine must account for that persistent complexity, select an appropriate supported representation, and establish any construction or simulation rules before irreversible activation.
+
+Accepted destruction, thin cover, and player geometry cannot disappear when their representation becomes inconvenient.
+
+Smaller voxels also need explicit treatment. Halving voxel edge length over a fixed physical volume multiplies dense cell count by eight. A smooth boundary has roughly four times as many unmerged voxel faces; highly fragmented content can approach eight times the face count. Actual mesh output depends on merging and representation.
+
+That makes variable voxel size a representation and workload problem, rather than merely a smaller coordinate step.
+5. Make visibility processing bounded and preserve coherent world coverage
+A large world should not require testing every resident fine chunk every frame.
+
+The revised renderer specification selects a coverage-preserving set of representations from a spatial hierarchy. Nearby or visually significant regions refine; other regions retain valid coarser representations.
+
+Refinement considers projected geometric error, viewport size, distance, and hysteresis. A coarse region should refine when its error becomes visible, not simply because it crosses an arbitrary distance threshold.
+
+When the visibility traversal reaches its work budget, it keeps a valid parent representation. It must not truncate a draw list and leave holes.
+Replace parent and child representations coherently
+A parent should be replaced only when the required children and seams are ready, including explicit results for empty children.
+
+Temporary parent/child overlap needs:
+- An explicit coverage rule.
+- Reserved memory.
+- A bounded transition.
+- Safe retirement of the previous representation.
+Neighbor balancing also has a cost. One refinement request can induce more refinements around it. The engine must account for that expansion before recursively scheduling work.
+
+Destroyed landmarks must invalidate their coarse summaries. Reducing detail cannot make an intact tower reappear in the distance.
+Make occlusion conservative during destruction
+The depth hierarchy must match the query. For a conservative test that something is fully occluded, conventional depth uses maximum depth over the tested footprint; reversed depth uses minimum depth. Non-power-of-two dimensions and complete footprint coverage matter. Mike Turitzin
+
+A previous-frame depth buffer becomes uncertain when a wall is destroyed, an occluder moves, or the camera changes sharply.
+
+The updated requirements treat uncertain cases as visible, invalidate affected history, and compare culling against an unculled reference. In PvP, stale occlusion must not hide a newly exposed opponent.
+6. Reduce pixel and material work alongside geometry cost
+A smaller mesh does not necessarily make the GPU frame fast. Transparent layers, foliage, particles, lighting, shadows, and material evaluation can dominate the remaining work.
+
+The prompt now calls for targeted comparisons on actual scene classes:
+- Large terrain surfaces.
+- Dense city interiors.
+- Fine fragmented geometry.
+- Foliage and cutout materials.
+- Transparent windows, water, fog, and effects.
+- Moving voxel structures.
+Packed-quad vertex pulling and conventional indexed geometry should be compared by complete pass cost, upload bytes, shader invocations, and memory traffic. A smaller stored representation can still lose through decoding cost or unfavorable access patterns.
+Evaluate a compact clustered lighting path
+For the intended stylized materials, the revised plan proposes a compact clustered-forward experiment against the existing lighting path. Clustered shading groups samples in three dimensions to reduce irrelevant light evaluations; the original research covers both forward and deferred approaches. It does not establish which will win for Axiom. research.chalmers.se
+
+The comparison must include crowded interiors and substantial overdraw. Light-list storage also needs a bounded overflow policy.
+Do not assume CPU concurrency creates GPU overlap
+Several worker threads encoding commands do not prove that graphics, compute meshing, and lighting run independently on the GPU. WGPU’s HAL queue contract defines ordered submission behavior. Actual overlap and contention must be measured. Rust
+
+When the GPU is saturated, another “background” compute pass still consumes capacity. Removing redundant passes may help more than submitting them from another thread.
+7. Bound structural destruction beyond the initial connectivity query
+Cutting a structure creates several distinct workloads:
+1. Determining which connections remain.
+2. Determining which components are supported under the game’s structural model.
+3. Enumerating detached components.
+4. Computing their physical properties.
+5. Creating or updating collision representations.
+6. Transferring module, cargo, and ownership state.
+7. Activating their physical behavior.
+The prompt now budgets these separately.
+
+A fast connectivity query does not make the materialization of a detached megastructure inexpensive. Likewise, a structure being connected to an anchor does not by itself establish its load-bearing strength; that depends on the chosen structural model.
+
+The proposed implementation can use local components and a higher-level connection graph, with versioned, resumable work. Repeated cuts should be batched so the engine does not restart a large traversal for every removed voxel.
+
+Physical activation remains deterministic. Delaying a scheduling-only graph split can be acceptable; leaving an unsupported body frozen while an arbitrary backlog drains changes gameplay.
+8. Budget physics by interactions, not only by body count
+A thousand dispersed objects can be far cheaper than a thousand tightly interacting objects.
+
+The expanded physics accounting includes:
+- Broad-phase candidate pairs.
+- Compound-shape leaves.
+- Contact manifolds and solver rows.
+- Joint constraints.
+- Continuous collision work.
+- Wake propagation.
+- Collider replacement and contact-cache disruption.
+With \(n\) mutually overlapping broad-phase bounds, there can be \(n(n-1)/2\) candidate pairs. This elementary worst-case count illustrates why body count alone is insufficient.
+
+The remaining challenge is especially important: already-active bodies can converge into a dense pile without any new spawn request.
+
+The supported simulation model therefore needs allowances for those future interactions. Admission checks for spawning or destruction cannot, by themselves, prove that later physics cost stays bounded.
+
+The revised requirements preserve actual local physics and shared outcomes. They do not permit one client to drop contacts, reduce collision accuracy, or freeze admitted bodies to meet its frame budget.
+
+Sleeping also requires correct wake dependencies. Rapier’s documentation states that changing gravity does not automatically wake sleeping bodies, which matters for planetary transitions and changing magic fields. Rapier
+9. Make dormant factories efficient without introducing desynchronization
+Sleeping machines need a precise wake protocol.
+
+The new contract uses versioned dependency subscriptions, entity generations, deterministic activation order, duplicate suppression, and bounded reclamation of obsolete scheduled events.
+
+This addresses a real class of multiplayer errors. Factorio’s developers documented independently processed transport groups waking the same inserter: activation order affected subsequent updates, so requests had to be collected and applied deterministically. Factorio
+
+For Axiom, two changes waking the same machine during one phase should produce one correctly ordered activation while preserving any meaningful cause data.
+
+Deleted and recreated entities must not inherit stale wake requests. Canceled threshold events must not accumulate indefinitely in a scheduler.
+
+Dormant progression can jump to the next meaningful event only while its assumptions remain valid. Production completion, exhausted capacity, changed power, damage, or arriving transport must interrupt that progression at the correct point.
+
+This is how large factories can avoid per-block polling while retaining the functional scientific systems already specified.
+10. Reduce the CPU and memory cost of deterministic networking
+Command replication can reduce routine state traffic, but verification and recovery can become expensive if implemented through repeated whole-world serialization.
+
+The revised prompt separates three jobs:
+- Short rollback history.
+- Join and recovery checkpoints.
+- Durable saves.
+They need different retention periods and refresh policies.
+Hash stable semantic regions incrementally
+Routine verification should hash changed canonical regions and their affected ancestors: voxel bricks, entity/component ranges, inventories, controllers, and physics-domain state.
+
+Stable regions matter. The BLAKE3 specification describes efficient updates to modified chunks and ancestor nodes, while noting that inserting or removing bytes in the middle of a monolithic input shifts later data and defeats that advantage. raw.githubusercontent.com
+
+The proposed semantic tree is an application design. Calling a streaming hash API does not automatically supply edit tracking.
+
+Incremental verification must still include every future-affecting mutation. Periodic independent full computations check whether dirty tracking missed anything. Visible transforms or accepted commands alone are insufficient to establish matching simulation state.
+Measure copy-on-write amplification
+A fixed snapshot count does not guarantee low memory use.
+
+If hot edits repeatedly copy large shared pages, a small history ring can retain substantial memory. The prompt now measures copied bytes per tick, oldest pinned generations, and the peak overlap of snapshots and active state.
+
+Likely domain mergers also receive advance capacity checks. Joining two interacting physics domains can create more work than the sum of their previously isolated contact graphs.
+
+These changes aim to keep deterministic networking inexpensive without weakening its correctness requirements or moving the cost into frequent recovery stalls.
+11. Make resize and graphics transitions part of the performance contract
+Window resizing, render-scale changes, and graphics-preset changes can temporarily retain both old and new color, depth, shadow, and temporal resources.
+
+The updated plan coalesces repeated requests, reserves the transition peak, reuses compatible resources, and resets histories deliberately.
+
+This is a real synchronization concern: current WGPU documentation states that reconfiguring an already configured surface waits for GPU idle, and it specifies restrictions involving old surface textures, zero dimensions, and concurrent submissions. Rust
+
+Simulation and networking should remain independent of that presentation transition. Minimizing the window must not prevent already-submitted work from completing and retiring.
+
+The surface latency setting also remains a tuning parameter. WGPU documents it as a backend-clamped hint with latency and throughput tradeoffs, rather than a universal performance switch. Rust
+Implementation order and proof
+The updated prompt prioritizes work in this order:
+Priority	Implementation slice	Required evidence
+1	Allocation ledger, end-to-end admission, staging cancellation, completion and retirement	Memory plateaus under sustained production and deliberately delayed GPU completion
+2	Precise edit dependencies and bounded rebuild tiles	Less inspected, copied, generated, and uploaded data per edit, with correct geometry
+3	Conditional refinement and persistent complexity accounting	Less discarded work and stable cost after editing stops
+4	Coherent hierarchical visibility and measured material/lighting changes	Better full GPU frame time with preserved coverage and visual quality
+5	Structural, contact, and deterministic wake accounting	Stable simulation age during dense interactions and large factories
+6	Incremental digests and bounded checkpoint/COW behavior	Reduced verification and recovery overhead with matching canonical state
+
+
+The acceptance scenarios now include canceled encoders, minimized presentation, full completion queues, rapid resizing, sustained hot edits, checkerboard geometry, dense body piles, severed megastructure supports, changing gravity, concurrent machine wakes, and slow joins during destruction.
+
+For each retained change, the implementation must report the same scene and hardware before and after, including frame-time tails, simulation age, useful versus discarded work, memory peaks, upload and retirement pressure, and correctness.
+
+Relative goals still need absolute budgets: a 30% improvement from a 100 ms frame to a 70 ms frame remains too slow. Component gains also cannot simply be added together.
+
+The first engine patch should close the allocation-to-retirement lifecycle and reproduce the canceled-upload scenario. That provides a stable foundation for faster meshing and richer worlds, because increased production throughput will then remain controlled throughout the pipeline.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Keep going, search for ways to reduce network latency, block breaking latency, and integrating client/server data smoothly and better than minecraft netcode does it. Smooth, improved noita style physics in 3d, more than just a cellular automata
+
+
+
+
+
+
+
+
+
+
+
+
+Worked for 20m 49s
+
+
+
+
+
+
+The next major improvement should be one coherent prediction system for block edits, movement, and nearby physics—combined with a network pipeline that keeps urgent gameplay out of loading queues. That gives Axiom a practical route to faster interaction, smoother corrections, and richer destruction without transmitting every physical object’s state continuously.
+
+I researched the networking and physics approaches and saved expanded revisions of both implementation prompts:
+- AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt — new sections 2.11–2.24 cover latency, predicted terrain, reconciliation, streaming, and combat through changing cover. Sections 8.9 and 9.8 define validation and implementation order.
+- AXIOM_Reference_Worldgen_And_Bounded_Physics_Prompt.txt — new sections 4.10–4.18 specify coupled 3D material physics, including liquids, rubble, ropes, deformable structures, pressure, heat, and phase changes.
+These are updated implementation specifications. The native engine source and executable are not available in this workspace, so performance improvements still need implementation and measurement.
+1. Reduce the entire interaction delay, including the parts hidden by “ping”
+A low network RTT can coexist with sluggish gameplay if input waits for a render frame, outgoing commands wait behind chunk data, the host waits another tick, and the client delays installing the result.
+
+Riot’s published networking investigations are useful here: they distinguish network travel from simulation and presentation buffering, and document cases where excessive buffering increased perceived delay without increasing measured network RTT. Riot Games
+
+For Axiom, measure these separately:
+Measurement	What it tells us
+Input → first local feedback	Whether the tool, camera, sound, and provisional effect feel responsive
+Designed mining duration	Whether the gameplay rule itself is slow
+Eligible break → predicted hole and collision change	Whether the engine adds delay after the block should break
+Request → authoritative application	Network travel, host queues, validation, and tick scheduling
+Authoritative application → installed client result	Return travel, decoding, reconciliation, and publication
+Remote observer’s state age	How far behind another player’s displayed world is
+Applied result → durable recording	Persistence delay, measured separately from interaction
+
+
+This distinction matters for mining. A block may deliberately require a second of work, but the engine should start that work promptly and remove the block promptly when the rule permits it. Sending the first mining request only after the local animation finishes would add avoidable delay.
+What prediction can realistically achieve
+Consider an illustrative, already eligible simple break with:
+- 80 ms symmetric RTT;
+- a 60 Hz authority;
+- locally ready terrain and collision data;
+- no congestion, packet loss, or extra preparation.
+Event	Illustrative time after input
+Local predicted feedback enters a frame	About 0–16.7 ms
+Host receives the request	About 40 ms
+Host applies it at an eligible tick	About 40–56.7 ms
+Confirmation returns	About 80–96.7 ms
+Confirmation is installed on a subsequent client frame	About 80–113.4 ms
+
+
+Those intervals are arithmetic examples, not measured Axiom results or display-latency guarantees. They exclude input-device latency, render queues, scanout, and authored mining time.
+
+The useful gain is that local interaction can respond before confirmation returns. The confirmation path must then preserve that response without duplicated effects, flashing blocks, or inconsistent collision.
+2. Make a predicted block break part of a real local world
+The client should maintain:
+1. A coherent confirmed world state.
+2. A bounded, ordered set of pending local actions.
+3. A predicted simulation branch containing the terrain and physical objects affected by those actions.
+That branch supplies the local selection rays, character collision, nearby contacts, and current visuals.
+#chatgpt-mermaid-_r_62v_{font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;font-size:16px;fill:rgb(237, 237, 237);}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#chatgpt-mermaid-_r_62v_ .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#chatgpt-mermaid-_r_62v_ .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#chatgpt-mermaid-_r_62v_ .error-icon{fill:rgb(48, 48, 48);}#chatgpt-mermaid-_r_62v_ .error-text{fill:rgb(237, 237, 237);stroke:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ .edge-thickness-normal{stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .edge-thickness-thick{stroke-width:3.5px;}#chatgpt-mermaid-_r_62v_ .edge-pattern-solid{stroke-dasharray:0;}#chatgpt-mermaid-_r_62v_ .edge-thickness-invisible{stroke-width:0;fill:none;}#chatgpt-mermaid-_r_62v_ .edge-pattern-dashed{stroke-dasharray:3;}#chatgpt-mermaid-_r_62v_ .edge-pattern-dotted{stroke-dasharray:2;}#chatgpt-mermaid-_r_62v_ .marker{fill:rgb(175, 175, 175);stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_62v_ .marker.cross{stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_62v_ svg{font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;font-size:16px;}#chatgpt-mermaid-_r_62v_ p{margin:0;}#chatgpt-mermaid-_r_62v_ .label{font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ .cluster-label text{fill:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ .cluster-label span{color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ .cluster-label span p{background-color:transparent;}#chatgpt-mermaid-_r_62v_ .label text,#chatgpt-mermaid-_r_62v_ span{fill:rgb(237, 237, 237);color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ .node rect,#chatgpt-mermaid-_r_62v_ .node circle,#chatgpt-mermaid-_r_62v_ .node ellipse,#chatgpt-mermaid-_r_62v_ .node polygon,#chatgpt-mermaid-_r_62v_ .node path{fill:rgb(19, 33, 54);stroke:rgb(31, 78, 148);stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .rough-node .label text,#chatgpt-mermaid-_r_62v_ .node .label text,#chatgpt-mermaid-_r_62v_ .image-shape .label,#chatgpt-mermaid-_r_62v_ .icon-shape .label{text-anchor:middle;}#chatgpt-mermaid-_r_62v_ .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .rough-node .label,#chatgpt-mermaid-_r_62v_ .node .label,#chatgpt-mermaid-_r_62v_ .image-shape .label,#chatgpt-mermaid-_r_62v_ .icon-shape .label{text-align:center;}#chatgpt-mermaid-_r_62v_ .node.clickable{cursor:pointer;}#chatgpt-mermaid-_r_62v_ .root .anchor path{fill:rgb(175, 175, 175)!important;stroke-width:0;stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_62v_ .arrowheadPath{fill:rgb(175, 175, 175);}#chatgpt-mermaid-_r_62v_ .edgePath .path{stroke:rgb(175, 175, 175);stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .flowchart-link{stroke:rgb(175, 175, 175);fill:none;}#chatgpt-mermaid-_r_62v_ .edgeLabel{background-color:rgb(14, 14, 14);text-align:center;}#chatgpt-mermaid-_r_62v_ .edgeLabel p{background-color:rgb(14, 14, 14);}#chatgpt-mermaid-_r_62v_ .edgeLabel rect{opacity:0.5;background-color:rgb(14, 14, 14);fill:rgb(14, 14, 14);}#chatgpt-mermaid-_r_62v_ .labelBkg{background-color:rgba(14, 14, 14, 0.5);}#chatgpt-mermaid-_r_62v_ .cluster rect{fill:rgb(48, 48, 48);stroke:rgba(255, 255, 255, 0.15);stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .cluster text{fill:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ .cluster span{color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;font-size:12px;background:rgb(48, 48, 48);border:1px solid rgba(255, 255, 255, 0.15);border-radius:2px;pointer-events:none;z-index:100;}#chatgpt-mermaid-_r_62v_ .flowchartTitleText{text-anchor:middle;font-size:18px;fill:rgb(237, 237, 237);}#chatgpt-mermaid-_r_62v_ rect.text{fill:none;stroke-width:0;}#chatgpt-mermaid-_r_62v_ .icon-shape,#chatgpt-mermaid-_r_62v_ .image-shape{background-color:rgb(14, 14, 14);text-align:center;}#chatgpt-mermaid-_r_62v_ .icon-shape p,#chatgpt-mermaid-_r_62v_ .image-shape p{background-color:rgb(14, 14, 14);padding:2px;}#chatgpt-mermaid-_r_62v_ .icon-shape .label rect,#chatgpt-mermaid-_r_62v_ .image-shape .label rect{opacity:0.5;background-color:rgb(14, 14, 14);fill:rgb(14, 14, 14);}#chatgpt-mermaid-_r_62v_ .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#chatgpt-mermaid-_r_62v_ .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#chatgpt-mermaid-_r_62v_ .node .neo-node{stroke:rgb(31, 78, 148);}#chatgpt-mermaid-_r_62v_ [data-look="neo"].node rect,#chatgpt-mermaid-_r_62v_ [data-look="neo"].cluster rect,#chatgpt-mermaid-_r_62v_ [data-look="neo"].node polygon{stroke:url(#chatgpt-mermaid-_r_62v_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_62v_ [data-look="neo"].swimlane.cluster rect{filter:none;}#chatgpt-mermaid-_r_62v_ [data-look="neo"].node path{stroke:url(#chatgpt-mermaid-_r_62v_-gradient);stroke-width:1px;}#chatgpt-mermaid-_r_62v_ [data-look="neo"].node .outer-path{filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_62v_ [data-look="neo"].node .neo-line path{stroke:rgb(31, 78, 148);filter:none;}#chatgpt-mermaid-_r_62v_ [data-look="neo"].node circle{stroke:url(#chatgpt-mermaid-_r_62v_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_62v_ [data-look="neo"].node circle .state-start{fill:#000000;}#chatgpt-mermaid-_r_62v_ [data-look="neo"].icon-shape .icon{fill:url(#chatgpt-mermaid-_r_62v_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_62v_ [data-look="neo"].icon-shape .icon-neo path{stroke:url(#chatgpt-mermaid-_r_62v_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_62v_ .node text{font-size:14px;font-weight:600;letter-spacing:normal;fill:rgb(232, 232, 232);}#chatgpt-mermaid-_r_62v_ .edgeLabels text{font-size:13px;font-weight:600;letter-spacing:-0.08px;fill:rgb(232, 232, 232);}#chatgpt-mermaid-_r_62v_ .node tspan[font-weight="normal"],#chatgpt-mermaid-_r_62v_ .edgeLabels tspan[font-weight="normal"]{font-weight:600;}#chatgpt-mermaid-_r_62v_ .edgeLabel .label rect{opacity:1;rx:13px;ry:13px;fill:rgb(19, 19, 19);stroke:rgb(47, 47, 47);stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .node rect,#chatgpt-mermaid-_r_62v_ .node circle,#chatgpt-mermaid-_r_62v_ .node ellipse,#chatgpt-mermaid-_r_62v_ .node polygon,#chatgpt-mermaid-_r_62v_ .node path{fill:rgb(24, 24, 24);stroke:rgba(255, 255, 255, 0.1);stroke-width:1px;}#chatgpt-mermaid-_r_62v_ .node rect{rx:16px;ry:16px;}#chatgpt-mermaid-_r_62v_ .mermaid-decision .label-container{fill:rgb(19, 19, 19);stroke:rgb(47, 47, 47);stroke-dasharray:2px,2px;}#chatgpt-mermaid-_r_62v_ .edgePaths .flowchart-link{stroke:rgb(175, 175, 175);stroke-width:1px;stroke-linecap:round;stroke-linejoin:round;}#chatgpt-mermaid-_r_62v_ .marker{fill:rgb(175, 175, 175);stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_62v_ :root{--mermaid-font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;}Local actionBounded predicted worldHost validation and orderingImmediate collision anddisplayAccepted event or correctionCoherent confirmation andreplay
+
+
+
+
+Consecutive actions should see previous predictions
+If you break a block and immediately dig the block behind it, the second selection ray should see the first predicted opening.
+
+If you place a support and immediately attach a machine, the attachment request should identify its dependency on that support.
+
+These actions can travel together or consecutively without requiring a complete round trip between each one. The host validates their order, resources, target generations, and dependencies.
+
+This also avoids a subtle multiplayer bug: a delayed request to mine stone must not destroy a machine that another player has since placed at the same coordinates. Validation needs the relevant material or object generation, rather than coordinates alone.
+Collision, visuals, and physics must change together
+A disappearing wall that still blocks the player feels broken. A visually solid wall that can already be walked through is equally confusing.
+
+The fast edit path therefore needs to:
+- Remove the old blocking surface.
+- Expose the correct neighboring faces.
+- Update the relevant collision or terrain-query representation.
+- Invalidate occlusion that relied on the old wall.
+- Publish those changes under one current revision.
+Simply hiding triangles from an old mesh is insufficient: removing a block also reveals surfaces that may not exist in that mesh.
+
+A small correct replacement should be installed first. Greedy meshing, lighting refinement, and distant representations can follow under their existing budgets.
+Reconciliation must include affected physical objects
+Suppose you walk through a predicted hole, push a crate, and pull a rope attached to that crate. If the host rejects the break, correcting only the player leaves the crate’s impulse and the rope’s tension inconsistent.
+
+The correction must restore and replay the bounded affected domain together: terrain, controller, bodies, contacts, constraints, and dependent actions.
+
+For a large collapse whose complete predictive state is unavailable, the client can still provide immediate tool feedback and provisional fracture information. Full physical prediction should begin only when its required state and recovery budget are available.
+Confirmation must not make the block flash back
+An acknowledgment may arrive before the corresponding canonical terrain data.
+
+The pending overlay must remain until that result is installed, or be folded into it atomically. Removing the overlay immediately on receipt can briefly reveal the old wall underneath.
+
+Likewise, rejecting one action must remove that action and recompute its dependents over the current confirmed world. Restoring an old whole-chunk copy could erase another player’s intervening work.
+
+Stable operation identities also make resource handling predictable: a retried request returns its established outcome, confirmation does not create a second loot item, and replay does not repeat damage or purchases.
+3. Keep urgent gameplay moving while chunks and checkpoints transfer
+The proposed protocol uses a few delivery classes with clear semantics:
+Traffic	Delivery behavior
+Current movement and aim controls	Freshness-sensitive messages with sequence numbers and bounded redundancy
+Accepted edits, casts, and other consequential events	Ordered application, deduplication, and bounded repair of missing records
+Membership changes, receipts, and baseline negotiation	Reliable control messages
+Terrain, checkpoints, and other bulk content	Bounded transfers with receiver credits, cancellation, and explicit identities
+
+
+These classes share real bandwidth. Their purpose is to control what gets queued and processed first.
+Bound queue age as well as queue size
+A queue can fit comfortably in memory while containing several seconds of obsolete gameplay.
+
+Track both queued bytes and the age of the oldest relevant message. Limit bulk production before large amounts of data enter the transport. Reserve service capacity for input, accepted events, receipts, and recovery controls, while allowing enough bulk progress for joining to finish.
+
+This applies on both sides of the network: parsing, decompression, collision preparation, and main-thread installation also need budgets.
+Use transport behavior deliberately
+QUIC datagrams avoid automatic retransmission, but they remain congestion controlled and can be dropped. Streams provide independent delivery ordering while sharing connection resources. Neither mechanism supplies an application-level guarantee that an edit was validated or installed. rfc-editor.org
+
+The current Quinn documentation exposes a useful distinction:
+- send_datagram may evict older unsent datagrams.
+- send_datagram_wait waits for space, favoring older queued work.
+That difference matters for fresh movement controls. Consequential actions still need retained identities and repairable history. Rust
+
+Cancellation also needs care. Dropping a Quinn send stream can finish it and continue transmission; an explicit reset is the cancellation mechanism. A canceled partial transfer therefore needs framing and revision checks so its bytes cannot become a valid new baseline accidentally. Rust
+
+These are reasons to configure and instrument the existing pinned transport carefully before considering a replacement.
+Separate clock alignment from physical accuracy
+Clients need an estimate of host time, clock drift, and uncertainty. They can adjust input scheduling lead and remote presentation delay within limits.
+
+They must retain the shared physical timestep and accepted event order. A client recovering from alt-tab should not dump seconds of obsolete movement into the host, skip accepted simulation ticks, or secretly reduce solver iterations to catch up.
+
+Local camera and tool feedback should also remain independent of remote interpolation delay.
+
+For an interacting assembly—such as a player standing on a ship—the player, ship, cargo, and attachments need a coherent simulation time. Feeding a delayed rendered ship transform into current player collision creates avoidable sliding and correction problems.
+Measure the actual connection path
+Player hosting remains the appropriate default for minimizing developer simulation costs, with relay fallback where needed.
+
+Relaying can change the latency characteristics. Iroh’s documented architecture carries relayed QUIC traffic through WebSockets, and its multipath documentation distinguishes TCP relay paths from direct UDP paths. Inner datagrams do not remove stalls introduced by an outer reliable stream. iroh
+
+Record direct versus relayed operation, loss, jitter, upload saturation, and application state age. Route choice should follow measured behavior. Relay bandwidth and the player host’s upload capacity still need accounting.
+4. Integrate loaded regions without losing edits or reverting newer state
+Chunk streaming and live multiplayer edits must share one publication protocol.
+
+The proposed sequence is:
+1. Capture a coherent snapshot and its event cursor.
+2. Atomically register retention of subsequent events at that boundary.
+3. Transfer and prepare the snapshot away from the live interaction path.
+4. Apply the retained ordered events up to a selected publication point.
+5. Prepare matching collision and minimum correct visuals.
+6. Atomically publish the candidate after checking its epoch and the currently installed frontier.
+The atomic retention step is essential. If snapshot capture happens first and event retention begins later, an intervening edit could be absent from the snapshot and already removed from the retained log.
+
+Publication needs another check: a candidate that was valid when its download began may be older than live state when it finishes. A fresh transfer ID alone does not make that candidate safe to install.
+
+For delta compression, use a baseline the recipient explicitly reports as usable and retained. Fiedler’s original treatment establishes the need for a known received baseline; Axiom additionally needs matching terrain, collision, and solver dependencies before resuming an exact domain. Gaffer On Games
+
+Recovery must remain finite. If replay cannot catch up with relevant incoming changes, select a newer coherent checkpoint or a smaller valid interaction domain. Repeatedly restarting a huge download while its change backlog grows would recreate the update spiral the engine is meant to avoid.
+5. Define combat through changing cover explicitly
+Fast block prediction raises a gameplay question that ordinary transform smoothing does not answer:
+
+What happens when someone breaks a wall and fires through the predicted opening immediately?
+
+The updated prompt includes a proposed PvP rule for playtesting.
+Bounded historical targets, conservative cover checks
+The host assigns the shot’s authoritative execution tick, validates its ammunition and muzzle origin, and validates a bounded target-presentation time.
+
+For hitscan, query the historical targets while requiring the ray to pass the relevant cover at both the historical and execution times.
+
+This makes newly placed cover block rays that intersect it. It does not guarantee immunity whenever a player’s current position is behind new cover: a ray to their historical position may follow a different path.
+
+For an immediate break-then-shot chain, an accepted removal can provide a narrow exemption for the exact historical block or object revision it removed. Replacement blocks remain valid cover.
+
+If the break fails, the shot follows its declared blocked-shot or pre-activation rejection rule. A predicted opening never creates an authoritative kill by itself.
+
+This proposal deliberately uses conservative obstruction checks. It may reject some plausible historical shots through recently opened passages, so its fairness needs playtesting alongside responsiveness.
+Record one adjudication decision
+Clients may retain different amounts of history, especially during joining and recovery. They must not independently choose different fallback rules because one has an old wall revision and another does not.
+
+The host records the selected query mode, effective times, validated exemptions, and hit disposition as one ordered authoritative event. Clients apply that event consistently.
+
+Finite-speed projectiles use a different rule: spawn at their accepted tick and move forward through the shared physical world, with suitable continuous collision checks. Rewinding targets independently at every projectile contact would create a conflicting model.
+
+An initial 150 ms historical window is included as a tunable proposal. It is not a measured optimum.
+6. Build a genuine 3D material simulation with several cooperating models
+Noita already combines falling-sand simulation with destructible rigid bodies; its developer’s GDC presentation describes that hybrid approach. The useful direction for Axiom is to extend the interaction between material, structure, and motion into 3D. gdcvault.com
+
+I recommend these canonical representations:
+System	Representation	Gameplay it enables
+Terrain and structures	Sparse volumetric material with bonds and attachments	Excavation, damage, meaningful fracture, persistent ruins
+Detached structures	Compound rigid assemblies	Falling beams, moving machinery, doors, bridges, spacecraft sections
+Consequential rubble and grains	Bounded parcels with conserved deposits	Conveyors, piles, excavation, salvage, friction and impacts
+Free liquid	Bulk reservoirs plus bounded active 3D simulation	Sloshing, breaches, flowing channels, floating objects
+Gas and heat	Conserved room/pipe states with local spatial fields	Ventilation, steam, pressure vessels, combustion
+Ropes and flexible mechanisms	Constraints or bounded deformable bodies	Tension, bending, yielding, tearing, winches
+Fold magic	Shared motor or rest-shape changes with collision	Physically closing cages, lifting panels, deforming structures
+
+
+The boundaries between these models need explicit ownership and transfer rules.
+Every material amount has one owner
+When a wall fractures, its mass transfers from terrain to detached pieces. When rubble settles, its recoverable quantity transfers into a deposit. When water freezes, liquid ownership ends as solid ownership begins.
+
+Otherwise the game can duplicate matter between representations—or lose it during unloading.
+
+Transfers should preserve the quantities relevant to play: composition, mass, momentum, thermal state, and appropriate angular information. Numerical error needs an explicit tolerance. Magical energy or matter should enter as a defined source under game rules.
+
+This makes scientific automation meaningful. A conveyor, smelter, pump, or spell works on persistent material rather than disconnected visual effects.
+Fluid and solid forces need two-way ownership
+A flowing liquid can push a crate, and the crate must alter the flow.
+
+One coupling path should own that exchange, applying consistent opposing impulses and torque. If pressure coupling already generates buoyancy, adding a separate generic buoyancy force would count the effect twice.
+
+Active fluid regions also need real boundary conditions. Water exiting a detailed patch must transfer into another patch or a conserved reservoir. An unloaded boundary cannot silently become a wall or a drain.
+
+Adjacent fluid regions may require a shared pressure solve or a validated coupling method. Dividing their geometry into separate chunks does not establish physical independence. The variational fluid/solid work by Batty and colleagues is a useful numerical reference, with documented computational tradeoffs rather than a ready-made performance guarantee. cs.ubc.ca
+Smoothness should come from stable motion
+The important quality measures include penetration, contact jitter, rope stretch, density error, and pressure residual—not only how smoothly the rendered surface moves.
+
+XPBD provides a formulation for compliant constraints and force estimates. The Small Steps research also shows benefits from spending comparable constraint work on smaller substeps in its tested systems. Those findings support a benchmark candidate; they do not prove a universal best solver configuration. matthias-research.github.io
+
+Use a shared, bounded substep schedule, valid collision queries across the resulting motion, and careful treatment of fast projectiles, rotating fragments, and thin cover.
+
+For fold magic, use physical motor targets, forces, or rest-shape changes. A panel can jam, bend, or tear under load, making the magic legible and interactive.
+7. Use current Rust physics work selectively
+Several concrete projects are relevant to the native engine.
+Rapier: inspect the current integration first
+Rapier’s retrieved Rust 0.36 documentation now includes ropes, cloth, volumetric soft bodies, plasticity, and tearing. That is a reason to inspect the engine’s pinned version before building an independent deformable solver and introducing another coupling boundary. Rapier
+
+The engine should keep its existing backend if it satisfies the required behavior and performance.
+Salva: a concrete liquid prototype candidate
+Salva’s official repository lists DFSPH and IISPH liquid solvers, plus optional two-way Rapier coupling. It is a credible reuse candidate for the first CPU liquid experiment. Dependency compatibility, neighbor ordering, persistence, and cross-machine behavior still need verification. GitHub
+
+The first experiment should contain a tank breach, moving barrier, pipe inlet, and floating object. An isolated particle-count demo does not test the interactions Axiom needs.
+APIC: compare a complete grid-based liquid implementation
+APIC augments particles with local affine velocity information to address dissipation and noise in particle/grid transfers. It is a transfer scheme; a working liquid system also needs pressure, free surfaces, boundaries, viscosity, and conservation handling. The Affine Particle-In-Cell Method
+
+The proposed comparison is:
+- Salva’s existing liquid and rigid-body coupling path.
+- A bounded sparse-grid liquid implementation using APIC transport and a complete pressure/boundary solver.
+Measure both in the same coupled scene on the intended minimum hardware. The evidence should select the implementation.
+Nexus GPU MPM: promising research with relevant limits
+Dimforge’s October 25, 2026 report describes sparse GPU MPM for liquids, sand, snow, and cutting. It also states that rigid-body/MPM coupling is currently one-way and that its determinism is same-machine rather than cross-platform. Dimforge
+
+That makes it useful research for richer deformable materials, but those limitations matter directly to Axiom’s multiplayer and two-way interaction requirements.
+8. Keep deterministic networking compatible with real client physics
+The preferred normal path remains:
+
+Clients execute the shared physical model for complete relevant domains; the host distributes accepted commands, compact authoritative decisions, and verification information.
+
+Checkpoints and state repair support joining and recovery. Explicit state synchronization remains available where exact deterministic replication has not been established.
+
+Current Rapier documentation supports cross-platform determinism under stated initialization, arithmetic, and build conditions, and documents compatibility with parallel solving in the retrieved version. That does not automatically establish determinism for an external fluid solver, reaction system, or the application’s event ordering. Rapier
+
+The whole coupled domain needs consistent:
+- Insertion, removal, and neighbor ordering.
+- Constraint and reduction order.
+- Timesteps and coupling schedules.
+- Material transitions.
+- Accepted commands and boundary inputs.
+- Future-affecting state restored from checkpoints.
+A compatibility manifest describes schemas and rules. Checkpoints contain the mutable values needed to continue the simulation.
+
+The host can seal a tick without waiting for every peer. A client advances its confirmed frontier only when it has the complete accepted history and dependencies through that point. A missing peer therefore triggers bounded prediction or recovery for that peer, rather than a global pause.
+
+This preserves real local physics while keeping shared outcomes authoritative. It also avoids assuming that a seed alone reproduces everything after players begin changing the world.
+9. Validate improvement against Minecraft and against Axiom’s richer physics
+Minecraft is a useful baseline, but the comparison needs precision. Mojang’s current Bedrock documentation already describes predicted block removal and durability, plus tick-addressed movement reconciliation. Axiom’s advantage must come from measured integration quality and response time. Minecraft Bedrock Protocol
+
+Compare named Java and Bedrock builds separately, with matched hardware, network conditions, distances, and equivalent actions. Keep vanilla and modded comparisons distinct.
+
+The proposed acceptance suite includes:
+- Rapid digging and placement across region boundaries.
+- Breaking, moving through the opening, and immediately firing.
+- Two players mining or replacing the same cell.
+- A collapse involving occupied supports, crates, and ropes.
+- Joining while other players alter the incoming region.
+- Loss, jitter, asymmetric links, saturated uploads, and forced relay.
+- Corrections arriving while old mesh or collider jobs finish.
+- Reconnection and duplicate requests without duplicate rewards.
+For Axiom’s material simulation, add a shared scene where one player breaches a heated tank, another manipulates a hinged barrier, liquid pushes a crate, and a joining player receives the evolving state. Then test freezing a stream around a loaded cable and breaking its anchor.
+
+Measure response time together with correction frequency, authoritative state age, replay cost, frame/tick tails, memory peaks, conservation errors, and contact stability.
+
+The first delivery sequence should be: instrument one ordinary edit; implement coherent predicted terrain and reconciliation; integrate bounded streaming; establish the changing-cover combat rule; then ship one coupled liquid/rigid-body scene. That sequence makes each added capability prove its responsiveness, consistency, and bounded cost before expanding the world simulation.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Turn it into one cohesive implementation prompt
+
+
+
+
+
+
+
+
+
+
+
+
+Worked for 16m 47s
+
+
+
+
+
+
+Created the single, self-contained implementation prompt:
+AXIOM_Unified_Engine_Implementation_Prompt.txt
+It is written directly to the coding agent and combines the engine optimization, networking, loading, destruction, world generation, and 3D physics work into one controlling specification with one implementation sequence. You can attach it to your coding session as the complete brief for this engine pass.
+What the consolidated prompt establishes
+One shared data model. Authoritative world state, temporary client predictions, and replaceable rendering data have distinct ownership. Terrain, collision, inventories, physical bodies, and saved outcomes follow consistent identities and revision rules.
+
+One multiplayer model. A player or community host owns accepted outcomes. Relevant clients run actual local physics. Verified deterministic domains primarily exchange accepted commands and events, with explicit checkpoints, repair, and compatibility modes.
+
+One responsive interaction path. Mining starts promptly; predicted holes update collision and visible surfaces together; subsequent actions can depend on earlier predictions. Confirmation and correction preserve other players’ edits and prevent duplicated loot, damage, or costs.
+
+One resource-lifetime contract. Work reserves its downstream capacity before expensive production begins. CPU output, GPU staging, resident geometry, canceled jobs, and retiring resources remain accounted for through their real lifetimes.
+
+One coupled material model. Terrain, rigid fragments, rubble, liquids, reservoirs, gases, heat, ropes, and mechanisms exchange conserved quantities. The specification includes meaningful three-dimensional interaction, shared solver schedules, and bounded recovery.
+
+One world-generation contract. Spherical geography, drainage, erosion, regional refinement, settlement placement, and distant representations derive from consistent world data. The inhabited industrial sites, useful base improvements, radio/map freight, and editable megastructures remain part of the integrated gameplay target.
+The implementation order
+Stage	Required outcome
+0. Audit and baseline	Trace the actual engine, reproduce the reported freeze, and capture representative measurements.
+1. Safe lifetimes and ordinary edits	Stabilize memory, uploads, cancellation, retirement, and correct block-edit presentation.
+2. Canonical continuation and authority	Establish identities, persistence, complete checkpoints, deterministic domains, and replay.
+3. Responsive multiplayer and joining	Integrate prediction, receipts, ordered dependencies, atomic region installation, and changing-cover combat.
+4. Critical-path optimization	Improve measured CPU, meshing, rendering, loading, and streaming bottlenecks.
+5. Coupled material physics	Deliver and validate a shared liquid–rigid-body–mechanism scene before expanding material complexity.
+6. Default world integration	Deliver coherent planetary terrain and one complete inhabited district or shipyard bay.
+7. Release evidence	Demonstrate stable memory, bounded recovery, correct outcomes, and reproducible improvements on named hardware.
+
+
+Important details preserved during consolidation
+The prompt explicitly requires bounded foreground installation and cleanup, because asynchronous preparation alone cannot prevent a long frame stall. It also covers arrivals into changing destinations, disconnect behavior, deterministic circuit-solver limits, and complete physics recovery.
+
+It makes clear that the authority does not wait for a client’s GPU to apply accepted gameplay. Each rendering client must maintain a coherent represented state while advancing or recovering.
+
+The numerical goals are labeled as proposals to validate: conservative GPU admission thresholds, next-frame local feedback under ready dependencies, and initial targets of 30% lower problematic-scene p99 frame time and 50% shorter median warm-world time to first safe interaction, paired with absolute hardware-specific limits.
+
+The final instructions require native implementation, meaningful fault tests, before/after measurements, and an honest report of incomplete stages. The full acceptance matrix and primary-source references are included in the same file.

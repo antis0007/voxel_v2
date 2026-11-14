@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "rows": {
+    "A02-04": {
+      "status": "building",
+      "evidence": [
+        "crates/app/src/world/progression.rs",
+        "crates/app/src/world/adventure/blade.rs"
+      ],
+      "note": "Self-repair regrows 1 durability/stack/10 s (forging switch); Jagged adds up to 2 hit damage/stack as durability drops. Compiles; not exercised live. Costs not yet disclosed in tooltips.",
+      "updated": "2026-11-13"
+    },
+    "A09-07": {
+      "status": "blocked",
+      "evidence": [
+        "crates/content/src/factory_resources.rs"
+      ],
+      "note": "Factory resources are a fixed 25-entry array without stone/wood/sand; a new resource needs a save bump. Unblock: name-keyed resource table (one migration).",
+      "updated": "2026-11-13"
+    },
+    "A09-08": {
+      "status": "blocked",
+      "evidence": [
+        "crates/content/src/factory_resources.rs"
+      ],
+      "note": "Needs wood/sand/stone factory resources; RESOURCE_COUNT is fixed and new resources need a save bump. Unblock: name-keyed resource table (one migration).",
+      "updated": "2026-11-13"
+    },
+    "A10-04": {
+      "status": "playable",
+      "evidence": [
+        "tools/axiom-dev/scenarios/item-line.json"
+      ],
+      "note": "Pipes route and split; no belt speed, underground or distance-limit test.",
+      "updated": "2026-11-13"
+    },
+    "A11-07": {
+      "status": "playable",
+      "evidence": [
+        "tools/axiom-dev/scenarios/biofuel-chain.json"
+      ],
+      "note": "Growth, fermentation and fuel-gas conversion pass headless; generator burn and waste accounting untested.",
+      "updated": "2026-11-13"
+    },
+    "A12-02": {
+      "status": "playable",
+      "evidence": [
+        "tools/axiom-dev/scenarios/battery-admission.json"
+      ],
+      "note": "Cell capacity and rate tiers pass; tiers are code (4^tier), no light-priced generator.",
+      "updated": "2026-11-13"
+    },
+    "A12-03": {
+      "status": "verified",
+      "evidence": [
+        "tools/axiom-dev/scenarios/ore-routes.json"
+      ],
+      "note": "Crush/wash/smelt routes with accounted byproduct; no compressor or extractor kind.",
+      "updated": "2026-11-13"
+    },
+    "B-GT-04": {
+      "status": "verified",
+      "evidence": [
+        "tools/axiom-dev/scenarios/drive-overclock.json"
+      ],
+      "note": "Drive level scales speed and draw together; energy per batch constant. One modifier only, no stacking evaluator.",
+      "updated": "2026-11-13"
+    },
+    "B-GT-05": {
+      "status": "verified",
+      "evidence": [
+        "tools/axiom-dev/scenarios/shell-validator.json"
+      ],
+      "note": "Found/needed brick count and Incomplete shell status; does not name which cell is missing.",
+      "updated": "2026-11-13"
+    },
+    "B-GT-06": {
+      "status": "verified",
+      "evidence": [
+        "tools/axiom-dev/scenarios/battery-admission.json"
+      ],
+      "note": "Cells admit charge at tier rate 4/16/64 kW.",
+      "updated": "2026-11-13"
+    },
+    "B-GT-07": {
+      "status": "playable",
+      "evidence": [
+        "tools/axiom-dev/scenarios/item-line.json"
+      ],
+      "note": "Pipe split conserves units headless; concurrent-access duplication not exercised.",
+      "updated": "2026-11-13"
+    },
+    "B-GT-10": {
+      "status": "verified",
+      "evidence": [
+        "tools/axiom-dev/scenarios/ore-routes.json"
+      ],
+      "note": "Smelt 1x, crush 2x, wash 3x plus trace gold for water; processes.ron byproduct field, full byproduct buffer stalls.",
+      "updated": "2026-11-13"
+    },
+    "B-IE-07": {
+      "status": "playable",
+      "evidence": [
+        "target/reviews/parity-20261113/NOTES.txt"
+      ],
+      "updated": "2026-11-14"
+    },
+    "B-IE-09": {
+      "status": "playable",
+      "evidence": [
+        "tools/axiom-dev/scenarios/biofuel-chain.json"
+      ],
+      "note": "Same chain as A11-07; no distinct oil-crop route.",
+      "updated": "2026-11-13"
+    },
+    "L032": {
+      "status": "verified",
+      "evidence": [
+        "tools/axiom-dev/scenarios/hearths.json"
+      ],
+      "note": "Coke oven and blast furnace shells, heat gate, steel conversion; creosote now a data byproduct.",
+      "updated": "2026-11-13"
+    },
+    "L079": {
+      "status": "playable",
+      "evidence": [
+        "crates/app/src/world/farming/flowers.rs#76",
+        "assets/crops.ron#813",
+        "target/reviews/magitech-20261113/NOTES.txt",
+        "crates/app/src/world/farming/flowers.rs#67",
+        "assets/crops.ron#827"
+      ],
+      "note": "Mana flower feed: eats loose wild essence (16 mana each, one per 2 s) into habitat receivers or player; dev op mana_flower",
+      "updated": "2026-11-14"
+    }
+  }
+}

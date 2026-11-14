@@ -8,8 +8,9 @@ Inputs (untracked owner staging, 2026-10-29):
 - `docs/NEW/AXIOM_Reality_Contract_v1.txt` (gravity profiles)
 
 Decision 0039 applies: briefs are backlog, not inputs of record. MASTER_PLAN M1
-(`dam_break`) keeps priority. "Manyfold" is a new proper noun and is not
-approved (0039 §3); code uses `radial_tube` or `gravity_region`.
+(`dam_break`) keeps priority. "Manyfold" was approved by the owner on
+2026-10-30 (0039 addendum); code may use it alongside `radial_tube` and
+`gravity_region`.
 
 ## 1. The brief's own prerequisite is missing
 

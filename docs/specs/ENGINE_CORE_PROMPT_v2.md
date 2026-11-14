@@ -53,6 +53,11 @@ Write `docs/research/<topic>.md` (≤ 8 lines each: what we adopt, what we rejec
 
 Deliverable of this section: `docs/research/MOD_FEATURE_MATRIX.md` — a table of ~150 features across these sources with columns: feature, source, how it maps to our physics/data model, cost estimate (data-only / small code / new system), target milestone.
 
+**Addendum A:** [MOD_ADDENDUM.md](MOD_ADDENDUM.md) extends this research list.
+Its A.16 ten-column schema supersedes the abbreviated schema above; the current
+[feature matrix](../research/MOD_FEATURE_MATRIX.md) contains 422 planning rows.
+These rows are adoption targets, not implementation acceptance.
+
 ---
 
 # PART III — ENGINE ARCHITECTURE
@@ -271,6 +276,12 @@ World-query API over `sim`: nouns (materials/entities near), verbs = `Action`s; 
 ---
 
 # PART VII — MINECRAFT + MOD FEATURE ADOPTION
+
+[Addendum A](MOD_ADDENDUM.md) is part of this adoption scope, including A.1–A.14
+family requirements and the big-system feature minimums. Its A.15 shared services
+also extend the Part III/IV architecture: reuse one owner for planes, fields,
+controllers, links, genetics, modifiers and pocket worlds. Physical failure and
+education hooks remain requirements, not claims that those systems exist today.
 
 Produce `MOD_FEATURE_MATRIX.md` in research. Minimum feature list to adopt (grouped by how they map):
 

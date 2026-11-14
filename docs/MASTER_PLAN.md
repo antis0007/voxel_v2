@@ -5,6 +5,27 @@ session-2 draft. Amendments are applied here and in
 [decision 0022](decisions/0022-master-plan-review.md). No spike, SDD or claim has
 passed yet; table entries are targets until their receipts exist.
 
+## Regional world track, 2026-11-05
+
+W02's first integrated milestone is a playable Hills province with a substantial
+city, a rival stronghold, supporting villages, trade routes, recent history and
+a conflict the player can affect on foot or through overhead command. The
+W01/W04 nursery and W02 bridge fixtures are component checks for production,
+transport and repair. The [province execution plan](plans/2026-11-05-axiom-causal-world.md#next-regional-milestone-a-working-province)
+sets the regional acceptance checks within the existing M1 engine gates and
+frozen design claims.
+
+## Active code slices, 2026-10-29
+
+Direct user request: implement the Manyfold brief, followed by acquired underground
+map knowledge. Writer: this chat. Scope is the two rows below; unrelated in-flight
+renderer, scanner, inventory and audio work stays with its existing writers.
+
+| Slice | Implementation | Compatibility | Acceptance |
+| --- | --- | --- | --- |
+| Manyfold counterweight | Shared weight docks in a socket and opens an existing closed maze wall through authoritative block edits | Save 46 adds the latch after the existing footer; older saves default to unlatched. No generator gate or baseline geometry change | Source implementation; native solo/host/joiner review pending |
+| Acquired map observations | Personal 3D snapshots, travelled patches, local walking-plane charts, separate legacy survey | Versioned personal observation sidecar; old map tiles and waypoints retained; creative and survival archives separate | See `design/EXPLORATION_MAP_IMPLEMENTATION_20261029.md` for implemented boundaries and remaining work |
+
 ## 1. Inputs of record (frozen)
 
 1. [ENGINE_CORE_PROMPT_v2](specs/ENGINE_CORE_PROMPT_v2.md)
@@ -31,13 +52,13 @@ Supporting context (not inputs of record): [research](research/README.md),
 
 Source facts this plan relies on:
 
-- Save **32**, generator **48** at this pass (`world/storage.rs`,
+- Save **54**, generator **145** in the 2026-11-05 source audit (`world/storage.rs`,
   `voxel/src/config.rs`). Other sessions are active: reread both before any
   migration and pick the new save version against then-current source.
   Never edit a historical version gate.
-- The integer CA (`engine_sim`) and its byte-identical GPU port (`engine_sim_gpu`)
-  exist. Ordinary play still uses legacy authority; ADR 0018's sealed CPU region is
-  the only path on the new backend.
+- The integer CA and a GPU backend exist. Ordinary play uses legacy authority;
+  the isolated cellular session is a separate path with checkpointing.
+  Do not infer whole-game CPU/GPU equivalence or ordinary-save migration.
 - Reuse status: `L` = legacy/partial substrate exists, `P` = design only. Both
   still need their SDD and integration.
 - Keep the six product pillars, seven audience paths, current controls, saves and
@@ -173,16 +194,16 @@ contracted capability; adapters also wait for their named prerequisites.
 | V05 | text/node front ends | B | M2 | V01,V02 | P: common IR, text and visual editing |
 | V06 | cryptography primitives | B | M7 | V03,M09 | P: honest toy ciphers, key items and explicit limits |
 | W01 | worldgen stages | A | M1.5 | C01,C02 | L: worldgen crate; owns W-GEO P12 realization, G0–G3 grids and version policy |
-| W02 | civilizations generator | A | M6 | W01 | P: names/culture/architecture/religion/economy/downfall; S10 |
+| W02 | civilizations and regional history | A | M6 | W01,W04 | P: one functioning province with a city, rival state, trade, recent history and persistent conflict. S10 covers broader culture and historical coherence |
 | W03 | strata | B | M6 | W01,W02 | L: underground/depth generation; coherent histories pending |
-| W04 | structures | B | M3 | W01 | L: architecture/sites/dungeons; functioning templates pending |
+| W04 | structures | B | M3 | W01 | L: architecture/sites/dungeons; gate 85 freight hall with powered shutter and service bypass, see worldgen/GENERATOR_85.md; native acceptance pending |
 | W05 | POIs | B | M3 | W04 | L: sites; named roles and spacing acceptance pending |
 | W06 | secrets generator | B | M5 | W01,C15 | P: seeded conditions and discoverable hint chains |
 | W07 | ages/catastrophes/archives | B | M7 | W02,C16,C15 | P: physical knowledge preservation and new-age inheritance |
 | W08 | dimensions/physics constants | B | M6 | C16,C18,W01 | P: per-world constants (incl. planet size, default 32 km face edge) and transfer interface |
 | W09 | space layer/orbital | B | M6 spike; M7 target | B09,W08 | L: recovered orbital gameplay is not patched-conic physics; S9 |
 | W10 | ring | B | M7 | W09,W02 | L: orbital/skyhook narrative substrate; Founder ring pending |
-| W11 | tectonics/lithology/volcanism (W-GEO P0–P1) | B | M3 | W01 | P: plates, strata stack with erodibility/permeability, faults, volcanoes |
+| W11 | tectonics/lithology/volcanism (W-GEO P0–P1) | B | M3 | W01 | L: planar terrain solve; Planet 142+ shares plates between relief and vents. Remaining spec coverage and runtime consequences need separate evidence |
 | W12 | climate planning (W-GEO P2, P8 microclimate) | A | M3 | W01,W11 | P: insolation, circulation, orographic rain, wind field; runtime fields via C12; lat/long from cube-sphere projection (0024) |
 | W13 | erosion/drainage/hydrology network (W-GEO P3–P4) | A | M3 | W11,W12,C02 | L: interim gen-50 meandering drainage.rs; target stream power, priority-flood lakes, Q/Strahler/groundwater |
 | W14 | coasts (W-GEO P5) | B | M4 | W13 | L: beaches/coast bands; cliffs/deltas/estuaries/reefs and tides pending |

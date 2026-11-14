@@ -1,0 +1,465 @@
+AXIOM / MERIDIAN
+REALITY CONTRACT v1
+Shared deformation, impossible optics, material change, and readable warpspace
+Design and implementation standard — 29 October 2026, America/Edmonton
+
+STATUS AND PRECEDENCE
+
+This is an original project specification for the existing Windows-first Rust + raw wgpu voxel engine. It is not an industry standard, a claim that no previous game used any individual mechanic, or a completed engine implementation. No Axiom repository, GPU execution, native benchmark, or multiplayer session was available here.
+
+Read with AXIOM_Low_End_Physics_Water_and_Gas.txt, AXIOM_Open_Maze_Geometry_and_Gravity.txt, and AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt. The latter controls networking: deterministic accepted-command replication is the preferred normal path for supported, verified complete simulation domains. State synchronization is an explicit mode for incompatible, open, oversized, or recovering domains. Preserve raw wgpu, no Bevy, minimal developer hosting, actual local simulation, PvP, construction, destruction, industry, and persistent worlds.
+
+This standard extends The Manyfold and the multiplayer warped-space brief. Their acquired-knowledge maps, stable places, directed portal connections, and safe recovery rules remain. The Crimson Nexus retains its distinct multiversal role. A planet reached through a void opening is a particular discovered connection, not a universal destination selector.
+
+The supplied reality_lens_reference.wgsl and verify_reality_lens.py are a small original reference implementation and executed mathematical checks. The angular mapping uses ordinary stereographic direction scaling; the novel design aim is the coherent system of composable world rules, shared consequences, and discoverable evidence. Mathematical validation is not renderer or networking validation.
+
+1. THE EXPERIENCE
+
+A friend stands in a street that has begun to rise into a long stone wave. The attached steps, drains, and mortar joints bend with it. Their measuring rod remains rigid. A cart rolls toward a doorway that used to be uphill.
+
+Inside a nearby shelter, a window reveals an inverted coastline. Its water appears to hang above the roof, but the window's sill is dry. A second opening admits cold rain from another world. A third contains a reflection whose light can heat a receiver even though no person can pass through its surface.
+
+The party can determine which relationships are changing. They can close a shutter, throw a probe, brace a walkway, redirect water, hold a useful field with an anchor, and keep what they built afterward.
+
+The void becomes deeper through combinations of understandable rules. Its scale can be cosmic while its local interactions remain concrete. The world should be altered by an expedition: a new route, a usable bent causeway, an exposed seam, a transformed material, or machinery that now works with an unusual source of light.
+
+2. WHAT THE INSPIRATIONS CONTRIBUTE
+
+Use the user's Noita inspiration for experimental discovery and changes that affect material behavior. Noita's own release notes identify fungal-shift mechanics and fixes, but this document does not rely on an unverified probability table or copy its exact outcomes. [S1]
+
+Vintage Story's documentation describes temporal storms lowering stability and bringing visual effects and supernatural threats. The additional ambition here is a persistent, usable physical aftermath: altered connections, geometry, flows, and production opportunities. This is a design distinction, not a claim that every detail of Vintage Story's current implementation was audited. [S2]
+
+Warhammer's official Blackstone Fortress introduction describes reality destabilized by the Warp. Borrow the monumental contrast between fragile inhabited places and an overwhelming impossible exterior. Use original architecture, cosmology, names, entities, and inscriptions. [S3]
+
+Preserve the earlier literary direction through evidence: maintenance instructions, incomplete surveys, contradictory cosmological explanations, repairs made by people who survived, and a warning whose measurement is more reliable than its author's theory. Give the player room to learn, laugh, construct, and choose risks.
+
+3. THE STANDARD'S CENTRAL DECISION
+
+Every reality effect is a versioned region rule with declared consequences for geometry, optical paths, traversal, dynamics, materials, conserved quantities, observation, and work budgets.
+
+The engine compiles that rule into the representations needed by rendering, physics, fluids, networking, save data, and the exploration map. A collection of unrelated shaders cannot provide that agreement.
+
+The interesting relationship is that light, bodies, and materials may follow different declared rules. A window can borrow illumination from another world without permitting a body to cross. A reflection can disclose a visible room without establishing its identity. A supported shadow can carry weight because a local apparatus creates a field surface there. These differences are properties players can investigate.
+
+3.1 Required region record
+
+Identity: stable world, region, rule ID, schema version, epoch, and canonical seed.
+
+Geometry: canonical material frame, forward deformation, inverse or certified chart relation, derivatives, valid domain, compatible boundaries, and conservative bounds.
+
+Optics: ordered ray events, aperture surfaces, direction maps, branch weights, spectral response if supported, origin-transfer rules, and path limits.
+
+Transit: directed portal edges, endpoint frames, transform version, allowed transfer classes, availability, and return reservations.
+
+Dynamics: shared gravity/force law, supported body representation, field phase, surface velocities for moving geometry, and sources of mechanical work.
+
+Materials: exposure conditions, reaction tables, rates, inputs, products, energy source/sink, and persistent aftermath.
+
+Fluids: current volume owners, geometry/capacity versions, interface flux owners, atmospheric policy, and supported remapping rules.
+
+Observation: what each sensor or viewpoint can actually perceive; no automatic disclosure of hidden canonical geometry or destination identity.
+
+Lifecycle: preparation, validation, activation tick, transition, settling, persistent state, and supported shutdown behavior.
+
+Cost: admitted physical domain, shape complexity, new contacts, active fluid work, required views and optical branches, peak memory, downstream edits, and minimum information-preserving presentation.
+
+Evidence: observable signs and measurable consequences linked to the same rule record, plus authored historical explanations that may be incomplete.
+
+These are semantic requirements, not assumed existing Rust module names or a fabricated public API.
+
+4. KEEP THREE KINDS OF SPACE DISTINCT
+
+4.1 Canonical material coordinates
+
+Canonical coordinates identify persistent material and edits. They do not change because the camera moves or the exterior appears distorted. A player-built staircase remains the same staircase in storage even if its region changes physical embedding.
+
+4.2 Physical position
+
+For a supported Euclidean deformation, physical position is p = F(q,t), where q identifies canonical material. Attached terrain can change shape through F. Loose actors use an explicit physical body model. For the first implementation, keep avatars and ordinary cargo rigid in physical p-space; do not assume a nonlinear mapping of a capsule remains a capsule.
+
+This deforms geometry in Euclidean space. A coordinate reparameterization with its corresponding Euclidean metric does not create intrinsic negative curvature. True H3 remains a separate later domain with compatible movement, distance, and ray rules. [S4]
+
+4.3 Optical paths
+
+An optical query starts with an eye position and direction, intersects the relevant physical geometry and optical interfaces, applies each declared optical event, and continues through the appropriate chart.
+
+A lens changes direction at a specified event. A portal can change position, direction, and region. A physical deformation defines where matter is. These operations have explicit order and generally cannot be rearranged.
+
+Rendering must retain enough path information to interpret an observed image. Interaction then uses the appropriate rule for the action. An ordinary projectile can strike a mirror even when the reflected image shows an enemy; a declared reflecting light spell can follow an optical route. Aiming feedback should communicate that difference.
+
+5. GEOMETRY OPERATORS
+
+Use a small catalog of supported analytic fields before arbitrary deformation programs: bounded twist, radial expansion/contraction, smooth bends with validated domains, and combinations whose inverses and boundaries remain tractable. Do not accept arbitrary shader code as authoritative geometry merely because it produces an attractive image.
+
+The earlier void_warp_reference.wgsl supplies one example:
+
+    F(x,y,z) = (s(z) R(theta(z)) (x,y), z)
+    w(z) = sin^2(pi z/L) inside the interval; zero outside
+    s(z) = 1 + a w(z)
+    theta(z) = b w(z) sin(kz + phase)
+
+The exact inverse and analytic Jacobian make this family useful for a first bounded room. Only its end caps match the identity. A radial work limit is not a radial identity boundary; lateral exits need their own transition or explicit portal.
+
+5.1 Validation before admission
+
+Require finite parameters, a valid inverse or certified chart relation, bounded conditioning, a nondegenerate Jacobian, compatible boundary geometry, and conservative collision/render bounds. A positive determinant by itself is not proof of global one-to-one behavior.
+
+Bound the smallest and largest local stretch and the change of that stretch over space. Choose practical limits from body dimensions, numerical precision, and mesh resolution. The safe mathematical parameter range is not automatically an enjoyable or affordable gameplay range.
+
+Overlapping fields need a canonical composition order. Inverting their composition applies inverses in reverse order. Their derivative and conditioning bounds combine; many individually mild fields can still produce an unusable result. The compiler should reject or simplify unsupported compositions before they become live.
+
+5.2 Static and moving physical fields
+
+A static field can support cached geometry and collision. A settled warped street becomes ordinary usable infrastructure under that field.
+
+For F(q,t), physical velocity includes J times canonical velocity plus the explicit time derivative of F. Moving surfaces must carry the right support velocity, and collisions must sweep through their motion. Tangents, surface normals, bounds, and interaction queries need the same relevant field state. Inverse-transpose normal transformation is the standard rule; correct rendering does not by itself supply collision integration. [S5]
+
+The first occupied moving-field milestone should be one bounded walkway with simple supported actors. Large attached factories, jointed vehicles, arbitrary overlapping fields, and full-fluid compression require separate validation. A visual phase animation can be offered sooner as an explicitly optical event.
+
+6. OPTICS OPERATORS
+
+6.1 Three implementation classes
+
+Projection effects change how a central camera maps directions to pixels. If the required directions are covered, a suitable wider capture and remapping can be economical. They still need correct occlusion and a declared interaction interpretation.
+
+Aperture effects change a ray at a surface point. Across an aperture, the resulting rays may not share a single virtual origin. One perspective render texture is not generally an exact solution; choose a bounded ray method, adequate multiple views, or an intentionally faceted apparatus.
+
+Volume effects bend rays as they travel. These require a defined path integrator and an acceleration structure valid for the path. Reserve them for bounded fields and benchmark them against the baseline before extending their visible area.
+
+Do not implement all three as a full-screen UV distortion and assume they have equivalent semantics. Screen-space data cannot supply an offscreen person or a hidden remote room it never captured.
+
+6.2 A small angular lens operator
+
+For a unit direction d in an orthonormal local lens frame and positive k, define:
+
+    A = 1 + d.z
+    B = k*k*(1 - d.z)
+    D = A + B
+    d_out.xy = (2*k/D) * d.xy
+    d_out.z = (A-B)/D
+
+This preserves azimuth and satisfies tan(theta_out/2) = k tan(theta_in/2). k=1 is identity; the inverse uses 1/k. The reference restricts k to [0.25,4]. The denominator is then at least 0.125 in exact arithmetic.
+
+It is a direction map, not a complete lens apparatus. The physical event position, aperture, world frame, origin transfer, scene capture, light energy, and reverse-device behavior remain explicit. An invertible angular mapping alone does not prove optical reciprocity of the complete position-direction relation.
+
+For an orthonormal lens-to-world rotation R, use R L_k(R^T d). Same-axis maps compose by multiplying k values within the supported range. Differently oriented fields require their actual ordered transforms.
+
+This map alone cannot split an image. Multiple images require distinct declared optical paths or branches. Preserve actor identity, pose, and inventory across those views.
+
+6.3 Branches, colour, and energy
+
+A bounded optical interface can create two or a few stable branches. Give them explicit weights and paths. A colour-separated image can use shared spectral approximations without three independent full world renders when that approximation preserves the required information.
+
+If an effect merely displays an emissive image, it supplies no undeclared thermal or electrical power. If borrowed sunlight heats a receiver or drives a plant/machine process, the transport rule supplies a bounded energy input and the source or field pays it. Amplifying brightness for exposure does not multiply gameplay energy.
+
+The inverse direction map, branch weights, and radiance/exposure policy must be consistent enough for the intended visual model. This reference does not claim a physically complete caustic or radiometric solver.
+
+6.4 Queries through warped views
+
+After a lens event, a straight physical segment p0+t*d_out queries canonical attached geometry along F^-1(p0+t*d_out), generally a curve. A single inverse-Jacobian multiplication is only local differential information. Deformed signed distance fields likewise require conservative tracing; their raw values are not automatically physical distances. [S6]
+
+Query loose rigid actors in physical space, or against their mathematically equivalent pulled-back shapes. Compare all candidate hits using the same physical segment parameter. A rigid physical capsule is generally not a capsule after inverse deformation. Do not apply F twice or reuse an undeformed canonical body shape for that query.
+
+Ordinary projectiles, reflecting light spells, sound, exposure sensors, and visibility may use different declared paths. Preserve that distinction while presenting enough feedback for the player to learn it.
+
+7. SHARED REALITY TRANSACTIONS
+
+A reality event is prepared and committed under a shared epoch. It does not become real independently when a client finishes a shader or when a player looks at it.
+
+Preparation identifies affected persistent state, boundaries, bodies, fluids, routes, observers, and downstream work. It reserves peak memory and work needed for the supported transition. Geometry proxies, capacity summaries, optical coverage, and minimum presentation must be ready before the event's consequential state activates.
+
+The authority selects a commit tick and records the canonical rule change, version, seed, input resources, affected domains, and boundary events. Every verified deterministic subscriber installs the same committed state and executes the same physical schedule. A client that lacks a complete domain uses the explicit synchronization mode instead of inventing missing state.
+
+The new rule and its required geometry, contact representation, portal epoch, fluid ownership, and hazard interpretation activate coherently. A visible hole cannot precede the accepted collision change. An occupied portal cannot retarget halfway through a cargo transfer.
+
+Render interpolation may be smoother than the physical step, but it must remain a presentation of the accepted state and its supported trajectory. Do not keep an old wall collider behind a visibly open corridor while waiting for a background job.
+
+If preparation cannot satisfy the shared workload envelope, the event remains in a coherent preparatory state or uses a previously specified simpler physical outcome. It must not silently discard contacts, erase water, or delete player structures to finish a frame.
+
+8. MATERIAL CHANGE WITH PERSISTENT AFTERMATH
+
+Use explicit reaction/exposure rules rather than unrestricted random corruption of every material.
+
+Examples include a susceptible mineral coating becoming reflective, old mortar becoming porous, a vegetation product becoming useful under borrowed light, or a local fluid acquiring a measurable contaminant. A visible advancing front and residue show where exposure occurred.
+
+The rule specifies reactants, products, rate, temperature/exposure conditions, and energy or magical input. Preserve declared mass/resource accounting; if a magical operator intentionally creates or removes material, record the external source or sink. Numerical loss and accidental duplication are not magic mechanics.
+
+Persistent material identity can be interpreted through a versioned rule table where that is semantically sound. A table change is not permission to skip changed collision, buoyancy, fluid capacity, hazards, or background-network consequences. Cold regions can retain a bounded event history or valid coarse equivalent; when activated they must reproduce the already-established consequences without replaying an unbounded sequence of old cell ticks.
+
+Limit transformations by material susceptibility and region exposure, not by whether a block is currently visible. A protected shelter or anchored workshop can resist a known field through equipment the player understands. Remote inventory and an unrelated home do not mutate merely because a player entered a trip state elsewhere.
+
+Every material process should be exploitable through deliberate preparation. Sampling, shielding, controlled exposure, containment, neutralization, and harvesting create a new industrial vocabulary. A storm can offer a valuable process window as well as a threat.
+
+9. WATER, GAS, AND ENERGY UNDER WARP
+
+Presentation-only lensing changes sight without changing fluid inventory. Coordinate relabeling changes descriptions without physically compressing a room. Physical deformation may change actual volumes and interfaces. Optical transport that deposits heat or drives reactions can affect fluids even without a geometric change. The engine must identify which of these it is performing.
+
+For a physical F, local volume transforms as dV_physical = abs(det(J_F(q))) dV_canonical. In the reference twist/scale field, det(J)=s^2. Integrate or validly approximate this local factor over each represented volume; a single sample is not automatically a whole compartment's scale factor. Compute available capacity from the mapped enclosure and the actual physical obstacles, accounting separately for loose rigid bodies and supported moving boundaries. Holding density unchanged while expanding an occupied room would create gas. Preserve species amounts, remap them into the new volume, and derive concentration and pressure from the new state.
+
+Compression and expansion also involve work and heat. A magically lifted reservoir or permanently circulating flow draws power from an explicit field source. Avoid unlimited energy from repeatedly sending water through a height-changing or scaling portal.
+
+Water cannot simply disappear when a moving wall reduces its available volume. The supported model needs outflow, a defined pressure/compliance response, displacement, or refusal of an invalid transition. A sealed chamber with trapped air requires the gas and liquid models to agree on available volume.
+
+For early exchange portals, use fixed unit-scale rigid transforms with one authoritative boundary flux owner. Transfer fluid mass, species, energy, and the declared momentum transform exactly once. Optical-only portals and mirrors have no implied atmospheric passage. Regulated exchange and sealed survey apertures are useful explicit modes.
+
+A changed gravity direction can invalidate a hydrostatic summary. Promote only the affected finite hydraulic domain to the required transient model, then settle it back once its assumptions are valid. An ocean vista does not require an ocean-sized three-dimensional fluid solve.
+
+Cheap gas uses compartments, layers, tunnel transport, and local detailed fronts. Pressure can establish flow quickly without instantly mixing poison throughout the network. Graphics quality may change decorative wisps; consequential extinction, oxygen, toxin transport, and heat remain shared. The companion physics brief specifies these models and their limits.
+
+10. SIX REUSABLE PHENOMENA
+
+These are combinations of the standard's operators. They are examples of the underlying design language, not a fixed catalogue of mandatory landmarks.
+
+10.1 A street becomes new terrain
+
+A masonry street rises into a wave. Its attached steps and drains bend; loose rigid objects slide under the declared forces. An inaccessible service opening approaches the ground while an ordinary entrance moves away.
+
+Players can survey, brace, climb, time the change, build a connection, or hold a useful configuration. The settled geometry can become an elevated garden, freight ramp, water drop, or defensible entrance. Releasing an anchor has a visible consequence rather than deleting construction.
+
+The supported domain remains finite, with compatible boundaries and collision. Invalid self-intersection requires a different admitted outcome or an explicit topology operation. A shader cannot quietly push two solid rooms into the same physical volume and call the result solved.
+
+10.2 Light takes the useful route
+
+A window admits sunlight from a place that bodies cannot reach through that surface. Its direction sweeps across an interior as a shared lens mechanism turns. The light can activate a receiver, reveal an inscription, heat a bounded vessel, or sustain a greenhouse under the declared energy model.
+
+Players move shutters and lenses, carry probes, and compare visible images with actual traversal. One friend can guide a beam while another works at the receiver. A weighted stand provides a solo solution. Stabilizing the optical route gives a specific source of illumination or energy, with capacity and maintenance.
+
+10.3 Selected shadows become supports
+
+Inside a known field, the shadow of a designated lamp and a bounded set of occluders creates supporting surfaces on prepared receiver regions. A carried panel casts a broad crossing; another player walks across it. A solo player uses an occluder stand.
+
+Generate the support from shared geometric proxies, not each client's shadow map or screen image. Limit lights, occluder complexity, receiver area, output polygons, and topology changes. Prepare collision before activation. A visible rim shows the actual supporting boundary; change hysteresis and a warning phase protect against unannounced collapse.
+
+Fixing the field in place creates useful infrastructure at a power cost. Turning a shadow into ordinary permanent matter is a separate resource-consuming process. This effect can support a real puzzle without requiring every shadow in the world to become collision geometry.
+
+10.4 A cistern gains another ceiling
+
+A finite cistern adopts a different gravity direction. Water and supported loose objects move to the new low-potential region. Through its windows, ordinary rain outside still falls in its ordinary direction.
+
+Players can pump, route an overflow, move a boat between orientations, close a feed, or capture the field for an inverted garden. The puzzle is controlling where the water goes and what remains habitable. The field pays for lifting work, and its safe shutdown includes an outlet and clear reserves.
+
+A distant upside-down sea can be an optical view. A playable inverted cistern uses the actual bounded hydraulic model. Those two effects may coexist without pretending their simulation costs are equal.
+
+10.5 One shelter acquires several outsides
+
+A dependable room has openings onto different regions: a cold plateau, a ruined skyline, unfamiliar planetary weather. Its table, supplies, and interior stay persistent. The changed relationship is at the openings.
+
+Players survey destinations, close shutters, test air and cargo passage, establish return capacity, and anchor a chosen relation. Destinations are sampled once from immutable versioned inputs and saved. Later mutable blockage affects access, not silent rerolling.
+
+This can leave a new usable route after an event. Return reservations and occupied crossings are explicit. The map records bounded glimpses and provisional charts, not automatic planetary coordinates.
+
+10.6 Exposure becomes an industrial process
+
+A field front changes selected materials according to an observable recipe. Deposits record exposure. Resistant mineral growth on a mechanism can be weakened without destroying its body, or a mineral seam can acquire a useful reflective coating.
+
+Players sample, shield, expose, harvest, neutralize, and contain runoff. An inscription suggests a process; physical evidence permits independent discovery. The player can also excavate a bypass or fabricate a replacement where the ordinary sandbox supports it.
+
+The reward is a reproducible capability. The danger is a process with consequential byproducts, heat, contamination, or structural weakening. Preserve finite input accounting and persistent results.
+
+11. VISTAS AND PSYCHEDELIC PRESENTATION
+
+Build scale through the relationship between a few tangible surfaces and a much larger visible exterior. An inhabited gallery may cross the underside of an apparent ocean; a stair can open onto the lit flank of a distant planetary ruin; a black vault can contain several incompatible horizons.
+
+Use visible continuity where it matters: masonry joints, drains, ropes, and familiar objects show how a field behaves. Impossible imagery becomes more convincing when a player can still locate a rail to hold or a place to stand.
+
+The psychedelic vocabulary can include angular magnification, coherent image splitting, spectral separation at optical boundaries, apparent scale changes, nested skies, altered material response, and repeating views of the same moving actor. Progression adds combinations and interaction. It need not rely on violent camera motion, constant strobing, or unreadable combat.
+
+Use restrained ordinary materials as reference: chalk stone, damp timber, soot, oxidized metal, old gold, and small warm inhabited windows. Let unusual colour emerge from fields, surfaces, and light paths. A flat purple fog over every scene would erase the geometry that makes the place distinctive.
+
+Distant noninteractive vistas can use static or slowly updated proxies, directional skies, and bounded remote views. Approaching an actual traversal threshold must prepare the real destination and its collision. The transition should retain landmarks and parallax appropriate to its representation; a painted backdrop is not a promise that an object is immediately reachable.
+
+Players may have differing in-game exposure or perception states, but their physical world remains shared. A perception effect that changes concealment has a common gameplay model at every graphics setting. Personal private data is unnecessary; use authored world events and characters the game has established.
+
+12. STORMS WITH PHYSICAL AFTERMATH
+
+Use a readable lifecycle rather than unpredictable simultaneous changes to every system.
+
+Approach: local instruments, inscriptions, light behaviour, migrating wildlife, and changed flow cues reveal which field family is approaching. Give enough time for a prepared player to secure a workshop or deliberately position equipment.
+
+Optical phase: views and illumination change first. An apparatus can demonstrate the future connection without yet permitting passage. The difference is physically indicated by separate controls or visible state.
+
+Consequential phase: bounded geometry, route, force, or material changes occur under their shared event. Established return obligations and occupied boundaries remain handled. Player choices affect which local apparatus is anchored or released.
+
+Settling: physical motion and transport continue until the model reaches its valid settled state. A convenient screen fade does not freeze a flood or finish a collision update.
+
+Aftermath: some geometry, deposits, discovered routes, and player adaptations remain. Other effects need an anchor to persist. Restoration is a gameplay choice with clear costs, not an automatic reset of every place.
+
+Randomness selects from admissible combinations using persistent seeds and state. It does not invalidate everything the player learned about an apparatus. Deeper events can combine more rules while the basic vocabulary stays recognizable.
+
+13. LEARNING FROM SIGNS, LORE, AND RUINS
+
+An inscription gives a hypothesis; interacting with the world tests it. Reading must not set an invisible permission flag required to solve a physical puzzle.
+
+Use three levels of evidence. A short sign provides immediate actionable guidance. Nearby wear, tools, repairs, or a safe demonstration confirms the relationship. Deeper records explain past decisions and disagree about the ultimate nature of the void.
+
+13.1 Municipal survey notice
+
+"The rod remains a rod. Measure the road again."
+
+Meaning: loose measuring tools retain their rigid dimensions while the attached road deforms. Reinforcement: survey marks become separated by changed physical distances; extension rails and repair joints record earlier shapes. The player can verify this with a rod before attempting a risky crossing.
+
+13.2 Academic mechanism note
+
+"The image turns at the third stroke. The passage follows at the fourth."
+
+Meaning: this apparatus changes optical routing before physical traversal. Reinforcement: two visible cams operate different parts; scored observation stations provide a safe testing location. The clue applies to this mechanism, not every portal in existence.
+
+13.3 Cistern maintenance warning
+
+"Upward water spends the reserve. Shut the feed before the bell falls silent."
+
+Meaning: the field consumes stored power and uncontrolled inflow can defeat the planned shutdown. Reinforcement: a working gauge, overflow path, shutoff handle, and historic water marks. Closing the feed changes the actual hydraulic graph.
+
+13.4 Ritual instruction
+
+"Where the light refuses us, we set our feet."
+
+Meaning: selected shadow footprints carry weight in this field. Reinforcement: polished footholds align with hooded lamp mounts, with a safe short crossing before a deep gap. A weighted stand reveals that the ritual does not require a second player.
+
+13.5 Laboratory label
+
+"Blue growth records exposure. It does not record a traveller."
+
+Meaning: the deposit measures a field; it is not evidence that a body crossed the visible opening. Reinforcement: growth exists behind an intact barrier, while an old physical probe is caught on the near side. This teaches how to assess evidence without making the map omniscient.
+
+13.6 Transit regulation
+
+"Finish both anchors before accepting freight."
+
+Meaning: a temporary view or passage differs from a secured cargo route. Reinforcement: loading scales, unfinished anchor housings, aperture measurements, and abandoned oversized cargo. The player can choose disassembly or another route instead of treating the rule as an arbitrary quest gate.
+
+13.7 Custodial vow
+
+"What we bind, we must feed. What we release, we give a road."
+
+Meaning: sustained fields need supply, and safe release needs a discharge or retreat path. Reinforcement: refuges contain reserves, relief channels, manual exits, and redundant stairs. Ritual language preserves practical knowledge without explaining the void's origin.
+
+13.8 Refuge notice
+
+"The outward door may close. The return of those already through is reserved."
+
+Meaning: the station stops accepting new departures before withdrawing an established return provision. Reinforcement: separate outbound and return indicators, a tally mechanism, and a narrow reserve passage. The actual connection state and reservation system uphold the promise.
+
+Different generations can explain the same rule through engineering, theology, fear, or civic duty. Their local measurements should remain testable. Important clues have readable text or symbols and an accessible journal record of what was actually found; they do not require catching a single distorted frame.
+
+14. LOW-END RENDERING AND SIMULATION CONTRACT
+
+Author the common gameplay profile for the supported low-end machine. High-quality presentation can add sampling, lighting, particles, and distant detail; it cannot add a different collision model or remove a concealment rule on another client.
+
+Every effect needs a minimum presentation that depicts current contact surfaces, relevant actors, optical restrictions, and usable routes. If that cannot be produced within the declared baseline, simplify the effect's shared design or defer it. An arbitrary client-only recursion cutoff cannot conceal an attacker that remains visible through the same live opening on a faster machine.
+
+Keep geometry deformation, camera/projection effects, aperture views, and volumetric optical integration as separate cost classes. A few analytic operations per vertex can be affordable while an extra world view is expensive. The direction-map arithmetic is not a benchmark of a complete optical pass; obtaining the correct scene samples can dominate.
+
+Render finite physical geometry through the existing pipeline with appropriate subdivision and bounds. Use procedural sky/distant proxies for noninteractive scale. Admit a small measured set of simultaneously relevant apertures and optical branches. Reserve more expensive curved-ray work for bounded screen regions. Reduce cosmetic overdraw before changing useful information.
+
+Water and gas retain their cheap authoritative models. A purely presentational optical event with no energetic or material coupling does not wake fluid simulation. Optical transport that deposits heat or drives reactions activates the affected thermal and fluid domains under the same shared rule. A physical field event wakes the causally affected domains and uses validated conservative handoffs. Avoid full-world remeshing, dense volume allocation, per-frame temporary allocation, or synchronous GPU readback as the price of a reality effect.
+
+GPU completion and memory-lifetime accounting remain part of the existing optimization contract. WGSL barriers synchronize invocations within a workgroup, not all dispatched workgroups; a shader loop cannot substitute for a correctly ordered global solver. [S7]
+
+Performance claims require native CPU/GPU measurements with actual rendering, destruction, active factories, fluids, and multiplayer. A high-end research fluid solver or an attractive isolated shader establishes neither the minimum hardware profile nor a frame-time guarantee.
+
+15. NETWORKING, MAPS, AND PERSISTENCE
+
+Use stable IDs, topology epochs, canonical numeric rules, fixed physical timing, reproducible operator ordering, and identical supported domain state. Accepted-command replication is the preferred verified path; graphics shaders and decorative particles need not be bit-identical.
+
+Checkpoint the state needed to resume each domain: geometry and material revisions, operator parameters and phase, active ownership, relevant fluid inventories/flux history, portal reservations, and persistent object identity. A save contains the settled reality rule and aftermath, not only a screenshot or the last camera warp.
+
+Entering a region or observing a portal does not reroll its state. A discovery can remain unknown to another player despite both simulating relevant physical data. Authoritative state and acquired knowledge are separate records.
+
+The map records perceived surface patches and witnessed/tested transitions. Distorted images, false floors, optical-only openings, and unrecognized destinations retain their uncertainty. Internal canonical IDs do not identify a planet to the character. A later hidden reality event does not redraw historical observations as if the player saw it happen.
+
+Keep player construction recoverable and persistent under the supported model. Claimed or anchored shelter protections, if adopted, are explicit equipment/world rules. They must not be a hidden arbitrary exception that makes identical-looking structures behave differently without evidence.
+
+16. FIRST IMPLEMENTATION AND ACCEPTANCE
+
+Build a small persistent expedition around one ordinary refuge, one bounded deformable arcade, one optical apparatus, a finite cistern, and one remote landing. Reuse the established Manyfold architecture rather than creating a separate replacement world.
+
+First, implement the region record and common query/version conventions. Then prove static F and the cheap angular operator independently. Add a shared optical apparatus with adequate scene coverage. Add one coherent geometry commit with collision. Connect the cistern and its gas headspace through the conservative hydraulic/atmosphere model. Finally add a persistent remote connection and in-world evidence tied to actual rules.
+
+The shadow-support mechanism is a later bounded feature after collision generation and optical-event ordering work. Occupied moving fields and arbitrary volumetric lensing follow their own measured milestones. True H3 remains separate.
+
+Acceptance scenarios:
+
+1. Two players observe the same event from inside and outside; their actor identities and physical outcomes agree.
+2. A field's inverse and derivative remain valid throughout its admitted domain and at its compatible seams.
+3. A loose rigid measuring rod stays rigid while attached terrain deforms.
+4. Picking, projectiles, optical rays, and the map use their declared path laws without double-applying F.
+5. A remote image displays only scene data the renderer actually captured; uncaptured directions are never fabricated as actionable visibility.
+6. Multiple images of one actor do not duplicate damage, inventory, or pickup events.
+7. The cheap graphics preset retains required cover, shadow supports, and gas concealment.
+8. A physical volume change conserves gas species and accounts for work/heat. Presentation-only lensing with no physical energy or material coupling alters neither; declared light heating or reactions activate the appropriate domains.
+9. A water-filled chamber has a defined displacement/pressure response before its walls move.
+10. A gate change cannot retarget an in-flight fluid/cargo transaction or abandon a promised return.
+11. Saving and loading preserve warped construction, material changes, and learned map uncertainty.
+12. A staged event cannot accumulate an unbounded preparation or retirement backlog.
+13. The shortest safe demonstration teaches each inscription's practical rule without requiring an invisible reading flag.
+14. The expedition has a solo solution and a self-rescue route, with cooperative tools making it easier.
+
+These are future engine acceptance requirements. They have not been reported as executed.
+
+17. DELIVERED OPTICAL MATH VERIFICATION
+
+reality_lens_reference.wgsl is 72 lines. It validates finite input directions, normalizes finite nonunit inputs through component scaling, rejects near-zero input and unsupported k values, and returns both a direction and validity flag. Invalid results must not be used as rays.
+
+verify_reality_lens.py executed 8,192 seeded directions and 410 deterministic pole, near-pole, and grazing cases. It also checked exact poles, 1,280 monotonicity intervals, 11 invalid-input cases, and four finite nonunit normalization cases.
+
+Maximum observed float64 errors:
+Raw unit-length error before output normalization: 1.998401444e-15.
+Inverse round-trip L2 error: 1.002664167e-15.
+Independent polar-angle oracle L2 error: 9.715442685e-16.
+Same-axis composition L2 error: 5.613217784e-16.
+
+The checks passed their declared tolerance of 2e-13. The independent oracle uses polar angles and the half-angle relation rather than the Cartesian rational formula. These are mathematical checks, not GPU or game tests. WGSL parsing, compilation, GPU execution, float32 accuracy, rendering, scene capture, and multiplayer remain unverified.
+
+18. PRIMARY REFERENCES AND COMPANIONS
+
+[S1] Noita official release notes, 8 April 2024. Confirms named fungal-shift functionality and maintenance fixes; no detailed probability claims are derived here.
+https://noitagame.com/release_notes/20240408/
+
+[S2] Vintage Story official wiki, Temporal stability / Temporal storms. Used for the limited comparison in section 2.
+https://wiki.vintagestory.at/Temporal_stability
+
+[S3] Warhammer Community, Blackstone Fortress: Setting the Scene, 6 November 2018. Used as a high-level setting reference, not a source of copied names or prose.
+https://www.warhammer-community.com/en-gb/articles/rDoAZGUx/blackstone-fortress-setting-the-scene/
+
+[S4] Szirmay-Kalos and Magdics, Adapting Game Engines to Curved Spaces, The Visual Computer.
+https://link.springer.com/article/10.1007/s00371-021-02303-2
+
+[S5] Physically Based Rendering, fourth edition, Applying Transformations.
+https://www.pbr-book.org/4ed/Geometry_and_Transformations/Applying_Transformations
+
+[S6] Seyb, Jacobson, Nowrouzezahrai, and Jarosz, Non-linear sphere tracing for rendering deformed signed distance fields, SIGGRAPH Asia 2019.
+https://cs.dartmouth.edu/~wjarosz/publications/seyb19nonlinear.html
+
+[S7] W3C, WebGPU Shading Language, synchronization built-in functions. Check the engine's pinned compiler and supported language version.
+https://www.w3.org/TR/WGSL/
+
+Project companions:
+AXIOM_Low_End_Physics_Water_and_Gas.txt
+AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt
+The_Manyfold_Design_and_Implementation_Brief.txt
+Axiom_Multiplayer_Warped_Space_Research_and_Implementation_Brief.txt
+Axiom_Underground_Exploration_Map_Implementation_Prompt.txt
+void_warp_reference.wgsl
+reality_lens_reference.wgsl
+verify_reality_lens.py
+
+19. OPEN LABYRINTH GEOMETRY AND GRAVITY PROFILES
+
+The new open-maze companion extends the dynamics record with explicit supported profiles for straight inward-facing tubes, bent tubes, junctions, shell interiors, and bounded twisting-down passages. These are project specifications, not implemented engine capabilities.
+
+Each admitted gravity profile identifies its physical domain, recipe/version, shared parameters, tick/epoch, force and work model, zero or critical regions, boundary conditions, supported body/vehicle/fluid classes, and recovery behavior. Store the relationship to persistent geometry and connections without making the physical field depend on a viewer's camera or previously selected nearest surface.
+
+The same physical position, region, shared state, and tick must produce the same ambient field. Contact, camera, or coordinate-lookup hysteresis must not create contradictory physical accelerations. Overlapping coordinate representations agree on their physical result; distinct portal-connected spaces remain distinct regions.
+
+The baseline straight-tube recipe is g=lambda*r, where r is the physical offset perpendicular to the axis and lambda=g_wall/R. Its potential is Phi=-lambda*dot(r,r)/2. Declare a finite radial and axial domain; transitions need a complete potential construction or a declared powered field. The zero-gravity axis is an explicit state, not a vector-normalization exception.
+
+A route winding around the axis, a bending axis, and a preferred down direction rotating along a straight corridor are different operations. Rotating a rendering frame changes none of the physical laws by itself. Gravity changes acceleration; portal crossing transforms supported state according to its own rule.
+
+Admission includes movement and clearance requirements. Arbitrary-up grounding does not prove safe reorientation of a capsule. Preserve world velocity through ordinary field changes, handle moving-platform velocity once, and validate large bodies or flows spanning different fields separately.
+
+Upper maze districts are persistent physical places when presented as traversable. Their observed surfaces enter acquired-knowledge maps under stable chart identities; visibility of the opposite wall does not reveal hidden corridors. Rendering budgets preserve relevant actors and usable routes across supported clients.
+
+See AXIOM_Open_Maze_Geometry_and_Gravity.txt for geometry recipes, traversal design, analytical limits, primary sources, and staged acceptance. Earlier fixed-gravity controller prerequisites remain in force.
+
+END

@@ -4,6 +4,15 @@
 This extends the master inventory without replacing system IDs, compatibility rules
 or existing work. Axiom names the architecture input, not a product rename.
 
+2026-10-26: user reopened implementation of the next missing milestone. The bounded
+CPU-region checkpoint foundation is implemented in
+[ADR 0025](../adr/0025-cpu-region-checkpoints.md); runtime acceptance is pending.
+This does not reopen every parked package or complete the window/save cutover.
+
+The subsequent request to continue through all milestones reopens the full Axiom
+track. Follow the [current execution ledger](../plans/2026-10-26-axiom-execution.md);
+the original records below remain historical evidence.
+
 Inputs: [original](../specs/project-axiom-revision-4.txt),
 [refined review](../design/PROJECT_AXIOM_REV4_REVIEW.md),
 [master plan](../MASTER_PLAN.md). The review records the earlier design-only pass;

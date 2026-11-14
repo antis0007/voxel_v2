@@ -263,3 +263,30 @@ Each row is data plus one bounded code change; order by dependency.
 - Visual change = before/after capture from the factory fixture.
 - Variable voxel scale: all geometry in cell units times
   `VoxelScalePreset::meters()`; nothing hardcodes 1 m.
+
+
+## Tinkers integration audit — 2026-10-28
+
+The scope remains Addendum A.2, ADR 0022, and master-plan P04/M04/M17.
+The initial smeltery prototype is **not Phase 2 completion**.
+
+| Requirement | Current source state | Remaining integration |
+| --- | --- | --- |
+| Parts and material-derived traits | `engine_tools` has schemas, weighted stats, property rules, XP, repair and codec | Connect persistent assemblies to item ownership, transfers and gameplay; do not replace this with tier-only picks |
+| Real molten cells and heat | Copper, tin, iron and bronze now have authored phase pairs and fusion energy; sparse thermal conduction and latent storage replace fixed-rate cooling | Controller fuel/heat must use the shared factory owner; current input interaction still creates hot liquid immediately |
+| Alloy reactions | `reactions.ron` has an exact 3:1 copper/tin region recipe; sparse solver applies it to a connected molten region, conserving cell volume and solver sensible heat | Packed CPU/GPU pair kernels do not execute region recipes; full physical mass/enthalpy acceptance remains open |
+| Smeltery multiblock | Prototype floor/wall check and finite cell pouring | Register components as factory Kind rows, shared structure ownership, scalable dimensions and proper controller UI |
+| Molds and parts | Table/basin collect cooled metal only | Persistent molds, part casting, differentiated table/basin output, failure/spill conservation; remove the sub-25cm restriction |
+| Part builder / tool station | Not integrated | Visible part choices, each part's stat contribution, assembly, repair and sharpening through the existing tool model |
+| Mining / leveling | Legacy tier picks remain separate from ToolAssembly | Material-derived harvest/speed, wear, broken tools, XP and repair across local/server authority |
+| Modifiers / armor | Tool model stores modifier IDs; shared M17 evaluator remains pending | Common evaluator and authored modifier costs/tradeoffs; armor follows working tools |
+| Presentation | Larger inventory/catalogue slots and native crafting-material icons; generated workshop sheets are references | In-game review of station layout, components, casting and held parts; concept sheets do not establish parity |
+
+Region reaction rows deliberately do not compile to ordinary two-cell rules:
+a 3:1 recipe must never silently become 1:1 on another simulation backend.
+The current save header increment for appended materials does not establish
+assembly serialization. Bundle the actual new item/factory layout with its
+versioned readers before claiming that Phase 2 save work is done.
+
+Validation policy for this request: local compilation only; no tests or hosted
+CI requested. Runtime and conservation acceptance are still outstanding.

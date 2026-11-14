@@ -50,6 +50,17 @@ Rules:
   lean of a few percent.
 - Lichen and moss are accents on older runs and in furrows, at most a third
   of the face.
+- Any speck material (lichen on rock, pebbles in soil) is a step paler than
+  the surface it sits on, never a fixed pale colour: a fixed grey reads as
+  white confetti on basalt and on dark soil.
+
+## Crowns
+
+Crowns in the references are clumped lobes with sky gaps and three tones.
+The leaf material shades each face by two lobe scales (4.8 m masses and
+2.2 m clumps) so a crown reads as clustered lobes with shaded hollows;
+sunlit tops carry the same clump field at lower contrast. Lobe silhouettes
+stay with worldgen tree forms.
 
 ## Biome floors
 
@@ -123,9 +134,16 @@ boards on the gable), rainforest2 (trunk plates, darker floor), savanna2
 and grey mat on the slopes). Unchanged as expected: meadow2, forest2, desert,
 coast, badlands.
 
-Limits: the heath2 and taiga2 map points landed on basalt and a sandstone
-site, and the fen and heath survey points on river dirt and a cliff, so the
-heath and fen floors are verified by code only. One seed, no shadows, no
-motion, no performance claim. The benchmark driver now renders while the
+Round 2 (`biomeart-b3-*` before, `biomeart-a3-*` after, same seed and
+settings): `--terrain-survey` now lists the nearest Grass-surfaced columns
+per biome (`... turf:` lines), which gave heath3 `-1248,-356,5,0,-0.12`,
+fen3 `96,-836,5,0,-0.12` and forest3 `288,-68,5,0,-0.12`. Inspected and
+accepted: heath3 (heather runs and ochre on the slope), fen3 (darker wet
+floor), forest3 and rainforest2 (crowns shade as clumps, two lobe scales),
+heath2 (basalt lichen is a step paler than the rock instead of white
+confetti), fen and fen3 banks (soil pebbles a step paler than their soil,
+not white specks).
+
+Limits: one seed, no shadows, no motion, no performance claim. The benchmark driver now renders while the
 window is occluded (`main.rs`), because a fullscreen game in front of the
 hidden review window stalled every capture; that change is part of this pass.

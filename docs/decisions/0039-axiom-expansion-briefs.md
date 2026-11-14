@@ -118,3 +118,22 @@ the key design reference. Reconciliation with this record and the tree:
 `docs/superpowers/specs/2026-10-29-update-pack-r1-reconciliation.md`. Items 2
 (body authority) and 3 (names) stay in force until the owner answers the
 questions listed there.
+
+## Addendum, 2026-10-30: Manyfold, Webway and Crimson names approved
+
+The owner approved these names for code, player text and RON rows. This revises
+decision 3 for the items below only; every other proper noun in the briefs stays
+unapproved.
+
+- **Manyfold**: the dimension, the Manyfold Tube world type, and its seven regions
+  (Foldfields, Bellworks, Cistern of Borrowed Rain, House of Contrary Stairs,
+  Unfinished Borough, Guest Wing, Room with an Outside), plus Stillcourt.
+- **Webway**: the portal network (code keeps `portal_network` as the module name).
+  The term originates in Warhammer 40,000; the owner approved it knowingly. Keep
+  designs, art and text original to this game.
+- **Crimson Nexus** and **Hall of the Crimson King**: the multiversal hub. Its role
+  stays separate from the Manyfold's discovered routes, as the Manyfold brief states.
+
+The briefs remain backlog (decision 1). Approval of a name does not schedule the
+work: M1 keeps priority, and any save bump or generator gate still needs a row in
+MASTER_PLAN and a check of the cross-branch gate registry.

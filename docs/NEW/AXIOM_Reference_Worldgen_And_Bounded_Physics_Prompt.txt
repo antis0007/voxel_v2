@@ -1,0 +1,799 @@
+AXIOM / MERIDIAN — REFERENCE-DRIVEN WORLDS, LOCAL PHYSICS AND BOUNDED DESTRUCTION
+Design and implementation prompt — 29 October 2026
+Expanded: responsive local interaction and coupled 3D material physics
+
+STATUS AND PRECEDENCE
+
+This prompt implements the latest design direction in the planning documents: heavy use of the ten supplied concept-art references; coherent geological structure and advanced erosion in default world generation; real local physics on each client; live PvP, magic, destruction and automation; minimal developer hosting cost; and explicit prevention of update backlogs. It is a researched implementation specification. No Axiom repository was available for this work, and no engine code, native scene or benchmark was executed.
+
+Preserve the Windows-first Rust + raw WGPU engine, no-Bevy requirement, variable voxel scales, existing content, dimensional spaces, scientific machinery, identity/save contracts and player construction freedom. Inspect the actual repository before selecting dependencies or treating prior implementation reports as verified.
+
+This is the controlling addendum where older briefs differ about client physics, destruction scheduling, default erosion quality and hosting. In particular, replace the earlier 'selected motion now, heavy shared-body prediction later' limitation with local simulation of the client's relevant interaction set. Retain authoritative agreement for shared outcomes. The phrases 'server authoritative' and 'client simulates physics' describe different responsibilities and are compatible.
+
+The companion briefs remain in force for scientific industry, spacecraft, ecology, inhabitants, civilization history, livable cities, cargo ownership and durable transactions. This prompt develops how those ambitions remain coherent under live interaction and limited compute. It must not become a replacement game or an isolated visual demo.
+
+Latest technical priority: AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt controls deterministic command replication, substantially faster loading, CPU/GPU rendering optimization and default GPU memory admission. It promotes commands plus verification as the normal path for proven deterministic domains, with bounded state synchronization for incompatible/open domains and recovery. It also makes the reported default-preset freeze a release blocker to diagnose, adds current voxel-engine comparisons and requires a conservative total-process residency controller. Its sections 2.11–2.24 now specify low-latency transport, coherent predicted terrain/physics, semantic receipts, baseline publication and changing-cover PvP. Sections 4.10–4.18 below extend the physical world beyond cellular rules using coupled rigid, constrained, fluid, thermal and pressure models. The visual, geological, gameplay and accepted-destruction requirements here remain in force.
+
+READING GUIDE
+
+1. Non-negotiable outcomes and explicit operating limits.
+2. Analysis of the ten reference images and original regional art briefs.
+3. Spherical terrain, erosion and geology pipeline with current research.
+4. Local physics, responsive authority, PvP, hosting and hybrid 3D material simulation.
+5. Destruction pipeline, bounded scheduling and recovery from bursts.
+6. Rendering, automation and environmental interactions under load.
+7. Native delivery sequence, acceptance scenarios and performance evidence.
+8. Research and companion-document index.
+
+1. THE ENGINE AND WORLD EXPERIENCE WE ARE BUILDING
+
+1.1 The visual and gameplay target
+
+Build a standalone alternative to heavily modded Minecraft with a cohesive native implementation. Support inhabited valleys, layered coastal cities, immense working infrastructure, industrial spacecraft, original magitech, underground history and useful automation. The references supply strong composition, machinery, material and scale cues; they do not require copying their exact ships, cities, logos or names.
+
+The default world must already possess connected mountain systems, drainage, valleys, coastlines, geological provinces and environmental history. Players should not have to select an expensive 'cinematic erosion' preset to escape unrelated noise hills. Walking terrain, aerial views, orbital silhouettes and the map must describe the same world.
+
+Construction, excavation, magic and destruction must interact with this world. A bridge can be broken, a service route reopened, a quarry expanded, a hangar altered or a port restored. Cost control must come from representation, locality, batching, budgets and validated gameplay rules. Do not preserve scenery by silently making every impressive object indestructible, fabricating invisible walls or replacing all interiors with inaccessible facades.
+
+1.2 Every client runs relevant physics locally
+
+Each client runs the actual supported physics for its player, controlled vehicles and nearby interacting bodies, using current collision data and a bounded prediction horizon. It does more than animate interpolated pictures. The scope is the relevant local interaction set, not every body, machine and inhabitant on every planet.
+
+One declared authority resolves each shared gameplay result. For the first implementation that is the player-operated listen host, with the same code available for a user/community dedicated server. Other clients simulate and reconcile. A client can predict a collision or attack immediately without being allowed to unilaterally grant itself resources, destroy another player's base or invent a hit.
+
+Only optional later delegation assigns noninteracting simulation work to other peers. It must preserve ownership epochs, validated results and a safe handoff before interacting groups meet. Do not begin with a peer-consensus MMO, or trust arbitrary client physics outcomes as a substitute for authoritative PvP decisions.
+
+1.3 Developer costs are an architectural budget
+
+The default developer-operated service should not simulate or persist every active world. Players own their world saves and host sessions; community administrators can run persistent servers. Connection setup uses a small supported rendezvous/discovery path and direct traffic where connectivity permits. Relay fallback, if offered, has explicit capacity, eligibility, accounting and funding. No public free relay is assumed to be unlimited production infrastructure.
+
+Avoid centrally streaming terrain meshes, images of play, or every physics update. Compatible peers reconstruct immutable content from the versioned manifest and receive relevant canonical edits/state. The application still measures real connection success and relay use. Low company hosting cost does not mean zero bandwidth or compute cost for the players.
+
+1.4 Define smooth operation in a finite operating envelope
+
+The target is stable frame pacing and responsive interaction during the declared supported workload. An unqualified guarantee of unlimited exact destruction, arbitrary machines, any player count, every device and every connection at a fixed frame rate is physically impossible. Convert the ambition into enforceable work limits and measured acceptance gates.
+
+Specify supported hardware/settings, active interaction complexity, maximum operation footprint, concurrency, network impairment and recovery time. Within that envelope, expensive work must stay within its budget and burst debt must drain. Under excess demand, prevent new expensive work from entering an unbounded queue. Preserve accepted outcomes and common PvP rules while reducing optional detail or applying the declared operation limits.
+
+Do not silently discard authoritative time, fabricate completed work, skip charged actions, or slow one client's competitive physics independently. If a severe fault defeats the supported envelope, an explicit session recovery state is more honest than permanent hidden simulation lag. Repeated recovery during the supported workload is a failed milestone, not an acceptable way to claim smoothness.
+
+1.5 Required invariants
+
+- One persistent identity for each person, ship, consequential fragment, process lot and consignment.
+- One declared authority/epoch for each shared result; every relevant client simulates against that result.
+- One authoritative voxel/material revision for collision and consequential queries. Each peer keeps its installed known revision internally consistent while newer state arrives; this does not require instantaneous network delivery or a wait-for-all-peers barrier.
+- Bounded queue bytes, estimated work, active jobs, task duration and oldest required-work age.
+- No per-voxel fan-out into unbounded physics, lighting, navigation, water, inventory and network jobs.
+- No visual LOD rule changes a PvP obstruction or a resource amount.
+- No unload/reload, reconnect, mesh rebuild or authority handoff duplicates cargo, restores destroyed terrain or erases an accepted consequence.
+- Every measured milestone includes actual interaction, simultaneous players and recovery after load.
+
+2. THE TEN REFERENCES AND ORIGINAL WORLD DIRECTION
+
+Art analysis dated 29 October 2026. Proposed art and world-generation requirements; no implementation claims.
+
+Use the ten supplied images as substantial visual direction. The observations below concern what is visible in those images; the sites and systems are original proposals. Reference numbers follow the supplied filenames, 01-1000021715.jpg through 10-1000021706.jpg. Do not reproduce their branding, ship outlines, building designs, signatures, or painted text. Preserve Axiom's established names where the provisional site names below conflict.
+
+2.1 IMAGE MAP: WHAT TO CARRY FORWARD
+
+01 — Mountain-facing landing apron. A broad, low, angular ship sits under a dark roof and suspended crane, with a brightly lit mountain valley beyond. Tiny workers, ground equipment, landing supports, railings, and a distant airborne craft establish scale. Carry forward the sheltered foreground, substantial docking hardware, and readable relationship between ship, servicing deck, and landscape.
+
+02 — Industrial spacecraft over a planet. Paired tapered projections, deep gaps between major hull masses, exposed mechanical recesses, and concentrated blue-white engine light give the foreground ship a strong outline. Smaller ships and nearby rocks create depth against the curved planet. Carry forward mass hierarchy and negative space; the image does not establish a physically accurate propulsion or orbital arrangement.
+
+03 — Heavy carrier at a wet landing field. A very large, horizontally organized hull has repeated round machinery housings, layered decks, and substantial supports. Workers, vehicles, crates, vegetation, rain, and low cloud make it feel situated. Carry forward the busy ground interface and weathered mass. Its apparent scale should inform reachable working spaces, rather than justify an inaccessible scenic hull.
+
+04 — City canyon from an inhabited terrace. Extremely tall, individually shaped towers rise above smaller buildings, balconies, illuminated signs, bridges, people, and airborne traffic. Cool blue daylight and narrow cyan accents contrast with dark foreground shelter. Carry forward skyline individuality, ordinary activity, vertical neighborhoods, and distinct depth layers; continuous neon coverage would lose the hierarchy.
+
+05 — Elevated transport district. Pale, hazy towers sit behind wide platforms, connecting decks, landing surfaces, and ships at several depths. Horizontal infrastructure is as prominent as skyscrapers. Carry forward large navigable aprons, strong circulation, and silhouettes that remain legible through atmosphere. The image alone does not prove what lies inside its distant monumental forms.
+
+06 — Coastal city among rock spires. Irregular stone stacks and shallow branching water occupy the foreground; an elevated, luminous city and curved buildings rise beyond. Sunset colors, vegetation atop some rocks, and several moving craft soften the industrial scale. Carry forward the contrast between eroded geology and deliberate construction, with water separating neighborhoods and defining approaches.
+
+07 — Metropolitan geography from above. Large towers emerge from extensive smaller urban fabric, organized shorelines, bridges, green spaces, canals or waterways, and civic open spaces. Huge distant forms expand the scale. Carry forward this district hierarchy and the land-water structure. A megacity needs ordinary blocks, transport connections, and open ground, not an evenly spaced forest of hero towers.
+
+08 — Ship maintenance cathedral. A relatively compact red-and-white craft is held among large ochre articulated service arms, suspended cables, gantries, and layered walkways. A shaft of light reveals the central work area; foreground figures and railings provide human scale. Carry forward concentrated machinery, access for maintenance, and the contrast between enormous enclosure and specific workpiece.
+
+09 — Open cargo bay during combat. An arched enclosure, white-and-blue wall bands, upper walkway, floor tracks, and a freestanding vertical rack organize the space. The wide opening exposes exterior ships and bright sky. Carry forward a readable connection between inside and outside, vertical routes, useful equipment as cover, and clear material zoning. Combat effects should not obscure that spatial clarity.
+
+10 — Industrial hall at walking height. Yellow railings and framing, pale wall panels, dark structural members, freight tracks, a suspended transparent display, and upright green-lit devices sit around a tall central void. Carry forward practical color grouping, readable floor circulation, and operations visible across levels. Do not infer a particular device function from a glowing prop alone.
+
+2.2 ONE WORLD, FOUR SCALES
+
+Compose every major location at landscape, district, building, and hand scale. From far away, recognize the headland, ship hull, elevator, or roof profile. At district range, recognize docks, homes, workshops, gardens, transit, and damaged connections. At walking range, understand doors, routes, machinery, and cover. Close up, discover a repaired hinge, a resident's mug, worn paint, or a tiny household. More detail cannot rescue a weak silhouette or an incoherent layout.
+
+Large ships should have a few dominant masses, functional separations, and deliberate empty space. Give cargo carriers, survey vessels, rescue craft, and armed escorts different loading arrangements and proportions. Establish cargo access, propulsion, heat rejection, service clearance, and habitable spaces before surface detail. Decorative vents need not each be an independent simulation, but interactive equipment must match the actual installed system. Hull markings should communicate Axiom's own ownership, access, maintenance, and direction conventions.
+
+Translate this into variable-scale voxel construction with original Blender assets and native Rust/WGPU rendering. Broad hull plates, load paths, floors, and terrain belong to the editable world representation; compact machines, characters, fixtures, and animated mechanisms may use authored meshes. A visible mesh is not an excuse for indestructible backing. Its damage, removal, replacement, and collision must resolve through authoritative objects or editable structures. Finer detail belongs where its physical size or gameplay function warrants it, rather than forcing uniform tiny voxels across the planet.
+
+Retain Minish Cap's carefully placed color and expressive silhouettes, Noita's material legibility, and Zelda's inviting landmarks through Axiom's own forms. Use quiet material fields, selective edge detail, readable poses, warm windows, tiled courtyards, plants, awnings, and clear skies as well as industrial gloom. Reserve strong emissions for identifiable devices and navigation. Add icons and geometry to operational color codes. Tiny homes and mythic residents require daily life and agency; they are not decorative production multipliers.
+
+2.3 GEOGRAPHY AND HISTORY BEFORE SKYLINES
+
+Generate drainage, exposed rock, sediment, slopes, shorelines, and usable crossings before the settlement network. Decide why each settlement exists, how supplies arrive, and where its waste heat, water, and outgoing goods go. Route major roads and cargo corridors through feasible gradients and crossings. Fit foundations and reclamation to that geography. Preserve these relationships across spherical-world seams and strategic/local representations.
+
+Give districts successive, legible eras: an early river landing; industrial expansion; an orbital freight investment; damage or abandonment; selective reoccupation. Use foundations, blocked historic streets, mismatched repairs, old flood marks, altered signage, and vegetation following moisture to express those changes. Ruin distribution should follow events, exposure, and maintenance history rather than a uniform damage filter. These references frequently show functioning places: retain bright civic districts, lived-in workshops, and prosperous towns alongside abandonment.
+
+Connect the skyline to reachable infrastructure. A distant port, terrace, or bridge must occupy consistent world coordinates and have real structure when approached. Some towers can contain unoccupied floors or service voids, but their visible doors and decks cannot promise nonexistent interiors. Space elevators require a compatible body's rotation, orbit, engineering, and any explicitly fictional support. Where unsuitable, use a launch terminal, orbital transfer station, or skyhook service with honest geometry and schedules.
+
+2.4 FOUR SIGNATURE REGION AND SITE BRIEFS
+
+A. Ternwater Anchorage — river mouth, civic skyline, and orbital freight.
+
+References 04, 06, and 07. A river cuts through resistant coastal rock, leaving sheltered channels and isolated stacks. Early ferries became port districts; later reclamation supported a white-and-terracotta metropolitan spine with narrow blue accents. Old channels remain visible beneath raised roads. Orchards, small houses, and market courts occupy the spaces between towers.
+
+The major landmark is a working freight terminal serving an eligible elevator or a skyhook receiving network. Its viewing terraces, cargo lifts, workshops, and ground connections are reachable. Radio reports identify actual consignments, receiving pads, and arrival confidence; the map distinguishes a forecast from a completed delivery. Docks and cargo handling connect to real inventories.
+
+Players can restore a sheltered canal workshop, install trade storage, host travelers, or run automated freight between waterfront districts. Naiads and amphibious residents have negotiated water access. Erosion and old flood damage create boat approaches and salvage layers. PvP can damage docks, bridges, defenses, and service equipment, with visible consequences and repair options. Mining or building an alternate crossing remains possible. No invisible wall protects the skyline or forces everyone through one checkpoint.
+
+B. Rainbreak Shipyard — mountain terraces and a grounded carrier.
+
+References 01, 03, and 08. A broad mountain valley supplies water and sheltered access; glacially shaped terrain and later stream erosion leave terraces above the floodplain. Quarry roads and rail grades explain the original industrial site. A grounded carrier became a repair center, then partly a neighborhood. Riveted charcoal masses, pale replacement panels, ochre cranes, wet stone, and warm cabin lights distinguish it from the coastal city.
+
+The carrier and surrounding gantries form the megastructure. Players can enter cargo decks, climb service routes, reach the bridge, and inspect the engine housings. Functional bays have actual clearance and equipment. Nearby landing fields receive forecast orbital cargo; a ridge radio relay explains the site's continued importance.
+
+A player base can operate a repair berth, fabricate parts, recover hull material, provide rescue services, or automate workshop deliveries. A former crew mess supports residents and visiting traders. Meltwater and sediment expose older tunnels and require sensible drainage choices. Combat or excavation can breach hulls and remove supports; structural consequences are bounded computationally, persist, and remain repairable. The settlement does not lose every route because one cinematic catwalk breaks. Build the first playable portion around one complete bay and connected neighborhood before expanding the entire yard.
+
+C. Ambercut Counterweight Ward — layered city in a worked basin.
+
+References 04, 05, and 07. A sedimentary basin was quarried, terraced, and crossed by freight viaducts. Resource extraction moved elsewhere; homes and civic gardens now fill former loading benches. Monumental counterweight towers and bridge decks remain above a dense, irregular lower city. Original stone strata, retaining walls, later tower foundations, and repaired lift shafts preserve the site's history.
+
+Its landmark is a large terrestrial cargo lift serving elevated districts, not an orbital elevator disguised by height. Wide ramps, transit decks, stairs, and accessible lifts accommodate different residents and freight. Upper terraces offer a clear approach to orbital receiving pads beyond the populated core. Lower routes include workshops, canals, and sheltered markets.
+
+Restoring a lift makes a player warehouse useful to multiple districts; adding local power or replacing a damaged bridge opens practical trade choices. Automated handling works with the same cargo identities as caravans. Players can build new connections rather than obey a prescribed repair order. Destruction alters access and lines of sight without permanently locking quests to vanished stairs. In PvP, attackers can breach or construct routes; defenders gain value from observation and redundancy rather than indestructible architecture. Peaceful recovery supports dependable commerce and housing.
+
+D. Hearthglass Foundry — an inhabited industrial interior.
+
+References 08, 09, and 10. An inland river exposes workable stone and supplies a longstanding manufacturing district. A former civic machine hall retains its tall clerestories, freight tracks, cream panels, mustard framing, and dark roof structure. Flood deposits, rebuilt foundations, and successive machine mounts reveal changes in use. Outside, a reservoir embankment, transport viaduct, and cooling structures connect the hall to its region.
+
+This site's monumental space is playable at close range: an assembly floor, crane level, control gallery, service trench, and public repair courtyard. Machines expose useful inputs, outputs, controls, and faults. Freight lifts and service rails have destinations. The same central rack that provides cover can be moved, dismantled, or replaced.
+
+Players can develop a shared fabrication base, commissioned repair business, or automated workshop. A brownie household inhabits an agreed service alcove; gardeners and dryads maintain a light-filled courtyard. Comfort and manufacturing can coexist through ventilation, acoustic separation, and thoughtful access. During conflict, machinery and doors follow ordinary power and damage rules; windows, floors, and walls can be breached. Afterward, damaged equipment remains salvageable or repairable. The hall should remain worth inhabiting when nobody is fighting.
+
+2.5 DISTANCE, DESTRUCTION, AND ACCEPTANCE
+
+Use visual hierarchy rather than treating every distant voxel and pedestrian as continuously active. Far geometry can be derived district silhouettes and sparse window patterns; intermediate representations resolve streets, roofs, terraces, and transport routes; nearby chunks resolve authoritative editable structure and interactive entities. All levels refer to the same place. Destruction invalidates affected summaries so a demolished tower does not remain on the horizon. Hide streaming transitions with appropriate loading and detail selection, never with permanent invisible barriers or false collision.
+
+Compose traffic along actual travel corridors with quiet intervals. At distance, aggregate route occupancy and render representative movement. Interactive ships, cargo, caravans, and named residents retain identities and state through changes in detail. Decorative traffic cannot become a conflicting target or duplicate a real shipment. Visual simplification cannot alter material mass, object dimensions, or weapon permeability. Near combat, keep cover geometry, damage state, collision, and visibility consistent across clients; distant simplification must not expose concealed opponents or create invulnerable walls. Railings with visible gaps cannot silently act as solid shields. Physical debris may settle into cheaper persistent representations without restoring destroyed obstacles.
+
+Use fog, shadows, reflected color, and concentrated activity to guide attention without crushing interiors into black. Detail budgets should prioritize silhouette, navigation, animation, and functional readability. Profile the real native build; do not claim performance from concept art or a static render.
+
+First deliver one coherent coastal district or one shipyard bay with its landscape approach, working interior, inhabited corner, automation use, and persistent destruction. Review it from aircraft altitude, a district overlook, walking height, and a close interaction. Require original source assets, imported materials and animations, functioning geometry, and native screenshots showing all four scales. Verify a supply arrival, an ordinary resident routine, a useful base improvement, and destruction followed by repair. Keep the other signature regions explicitly planned until they meet the same gate.
+
+3. DEFAULT GEOLOGY, SPHERICAL TERRAIN AND ADVANCED EROSION
+
+Research snapshot: 29 October 2026. Proposed native implementation requirements; no Axiom source was modified, dependency integrated or performance measured.
+
+3.1 DEFAULT TERRAIN QUALITY AND CONTINUITY
+
+Make coherent planetary structure, drainage and erosion part of ordinary world generation. They must not be an optional screenshot preset hiding a default landscape of unrelated noise hills. Preserve the Windows-first Rust + raw WGPU engine, existing spherical ownership, mixed voxel scales, generation manifest and persistent edits established in architecture sections 3 and 8.
+
+Translate the approved concept-art study into explicit terrain targets: valley proportions, ridge rhythm, cliff and plateau relationships, quiet buildable ground, water placement, landmark silhouettes and vegetation transitions. Preserve those relationships while generating original places. Atmospheric haze and attractive lighting cannot substitute for convincing ground geometry at walking height.
+
+The default should produce recognizable watersheds, connected mountain systems, plains, passes, coastlines and geological provinces. A river valley should explain a road, settlement, fertile garden or ruin. Erosion should create useful places and routes, including broad valley floors and accessible terraces, rather than make every surface sharply gullied. Reference-derived art targets remain compatible with believable geology and deliberate fantasy exceptions.
+
+3.2 WHAT CURRENT RESEARCH ACTUALLY PROVIDES
+
+Tzathas and colleagues' 2024 analytical erosion method uses analytical stream-power solutions with a multigrid-accelerated iterative extension to heightfields, including hillslope and landslide effects [T1]. It is a strong macroterrain reference. “Analytical” does not mean that its complete implementation is iteration-free, a full sediment simulation or already spherical.
+
+Schott and colleagues' 2024 multiscale erosion method refines coarse terrain while retaining hydrologically informed structure [T2]. Its MIT reference code uses OpenGL 4.3 compute and an erosion/thermal/deposition sequence interleaved with upsampling. It offers useful algorithms to adapt; it is not a Rust/WGPU component or a demonstrated cross-vendor deterministic planet generator.
+
+The 2023 glacial terrain work combines learned ice-flow estimation with multiscale transport to model erosion over glacial cycles [T3]. Its value is process-specific landforms and geological history. Requiring its complete research machinery at runtime is unnecessary. Source-code licensing was not verified here.
+
+The 2026 stochastic geomorphological transport paper demonstrates richer channel and deposit behavior, including meanders, braided rivers, deltas and debris fans [T4]. Its MIT geotransport repository contains the core transport reference, explicitly excluding the full erosion implementation. The linked soillib uses C++23/CUDA/Python and lists LGPL-3.0. Evaluate this as an offline quality upgrade or algorithm reference; do not silently introduce a mandatory CUDA stack.
+
+NEWTS1.0, published in 2024, models reduced-complexity erosion of rocky coastlines in closed basins using exposure and incident-wave relationships [T5]. It does not supply beach sedimentation, open-ocean circulation or sphere-native coastlines. The 2025 terrain-descriptor survey provides useful evaluation measures beyond attractive renders [T6]. None of these sources establishes Axiom's runtime performance.
+
+3.3 RECOMMENDED DEFAULT GENERATION PIPELINE
+
+3.3.1 Establish whole-body structure.
+
+Begin with the existing canonical spherical graph. Generate continuous uplift and subsidence fields, lithological provinces, broad structural directions, continental shelves, basins and volcanic or impact regions as appropriate to the body. Use bounded stylized tectonic history; full mantle simulation is not a dependency. Specify lengths and slopes in physical units, with intentional compact-planet scaling documented.
+
+Estimate moisture, temperature, prevailing transport and paleoclimate through the existing bounded climate model. A few versioned climate/relief correction passes may improve rain shadows; never iterate until an unspecified equilibrium during joining. Airless worlds, glaciated worlds and active hydrological worlds require different process masks. Ancient valleys can survive a later dry climate without implying present rainfall.
+
+3.3.2 Resolve global drainage and retained basins.
+
+Build connected catchments, terminal seas, intentional closed basins, lake spill relationships and downstream order. Priority-Flood is a useful established foundation and supports irregular connectivity [T7]. Its usual rectangular-edge outlet assumption must be replaced with explicit sea/base-level seeds and retained-basin rules: a closed sphere has no outside map edge.
+
+Do not fill every depression into an artificial plain. Distinguish numerical pits from intended lakes, craters, wetlands and endorheic basins. Represent a lake as a reservoir node with a declared spill/outlet rule when appropriate. Resolve flat routing with stable ordering; do not depend on arbitrary floating-point perturbations that change with thread order.
+
+Accumulate runoff using contributing area and the supported climate/infiltration assumptions. A cell count is not an area measure on a distorted cube projection or unequal spherical cells. Store channel connectivity, upstream contribution, base levels and valley corridors before local detail can disturb them.
+
+3.3.3 Form fluvial relief with a bounded solve.
+
+Use a native coarse erosion implementation informed by analytical stream-power methods as the initial default. Its inputs include uplift, runoff, erodibility and downstream structure; its outputs include connected valleys, ridge divides and stable longitudinal channel profiles. Parameters are authored geological controls, not a claim to predict a particular real planet's history.
+
+Allow a bounded number of routing/relief corrections before accepting the macroterrain. Record convergence or validation failure explicitly; a failed solve must not keep a world-loading job alive indefinitely. Use a deterministic conservative fallback with coherent drainage, and report that fallback in generation diagnostics. Do not release visibly broken rivers and describe the seed as complete.
+
+Preserve floodplain and deposit metadata. A stream-power incision model alone should not be advertised as reproducing all meanders, sediment transport or delta formation. Initial channel-width and deposit rules can be controlled approximations; the 2026 transport method is an optional preprocessing comparison when its complexity improves the agreed art targets.
+
+3.3.4 Apply regional histories before freezing geography.
+
+Glaciated regions need broad troughs, overdeepened basins, tributary height relationships, cirques and deposited material where their history warrants them. U-shaped and hanging valleys are distinct from simply adding a snow texture to river terrain [T3, T8]. Use bounded regional authoring or simplified process passes; do not apply the same cross-section stamp to every valley.
+
+Coastal regions use shared sea level, exposure, geology and sediment availability. Distinguish rocky headlands, sheltered deposits, estuaries and drowned glacial valleys. Coastal sediment can originate from eroding cliffs and other connected sources [T8]. A continuous sand ribbon around every island is not an adequate coastal model. NEWTS informs selected erosion relationships, not universal coast generation.
+
+Weathering changes rock in place; erosion transports resulting material [T8]. Use lithology, fractures, moisture and climate history to guide soil depth, exposed bands, weathered surfaces and talus. Separate slope-relaxation operators from actual temperature or chemistry simulation. Arid, icy, volcanic and impact terrains need their own dominant processes and transitions.
+
+Revalidate drainage after any pass that changes meaningful elevations. Freeze the accepted macrograph, channel profiles, important landforms and geological records before civilization/site planning relies on them.
+
+3.3.5 Refine locally while retaining the accepted world.
+
+Reserve site foundations, river crossings, approach routes and landmark compositions through the existing planning stages. Then amplify terrain in bounded catchment or regional patches, using coarse-to-fine erosion and deposition approximations with shared boundary constraints. Small gullies and rock detail must respect the protected channel profiles and watershed divides.
+
+Use the engine's volumetric terrain for overhangs, caves, arches and excavatable strata. A radial heightfield is a useful surface scaffold, not a replacement for voxel volume ownership. Materials and resources continue across patches through shared geological fields. Decorative noise may modulate supported detail; it cannot move a river uphill, seal a required entrance or replace the ground beneath a saved structure.
+
+3.4 SPHERICAL BOUNDARIES ARE A GENERATION CONTRACT
+
+Use actual surface edge lengths, cell areas and tangent directions. Transform directional fields and transport vectors across cube faces; copying their two planar components unchanged is incorrect. Poles, date-line display wrapping and any pentagonal cells remain normal topology, not special drains or mountain seams.
+
+Give shared edges and corners canonical owners and sample identities. Adjacent patches query the same elevation, material and channel boundary records. Halos support finite local operators; they do not solve the nonlocal problem of a river fed by a distant mountain range. Global drainage must already supply the upstream state.
+
+At each refinement level, carry downstream outlets, incoming runoff, valley-floor constraints and appropriate slope/derivative continuity. Patch blending must preserve those constraints rather than averaging away a gorge. Check face corners and transitions between unequal levels, not only the middle of equal-resolution edges.
+
+Retain physical relief and channel silhouettes in distant LOD. Surface meshes, voxel realization, navigation, river rendering and the map derive from the same accepted data. Camera distance may change visual detail, never authoritative solidity, water connectivity or a projectile's obstruction.
+
+3.5 NATIVE DETERMINISM AND CPU/GPU CHOICES
+
+Default authoritative generation to bounded Rust CPU jobs with stable traversal, keyed random streams, explicit tie-breaking and recorded stage versions. This is a practical reproducibility strategy, not a claim that CPU floating point is automatically portable. Specify supported targets, arithmetic assumptions, quantization boundaries and reference hashes. Quantization alone cannot repair a branch that already chose a different downstream neighbor.
+
+Persist compact authoritative macroterrain and accepted regional results where recomputation cannot satisfy the compatibility promise. Compatible clients may reproduce and verify immutable terrain; mismatches use authoritative data or a clear incompatibility response. Never allow a client's private GPU result to determine a different PvP wall, tunnel or firing line.
+
+Use WGPU compute for validated accelerations and cosmetic detail, with a CPU-compatible fallback where needed. WGSL permits floating-point implementation variation, including reassociation and rounding choices [T9]; identical shader text and seed do not prove identical terrain on all devices. Optional GPU authoring may bake, validate and version an accepted result. Measure dispatch, synchronization, readback and upload cost, not kernel time alone.
+
+Research code requires a pinned version, dependency inspection and license decision before reuse. Prefer narrow native adaptations over importing an entire authoring application. No OpenGL, CUDA, Python or machine-learning runtime becomes a mandatory gameplay dependency merely because a reference implementation uses it.
+
+3.6 PRECOMPUTE, STREAM AND CHANGE AT DIFFERENT COSTS
+
+Planet creation or an explicit authoring step owns expensive global routing, geological aging and accepted regional landform records. Save resumable stage checkpoints. The first playable region can materialize while later detail is deferred, but the macrofacts that affect its neighbors must already be stable.
+
+Streaming owns deterministic local refinement, voxel materialization, meshes, collision and placement against immutable baseline records plus saved edits. Cache these by manifest and relevant revisions. Separate planning, collision preparation and rendering uploads; reserve capacity for approaching ground and active player interactions. Cancel obsolete speculative detail when travel direction changes.
+
+Runtime owns discrete excavation, destruction, supported local fluids, erosion effects and construction. Do not rerun geological aging because rain begins, a spell hits a cliff or a factory moves soil. Geological appearance is already present by default; continuous planet-wide evolution is not needed to preserve that quality.
+
+3.7 BOUNDED DESTRUCTION, WATER, MAGIC AND AUTOMATION
+
+Validate a terrain-changing action's affected volume and downstream work before admission. Include collision, connectivity, support, navigation, fluids and replication in its cost estimate. Bound work per action, actor, region and server. Large tools can expose an explicit staged operation with reservations and progress; they must not enqueue unlimited invisible future destruction.
+
+Commit accepted edits through the existing authoritative revision and durable-operation contract. Keep canonical voxels, relevant collision and consequential interaction queries coherent. A client effect may anticipate a blast visually, but cannot open an authoritative firing line before its edit is accepted. Server PvP checks use the agreed terrain history/current-state policy, never a cosmetic mesh or peer-generated terrain.
+
+Coalesce rebuild requests to the latest required revision; do not coalesce away gameplay edits, inventory transfers or recorded outcomes. Keep queue byte/work limits, cancellation and maximum age. If sustained demand exceeds processing, throttle or reject new expensive work with a readable reason. A bounded queue that leaves required jobs waiting forever still fails the user's requirement.
+
+Treat collapse with supported structural groups and a bounded set of meaningful fragments. Preserve material and ownership when debris becomes salvage or a coarse record. Decorative dust does not require physical particles; neither a single explosion nor recursive spell effects may create unlimited active bodies.
+
+A dam, breach or canal can update affected local flow and reservoir state without recomputing an entire planet. Reuse boundary flux and storage records, with explicit reservoirs/sinks and no water duplication. Propagate consequential changes through bounded regional events. Limit the supported affected domain before accepting an operation; do not silently truncate an accepted flood or discard its downstream consequences because the player looks away.
+
+Automation uses the same terrain operations and budgets as manual tools. Fair scheduling prevents one excavator or spell chain from monopolizing collision and networking. Distant equipment advances through a valid coarse rule or waits under an explicit operational limit; it cannot accumulate unlimited unpaid simulation work. Ordinary settlements retain the existing policy against unavoidable maintenance chores.
+
+3.8 ACCEPTANCE AND HONEST PERFORMANCE
+
+Produce one default spherical test body with a cross-boundary river, intentional closed basin, glacial region, contrasting coast and inhabited valley. Inspect it from orbit, aircraft, walking camera and underground. Compare landform descriptors such as relief, slope distribution, drainage structure and valley dimensions alongside the concept-art targets [T6]. Metrics support visual and gameplay judgment; they do not prove geological truth.
+
+Repeat generation with different worker schedules and supported target configurations. Verify authoritative hashes, downstream continuity, shared edges, level transitions and preserved edits. Dig, build and exchange fire across a patch boundary. Save/restart during a committed excavation and during a pending rebuild; stale work must never restore removed ground.
+
+Profile traversal while separated players build, operate machinery and trigger bounded destruction. Record server tick tails, frame-time tails, time to usable collision, queue size and oldest age, cancellations, GPU uploads, memory and durable-write costs. After a sustained supported burst stops, required work must drain within the declared recovery bound. Under unsupported sustained load, enforce admission limits instead of growing backlog.
+
+Use measured hardware, world size, resolution, seed and content versions. Research-paper timings and an empty terrain viewer establish no Axiom capacity. Default terrain quality, interaction correctness and bounded latency must pass together.
+
+4. LOCAL PHYSICS, SHARED OUTCOMES, PVP AND HOSTING COSTS
+
+Research and proposal dated 29 October 2026. This supersedes the restricted client-physics wording in planetary architecture section 7.2 and the deferred shared-body prediction in section 7.4. It is not an implementation or performance claim. Preserve Rust, raw WGPU, existing saves, mixed voxel scales and working transport. Do not introduce Bevy.
+
+4.1 REQUIRED OUTCOME AND SIMPLEST TOPOLOGY
+
+Every participating client MUST execute the real game physics for its relevant interacting local bodies: its character, nearby players and creatures, moving platforms, vehicles, manipulated objects, meaningful projectiles and gameplay destruction fragments. They respond locally to forces, collisions and supported constraints between network updates. Rendering an authoritative transform stream alone does not satisfy this requirement. Distant noninteracting objects may still interpolate or use coarse records; no client must simulate the entire planet.
+
+Use one player-hosted listen authority with the same optional headless executable for user/community servers. Each client simulates its local interaction domain; the host simulates the union of authoritative active domains and resolves shared outcomes. This duplication buys immediate response and coherent persistence. It does not distribute the host's workload away. The host player need not run a redundant second copy of identical authoritative physics.
+
+This requires no mandatory developer-hosted world simulation. Players provide simulation hardware, world storage and game bandwidth. Connectivity services can still cost money. A trusted friend host supports cooperative play and consensual PvP; a malicious host can alter results, inspect hidden state or deny service. Authentication cannot make an authority trustworthy. Offer neutral user/community dedicated hosting for competitive sessions; do not advertise cheat-proof peer authority.
+
+4.2 EXECUTION AND AUTHORITY TABLE
+
+| System | Execution on each relevant client | Shared outcome owner |
+|---|---|---|
+| Character, vehicle, contact physics | Actual local solver and local-input prediction | Host validates and sequences accepted inputs/events; checkpoint/state repair when needed |
+| Other nearby dynamic bodies | Actual local solver from a matching domain baseline and accepted commands; explicit state-sync mode when required | Host resolves collisions, damage and accepted trajectories |
+| Spell/projectile interactions | Predict permitted forces, travel and provisional effects | Host validates cast, resources, hits, status and destruction |
+| Terrain and structural damage | Predicted overlay; authoritative revisions update local collision | Host commits occupancy, topology, material and fragment identities |
+| Conveyors and machinery | Local motion/contact simulation where interactive | Host owns recipes, power accounting, transfers and output custody |
+| Inventory, trade, loot, freight | Provisional UI and physical representation | Host transaction ledger |
+| Distant settlements and orbital traffic | Subscribed summaries or relevant trajectory extrapolation | Host coarse simulation and persistent records |
+| Cosmetic dust and sparks | Independent local effects | No gameplay ownership or collectible value |
+
+Local execution is mandatory where interaction requires it; authority remains singular. A client cannot manufacture accepted cargo by reporting a locally simulated pickup.
+
+4.3 BUILD A LOCAL INTERACTION DOMAIN
+
+Subscribe by interaction reach, not camera visibility. Include support contacts, joints, vehicle occupants, carried cargo, nearby collision candidates and a velocity-aware incoming-projectile margin. Keep constraint-connected bodies together. A distant skyhook can remain analytical while the boarding assembly and nearby cargo run detailed physics. The host shares work where players overlap; clients receive only their relevant domain plus necessary boundary state.
+
+Include in coherent baselines and necessary state-repair or mode updates: entity identity/generation, authoritative tick, world epoch, frame identity, topology revision, pose, linear/angular velocity, sleep state and applicable controller/actuator inputs. Healthy deterministic domains continue from accepted commands and verification instead of routine per-body pose packets. Include relevant joints and material parameters. Give clients identical collision definitions and gameplay force rules; host AI chooses intentions, while clients execute the locally relevant motion model. Stop extrapolating stale commands after a bounded interval rather than continuing thrust or attacks indefinitely.
+
+Install an interaction-ready baseline before admitting movement into an unknown collision region. Prefetch likely crossings. Unknown terrain cannot become a tunnel, and stale geometry cannot silently determine a competitive hit. Planetary, vehicle and portal frame changes are authoritative tick events carrying full position/velocity transforms and attachment revisions. Preserve rotational velocity terms and the existing gravity/frame conventions.
+
+A detailed fluid/pressure boundary belongs to the declared simulation model. Provide time-indexed canonical boundary flux/pressure state or merge the affected solve before two-way interactions require it. An analytical reservoir may be a legitimate reduced model with conserved state; it cannot be a convenient cut through an otherwise continuous exact simulation. Clients reproduce accepted coarse-boundary inputs within their complete domain instead of guessing an unseen ocean or remote factory. Authority-chosen boundary events must account for their traffic and simulation cost.
+
+4.4 DETERMINISTIC COMMAND REPLICATION AND BOUNDED RECOVERY
+
+Make exact accepted-command replay the preferred normal path for validated gameplay and physics domains. Each relevant client executes the actual same canonical domain as the authority, from a matching complete baseline and command stream. Exchange accepted controls, authoritative external events, membership/boundary transitions, digests and receipts; avoid routinely transmitting every body's pose while verified replicas agree. Determinism does not eliminate initial state, late-join checkpoints or exceptional repair.
+
+Use an explicit manifest for physics/build features, content/mods, numerical rules, RNG, tick rate, solver settings, collision construction, stable identities and ordering. Current Rapier documentation supports enhanced-determinism with parallel solving under its conditions and excludes simd8 [N2]. That is useful dependency evidence, not proof for Axiom's scripts, controllers, geometry or asynchronous work. Cross-machine and checkpoint-continuation tests are required before removing routine state updates.
+
+An exact local domain includes all future-affecting state and inputs. It cannot be an arbitrary subset of a larger host solver world. Establish canonical domain membership, collision geometry, frame, creation/removal order and internal solver state on host and subscriber. Prepare merged or split baselines before two-sided coupling changes; use a declared state-synchronized mode when exact-domain conditions fail. That mode retains real local physics, and it does not remove independent limits on active physical complexity.
+
+Keep fixed simulation ticks independent of render timing and packet arrival. The authority validates inputs and publishes accepted order and completeness watermarks without waiting for every client. Missing controls use a declared bounded hold/neutral policy; never invent repeated shots, casts, trades or inventory use. A slow client has bounded prediction/replay and explicit recovery while other players continue. Local wall-clock budgets and worker completion cannot change shared effect ticks or collision representation.
+
+Retain coherent bounded checkpoints with body tick, membership, frame, geometry/topology, joints, controller and solver state. Do not combine old bodies with arbitrary current terrain. Restore only manageable domains and cap replay work and retained bytes; obtain a newer baseline when history is insufficient. State synchronization as described by Fiedler remains a compatibility/recovery path [N1], not a requirement to keep routine transform streams for proven exact domains. Jolt's topology/property restore caveats still apply [N3].
+
+Prediction remains provisional. Stable effect IDs prevent repeated sounds, damage, loot or resource spending during replay. Correct physical state first and smooth a separate visual offset where safe. PvP historical hit queries retain a declared bounded body-and-cover policy. Digests reveal divergence, not client honesty; the host still validates and executes shared consequences. Detailed implementation, bandwidth accounting and acceptance requirements are in AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt.
+
+For responsive breaking and placement, keep confirmed canonical state and pending speculative edits separate. Local movement, terrain queries and affected bodies read one coherent predicted branch; correcting it includes dependent contact/constraint state. Overlay promotion waits for the matching authoritative data to be installed, so an early receipt cannot flash old cover back into view. Use the optimization prompt's semantic operation receipts and exact input/accepted-history frontiers; rendering interpolation never feeds collision.
+
+4.5 TRANSACTIONS, EPOCHS AND CROSS-DOMAIN INTERACTION
+
+Use stable WorldId, ActorId, OperationId and EntityId/generation. Use a host/session epoch to fence stale simulation traffic and a domain authority epoch for any future handoff. Operation deduplication remains scoped to persistent world and actor identity across reconnects; changing a session epoch must not make the same purchase executable again.
+
+Validate expected revisions, reach, permissions, item availability and costs. Commit affected inventories, terrain revisions, structural changes, new entity identities and the operation result atomically where the gameplay action requires it. A committed receipt follows the declared durable journal/transaction boundary. Group commits may expose provisional acceptance, but cannot masquerade as crash-safe commitment. Transport delivery is not durable application execution.
+
+Include causal lasting changes together: destroying a cargo hold cannot durably create salvage while recovery resurrects its intact original contents. Prune deduplication only with a durable rejection watermark or equivalent protection. Retrying a previously committed operation returns its existing receipt before fresh revision validation.
+
+Solver islands are transient contact groups, not independent world owners. With the recommended single host, a collision joining islands simply becomes one authoritative interaction. Broadphase, projectile paths, beams, portals and joint creation must see all relevant candidates across region boundaries. Clients predict that interaction; they never exchange competing authoritative impulse corrections.
+
+4.6 DESTRUCTION WITHOUT AN UNBOUNDED BACKLOG
+
+Network compressed edits, structural operations and resulting revisions, not one reliable RPC per removed voxel. A small operation descriptor requires a bounded affected region, validated parameters and matching algorithm/content version; provide explicit canonical data when regeneration differs. Deduplicate cast/explosion IDs. Every peer must converge on the accepted edit, material result and gameplay fragments.
+
+Separate bounded logical occupancy/collision changes from optimized mesh, lighting and distant navigation rebuilds. Prepare required collision before activating a geometry revision, or use a verified current-voxel query path. Each client activates its installed known revision with a correct fast visual representation or direct material-rendering fallback; it need not display the host's latest revision before network delivery. Coalesce rebuild jobs by region and revision; cancel superseded work and atomically publish coherent replacements. Do not let camera LOD change solidity.
+
+Budget active fragments, contact pairs, spell propagation, rebuilt cells and per-peer bytes. Use compound rubble bodies and conserved material aggregates when individual debris exceeds the admitted budget. Cosmetic particles can disappear; valuable material cannot. Design explosive power and structural granularity around measured limits rather than silently dropping authoritative damage.
+
+Use separate bounded input/state, control, durable-operation, edit and bulk lanes. New snapshots supersede obsolete queued snapshots; durable operations require bounded admission, backpressure or explicit rejection. Compact old edit streams into revisioned baselines while preserving committed effects and receipts. Joining and mesh uploads cannot starve interaction traffic. Independent streams still share bandwidth and congestion.
+
+Under overload, lower distant detail and cosmetic work, cancel obsolete jobs, and stop accepting additional expensive work before queues grow without limit. A finite machine cannot promise zero stutter for unbounded adversarial destruction. The deliverable is a measured supported envelope, responsive rendering and bounded recovery, with visible overload behavior outside that envelope.
+
+4.7 OPTIONAL DELEGATION IS A LATER MILESTONE
+
+Do not require distributed physics ownership to satisfy local execution. If host measurements later justify it, lease only provably noninteracting domains to trusted peers. A stable domain ID is separate from the solver's changing island indices. Record owner, authority epoch, effective tick, lease expiry and accepted checkpoint.
+
+Before cross-domain contact, combat, joint attachment or physically continuous portal interaction, reclaim or merge the relevant domains under one authority. Use a prepared baseline and one activation tick; revoke the old epoch, then reject its delayed updates. A handoff cannot leave two accepted authoritative owners. Timeout returns ownership to the host from the last accepted checkpoint plus subsequent committed events, under a new epoch. Never overwrite newer ledger state with a stale physics checkpoint. Inventory/cargo transactions always use the host ledger.
+
+Delegated physics proposals cannot be proven honest by plausibility limits alone; recomputing everything removes much of the saving. Disable untrusted delegation for competitive sessions. Establish single-host performance and correctness first.
+
+4.8 DIRECT CONNECTIVITY AND ACTUAL COSTS
+
+Keep a working transport. For missing native friends connectivity, evaluate iroh behind the existing interface; for an established Steam product, evaluate SteamNetworkingSockets/SDR under applicable platform terms. Neither requires Bevy. Peer connectivity does not require mesh simulation authority. [N4, N8]
+
+Iroh's documented standard relay path carries QUIC through WebSockets; older crate prose still calls it a plain TCP upgrade. Test the pinned implementation. TCP-carried relay loss can cause head-of-line delay even for application datagrams; separate application lanes cannot eliminate that underlying effect. [N4, N5] Require direct and forced-relay action tests.
+
+Public iroh relays are rate-limited, have no uptime guarantee, and its production guide recommends against production dependence on them. [N6, N7] Default to direct connections where possible, with explicit user/community relay configuration or a deliberately funded fallback. LAN/direct-IP hosting remains available. Invite authorization, discovery and rendezvous need deployment choices even when game simulation is entirely player-hosted. Ship no reusable developer billing secret inside the game; developer-funded access needs bounded, revocable credentials and spending controls.
+
+Estimate with measured bytes. Let N include the host, d_i be host-to-client bytes/second, u_i the reverse, and T session seconds. Host upload is sum(d_i); download is sum(u_i). For relay fraction r_i, overhead factor h_i and billed forwarding multiplier k_i:
+
+V_relay_GB = T * sum[r_i * h_i * k_i * (d_i + u_i)] / 1,000,000,000.
+
+Add join transfers, signaling, retries and any voice traffic. k_i captures provider accounting and additional relay hops; do not automatically equate ingress-plus-egress with billed egress. For illustration only, three remote clients at 40 kB/s down and 4 kB/s up require 120 kB/s host upload and 12 kB/s download. At 25% relay usage, h=k=1, one hour is 0.1188 GB relayed. These invented rates are arithmetic inputs, not Axiom benchmarks or a predicted NAT-success rate.
+
+Monthly cost is provider base fees plus metered traffic/connection/observability charges, self-hosted infrastructure and any discovery services. On the retrieval date, iroh advertised Pro at US$19/month with 100 GB egress included and US$0.09/GB thereafter; terms, limits and other charges still apply. [N7] Developer simulation cost can be zero by architecture; universally available, unlimited connectivity cannot be guaranteed free.
+
+4.9 DISCONNECTS AND ACCEPTANCE GATES
+
+During a short outage, allow bounded local prediction and show deteriorating connectivity. Do not accept offline shared loot, PvP kills or factory outputs. After the prediction horizon, stop speculative gameplay changes and resynchronize. A separately saved offline branch must have a distinct world identity; never merge its economy automatically. The host decides the published disconnect-body policy so unplugging is not an automatic PvP escape.
+
+Reconnect restores current world/session epoch, frame, accepted operations and regional baselines. Clean host exit saves and closes the world; abrupt exit recovers the documented durable boundary. User-hosted persistent servers can continue without players; a closed listen world follows its explicit offline-time policy. Seamless host migration remains optional.
+
+Acceptance must demonstrate two clients pushing the same crate; colliding occupied vehicles; spell forces during structural collapse; simultaneous last-item pickup; active factories during late join; portal/skyhook transit; and reconnect during destruction. Prove clients actually step interacting physics from matching domain baselines and accepted commands, including healthy periods without routine pose snapshots, while unauthorized results never become committed outcomes. Verify digests and bounded repair; withheld required commands eventually exhaust only that client's prediction horizon.
+
+Test representative four-player hardware with 0/80/160 ms RTT, jitter, reordering, duplicate requests, 1–5% loss, burst outages, constrained upload and forced relay. Exercise 1,000/10,000/100,000 edited-cell scenarios, including fragmented structures, to establish admission limits rather than presume every tier passes. Measure frame/tick percentiles, worst stalls, replay cost, correction magnitude, queue bytes/age, collider readiness, bandwidth, relay fraction and durable-receipt latency.
+
+Inject crashes before and after mutation, persistence and receipt delivery; inject stale epochs, forged hits, impossible forces and excessive requests. Require bounded memory/queues, material conservation, no duplicate durable effects, coherent frame transitions and eventual convergence. Set explicit supported-hardware timing thresholds before calling the result smooth; report failed cases and degradation behavior.
+
+4.10 A coupled three-dimensional material model
+
+Extend Noita's emergent material interactions into three dimensions with momentum, pressure, constraints and meaningful fracture. Noita itself already combines falling-sand simulation with destructible rigid bodies, as its developer's GDC session explains; treating it as cellular automata alone would misrepresent the reference. [H1]
+
+The baseline architecture is CPU-authoritative material accounting, the existing rigid-body solver, bounded constrained/deformable assemblies, conservative reservoir/pipe/room networks, and a bounded active three-dimensional liquid solver selected by comparison. Clients execute the same gameplay model for their relevant closed interaction domains. GPU reconstruction, spray and cosmetic smoke may vary visually without changing shared outcomes.
+
+Material category | Canonical representation | Active physical behavior
+Terrain, walls and coherent machinery | Sparse volumetric material plus bonds/attachments | Local damage, separation into compound rigid aggregates, persistent edited geometry
+Loose consequential rubble or grains | Bounded material parcels and contact geometry | Momentum, friction, collision and supported settling; stable deposits retain quantity
+Free liquid | Conserved reservoirs plus bounded 3D active patches | Flow, splashes, pressure and two-way force exchange using one selected solver
+Gas, heat and reacting matter | Conserved room/pipe states and local finite-volume fields | Pressure-driven transport, conduction, mixing, combustion and phase changes
+Ropes, hinges, flexible machinery and fold magic | Constraint graph or bounded deformable cage | Tension, bending, motors, yielding, tearing and contact
+
+These are declared representations with explicit transitions, not a camera-dependent excuse to stop gameplay simulation. A distant operating pump or pressure vessel still has a meaningful conserved state and boundary flux.
+
+4.11 Material ownership and conservative conversions
+
+Give each material amount exactly one canonical owner: terrain cells, rigid aggregate, granular parcel, liquid patch or reservoir. Grid samples and reconstructed liquid surfaces are derived views, unless explicitly designated as the solver's authoritative state. A transfer transaction records source/destination identities and generations, tick, composition, quantity, momentum and thermal state. Fracturing a wall cannot leave its original mass in terrain and create the same mass as debris.
+
+Use exact bounded quantity units where practical for inventories and material accounting; define numerical tolerances for momentum, angular momentum, thermal energy and solver drift. Distinguish physical dissipation and external magical work from unexplained conservation errors. Splitting inherits the parent's translational and rotational motion at the split state; merging must account for relative kinetic energy and angular momentum rather than average velocities blindly.
+
+Liquid-to-ice transfers remove the corresponding liquid, account for latent heat and create compatible collision at the agreed tick. Melting reverses ownership. A sparse-grid rebuild or particle reseeding cannot mint water. Merging computational particles needs a specified moment-preserving rule; if the reduced representation cannot retain an important angular mode, retain extra state or delay that reduction. Cosmetic spray carries no collectible duplicate mass.
+
+Activate material, topology, attachments, mass properties and current collision coherently. Visual smoothing may not seal a breach or make thin cover disappear. Existing reservation and revision rules still protect accepted attacks and prevent destruction work from accumulating indefinitely.
+
+4.12 Rigid aggregates, compliant mechanisms and fold magic
+
+Keep structures as coherent voxel assemblies with compound collision until accepted bond failure detaches meaningful pieces. Reserve component enumeration, collider construction, contact growth and fragment ownership changes separately. One voxel is not one rigid body. Tiny nonconsequential chips can be visual; supported rubble parcels retain recoverable material and physical effects.
+
+Keep the current backend if it passes the required behavior. Rapier's current Rust 0.36 documentation exposes rope, cloth and volumetric soft bodies, including a constraint path solved with scene contacts and joints. Inspect the engine's pinned version and integration before building a second deformable solver. [H2] Use rigid hinges for doors and folding panels; use compliant tension/bending constraints for ropes and bounded cages for deformable sections. Art/render vertices need not equal physical degrees of freedom.
+
+XPBD provides a useful compliant-constraint formulation and force estimates. The Small Steps research found lower constraint error and damping when spending comparable constraint work on smaller substeps rather than many iterations of one large step in its tested systems. Neither result proves universal superiority or exact stiffness with an unconverged solve. [H3,H4]
+
+Benchmark a fixed shared substep schedule against the existing solver on ropes, stacks, heavy/light contacts and moving mechanisms. Never let local frame rate choose physical accuracy. Collision detection must remain valid over each substep's motion; reusing contacts is safe only with validated swept bounds and feature tracking. Use supported swept/continuous tests for fast projectiles, rotating blades and thin geometry; test two moving objects as well as a projectile against a static wall.
+
+Fold magic applies bounded motor targets, rest-shape changes or explicit forces with energy/resource rules. It cannot teleport a rigid panel through an occupied player or duplicate attached cargo. Tearing, motor limits and wake conditions are shared simulation state.
+
+4.13 Select one liquid solver through a coupled CPU pilot
+
+First build a CPU liquid pilot with a tank breach, floating rigid body, pipe inlet and moving barrier. Salva is a concrete Rust reuse candidate: its official repository lists DFSPH/IISPH pressure solvers and optional two-way Rapier coupling. [H5] Verify dependency compatibility, neighbor-search ordering, adaptive stepping, persistence and cross-machine behavior; linking it to deterministic Rapier does not establish deterministic fluids.
+
+Compare this reuse path against a bounded sparse staggered-grid solver with APIC transport. Choose the path meeting coupled physics, sustained memory and minimum-hardware budgets. Do not run multiple authoritative liquid solvers over the same material or select the winner from an isolated particle-count demonstration.
+
+Method | Transferable benefit | Additional obligations and limits
+PIC / FLIP / APIC | APIC augments particles with local affine velocity information to reduce PIC dissipation and FLIP noise; the paper establishes angular-momentum preservation for its transfers. [H6] | APIC is a transfer scheme, not a complete pressure solver. Add free-surface handling, viscosity, boundaries, pressure projection, volume control and conservation tests. Grid/particle/scratch overlap costs memory.
+PBF | Iterative positional density constraints provide a practical liquid approach; its paper also adds artificial pressure and vorticity correction. [H7] | Density error, dissipation and injected correction energy need measurement. Neighbor lists and repeated neighborhood passes can dominate.
+DFSPH / IISPH family | DFSPH explicitly corrects both density and velocity divergence; Salva provides implementations worth testing. [H8,H5] | Bound neighbor storage, pressure iterations and boundary work. A convergence loop cannot silently grow past a frame budget; stopping early needs a validated error envelope.
+MPM | Particle/grid continuum models can express elastic, plastic and flowing material; the snow paper demonstrates an elastoplastic model. [H9] | Constitutive state, grid transfers, collision and timestep restrictions are substantial costs. Keep large-scale plasticity as an experiment until integrated evidence supports it.
+
+For the first shipping model, retain fill-level reservoirs and conservative pipe flow for bulk stored liquid, alongside the selected real 3D active solver where sloshing, splashing and free flow matter. Represent sustained visible flow continuously; cosmetic splash particles cannot substitute for moving the actual water. Build a surface from the canonical fluid state, preserving openings and occupancy relevant to gameplay.
+
+4.14 Active fluid boundaries and two-way force exchange
+
+Every patch declares open, sealed, inlet/outlet or coupled boundaries. Exiting liquid transfers mass, momentum and heat to the adjacent patch or reservoir. An unloaded boundary cannot silently become a wall or drain. Two adjacent active patches exchange matched fluxes; their shared face is processed once. Shared pressure coupling may require a merged solve or a validated coupled boundary method: separate visually touching patches are not automatically physically independent.
+
+Patch activation/deactivation is an authoritative representation transition with hysteresis, capacity reservation and a coherent baseline. Convert only when the declared reduced model remains valid; an active jet, submerged mechanism or moving contact cannot vanish merely because the camera turns. Reduced reservoirs preserve level/volume, composition, thermal state and applicable transport/momentum information. Detail reconstruction must not generate energy or reset pressure.
+
+Define one owner for each fluid-solid impulse. Pressure and viscous traction applied to a body have equal and opposite contributions to the fluid, with consistent moment arms. If the pressure solve already produces buoyancy, do not add a second generic buoyancy force. Moving-body boundaries use the same pose and substep as contacts. Light floating bodies need particular attention: loose one-way or delayed coupling can produce unstable feedback.
+
+Batty and colleagues provide a pressure-based variational coupling reference; their project also documents matrix-cost complications, so it is a numerical reference rather than a guaranteed fast drop-in solver. [H10] Prefer integrated coupling where available; otherwise specify a fixed, measured coupling iteration schedule and acceptable residuals. Grid cuts around thin geometry need a tested small-cell treatment rather than arbitrarily tiny timesteps. [H11]
+
+Bound fluid neighbor storage and pressure work under the densest supported interactions, not only at initial particle placement. Do not truncate physically required neighbors when a list fills. Use conservative capacity bounds, a supported common resampling/aggregation rule or an explicit model limit established before the action activates. Sparse grids still need budgets for active bricks, particle/grid transfers, pressure scratch and retained checkpoints. A detailed patch spreading into a huge connected fluid region requires the declared reservoir/patch model, not recursive unlimited activation.
+
+4.15 Gas, pressure, heat and reactions for working machinery
+
+Use coarse room and pipe graphs for bulk quantities, refined local finite-volume cells where spatial gradients affect play. Track species mass, thermal energy, volume and an explicit pressure relation. Compute each intercell/edge flux once and apply opposite transfers. Carry conduction and transported enthalpy consistently; cap outflow through positivity-preserving flux handling rather than deleting negative mass after the update. Finite-volume conservation, convection, diffusion and source terms are established numerical tools; FiPy's NIST documentation is a reference, not a proposed Python runtime dependency. [H12]
+
+Combustion consumes available fuel and oxidizer, produces defined products and heat, and changes pressure through the chosen equation of state. Boiling/freezing budgets latent heat. Magic may add material or energy only as an explicit source with game rules. Sealed rooms cannot lose pressure because their visuals unload.
+
+Select and declare the physical scope: low-speed ventilation/steam transport does not resolve a true compressible shock. Use a separately defined, conserved/budgeted blast model or a validated local compressible solver for shock effects. Do not describe a smoke animation as explosion pressure physics.
+
+Explicit transport must respect its stability conditions; implicit diffusion/pressure still needs bounded work and residual checks. Fix valid cell scales, flow speeds, source magnitudes and iteration/substep envelopes in the common simulation profile. More CPU threads cannot make arbitrary stiffness or pressure convergence bounded.
+
+4.16 Determinism of the complete coupled system and GPU placement
+
+Rapier supports cross-platform determinism under documented initialization, arithmetic and build conditions, including enhanced-determinism with parallel solving in the retrieved version. Jolt offers its own cross-platform configuration but documents nondeterministic query/callback ordering requiring application handling. Neither setting covers external fluid or reaction code automatically. [H13,H14]
+
+Canonicalize particle insertion/removal, spatial sorting, neighbors, constraint order, reductions, phase transitions and representation changes. Define fixed-point/quantized fields only with units, rounding, overflow and error budgets; quantization alone does not cure differing branches. Pin floating-point contraction, denormal treatment and deterministic transcendental routines where applicable. Include all future-affecting fluid/constraint state and caches in checkpoint continuation tests, including APIC matrices if used.
+
+Perform CPU-authoritative coupled stepping first. GPU rendering and nonconsequential effects can be asynchronous without a per-tick readback barrier. A GPU solver may become authoritative only after proving the required deterministic or explicitly state-synchronized mode, recovery and performance on supported devices.
+
+This is a current practical distinction: Dimforge's October 2026 Nexus report describes sparse-grid GPU MPM with sand, snow, liquid and cutting, but its rigid/MPM coupling is still one-way and its determinism is same-machine, not cross-platform. Treat it as an optional research track, not evidence that Axiom's required coupling and replication are already solved. [H15]
+
+Separate a predictable shared solver schedule from device-dependent worker scheduling. Deterministic adaptation may use canonical state and specified arithmetic within a certified maximum; wall-clock exhaustion cannot independently choose different physical iterations on each peer. Include the selected coupling schedule, numerical tolerances, representation-transition rules and cache schemas in the compatibility manifest. Include all future-affecting cache values in coherent domain checkpoints and checkpoint-continuation tests.
+
+4.17 Admission, minimum hardware and physical acceptance
+
+Account for active cells, particles, neighbors, contact/constraint rows, pressure iterations, boundary coupling, checkpoint copies and visible reconstruction together. Particle count alone is insufficient. Reserve work for future convergence of bodies and previously admitted effects. Global stable substep profiles may differ between explicitly configured worlds, but clients within a shared domain cannot secretly choose different physical models.
+
+The minimum-hardware profile must run the complete supported gameplay model on CPU while WGPU renders the measured scene. Optional GPU particles reduce visual detail first. Name actual CPU, RAM, GPU/shared-memory budget and storage before claiming support for a small laptop. No global particle-per-voxel simulation, hidden full-planet grid, unbounded iteration loop or mandatory high-end GPU is acceptable.
+
+Require these coupled fixtures:
+- Breach a heated tank while a floating crate and powered hinge interact with the outflow; verify pressure, impulses and ownership once.
+- Pour grains onto a moving belt, settle them, reload and excavate; preserve mass, composition and custody without body-count explosions.
+- Freeze flowing water around a cable, then melt and cut the anchor; collision, tension, latent heat and topology agree.
+- Open a pressurized room into adjacent active/inactive regions; no false sealing, disappearing outflow or camera-dependent pressure.
+- Fire fast objects through newly broken mixed-scale cover while a wall fragment rotates; validate swept contacts and represented revisions.
+- Replay, restore and late-join during those scenes across machines and worker counts; compare full canonical state and bounded recovery.
+
+Measure conservation residuals, pressure/density error, penetration, constraint stretch, contact jitter, authoritative state age, visible response, frame/tick tails and memory peaks together. Smooth rendered interpolation does not excuse unstable physics; a numerically impressive liquid demo does not establish multiplayer performance.
+
+4.18 Turn the physical model into readable, responsive play
+
+Magical jackhammer: a continuous tool request produces a bounded, shared cadence of impacts. Local swing, recoil and provisional chips respond promptly; authoritative material loss, impulse and salvage are applied once. A modifier that sends mined matter to inventory changes the material-transfer destination instead of creating both debris and inventory copies. Avoid one network transaction per rendered spark.
+
+Folding cage: the targeted ground becomes a bounded articulated set of rigid panels or a deformable cage, with shared hinge/motor targets, collision and force limits. Preserve panel material and attached objects. It can lift, deflect or trap through actual contacts; an occupied space is not resolved by teleporting a panel through a person. If a fracture or motor jams, players can see and exploit that physical outcome.
+
+Factory breach: a projectile opens a hot pressure vessel. Its accepted hole changes collision, flow area and visible boundary together; the conserved contents drive an outflow that pushes a crate and loads a hinged door. Temperature, species and pressure affect the resulting steam/fire behavior. Distant storage receives the same conserved transfer through the declared reservoir model.
+
+Frozen crossing: freeze a flowing channel around a cable, cross or load the resulting support, then melt or break it. Liquid/solid ownership, latent heat, cable force and collision transition at the accepted ticks. Physics results remain legible through material colors, motion and sound even when optional spray or smoke detail is reduced.
+
+Smoothness comes from stable integration, coherent contact geometry, appropriate shared substeps and low-delay prediction. Surface interpolation can improve appearance, but it cannot repair excessive penetration, unbounded pressure error, missing impulses or contradictory ownership. Review physical behavior, input response and visual clarity together.
+
+5. DESTRUCTION WITHOUT AN EVER-GROWING UPDATE QUEUE
+
+5.1 Recognize both overload mechanisms
+
+The fixed-timestep 'spiral of death' is an established failure mode: catching up takes enough work to leave the simulation further behind [B1]. A destructive voxel game also has a dependency problem. One edit can request mesh rebuilding, collider changes, support analysis, pressure/fluids, navigation, light propagation, loot creation, persistence and replication. Moving those requests onto worker threads does not make an unbounded amount of work affordable.
+
+Treat all of that as a costed pipeline. A large blast should produce a bounded set of region operations and shared dirty records, not one full world-update chain per voxel. A mining machine and a spell use the same pipeline. Rendering never becomes the place where deferred simulation debt must be paid in one burst.
+
+Let Q be outstanding estimated work, A newly admitted work and C completed work in one scheduling interval. Conceptually Q_next = max(0, Q + A - C), with explicit reservation for work already running and costs induced by accepted operations. A finite queue only controls memory; sustained A above C still creates latency or requires refusal. The implementation must control admission, service capacity, work amplification and age together.
+
+Use conservative cost classes calibrated by profiling. Counts alone are insufficient: rebuilding a uniform brick and a heavily perforated brick can have different costs. Reserve downstream capacity before admitting operations likely to create substantial derived work. Reconcile estimated and actual cost so repeated underestimation cannot defeat the admission limit.
+
+5.2 Organize data for bulk change
+
+Keep existing chunk ownership when sound. Within it, use compact material/occupancy bricks, uniform-region summaries, contiguous data and stable identifiers. Separate editable material truth from render meshes, collider acceleration structures and far-field proxies. A world edit changes the material source; derived representations refer to its revision.
+
+Different workloads may use different bounded units: a small editing/collision brick, a larger batched draw region, and a streaming page. Tune their sizes from edit and draw costs. The Voxel Tools documentation illustrates the general tradeoff between larger render blocks and modification cost, and the need to budget main-thread work [B2]. Its Godot/OpenGL/Vulkan-specific problems are not evidence of an identical WGPU fault.
+
+Represent coherent edits as boxes, spans, masks, supported constructive operations or compressed patches, according to the actual terrain model. Air/uniform interiors can be skipped through trustworthy summaries. Do not allocate an entity, notification and heap object for every deleted block. Keep exact material changes at the game's supported resolution; visual voxel refinement must not manufacture extra mass.
+
+Compact operations have conditions. Replaying a blast description is safe only when the relevant algorithm, initial state and authority decision are agreed. Material-dependent or order-dependent results may need canonical patches. A tiny procedural command is not a general compression scheme for arbitrary high-entropy edits. Bound operation chains, patch storage and decompression; compact them into snapshots using budgeted maintenance.
+
+5.3 One action has an explicit admission and commit path
+
+The following is a specification of responsibilities, not a new mandatory service architecture:
+
+Step A — Validate intent. Resolve actor, session, permissions, action definition, target, range, resources, world/body, relevant revision and logical operation ID. Continuous tool input and a discrete item-consuming action remain distinct.
+
+Step B — Bound the footprint. Determine or conservatively bound affected bricks, protected state transitions, possible detached groups, water/pressure changes, collision preparation, replication and durability work. Preflight itself has a time/work bound. Use cached summaries where valid; never scan the whole world merely to estimate whether a command is affordable.
+
+Step C — Reserve capacity. Reserve the required operation slot, temporary memory, output space and critical downstream work. Unsupported giant actions are rejected before consuming their irreversible input, or become an explicitly staged supported action. Per-player quotas are combined with region and session limits so many identities cannot defeat the global cap.
+
+Reserve or conservatively bound critical impact consequences when a cast, projectile or charged action is accepted, before its irreversible activation. Do not consume ammunition, admit a hit, then refuse its damage because the edit queue is full. Active dynamic systems also need headroom for their supported collision/damage consequences. Child effects share a bounded action budget. The supported action definition determines authoritative effect/stage ticks and interruption rules; worker completion order must not determine combat timing.
+
+Step D — Prepare critical state in bounded tasks. Compute the canonical material patch, relevant mass/inventory consequences, and a valid collision/interaction representation. Capture all relevant material, topology and resource read revisions. Stage affected topology and attachments when the action requires them. For a rendering peer, prepare a fast correct visual representation or a verified path that reads the newly installed material directly before locally activating that revision. The headless authority does not wait for clients' GPU uploads. Do not mutate live shared state from arbitrary worker tasks.
+
+Step E — Commit a bounded authoritative revision. Revalidate the prepared result's material, topology and relevant resource read-set against authoritative state. Commit a matching result atomically; otherwise reprepare or reject while the action remains provisional. An already activated attack resolves conflicts through its declared impact rules and reserved critical budget, without silently cancelling the accepted consequences. The accepted split state supplies fragment motion; stale preparatory velocities do not.
+
+Publish the material edit and essential gameplay result at the defined authoritative tick using the existing operation machinery. Tick publication and durable acknowledgement are distinct: a result may be accepted but still pending persistence, while a committed receipt requires the documented durable boundary. Use bounded asynchronous/group persistence and coherent causal recovery; never force a synchronous disk flush on every physics tick. Large staged operations have explicit atomic suboperations, effect ticks and interruption rules. The engine must not promise atomic whole-city removal while actually exposing partial unrecorded results.
+
+Step F — Publish relevant deltas and dirty state. Send compact committed revisions and receipts to interested peers. Dirty derived data is keyed by the affected region and subsystem. Background refinement can continue while the current accepted world is safely represented.
+
+The client's initial spell animation, swing or placement preview can be immediate. Its locally predicted outcome remains provisional until accepted. Prediction cannot permanently open a firing line, grant salvage, charge another player, or establish a new durable object on its own.
+
+5.4 Separate essential correctness from visual refinement
+
+Authoritative and confirmed collision/hit queries must agree with their committed material state. Local speculative queries must agree with their separate coherent predicted branch; that branch cannot authorize shared damage or inventory outcomes. Use a queryable voxel representation or bounded replacement collision pieces supported by the chosen physics backend. If an exact supported fallback does not exist, prepare the necessary collider before committing that geometry change. 'The mesh will catch up eventually' is not sufficient for PvP or moving rigid bodies.
+
+For remote clients, 'current' means the peer's installed known revision at its represented tick, with predictions marked provisional. Body state, relevant collision and the current visual representation activate coherently at that peer. The authority continues without waiting for every GPU; it resolves actual hits and the declared terrain-history policy. Bound install delay and recover from excessive staleness. Receiving a later revision must not allow an older mesh to reappear over that installed state.
+
+A broad-phase proxy may conservatively nominate a possible contact. The final supported query must not let an obsolete solid wall block an accepted hole, or permit movement through newly placed cover. Render simplification and collision approximation need stated tolerances appropriate to the game's voxel scale. Open railings, doors, firing apertures and traversable clearances require consistent behavior.
+
+For visual response, use a small fast current-revision mesh or another verified current geometry representation, then replace it with a better batched/greedy mesh when budget allows. The two-stage latency/mesh-quality idea is a useful established foundation [B3]. Its adaptation still needs strict revision checks, bounded GPU work and handling of repeatedly edited regions.
+
+Never display a stale optimized mesh as current cover. Remove or mask stale geometry in the affected region using a validated method and show the current representation. Pending regions must neither vanish into holes nor retain a phantom wall. If the chosen fast representation cannot satisfy this, the edit unit or admitted workload is too large.
+
+5.5 Coalesce derived jobs, preserve gameplay history
+
+Maintain a bounded dirty record per (region, subsystem), containing the latest desired input revision, dirty subranges, age, priority, dependencies and any running job. Repeated edits merge affected ranges and update that desired revision. They do not enqueue thousands of equivalent rebuilds.
+
+A worker captures immutable input revisions. Its output carries those revisions. Publication checks that they still describe the required state. A late mesh, navigation result, light field or collision artifact cannot overwrite newer terrain. Cancellation is cooperative at bounded checkpoints and does not free memory still being read by a worker or GPU command.
+
+Coalescing is valid for reconstructible derived state. It is not a license to throw away committed edits, resource consumption, damage, item transfers or operation receipts. Compact old edit history only after a durable snapshot and revision/receipt policy safely represents it. A recovering or joining peer receives a baseline plus the necessary subsequent changes, not an endless backlog of obsolete render jobs.
+
+Prevent cancellation livelock. A brick being edited continuously still needs a correct fast representation and progressing critical state. Give old required work deadlines, protect a bounded execution quantum, and reserve capacity for it. Keep optional optimized meshing behind current correctness. Do not repeatedly cancel a nearly completed essential job while allowing new speculative work to take its place.
+
+A protected quantum alone is insufficient if every completed result is already stale. Either safely update/rebase the required result to the latest compatible state, or gate additional conflicting admissions/commits around a bounded revision batch until the essential result can publish. Plan that fence before accepting timed effects; admitted attacks retain their declared schedule and reserved consequences. Pending operations remain within the existing capacity limits. Optional optimized meshes may wait while the correct fast representation remains usable.
+
+Use age and service quotas as well as distance. A queue that never grows but keeps one important collider, receipt or water update waiting forever is still broken. Report oldest age per lane, not only total queue length.
+
+5.6 Budget work at every stage
+
+Separate resource budgets for command admission, simulation, worker CPU, temporary memory, collider installation, mesh upload, GPU compute, network serialization/transmission, durable writes and resource retirement. A job accepted by one stage must not create an unbounded queue in the next.
+
+Reserve service for control, local interactions, committed-state delivery, and necessary collision. Use fair scheduling for players, machines and regions. Background erosion refinement, distant visual upgrades and speculative prefetch use spare capacity. Thread pools leave CPU time for rendering, physics, audio, networking and the operating system.
+
+Long work units must be partitioned or made resumable; checking a time budget only after a 100-ms task has finished cannot prevent that stall. Count allocations and serialization as work. Bound live references to stale generations. Release buffers and large object graphs progressively where the backend permits it, without recycling resources before their consumers finish.
+
+Apply the same discipline to GPU compute. Moving erosion or meshing onto the GPU can compete with the frame's graphics work. Bound dispatch sizes and queued work, avoid synchronous readback on the render path, and measure complete latency through submission and upload. Cache and prepare known shader/pipeline variants before an encounter when practical. Do not compile a new material pipeline in response to every broken block.
+
+5.7 Fragmentation must preserve consequences within a supported model
+
+A voxel is not automatically a rigid body. Coherent structures remain assemblies with compound collision and cached mass properties. Structural analysis uses bounded hierarchical groups and supported attachment/bond rules. Local edits update affected summaries; global connectivity cases have explicit bounded or staged handling. No claim of constant-time arbitrary graph splitting is made.
+
+Choose meaningful physical fragments from the actual damage: a detached wing, bridge segment, machinery rack or slab can matter. Small chips and dust can be local effects when they have no collision, damage, loot, sensor or cover consequence. Consequential fragments have common identities and rules on every peer.
+
+If loose material is represented as an aggregate or salvage lot, preserve its quantity, composition, custody and recoverability. Do not silently delete it to satisfy an entity cap. Conversely, do not turn settling dust into free collectible mass. Collapse and fracture content must define the supported scale and aggregation rules in advance.
+
+Keep authoritative obstruction consistent. Local performance settings may reduce debris particles, never remove a physical fragment used as cover. Sleeping objects retain their state and can wake when relevant; they do not lose collision because the camera turns away. Large fragments cannot be frozen in midair or replaced by a new static barrier merely because one client ran out of frame time.
+
+A split commits topology, colliders, module locations, compartments, mass properties, ownership and motion consistently. Detached components inherit appropriate point velocities and angular motion. Reference changes and recalculated centers of mass do not generate free impulses. Salvage, mining and cargo collection use the same durable transfer path as factories.
+
+5.8 Prevent recursive work explosions
+
+Spell and machinery definitions declare bounded expansion: affected volume, active projectiles, child effects, recurrence, duration, physical fragment policy and costly subsystem interactions. Validate these at content load and again when player composition changes them. Charge and shaping mechanics can support spectacular large effects through an explicit bounded propagation model.
+
+Do not let every burning voxel independently schedule every neighboring voxel without a shared frontier and deduplication. Flood, fire, contamination, support and pressure updates use active frontiers or regional models with work limits and thresholds. Multi-system feedback has termination or stable bounded evolution rules. Energy/material accounts still constrain supported behavior.
+
+Larger tools can operate as visible work over time, with interruption and resource rules, while ordinary actions remain responsive within their admitted envelope. The stage progression is part of the shared gameplay definition. It is not private frame-rate-dependent throttling or a hidden ever-growing promise to finish later.
+
+5.9 Time and catch-up remain bounded
+
+Keep the selected fixed simulation step independent of rendering. Reserve measured headroom and cap the work of a single iteration and of prediction replay. Never run an unbounded 'while behind, simulate another tick' loop on a frame. Never enlarge the timestep arbitrarily as an emergency substitute for validated physics.
+
+A slow client installs an authoritative baseline whose body-state tick, frame, attachments, topology and relevant collision revisions agree, then applies the subsequent ordered events and revisions before resuming appropriate prediction. It must not combine an old physics checkpoint with arbitrary newer geometry, or replay minutes of every remote physical event. Bounded replay restores its appropriate local interaction set; irreversibly committed effects are not applied again. Preserve input acknowledgements and pending operation identities across that recovery.
+
+For the authority, prevent persistent overload before it enters the simulation through admission, supported complexity and representation. If an exceptional fault still prevents real-time progress, publish an explicit common recovery state. Do not silently skip authoritative combat, charge resources for nonexistent actions, or let each peer invent a different elapsed time. The normal supported benchmark must not depend on this emergency behavior.
+
+6. ENVIRONMENT, AUTOMATION AND RENDERING SHARE THESE LIMITS
+
+6.1 Environmental changes remain real
+
+The default world contains the results of geological history. Live rain can affect wetness and supported local flow without requesting millions of years of global erosion each tick. A destroyed dam changes affected storage and downstream flow through the accepted water model. Connected regional boundaries carry consistent flux and revision information.
+
+Water, pressure and contamination are not purely cosmetic where they affect people, machinery, movement or damage. Select a bounded spatial/temporal model before admitting interventions. If a breach can influence a huge basin, represent remote effects through appropriate reservoir and route records while maintaining a detailed active front near interactions. Do not erase downstream consequences, create infinite source water or replay every unseen fluid-cell tick on return.
+
+Thermal, electrical and industrial models preserve the earlier scientific contracts. A stable remote network can use a validated equivalent or scheduled operation. Topology changes and operating conditions that invalidate the equivalent wake the relevant computation. 'Offline' cannot arbitrarily change a controller's function, grant free energy or finish blocked outputs.
+
+6.2 Automation avoids millions of independent timer callbacks
+
+Use event-driven work, sleeping stable components, grouped transfers and bounded scheduling where behavior permits. A belt can represent an ordered flow or segments between actual interactions; it need not make every visible item an independent full rigid body. Junctions, picking, blocking, collision and transfer ownership still use the supported physical/gameplay model.
+
+Factories record production as typed batches or lots and scheduled work with real input/output capacity. Coarse catch-up advances supported balances directly, splits at consequential thresholds and preserves incomplete batches. It does not enqueue one missed update per machine per past frame. Bound event generation and storage, including automated excavation and recursively generated production orders.
+
+Use fair throughput for machines and players under the same world rules. Expose meaningful operational bottlenecks such as capacity, power, blocked outputs and queueable jobs. Avoid leaking implementation terminology into routine player UI. Engineering/debug views may expose work budgets to creators and server administrators.
+
+6.3 Planet scale comes from representation and truthful continuity
+
+Render the same authoritative forms through nested detail levels: planetary shape and landform hierarchy; regional terrain and city silhouettes; nearby editable geometry; fine surface and asset detail. Important valleys, tower proportions, ship outlines and edited excavations survive the relevant transition. Visual detail can vary by device without changing collision or ownership.
+
+Preserve the existing horizon repair requirements: shared source heights/materials, compatible boundary samples, proper seams or geomorphs, and coverage during streaming. A depth sink and radial discard are not a permanent substitute for matching geometry. Edited caves and overhangs cannot be sealed by a distant heightfield as players approach them.
+
+A large city may have lightweight persistent records and distant geometry until approached. Its sites, roads and important interiors already have identities and constraints. When materialized, it becomes the same planned place. Decorative air traffic is allowed where it has no gameplay consequence; an interactable courier or visible freight shipment must retain identity and resolve into the actual vessel before interaction.
+
+Treat assets as original production work: block out silhouettes and clearances in Blender, author reusable functional kits, derive suitable representations for the established voxel scales, and review them inside the native camera. High-resolution concept art is a direction for composition and material hierarchy, not a mandate to render unlimited tiny geometry, emissive lights or translucent layers.
+
+6.4 Default GPU allocation and frame-time optimization
+
+Enable total-process residency admission by default. Use current native budget/usage where available, conservative tested headroom, peak reservations, bounded uploads and GPU-completion-aware retirement. Do not treat max_buffer_size or physical VRAM as an allocation allowance, or MemoryHints as a hard cap. Preserve minimal correct visible gameplay while evicting optional detail. Lowering texture sampling LOD alone does not free an existing allocation. Profile the reported default freeze before asserting its cause.
+
+Compare the existing mesher with bounded visible-face/run and binary-greedy candidates, including mask preparation, material rules, boundary handling, collision readiness, upload, draw and retirement. Study Sector's Edge, current Sodium allocator work, Luanti, Veloren, compact voxel research and native WGPU capabilities through the new optimization prompt. Keep surface rasterization as the initial measured baseline, with optional sparse/hybrid experiments. No author's microbenchmark establishes Axiom frame time.
+
+7. DELIVERY AND PROOF
+
+7.1 Audit before changing architecture
+
+Find the current authoritative voxel representation, collision path, mesh lifecycle, worker queues, fixed tick, streaming scheduler, edit log, physics backend, networking, factory update model and rendering hot spots. Record which features exist, which are provisional and which were only described in older reports. Preserve unrelated changes and working systems. Keep dependencies narrow and native; no engine migration.
+
+Instrument end-to-end operation traces. A destruction trace should expose validation, admission wait, canonical patch work, collision readiness, commit, first correct visual, optimized mesh, network delivery and persistence. Track affected region revisions so a late publication can be explained. Sampling counts and budgets are diagnostic data, not a player-facing requirement.
+
+7.2 Deliver a representative location in complete slices
+
+Slice A — Bounded edit substrate. In an existing native test scene, implement admission, revisioned patches, bounded dirty records, correct collision, current visual fallback and durable replay. Prove repeated edits cannot resurrect terrain or multiply jobs. A small ugly but correct engineering fixture is acceptable only as this temporary substrate gate.
+
+Slice B — Default eroded valley. Generate a sphere-connected catchment with recognizable ridges, tributaries, valley floors, a retained basin, a glacial or coastal region and a usable route. Show that visual detail preserves the macrograph across seams and LOD. Include player modifications in the near and far representation.
+
+Slice C — One reference-quality inhabited site. Build one of the four art briefs, with an approach, useful district, hangar/workshop, human-scale paths and reachable landmark. Give it inhabitants, a real supply connection and a reason to build nearby. Review walking, aircraft and distant views in the native renderer.
+
+Slice D — Local physics on each client. Two clients manipulate, board, collide with and damage shared moving objects while both execute local physics. Prove deterministic command replication for the supported complete domains, then add bounded baseline repair, explicit state-sync compatibility, terrain-revision handling, prediction/replay and valid join/reconnect. Verify that authoritative consequences remain coherent under impairment.
+
+Slice E — PvP with destruction and automation. Use the site as a representative shared encounter while a factory and terrain-changing machine operate. Include magic, changed cover, an actual structural fragment, inventory recovery and separated player areas. Add the supported co-op/PvP player count only after this passes on declared hardware.
+
+Slice F — Network and content expansion. Validate direct connectivity, forced relay, save/rejoin and user-run dedicated hosting. Expand regions and megastructures only after the engine sustains the workload and visual quality together. Run the same bounded contracts through spacecraft, portals and the additional planetary catalog.
+
+7.3 Concrete acceptance scenes
+
+Destruction burst: trigger a declared supported cluster of blasts through a built structure and terrain while other players move and fight. Verify coherent openings, material conservation, bounded fragments, accepted effects, bounded queues and a measured return to steady state after input stops.
+
+Continuous-edit hotspot: repeatedly edit the same brick while background workers run. The current representation remains correct; stale meshes never publish; cancellation does not prevent required progress indefinitely. Check queue age and memory, not only FPS.
+
+Geological seam: follow a river across a spherical face/cell boundary and a level transition, excavate its bank, cross a bridge, and save/rejoin. Tributaries, materials, terrain edits, map position and obstruction remain coherent. Test a corner as well as an edge.
+
+Shared moving platform: two players stand on or board a moving vessel, exchange forces with nearby bodies, break a loaded section and recover it. Each client simulates locally. Reconciliation preserves supported contact behavior, identity, compartments, mass and momentum semantics.
+
+Changed-cover PvP: fire while another player creates or removes cover. Repeat with latency and reordering, within and outside the lag-compensation window. Record the policy and accepted terrain/body revisions. Never validate against a private visual mesh, obsolete authority epoch or unavailable historical terrain.
+
+Factory and flood: operate a functioning factory while breaching a reservoir and excavating nearby ground. Electrical, thermal, fluid and work models preserve their supported consequences. Returning from a distant trip does not trigger an unbounded replay of missed ticks.
+
+Separated players and joining: one player explores a new valley, one operates the home factory, others fight at a port, and a joining peer receives its baseline. Bulk transfer, generation and optional visual work cannot starve control or committed-state delivery. The low-detail client retains the same PvP cover.
+
+Fault and abuse: exercise oversized requests, recursive spell definitions, hostile edit rates, bandwidth restriction, burst loss, host interruption, stale revisions and repeated operation IDs. Limits apply before costly amplification. Recovery neither duplicates resources nor silently reexecutes old actions.
+
+Coupled material scene: breach a heated tank with a floating crate and powered hinge, then freeze a stream around a cable and sever its anchor. Validate equal-and-opposite coupling, topology, phase accounting, predicted interaction, accepted outcomes and bounded correction while another client joins. Include active/inactive patch boundaries and camera turns so no material or pressure disappears with visibility.
+
+7.4 Performance reporting
+
+Select declared baseline and higher-end machines, including a realistic CPU and memory budget. Do not make the user's RTX 4090 the sole proof of accessibility. Choose the intended frame/tick target, settings and maximum active gameplay workload before claiming success. A 60-fps frame interval is about 16.7 ms; it is a target budget, not measured Axiom performance.
+
+Report p50/p95/p99 CPU and GPU frame times, maximum observed stall, authority tick times, input/correction latency, queue bytes/work/oldest age, operation amplification, time to correct collision/visuals, upload/retirement work, peak memory, network bytes by class and durable-write latency. Report direct and forced-relay conditions separately. Measure the whole path, including buffer allocation, synchronization, serialization and saving.
+
+For each supported burst define an observed recovery deadline: after new work stops, required debt returns to the stated steady-state bound without lost accepted effects. For sustained workload, queues must remain stationary within their bound and important work must continue receiving service. A flat queue length with increasing oldest age fails. A high FPS with seconds-old collision or remote state also fails.
+
+Scale independent variables to identify the limit: affected material volume, surface complexity, active bodies, contact density, fragments, spell expansion, machines, separated regions, player count and network impairment. A checkerboard or thin perforated structure can be harder than a larger uniform block. Do not report only the easiest 'million blocks removed' demonstration.
+
+No target is established by another engine's benchmark, a paper's GPU timing, an empty flyover, a passing compile or a count of unit tests. Stop optional retesting when the declared gate is satisfied and move to the next player-visible slice. Record remaining limits plainly.
+
+Report latency by stage as defined in the optimization prompt: local feedback, mining completion, predicted collision/visual readiness, authoritative application, installed result, remote observation and durable recording. For material physics, report mass/energy residuals, pressure/density error, constraint stretch, penetration, contact jitter, neighbor/iteration maxima and coupling cost. A fluid particle count or smooth video alone cannot establish quality or multiplayer readiness.
+
+7.5 Required implementation report
+
+Return exact native files changed, player-visible behavior, representative screenshots/captures, reproducible validation commands, before/after measurements, dependency/license decisions and known limits. Separate implemented, prototype, placeholder and deferred work. Include a short compatibility/migration note for old saves and manifests. The complete outcome is a beautiful, inhabited, editable default world that remains responsive under the supported shared workload and does not generate unpaid endless work.
+
+8. RESEARCH AND PROJECT CONTINUITY
+
+The image observations in section 2 come from the ten user-supplied references, numbered by upload order. They are visual analysis, not claims about the implementation of the depicted games. The named Axiom sites, architecture, limits and delivery sequence are original proposals.
+
+Primary technical sources were checked on 29 October 2026. Foundational engineering references are identified by their original dates; recent research does not automatically supersede a simpler method that meets the native game's quality and cost gates. No research benchmark was reproduced in Axiom.
+
+8.1 Terrain sources
+
+[T1] Tzathas et al., 2024, Physically-based Analytical Erosion for fast Terrain Generation. Analytical stream-power extension and multigrid method; no spherical/runtime guarantee. Code reuse license not verified here.
+https://doi.org/10.1111/cgf.15033
+https://diglib.eg.org/items/0a412929-2e29-4bcb-a597-1a4b2cc558e2
+https://www-sop.inria.fr/reves/Basilic/2024/TGSC24/
+
+[T2] Schott et al., 2024, Terrain Amplification using Multi-Scale Erosion. Hierarchical refinement; inspected code declares MIT and OpenGL 4.3 compute.
+https://h-schott.github.io/p/mserosion/
+https://github.com/H-Schott/MultiScaleErosion
+
+[T3] Cordonnier et al., 2023, Forming Terrains by Glacial Erosion. Glacial-cycle terrain research, not required runtime machinery.
+https://researchportal.ip-paris.fr/en/publications/forming-terrains-by-glacial-erosion/
+
+[T4] McDonald and Cordonnier, SIGGRAPH 2026, Stochastic Geomorphological Transport for Terrain Erosion Simulation. Core reference MIT; full linked implementation lists LGPL-3.0 and CUDA. No Axiom benchmarks reproduced.
+https://doi.org/10.1145/3811336
+https://erosiv.studio/publications/stochastic-geomorphological-transport
+https://github.com/erosiv/geotransport
+https://github.com/erosiv/soillib
+
+[T5] Palermo et al., 2024, NEWTS1.0. Reduced-complexity rocky closed-basin coast erosion; no coastal sediment redistribution. Article is open access; code license not verified here.
+https://gmd.copernicus.org/articles/17/3433/2024/
+
+[T6] Argudo et al., 2025, Terrain descriptors for landscape synthesis, analysis and simulation. Survey and comparison of metrics, not a complete generator.
+https://doi.org/10.1111/cgf.70080
+
+[T7] Barnes, Lehman and Mulla, 2014, Priority-Flood. Depression/watershed foundation; adaptation to explicit spherical outlets is Axiom's proposed engineering.
+https://rbarnes.org/sci/2014_depressions.pdf
+
+[T8] National Park Service geological references. Ground the limited distinctions among glacial landforms, coastal sediment sources and weathering/erosion; they do not validate proposed generation rules.
+https://www.nps.gov/articles/ushapedvalleysfjordshangingvalleys.htm
+https://www.nps.gov/articles/coastal-processes-sediment-transport-and-deposition.htm
+https://www.nps.gov/articles/000/weathering-erosion.htm
+
+[T9] W3C WGSL, floating-point evaluation, retrieved 29 October 2026. Supports the determinism caveat, not a claim about measured WGPU behavior in Axiom.
+https://www.w3.org/TR/WGSL/#floating-point-evaluation
+
+8.2 Physics, networking and connectivity sources
+
+N1. Original-author state synchronization: https://gafferongames.com/post/state_synchronization/
+N2. Rapier Rust guide, retrieved as version 0.36 documentation: https://rapier.rs/docs/user_guides/rust/determinism/
+N3. Jolt architecture, determinism and rollback: https://github.com/jrouwe/JoltPhysics/blob/master/Docs/Architecture.md
+N4. Iroh crate documentation, retrieved 1.4.1: https://docs.rs/iroh/latest/iroh/
+N5. Official relay protocol change: https://www.iroh.computer/blog/iroh-0-91-0-the-last-relay-break
+N6. Iroh production relay guidance: https://docs.iroh.computer/add-a-relay
+N7. Iroh prices and limits, retrieved 29 October 2026: https://www.iroh.computer/pricing
+N8. Steamworks networking: https://partner.steamgames.com/doc/features/multiplayer/networking
+
+Hybrid 3D material physics sources
+
+[H1] Petri Purho / GDC 2019, Exploring the Tech and Design of Noita: https://www.gdcvault.com/play/1025695/Exploring-the-Tech-and-Design
+[H2] Rapier Rust 0.36 soft bodies: https://rapier.rs/docs/user_guides/rust/soft_bodies/
+[H3] Macklin et al., XPBD (2016): https://matthias-research.github.io/pages/publications/XPBD.pdf
+[H4] Macklin et al., Small Steps in Physics Simulation (2019): https://matthias-research.github.io/pages/publications/smallsteps.pdf
+[H5] Dimforge Salva official repository: https://github.com/dimforge/salva
+[H6] Jiang et al., The Affine Particle-In-Cell Method (2015), author page: https://www.andyselle.com/papers/24/
+[H7] Macklin and Müller, Position Based Fluids (2013), author page: https://blog.mmacklin.com/project/pbf/
+[H8] Bender and Koschier, Divergence-Free SPH (2015): https://animation.rwth-aachen.de/publication/054/
+[H9] Stomakhin et al., A Material Point Method for Snow Simulation (2013): https://disneyanimation.com/publications/a-material-point-method-for-snow-simulation/
+[H10] Batty et al., A Fast Variational Framework for Accurate Solid-Fluid Coupling (2007): https://www.cs.ubc.ca/labs/imager/tr/2007/Batty_VariationalFluids/
+[H11] Almgren et al., Cartesian Grid Projection Method / cut-cell treatment: https://ccse.lbl.gov/Publications/almgren/abcm.aiaa/abstract.html
+[H12] NIST FiPy numerical background: https://pages.nist.gov/fipy/en/3.4.5/numerical/index.html
+[H13] Rapier determinism: https://rapier.rs/docs/user_guides/rust/determinism/
+[H14] Jolt architecture, deterministic simulation: https://github.com/jrouwe/JoltPhysics/blob/master/Docs/Architecture.md
+[H15] Dimforge Q3 report, 25 October 2026, Nexus multiphysics and limits: https://dimforge.com/blog/2026/10/25/dimforge-Q3-technical-report/
+
+8.3 Bounded-work and meshing sources
+
+[B1] Glenn Fiedler, Fix Your Timestep! (2004). Foundational explanation of fixed-step overload and headroom. This prompt's admission, queues and destruction pipeline are original Axiom engineering proposals.
+https://gafferongames.com/post/fix_your_timestep/
+
+[B2] Voxel Tools, Performance documentation, retrieved 29 October 2026. Supports general worker/main-thread budgeting and block-size tradeoffs; backend-specific observations must not be attributed to WGPU without measurement.
+https://voxel-tools.readthedocs.io/en/latest/performance/
+
+[B3] Mikola Lysenko, Meshing in a Minecraft Game (2012). Foundation for fast first meshing followed by quality refinement; not a benchmark or complete implementation for Axiom.
+https://0fps.net/2012/06/30/meshing-in-a-minecraft-game/
+
+8.4 Companion implementation prompts
+
+AXIOM_Living_World_Expansion_Prompt.txt — inhabitants, mythology, ruins, regional restoration and actual orbital freight.
+https://chatgpt.com/library?file_id=libfile_93af63b820a48191ad47ceb7177e95d8&account_id=personal
+
+AXIOM_Planetary_Simulation_And_Coop_Architecture.txt — deterministic sphere, civilization/history, cities, economy, work, ownership and durable operations; client-physics wording is revised to agree with this addendum.
+https://chatgpt.com/library?file_id=libfile_7033d540843c819183622890781a23f2&account_id=personal
+
+AXIOM_Science_Spaceflight_And_Planetary_Expansion.txt — scientific industry, planetary catalog, spacecraft, exploration, combat and interplanetary infrastructure.
+https://chatgpt.com/library?file_id=libfile_5b72c2e2c51c8191a6fb930165facf17&account_id=personal
+
+END OF REFERENCE, WORLDGEN AND BOUNDED-PHYSICS PROMPT
+
+Technical optimization companion: AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt — controlling deterministic networking, faster loading, CPU/GPU pipeline, current engine comparisons and default GPU memory limits.

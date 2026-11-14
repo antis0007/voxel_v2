@@ -404,3 +404,20 @@ first, then the split that every later step builds on.
 The four builder calls above were accepted, with one condition: the 10 Hz
 full-state broadcast is the first thing replaced (M2), and chunk work in M4 must
 not build on it.
+
+## Manyfold encounter integration, 2026-10-29
+
+[Manyfold horror and multiplayer design](../../design/MANYFOLD_HORROR_AND_MULTIPLAYER.md)
+defines the spatial encounter requirements. These are pending implementation and
+do not change the authority or transport decisions in decision 0039.
+
+The host owns each encounter's collision, topology, gravity rules, actors, items,
+and rewards. Authored perceptions may differ by player; physical outcomes remain
+shared. Portal crossings and topology changes need revisioned, atomic commits,
+destination readiness, and a dependable return route. Replicate current encounter
+state to late joiners and persist it through reload. Rewards and carried objects
+must not duplicate under concurrent interaction or reconnect.
+
+Use one finite expedition to establish traversal and persistence before adding
+personal apparitions, procedural expansion, or more complex geometry. Validate it
+with two connected players before claiming multiplayer readiness.

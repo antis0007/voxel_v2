@@ -99,8 +99,9 @@ The pinned u32 kernel tick is checked for exhaustion instead of silently wrappin
 This is a bounded application path, not the Flooded Observatory or a migration
 of factory/spell/save/renderer writers. CPU sessions do not load or save ordinary
 world files; their seed and command document are the development input. Pending
-commands are reported on exit, not implicitly drained by invented ticks. Exact
-checkpoint/resume, world revisions/meshes, shared boundary exchange, migrated
+commands are reported on exit, not implicitly drained by invented ticks. Region-only
+checkpoint/resume is now implemented in [ADR 0025](0025-cpu-region-checkpoints.md),
+with runtime acceptance pending. World revisions/meshes, shared boundary exchange, migrated
 writers and the GPU-resident adapter are next gates. GPU work must reuse
 `sim_gpu::resident` and `resident_readback`; legacy rollback stays available.
 

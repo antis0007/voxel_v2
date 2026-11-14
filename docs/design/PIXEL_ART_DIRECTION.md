@@ -36,10 +36,32 @@ The six glyph roles are stable across every sprite:
   as a spark, crystal core or polished metal, not a general fill.
 - Spell accents still carry element identity, but their shade/highlight ramp is
   derived from the same roles. No sprite invents its own outline or cream.
-- Material textures in `world_shader.wgsl` use the same direction: discrete
-  native-sized grain, a 20-cell/metre albedo lattice, 4×4 Bayer dithering, and
-  material-keyed wood/leather/skin branches (`kind 55`/`54`). Solid wand parts
-  must not take the glow-particle path.
+- World textures retain their metric albedo lattice. The held kit has its own
+  art direction below; solid wand parts must not take the glow-particle path.
+
+## Held kit: authored atlas and Blender forms
+
+The current owner direction is **Minecraft modded style**, with models authored
+in Blender. This supersedes the earlier low-poly choice and the overly detailed
+Blender candidate on 2026-10-25. The hand and sleeve were restarted on 2026-10-26.
+Match the world's coarse detail through broad planes, pixel colour clusters,
+a limited material palette, readable silhouettes and quiet surfaces.
+
+The grip has closed finger profiles that curl in depth around the handle,
+a palm heel and an opposed thumb. The sleeve has a short asymmetric outline
+and a leather cuff. It retains uniform scale through every pose. Split timber,
+ceramic insulation, a copper strap and a recessed mineral tie the default wand
+to the lore's workshops. Detail stays concentrated around functional parts.
+
+`tools/pixel_kit/build.py` now authors the editable source at
+`assets/viewmodel/pixel_source/workshop_kit.blend`. This replaces the rejected
+remeshing pipeline in `tools/blender_artificer`; its source remains historical.
+The runtime caches `assets/viewmodel/*.ron` and samples `kit.png`'s identical
+64×64 RGBA upload using nearest texels in linear-light shading. Materials 54/55
+retain cloth, skin, wood, leather, metal and mineral finishes. The mineral
+follows the selected spell and cast-release energy. The expanded art rationale,
+software research, evidence and limitations are in
+`PIXEL_WORKSHOP_RESET_20261026.md`.
 
 ## Generators
 

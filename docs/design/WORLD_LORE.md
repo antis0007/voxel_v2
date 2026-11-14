@@ -661,6 +661,52 @@ house plan. Familiar shape (the secret level, the thirteenth floor), but the clu
 bureaucratic, not mystical. A painted-over directory line is more unsettling than a
 prophecy.
 
+## The Manyfold and the ascent
+
+The Manyfold extension is specified in
+[Manyfold horror and multiplayer design](MANYFOLD_HORROR_AND_MULTIPLAYER.md).
+It adds the following lore direction; encounter implementation remains pending.
+
+### Relationship to the Anchor
+
+**Design fact:** the Manyfold preserves displaced districts linked by evacuation
+infrastructure. Their original builders remain unidentified. Later custodians
+sometimes enforce protection by refusing departure. Rooms and player alterations
+remain stable even when a marked connection changes destination.
+
+**Record:** Anchor manifests describe receiving halls missing from ordinary maps.
+Ballast repairs show that families later lived around their pipes and freight stairs.
+These connect the dimension to the established world without resolving Return or
+identifying the Surveyors. “Last Surveyor” in an earlier brief is not proof that a
+guardian belongs to that civilization; use a measuring custodian for that role.
+
+**Rumour:** residents call the lower districts Hell and the inhabited ascent
+Purgatorio. Stillcourt is the first refuge on that ascent. Restored water, opened
+stairs, and released occupants make progress visible. The Room with an Outside
+remains its destination. These names express residents' beliefs; they do not settle
+the world's afterlife or identify existing Nether geography with the Manyfold.
+
+Keep the ninth office's purpose open. A connection to it is a rare, disputed Record,
+not the explanation of the dimension. Keep the Crimson Nexus's larger role separate
+from the Manyfold's particular, discovered routes.
+
+### Horror through evidence
+
+Use the sealed household, the cellar's fresh mortar, the pulse beneath a floor, and
+the familiar person with an impossible memory as encounter structures. Literature
+supplies situations and recurring objects; puzzle solutions depend on evidence in
+the game. Show grief, fear, and fixation through characters without making a diagnosis
+an enemy type or using a universal sanity meter.
+
+An anachronism needs a place in the building's history: a queue display wired into a
+chapel, a warm bath beneath an abandoned school. Preserve ordinary hospitality and
+quiet beauty. A player should sometimes be right to trust a resident.
+
+Some causes remain unknown. Repairing a door need not explain its visitor. All
+physical consequences still follow shared rules: players may disagree about a face
+or voice while standing on the same floor, facing the same creature, and using the
+same doorway. Local marks, repairs, possessions, and recovery routes persist.
+
 ## Mystery design: how to be cryptic without trying too hard
 
 Noita, Outer Wilds and Hyper Light Drifter hide their best material in plain sight.
@@ -701,8 +747,24 @@ place-name rule.
 ## The sky runs on one clock (implemented)
 
 Every orbital object (skyhooks, the Loom, the Continuum drums) uses the same orbital
-clock: real seconds, with the planet turning once per sidereal day. The sun runs on the
-fast game day. So orbits move at real speed (a low orbit crosses the sky in minutes) and
-all orbital objects agree on where the ground is. Earlier, the megastructures ran on a
-clock that counted 86 400 s per game day, so they raced across the sky while the hooks
-crawled. Use `megastructures::seconds` or `skyhook::clock` for anything new in orbit.
+clock: 86 400 orbital seconds per game day, with the planet turning once on that
+clock. The sky planet is compressed by four and the gravitational parameter is tuned
+for watchable passes (2.25 reference orbits per game day). These are deliberate game
+abstractions, not Earth-scale mechanics or real-time orbital periods. The two-body
+rails, resonant hooks and drum rotations all use this shared clock. Use
+`megastructures::seconds` or `skyhook::clock` for anything new in orbit. Atmospheric
+Meridian lifts are supported infrastructure, not geostationary space elevators.
+
+## Underground field records (generator 88)
+
+Buried scriptoria preserve the Watch's lamp tallies; the black arches preserve a
+porter's warning about keeping a ward for the walk home. Both are readable objects
+with useful magic attached. A completed return earns a countermark, and the
+Manyfold counterweight exposes a freight diagram with two labelled floors.
+
+These four Records connect practical spell knowledge to work, travel and survival.
+Their omissions remain omissions: the missing lamp, the blank ledger line and the
+unknown freight destination do not establish an afterlife, identify the Surveyors,
+or resolve the office of Return. Manyfold and the Nether remain distinct places.
+See [Underground records and routes](UNDERGROUND_RECORDS.md) for placement,
+mechanical rewards, persistence and the five-field lore audit.

@@ -1,0 +1,1892 @@
+THE MANYFOLD
+The Country That Lost Its Outside
+A labyrinth dimension for Axiom / Meridian
+Design and implementation brief — expanded edition, 29 October 2026
+Expansion: literary and gothic horror, Purgatorio, strange geometry, forest ruins, local gravity, archaeological traversal, exploration-aware underground mapping, multiplayer warped space, conservative fluids, learnable reality changes, open maze tubes, and twisting gravity
+
+STATUS
+
+This is a proposed game design and production brief. It does not describe implemented features or an inspected repository. Quantities below are starting design targets for playtesting, not measured engine capabilities. The accompanying concept image is an art-direction target, not a game screenshot.
+
+The expanded edition retains the original playable foundation and adds sections 20 onward. Sections 20–30 develop the literary descent, the separate Dawnward ascent, authored horror encounters, procedural mystery generation, and the distinctions between portals, hyperbolic space, higher-dimensional sections, and AdS-inspired effects. Sections 31–38 add a forest-swallowed archaeological district, actual local gravity, concrete puzzle and platforming sequences, and a lost underground civilization. Section 39 establishes underground mapping based on acquired knowledge, with separate local charts and learned portal connections. Section 40 develops shared optical distortion, multiplayer crossings, increasing void depth, and persistent routes to other planets. Section 41 connects low-end fluid/physics models to a reusable reality contract, persistent world changes, and inscriptions that teach observable rules. Section 42 develops open maze tubes, curved branches, layered ribbons, shell interiors, and twisting gravity with reachable upper districts. The earliest playable expansion uses bounded, understandable spaces; the more difficult geometry systems remain separate production milestones.
+
+1. THE EXPERIENCE
+
+You enter through a door in a ruined workshop and emerge onto a balcony. Below you, pale maze walls roll over an entire landscape. They climb stone swells, descend into blue ravines, and reappear on a gigantic surface hanging overhead. A tiny warm window shines in one of those walls. Somewhere beneath it, a bell rings twice. A shape you took for an aqueduct takes a breath.
+
+The Manyfold is a persistent, inhabited labyrinth-world assembled from folded places: ancient evacuation districts, gardens, cisterns, machine halls, wizard compounds, forgotten streets, and entire fragments of civilizations. Its horizon suggests endlessness. Its individual expeditions have achievable objectives, understandable rules, and lasting results.
+
+The player should gradually become someone who knows how to live here. They learn which bell opens a route, how to detect a false floor, where the dragon drinks, how to coax a door-creature out of its frame, and where a bridge would make a dangerous district profitable. They become a surveyor, thief, engineer, mage, guide, settler, and occasional monster hunter.
+
+The design must deliver five pleasures:
+
+- Awe: the labyrinth covers the landscape and sometimes the sky.
+- Discovery: a crooked passage can reveal a meaningful place, creature, machine, or rule.
+- Ingenuity: magic, physics, construction, observation, and social knowledge all solve problems.
+- Risk: a powerful artifact or an uncharted shortcut can make a deeper expedition tempting.
+- Ownership: maps, bridges, workshops, relationships, and secured routes persist.
+
+The fundamental rule is that local places remain dependable while selected connections between them change according to discoverable laws. A courtyard remains a courtyard. A special arch may lead somewhere different at another bell. The player's wall markings, excavations, and workshop remain attached to the real place.
+
+2. HOW IT FITS THE WIDER COSMOLOGY
+
+Make the Manyfold a pocket dimension with a world-sized interior. It can be approached through doors, wells, collapsed research facilities, archaeological sites, and eventually a navigable exterior manifestation resembling a maze-covered world. The exterior manifestation is a later feature; the dimension does not depend on orbital simulation to work.
+
+The Manyfold's documented refuge network was built inside a preexisting folded space during the great resets. Geomancers and engineers moved endangered districts away from their home worlds. Successive custodians added their own masonry, machinery, spells, and definitions of safety. After its original administration disappeared, the system continued preserving places. It gradually lost the distinction between protecting a settlement and preventing anyone from leaving it. These records explain the later infrastructure; they do not establish who or what produced the underlying space. Some of its oldest structures have no human-sized route to their interiors.
+
+This gives the buried civilizations a physical reason to overlap. A medieval courtyard drains into an older industrial channel. A wizard school has appropriated a transit station. The station sits above a tomb whose original sky now appears through a maintenance hatch. The maze contains rescued places, stolen places, accidental additions, and things that should have remained outside.
+
+Keep its function distinct from the Hall of the Crimson King. The Manyfold grants earned, specific connections between discovered places. The Crimson Nexus retains its wider role in the multiverse. A discovered Manyfold door can shorten a journey or reach a neighboring world, but it does not grant unrestricted access to every dimension or bypass another world's established access rules.
+
+The ultimate prize is a usable relationship with the dimension: knowledge and tools for opening, stabilizing, redirecting, and inhabiting folded space.
+
+3. THE VISUAL LANGUAGE
+
+The defining reference feature is labyrinth as topography. The provided Maze of Ith images show winding masonry becoming ridges, troughs, cliffs, and immense continuous surfaces. Preserve that feature at every scale.
+
+Large scale:
+
+- Broad, frozen waves of maze-covered land stretch toward the horizon.
+- Some walls are tall enough to contain smaller inhabited streets and service passages.
+- Ravines reveal older labyrinth layers in their sides.
+- A few bridges cross spectacular gaps; many visible destinations need a route through another layer.
+- One distant inverted district introduces impossible space without filling every view with visual contradictions.
+
+Walking scale:
+
+- Curved corridors have irregular stone courses, drainage slots, repairs, ferns, hanging roots, and worn corners.
+- Passages open onto terraces, orchards, tea rooms, markets, pumping stations, chapels, vaults, and ruined homes.
+- Important corners have identifying details: a blue ceramic repair, a leaning bronze tree, a fountain with a dry mouth, a bell wrapped in ivy.
+- Architecture suggests use. Wide turns show the passage of carts or a large creature; scratched stone shows repeated movement; water and vegetation reveal maintenance and neglect.
+
+Palette and lighting:
+
+- Warm limestone, pale ceramic, weathered copper, indigo shadows, turquoise water, and restrained amber refuge lights.
+- Strong variation between sheltered interiors, open terraces, damp service galleries, and deep sealed precincts.
+- Darkness frames discoveries but does not consume the playable scene. A chamber's scale and major exits should usually be readable before it becomes dangerous.
+- The crimson palette belongs to the separate hell universe and Crimson Nexus. Use it sparingly here, for an invasive fold or exceptional sealed route.
+
+Motion:
+
+- The landscape is wavy architecture, not constant screen distortion.
+- Occasional gates, rotating bridge sections, and settling machinery provide legible movement.
+- Disturbances have causes: pressure, gravity mechanisms, animals, or a named folding event.
+
+Sound:
+
+- Bell rhythms identify districts.
+- Water noise points toward hydraulic spaces.
+- Footsteps, scale scraping, pipe knocks, and far-off machinery reveal activity before it is visible.
+- Important sound clues have visual equivalents. Important color distinctions also use shape or pattern.
+
+4. GEOGRAPHY: SEVEN DISTINCT REGIONS
+
+4.1 THE FOLDFIELDS
+
+The first grand landscape: pale serpentine walls draped over stone hills, with courtyards and narrow bridges between them. A conspicuous green belfry and a bronze aqueduct establish objectives across the vista.
+
+Navigation is about using elevation and recognizing drainage, wear, vegetation, and landmarks. A wall-top route provides an excellent view and a dangerous exposed shortcut. A lower route is sheltered but crosses inhabited or trapped courtyards. Ordinary stone can be excavated. A player-built stair can turn a frustrating ridge into a reliable expedition route.
+
+Signature discovery: a wall is hollow. Its interior contains a lane of occupied homes, a communal oven, and a small shop advertising directions by appointment. The inhabitants have been treating the supposedly featureless maze as a neighborhood for generations.
+
+The Foldfields teach the spatial vocabulary before adding elaborate topology changes. Early shafts are recoverable, rare loot has understandable clues, and an initial refuge is visible from more than one approach.
+
+4.2 THE BELLWORKS
+
+A district of bronze switching frames, counterweights, resonating pipes, and ceremonial towers. Selected arches change their destinations when the district mechanism changes state.
+
+Each arch displays a physical destination emblem. A posted mechanism shows the sequence. Advance chimes, moving counterweights, and illuminated route marks announce a transition. A player can learn the schedule, operate a local control, arrest the mechanism, repair it, or later anchor a specific connection.
+
+Do not impose a global timer on every exploration activity. Some valuable routes open at particular states, while a protected return route remains available. Optional races, hunts, and rare harvests can exploit timing more aggressively.
+
+Signature discovery: the same tiny courtyard receives three different markets through the day. Nothing inside the courtyard moves. Its two arches connect to different neighborhoods.
+
+4.3 THE CISTERN OF BORROWED RAIN
+
+A luminous water district beneath the maze: broad reservoirs, mossy galleries, wheelhouses, stepping stones, flooded libraries, and enormous spillways. Sunlight enters through a ceiling full of distant drainage openings.
+
+Water level changes the available routes. Raising water admits a small boat through an upper spillway while submerging a low gallery. Lowering it reveals machinery and a sealed archive but removes an easy floating crossing. The player can build platforms, repair pumps, redirect channels, freeze a crossing, or operate the original works.
+
+The core objective must concern something water actually controls. Recovering a submerged mechanism still requires access to the mechanism even if a player can fly across the room. This protects the puzzle through its causes rather than disabling the player's abilities.
+
+Signature discovery: rain from several rescued worlds arrives through different overhead apertures. One supplies warm spring rain, another cold mineral water, and another a dangerous magical contaminant. Their mixing supports alchemy, agriculture, and industrial use.
+
+4.4 THE HOUSE OF CONTRARY STAIRS
+
+A bounded architectural complex where stairs and doorways produce impossible adjacencies. A stair rises into a landing beneath its own entrance. A balcony faces a room that could not fit behind its wall. Through an arch, another group walks across what appears to be the ceiling.
+
+Build the first version with ordinary local gravity and carefully connected spaces. Add actual sideways and inverted walking only after the movement, camera, item, projectile, creature, and physics rules agree. The initial illusion can be powerful without requiring an entire curved-gravity engine.
+
+Later gravity thresholds must be visible. A plumb bob, falling dust, a hanging chain, and a gravity emblem tell the player which way objects will fall. Provide comfortable camera transition options and preserve legible controls. Actual gravity changes happen at known boundaries, not because the camera looks away.
+
+Signature puzzle: move a brass weight through connected gravity rooms so that it can operate a counterweight in a room that appears to be above it. Alternate methods include building a lifting mechanism or using a suitable spell. The environment should accept physically consistent solutions.
+
+Sections 31–38 develop this promise through the Hanging Parish, a forest-swallowed precinct adjoining the House of Contrary Stairs and the Cistern. Its first gravity prototype uses ordinary Euclidean architecture, two gravity zones, and one fixed quarter-turn connector. Later rooms add a third cardinal direction and physical mechanisms. These are actual movement and object interactions; they do not require a full hyperbolic or higher-dimensional engine.
+
+4.5 THE UNFINISHED BOROUGH
+
+The district most influenced by liminal architectural unease. It contains abandoned homes, service corridors, empty bathhouses, repetitive halls, research annexes, and subterranean streets. Its unsettling quality is evidence of maintenance without visible maintainers.
+
+A washhouse has warm water and folded towels. Fresh paint ends precisely at a locked doorway. A tram indicator announces a stop that no local resident recognizes. A long quiet hall repeats familiar motifs but contains actual differences in drains, repairs, and utilities.
+
+Repetition must support investigation. Follow a warm pipe to a boiler room, a delivery hatch to a hidden settlement, or repeated damage to the route of a creature. Avoid long stretches of interchangeable empty rooms.
+
+Signature discovery: a preserved residential street sits inside the wall of a vast maze ridge. Its rear windows overlook the underside of another district. Residents argue over which view is legally the front of the house.
+
+4.6 THE GUEST WING
+
+An old glasshouse and library district occupied by the Long Guest, an immense pale dragon. Its coils fill streets and courtyards. Its body passes through particular folded arches, so apparently separate sightings belong to the same animal.
+
+The dragon's presence is part of the geography. A sleeping flank blocks a route. Its warm nest keeps an orchard alive. Its breath strips illusion coatings from stone. Its movements dislodge walls, interrupt water, and expose sealed spaces.
+
+The first goals are modest and memorable: recover a shed scale, cross behind a sleeping coil, operate a gate while the dragon drinks, or discover why it never leaves. Combat is possible but is not the only measure of success.
+
+Signature revelation: the dragon entered as a hatchling. It grew inside a refuge whose exit geometry no longer accommodates it. Enlarging a route, changing its connections, or using appropriate magic can make liberation a genuine expedition objective.
+
+4.7 THE ROOM WITH AN OUTSIDE
+
+The finite, discoverable heart of the dimension. After impossible distances and immense architecture, the player finds a modest garden beneath an ordinary sky. This is the preserved reference for the outside world against which the original evacuation system was built.
+
+Reaching it requires mastery of several districts, but not a collection of arbitrary color keys. Each contribution should have a practical function: a secured route, a restored mechanism, an acquired spatial tool, or cooperation from someone who understands the old network.
+
+The Last Surveyor governs access. Its conflict with the player is about what may safely leave and which connections can be opened. The encounter can end through combat, demonstrated engineering, or a difficult restoration route. The outcome grants local control over useful parts of the Manyfold without erasing its residents or closing all future exploration.
+
+Beyond the heart, additional frontier districts support optional exploration. The main journey can be completed even though the larger world continues.
+
+5. STILLCOURT: A HOME WORTH BUILDING
+
+Stillcourt is the first dependable sanctuary: a planted courtyard, communal water source, repair bench, warm inn, and a few rooms built into thick maze walls. Its stability comes from a visible, maintained anchor monument. It is a place with inhabitants and infrastructure, not a menu imposed over the world.
+
+The player can build an expedition workshop nearby, then extend it with storage, farms, machinery, mapping instruments, defensive structures, and transport links. Later discoveries should improve this home directly.
+
+Examples:
+
+- Stabilizing silk supports better route anchors and exploration equipment.
+- Cistern access supplies water, alchemical inputs, and power opportunities.
+- Repaired mechanisms enable elevators, route selection, and freight movement.
+- A rescued trader creates a reliable supply of consumables.
+- A chartered road makes caravans and guided expeditions possible.
+- A captive or repaired Bellwarden can operate heavy infrastructure.
+- A negotiated dragon relationship supplies renewable materials and district protection.
+
+Claimed structures, excavations, storage, and markings persist. Ordinary disasters still follow the game's established rules, but a background reshuffle must never simply erase a base.
+
+5.1 RETURN, DEATH, AND EMERGENCY RECOVERY
+
+Normal extraction uses a secured route or the game's established recall mechanics. An emergency surrender is always available through a clearly labeled action: apply the established death or retreat cost, return the player to their last validated refuge, and preserve recoverable possessions according to the game's existing inventory policy. The player sees the consequence before confirming. This is a way to end a failed expedition, not a free delivery of treasure.
+
+A recovery cache has a stable region identity, a local location, an owner, and one persistent inventory identity. If a death occurs inside a falling loop or otherwise unsuitable space, place the cache at that encounter's registered recovery alcove. A changed gate must not destroy the cache or its location.
+
+If normal access becomes impossible, the Clerk of Returning Things provides a deterministic retrieval route or service that does not require the equipment or money trapped in the cache. Normal penalties and optional convenience fees can still apply, but basic recovery cannot depend on an unreachable resource.
+
+An occupied or inventory-bearing pocket is never deleted when an entrance breaks or an anchor runs out of upkeep. Its connection enters an explicit inactive state. A destroyed portable-room entrance becomes a recoverable entrance token or a registered replacement at the refuge, referring to the same room and inventory. This does not create a second copy of its contents.
+
+Logout, reconnection, and topology changes preserve these records. No real-world absence should cause the maze to silently erase a character's refuge or possessions.
+
+6. NAVIGATION THAT REWARDS LEARNING
+
+Use three geographical scales:
+
+- Territory: an enormous maze landscape with a distinctive visual identity and major landmarks.
+- District: a set of meaningful routes, mechanisms, refuges, and encounters.
+- Encounter: the particular courtyard, bridge, shaft, creature, vault, or junction the player is handling now.
+
+A strong district starts with a recognizable entrance, two plausible routes, a connection between those routes, a visible or clearly described objective, one optional risky reward, and a shortcut home. These are functional roles, not a repeated visible floor plan.
+
+Alternate route characters should be meaningful. One can be exposed and fast, another sheltered and inhabited, another flooded and profitable. Avoid three corridors that differ only in length.
+
+Give information a direct use:
+
+- Water and gutters reveal the relationship to a cistern.
+- Blue ceramic repairs mark a historical caravan route.
+- Scraped wall tops reveal a large animal's movement.
+- Bell rhythms identify where a gate currently leads.
+- Repeated pipe labels connect a room to an operating mechanism.
+- A view through a narrow slit can provide evidence that a previously mapped room lies nearby, when recognizable details or a verified connection establish its identity.
+
+Provide two complementary maps. The local map records acquired appearances, traveled routes, tested properties, discoveries, and landmarks. The route atlas records learned connections, their observed conditions, and their currently perceived or last-known state. Unobserved geometry remains unknown even when it is loaded or generated. An offscreen change does not secretly update the map; a connection is marked changed or uncertain only from acquired evidence or a clearly labeled prediction from known rules. Visited rooms do not vanish from the player's memory. Section 39 and the focused underground-map implementation brief define this knowledge boundary in detail.
+
+Player markings are trustworthy. In-world deceivers may use their own signs or misleading landmarks, but they cannot secretly rewrite the player's journal, authenticated markers, settings, or system interface.
+
+The right-hand-wall method should sometimes work. Ropes, pebbles, chalk, drones, maps, and careful observation should remain useful. The dimension's interesting problems come from route choice, loops, verticality, folds, ecology, and objectives rather than secretly invalidating competent navigation.
+
+7. ILLUSIONS, FALSE FALLS, AND TRAPS
+
+Illusions conceal or misrepresent a physical situation. They do not silently change what is physically true in order to defeat a successful test. Use a small vocabulary and expand its combinations.
+
+7.1 THE PAINTED ABYSS
+
+Appearance: a deep shaft, starry void, or rushing drop.
+Reality: an intact stone floor.
+Clues: dust lands in apparent midair; a pebble stops; nearby plants root across the apparent opening.
+Solutions: test the surface, dispel the image, cross by touch or a marked route.
+Player use: lure visual predators toward an apparently impassable crossing, conceal machinery, or build a convincing defensive feint.
+
+7.2 THE VEILED SHAFT
+
+Appearance: ordinary continuous floor.
+Reality: an open pit.
+Clues: a dropped object falls through; runoff disappears; drifting particles and loose cloth move downward.
+Solutions: probe, rope, bridge, dispel, or take a lower route intentionally.
+Early failure: a short fall into a maintenance room with a ladder and a small discovery.
+Later risk: deeper drops, hostile lower galleries, or hazardous machinery, after the illusion language has been taught.
+
+7.3 THE FALSE WALL
+
+Appearance: continuous masonry.
+Reality: an open passage.
+Clues: smoke passes through; rain or dust fails to settle; contact gives no solid response.
+Solutions: physical testing or illusion detection.
+Player use: conceal a refuge or supply cache. Creatures relying on smell, heat, or other relevant senses may still find it.
+
+7.4 THE FALL THAT GOES AROUND
+
+A visible folded shaft returns the falling traveler through an upper opening. The same cracked bell, balcony, and trailing root pass by again. The player realizes the geometry forms a loop.
+
+Provide grab ledges, a reachable side doorway, and an established return action. Do not require frame-perfect reactions from an exhausted player. Early versions can bleed speed through a visible cushioning field; later dangerous versions clearly show what changes.
+
+Portal energy rules must be deliberate. If the loop can increase kinetic energy, its mechanism must supply and consume a defined resource, or the resulting generator must be an intentional part of the economy. Do not accidentally create unlimited energy through an unexamined height reset.
+
+7.5 THE LOAD-BEARING LIE
+
+A real bridge is covered by a flattering illusion that hides its damage. It supports a pebble but not a loaded cart. This is a physical load problem, not an exception that makes an illusion mysteriously distinguish the player.
+
+Clues include bent brackets, rubble underneath, creaking, and a visible weight-test mechanism elsewhere in the district. Reinforcement, unloading, flight, or a new bridge are valid solutions.
+
+7.6 THE CLOSING STREET
+
+A real mechanical hazard: counterweights slowly rotate or slide a heavy wall section. Scored floor tracks, warning lamps, vibrating chains, and trapped debris reveal its movement.
+
+Players can pass at the correct time, brace the mechanism, use a service tunnel, cut power, or dismantle it. Disabling it has understandable consequences for the gates or transport systems it also operates.
+
+7.7 THE BORROWED VIEW
+
+A doorway displays an attractive scene that does not belong to its actual opening. Nearby lighting, reflection, parallax, airflow, or a physical probe reveals the discrepancy. The actual opening remains inspectable with the appropriate tool.
+
+The first examples lead to recoverable surprises. High-stakes versions belong to clearly dangerous vaults and should preserve at least two independent clues.
+
+Trap design rules:
+
+- Dangerous traps have readable evidence before commitment.
+- Basic probes remain valid once learned.
+- A new rule appears first in a recoverable situation.
+- A careful player can disable, avoid, redirect, or deliberately exploit most hazards.
+- Risk can be increased by combinations, pressure, and difficult environments; it does not require arbitrary exceptions.
+- Do not turn every corridor into a trap inspection chore. Once a district's mechanism is understood or disabled, ordinary movement should become easier.
+- Illusions do not depend on involuntary camera shaking, extreme flashes, or false operating-system messages.
+
+7.8 MIDGAME VAULT: THE HANGING MOON
+
+A sealed reliquary opens when a heavy brass route weight reaches its far-side socket. Two apparent crossings lead there.
+
+The impressive stone bridge looks intact, but its illusion hides corroded supports. Broken brackets below, a failed maintenance cart, and a nearby weight-test lever disclose the load problem. It may carry the player while failing under the weight and a loaded cart. A pebble correctly tests whether support exists; it does not establish its load capacity.
+
+Beside the bridge yawns a moonlit abyss. Dust settles across it, and a fallen chain appears suspended in empty air. This is a painted abyss over a sound platform. The frightening-looking crossing is the one that can safely carry the heavy object.
+
+A Bellwarden patrols on an audible and visible route. Removing the route weight attracts its attention, and it tries to retrieve the missing component. Distract it, interfere with its listening vanes, assume authority over it, fight it, or lure its heavy body onto the compromised bridge. It obeys the same structural rules.
+
+Other solutions work: reinforce the bridge, build a crane, move the weight with suitable magic, or excavate a recognizable service wall to create a delivery route. This is a demanding encounter because known rules interact under pressure, not because a new arbitrary exception invalidates earlier learning.
+
+The reliquary contains the Crown of the Second Self. A historical shadow held within a mirror circle demonstrates the cost of its power. Binding the item remains a deliberate choice; the player can carry it away sealed.
+
+8. CREATURES AND PEOPLE
+
+8.1 HINGE CRABS
+
+Mineral-shelled animals living in door recesses. Their bodies resemble old bronze-and-stone frames. They close around noisy intruders or egg thieves. Scuffed feet, irregular hinges, and feeding remains reveal them.
+
+Lure them with food, distract them, grease a favored hiding place, fight them, or learn to raise them. A well-fed crab can guard a passage. Their shells provide useful bearings and armor components.
+
+8.2 THREADMOTHS
+
+Pale insects that consume exposed magical bindings and illusion residue. They gather around active spellwork and can weaken a magically maintained crossing.
+
+Ordinary chalk, paint, and journal entries remain safe. Players can use moths to reveal an illusion, cultivate them for stabilizing silk, or protect vulnerable machinery with appropriate housings. Their ecology creates both danger and a renewable resource loop.
+
+8.3 BELLWARDENS
+
+Tall maintenance constructs with listening vanes, hanging chains, and long jointed tools. They inspect their assigned routes, repair designated equipment, and respond to disturbance. Their measured taps and shaking chains announce their approach.
+
+Sneak, distract them with pipes, learn an authorized signal, disable their vanes, repair them, or assume responsibility for a mechanism through an appropriate relic. Destroying a Warden yields materials and affects maintenance instead of producing an inexplicable respawn in the same doorway.
+
+8.4 THE REPEATER
+
+A predatory spatial echo that retraces a traveler's recent route. An extra set of footsteps arrives at a consistent delay. Repeatedly circling the same junction gives it an opportunity to intercept.
+
+It follows recorded movement rather than reading future player input. A prepared route can lead it through traps. Straight retreat, a broken route, a gate transition, or decoy traces can provide counterplay. Its condensed echo supports unusual spellcraft.
+
+8.5 UNDERFOLK
+
+Creatures associated with certain illusion pools. Their hands appear below a projected abyss, and they reach within the footprint of that active projection. Dust, distortion at the boundary, and objects pulled at the edge reveal their reach.
+
+Moving or disabling the projector changes their effective territory. Their material form becomes vulnerable when the projection collapses. A player can build an intentional containment or defensive installation, subject to clear limits and maintenance requirements.
+
+8.6 QUIET FAUNA
+
+Include creatures that have no interest in attacking the player: stair goats that browse rooftop plants; small wax-shelled snails collecting around warm pipes; pale fish in clean cistern channels; and courier birds nesting in occupied courtyards. Their behavior helps identify safe water, maintenance heat, or settlements.
+
+8.7 RESIDENTS
+
+Nacre, a minotaur mason, repairs load-bearing arches and sells assessments of dangerous stonework. His species does not define him as a compulsory boss. One practical remark: "You may remove that wall. The ceiling has expressed reservations."
+
+Mrs. Vell keeps the inn at Stillcourt. Her advice is specific and mechanically useful: which bell marks the next route change, where to bank an artifact, and why the dragon has been restless. Her humor should reveal the local worldview rather than interrupt every serious moment.
+
+The Clerk of Returning Things manages a salvage and lost-property office connected to old recovery machinery. The office explains a useful recovery service, trades information, and offers retrieval jobs. It should not use absurd paperwork to delay basic inventory recovery.
+
+Other residents can include refugee families, wizard apprentices, maintenance guilds, solitary researchers, caravans, retired hunters, and unusual species already established in the wider game. Give them everyday needs: water, warmth, safe routes, tools, food, and privacy.
+
+9. THE LONG GUEST
+
+The dragon should have a readable ecology and a spatially interesting body. It consumes particular minerals and prey, warms a glasshouse garden, drinks at predictable reservoirs, and uses a bounded set of sufficiently large passages.
+
+Read its approach through water displacement, migrating smaller animals, heated metal, dust jets, and scraping scales. These clues should predict its actual arrival and route.
+
+Its breath exposes illusion surfaces. This creates a distinctive solution: arrange for the dragon to clear a veiled route, then cross during the aftermath. Lures, sound, thermal machinery, opened gates, and prey movement all become tools.
+
+Support several encounter goals:
+
+- Steal a shed scale without waking it.
+- Rescue someone trapped behind a sleeping coil.
+- Lure it away from a control mechanism.
+- Guide its breath across an illusion-covered wall.
+- Negotiate passage through food, care, or a district-specific ritual.
+- Restore a route large enough to release it.
+- Hunt it later using a prepared arena and the broader game's combat systems.
+
+Combat should use terrain, cover, breath paths, body position, and retreat routes. Avoid reducing the encounter to a stationary health bar after a long walk. The dragon should be able to damage plausible structures and follow physically valid passages. Safe sanctuaries remain protected by established mechanisms or actual separation, not unexplained loss of interest.
+
+Its first quest rewards observation and ingenuity. Later farming uses explicit renewable inputs: prey, habitat, mineral feed, shed cycles, or repeatable high-risk encounters. A unique liberation reward is claimed once. Re-entering the dimension must not reset it.
+
+10. POWERFUL RELICS AND CURSES
+
+Rare treasure should change what players can attempt. A curse should be understandable, discoverable before binding, and related to the power. Carrying an unidentified artifact in an appropriate sealed container is different from equipping or activating it.
+
+10.1 THE LONG NEEDLE
+
+Power: stitch two visited, compatible thresholds into a traversable connection. It can create extraordinary expedition shortcuts and logistics links.
+Constraint: valid thresholds, a discovered destination, and a defined energy or charge requirement. It does not connect to unknown coordinates, invent a destination, or override a protected owner's access rules.
+Price: the connection is physical and bidirectional while open, and its magical signature is easy for relevant predators to track. This is a powerful dangerous relic, not necessarily a binding curse.
+Mastery: build a guarded arrival room, choose where to open it, lure a creature through, or add a proper closing mechanism.
+
+10.2 LANTERN OF STOLEN DAWN
+
+Power: reveals illusion surfaces and allows interaction with certain normally intangible creatures within its light.
+Curse: those creatures can sense the burning lantern through nearby barriers within a defined range, even when ordinary line of sight is blocked.
+Mastery: use it briefly, create escape routes, shield the light by extinguishing it, or deliberately build a hunting ground. It can become an excellent farming tool.
+Unbinding: a Stillcourt service can remove the tracking curse, producing a weaker lantern that reveals illusions but no longer makes those creatures tangible.
+
+10.3 THE DOWNWARD SHOES
+
+Power: adopt a contacted surface as the wearer's downward direction, enabling wall and ceiling travel.
+Curse: leaving the surface preserves that chosen direction until another valid contact or deliberate release. A careless jump can launch the wearer across a shaft in an unexpected orientation.
+Mastery: practice, mark gravity choices, use the manual release, and build unusual routes. The game must explain the release action and show the current direction.
+Unbinding: convert them to limited climbing footwear with ordinary jumping.
+
+10.4 THE OPENHAND KEY
+
+Power: opens conventional and magical keyed locks, including valuable vault mechanisms. A broken mechanism, a collapsed doorway, an active ward, or a requirement for pressure is not automatically a keyed lock.
+Curse: an opened lock cannot bar anyone until the key completes its visible relocking ritual. A liberated vault can become an intrusion route.
+Mastery: bring a barricade, negotiate with inhabitants, prepare an ambush, or deliberately make the doorway a monster passage.
+Unbinding: a lower-power key can remain useful for a narrower known lock family.
+
+10.5 THE REGENT'S SEAL
+
+Power: take control of a compatible gate mechanism and command a surviving Bellwarden assigned to it. It grants unusually strong control of local infrastructure.
+Curse: the network records the bearer as responsible for that mechanism. Unrepaired damage and unpaid material requirements produce visible maintenance debt and eventual enforcement in the relevant district.
+Mastery: maintain the machinery, automate its supply, redirect its work, or accept the consequences in a prepared place. The responsibility is local and explicitly listed; it does not randomly compromise unrelated bases.
+Unbinding: relinquish the office at a functioning registry after returning or transferring its assigned equipment. A basic exit remains possible while the debt exists.
+
+10.6 THE BORROWED HEART
+
+Power: a charged activation turns an otherwise lethal hit into full restoration for the bearer.
+Curse: the same pulse fully heals every living creature within its shown radius, including enemies and bosses. It does not resurrect the dead or duplicate inventories.
+Mastery: create distance before triggering it, use it to rescue allies, protect valuable fauna, or accept a longer fight. Charges consume a rare, explicit resource and cannot reproduce themselves through the healing effect.
+Unbinding: convert it into a less powerful ordinary emergency-healing item.
+
+10.7 THE ANCHOR NAIL
+
+Power: pins one eligible connection to a chosen validated destination state, or establishes a small stable refuge where its anchor conditions can be met.
+Constraint: only a limited number of active anchors, clear coverage, a real anchoring surface, and upkeep proportional to supported throughput or area.
+Value: it changes a successful expedition into permanent infrastructure. This should be a major uncursed reward so every desirable discovery does not require accepting a punishment.
+
+10.8 THE SURVEYOR'S APERTURE
+
+Power: a late-game spell or device makes a temporary cross-section through opaque local matter, revealing a useful spatial view without automatically revealing all concealed semantics or opening a passage.
+Constraint: bounded range, material interaction rules, and charge use. Folded destinations remain separate locations unless actually connected.
+Value: helps construction, exploration, demolition planning, and combat. Its ability to solve many early obstacles is part of the reward for progression.
+
+10.9 THE PORTABLE GUEST ROOM
+
+Power: a late-game housing artifact unfolds a compact workshop or shelter with persistent furnishings.
+Constraint: fixed interior capacity, a genuine entrance, no duplication of furniture or inventories, explicit access permissions, and a safe retrieval state if its exterior is destroyed.
+Value: a major connection between the labyrinth fantasy and rewarding base building. The first version can be an earned room connected to Stillcourt rather than an immediately portable structure.
+
+10.10 THE CROWN OF THE SECOND SELF
+
+Power: detach your shadow into a controllable double. It can scout, operate compatible mechanisms, cast equipped spells using the owner's actual resources, and exchange positions with the owner through supported connections within a discovered district. The real body remains physically present while the shadow is controlled. This enables remote preparation, simultaneous pressure, and extraordinary escape or infiltration opportunities.
+
+Binding curse: ending the projection leaves an independent hostile Second Self. It knows the route it actually traveled and reproduces one clearly identified spell used during that projection. It persists until defeated or contained. While that pursuer exists, further activations empower the same entity rather than creating unlimited copies. The item panel shows its current strength, recorded spell, and last observed location. A detached extra shadow provides an in-world symptom.
+
+The pursuer does not know unvisited rooms, read future inputs, rewrite marks, or fabricate journal entries. It moves through real supported routes. Established sanctuary wards block it. It cannot appear inside a remote home without traversing an actual route permitted by the world's protection rules.
+
+Mastery: lead it along a deliberately prepared route, choose which spell it learns, seal it behind a functional barrier, turn its attack against another threat, or draw it into a mirror circle. Its dangerous power is personal because the player taught it its capabilities and route.
+
+Removal: Stillcourt can seal the crown without requiring money or gear lost on an expedition, preventing further activations. The remaining Second Self stays a visible unresolved problem in its actual district. Permanent unbinding requires containment in a mirror circle and a known ritual, with an alternative service or work contract so one mandatory combat strategy is not the only solution. The curse belongs to persistent artifact and owner records; dropping, trading, or reloading the crown does not silently reset it.
+
+Economy: the projection creates no inventory or consumables. Every activation consumes a defined charge. The hostile echo's copied spell uses a bounded energy reserve supplied by that activation, rather than generating unlimited free spell energy. It drops no copied equipment. Useful echo essence can be harvested, but outputs cannot reproduce the charge inputs without another explicit scarce resource or work requirement. Defeat, containment, rebinding, and save/load preserve one authoritative entity identity.
+
+Production: this is a late expansion built on reliable projection control, spell resource accounting, the Repeater's route logic, persistence, and supported transfers. The first playable relic should remain the simpler Lantern of Stolen Dawn.
+
+Relic rules:
+
+- Appraisal, inscriptions, tests, or observed symptoms disclose the binding risk.
+- Activation is a clear player action. Opening a chest does not silently bind a ruinous curse.
+- Curse behavior is specific enough to exploit intelligently.
+- Cleansing is reachable and changes the item's tradeoff. It need not preserve the full cursed power.
+- Unique discoveries persist as unique objects; renewable crafting ingredients have separate economics.
+- Strong traversal powers may bypass some earlier challenges. Let this feel like mastery.
+
+11. LET THE SANDBOX WORK
+
+Digging: ordinary masonry breaks. Tunneling uncovers service passages, buried streets, and local shortcuts. Important spatial boundaries are actual connections to other spaces; excavating a nearby wall cannot make a remote folded destination adjacent.
+
+Wards: use limited, visible, powered installations. Their conduits and emitters can be traced, interrupted, repaired, or eventually repurposed. Do not blanket the whole dimension with unexplained indestructibility.
+
+Flight and climbing: reward reconnaissance, rooftop travel, and exposed shortcuts. Roof routes have their own ecology and treasure. Flying above one district cannot directly reach a place in a different folded space without its connection.
+
+Bridges: a player who bridges a chasm has solved it. Let that construction create a permanent, useful route. Reserve spatially disconnected gaps for situations that visibly require a fold or anchor.
+
+Teleportation: a known destination identity and a functioning anchor matter. Stable return teleportation is useful. Arbitrary universal coordinates do not identify a place across unrelated local spaces.
+
+Automation: probes, cargo systems, pumping, route indicators, magical lures, and ecological farms all belong here. Instruments report what their actual sensors encounter. A camera can be fooled by a visual illusion; a contact probe should still reveal physical support.
+
+Energy: moving matter upward, opening folds, maintaining gravity changes, and powering infrastructure have explicit supply and throughput rules. An engineered generator may be a valid reward, but its inputs and conservation model need deliberate design.
+
+No player trick should cause a designer to introduce a secret exception solely because it worked.
+
+12. PROGRESSION AND REPEAT VISITS
+
+Early play: survive a first expedition, learn basic probes, establish Stillcourt, claim a local shortcut, acquire a practical relic.
+
+Middle play: master a district law, use mechanisms, establish workshops and freight routes, form relationships, undertake dangerous recoveries, and discover deeper folded geography.
+
+Late play: manipulate selected connections, solve the Guest Wing, reach the Room with an Outside, and gain authority over a bounded useful part of the network.
+
+Repeat visits need goals beyond opening identical chests:
+
+- Survey an unknown district.
+- Recover a missing caravan or research party.
+- Escort someone along a route the player prepared.
+- Repair a water or transport link.
+- Harvest a renewable resource under changed environmental conditions.
+- Establish a new outpost.
+- Create a creature farm with explicit inputs and ecological effects.
+- Explore a sealed vault whose clues were found elsewhere.
+- Revisit a meaningful consequence of earlier choices.
+
+Treasure placement should be inferred. Rich gardens suggest a water source; sealed royal stairways suggest ceremonial vaults; abandoned instrument rooms suggest a route mechanism or scientific relic. A rare item is more satisfying when its location makes sense.
+
+Use finite main objectives and optional procedural frontiers. Do not require an infinite grind to finish the dimension's primary arc.
+
+13. THE LAST SURVEYOR
+
+The final guardian is a tall articulated figure of dark brass measuring arms, ceramic faceplates, hanging survey chains, and light projected through engraved apertures. It is visibly related to the maintenance culture but far older and more capable.
+
+Its encounter concerns a limited network of rooms. It uses marked arches to reposition, closes routes according to a visible mechanism, and projects measurable boundaries that reshape access. Its tools have physical sources and readable windups.
+
+The player can anchor a route to deny a reposition, interrupt a projector to remove a boundary, open a maintenance bypass, or exploit a known gravity connection. Combat changes the guardian's actual capabilities rather than merely revealing another identical damage phase.
+
+A noncombat route requires work: restore the outside reference mechanism, make a safe evacuation path, and demonstrate it by moving a vulnerable resident or caravan through it. The Surveyor can then accept a transfer of responsibility. This is an alternate challenge, not a single dialogue shortcut.
+
+Possible outcomes grant different advantages while preserving the world:
+
+- Open selected roads: improved travel and trade, with some additional frontier contact.
+- Maintain a protected refuge: stronger settlement benefits and managed access.
+- Claim a limited custodial office: control over specific mechanisms with explicit upkeep.
+
+Do not make a blind final choice destroy a player's long-established settlement. Major consequences are previewed and scoped.
+
+14. A FIRST EXPEDITION THAT PROVES THE IDEA
+
+Target a roughly 30–45 minute first substantial visit, subject to playtesting. Players can return earlier and do not need to complete the whole visit in one sitting.
+
+Opening:
+
+The player enters from a ruined workshop. A balcony reveals the Foldfields, a turquoise reservoir, the green belfry, and a distant structure that is actually part of a dragon. A visible path leads to Stillcourt. A resident lends or sells simple probing equipment and explains a nearby objective: retrieve a route weight from a disused gatehouse.
+
+First lesson:
+
+A painted abyss blocks the obvious route. Dust and a dropped pebble demonstrate the real floor. The player crosses, marks it, and sees a small creature refuse to follow. This establishes both detection and tactical use.
+
+First meaningful choice:
+
+A short wall-top route is exposed; a lower gallery contains a minor creature encounter and useful materials. A thin wall offers a diggable connection between them. The player can find or create a route appropriate to their equipment.
+
+First surprise:
+
+A veiled shaft drops an incautious player into a shallow maintenance room, where a ladder and a note reveal the mechanism. A careful player can descend deliberately for a small discovery. Both outcomes advance understanding.
+
+First fold:
+
+The gatehouse stair appears to rise but opens below a balcony visited earlier. The player's previous wall mark is still visible. The spatial surprise confirms that the world is strange while observation remains reliable.
+
+First major danger:
+
+The Long Guest moves through a nearby connected precinct, blocking a route and exposing an illusion with its breath. The player can shelter, distract it, use another route, or take a risky chance to retrieve a shed scale.
+
+First treasure:
+
+The gatehouse contains the Lantern of Stolen Dawn or another selected major relic. An inscription and a nearby demonstration communicate its attraction effect before binding. The player can test it, carry it sealed, or use it deliberately.
+
+Return:
+
+Installing the recovered route weight creates a permanent shortcut to Stillcourt. The player comes home with a changed map, resources, a new capability, and evidence that their work altered the dimension.
+
+If this visit feels like wandering through equivalent corridors until a chest appears, more procedural scale will not fix it.
+
+15. GENERATION AND PERSISTENCE ARCHITECTURE
+
+These are design recommendations to adapt to the actual Rust + raw wgpu engine. Inspect existing systems and keep established interfaces where they already satisfy the requirements.
+
+15.1 Generate the playable relationships first
+
+Create a district route graph with landmarks, objectives, alternate approaches, shortcuts, mechanisms, refuge access, and optional rewards. Use loops deliberately. Avoid relying solely on a perfect-maze tree, because its shape tends to emphasize dead-end backtracking.
+
+Create walkable routes on the large undulating landform before filling the surrounding walls. Reserve capsule clearance, gradients, stair space, bridge landings, and creature widths. Validate the actual voxelized passages, not only the abstract graph.
+
+Use authored encounter structures and puzzle roles embedded into procedural terrain. Vary their location, approach, route relationships, material history, occupation, and interactions. A different wall texture is not a different encounter.
+
+Validate return access against actual conditions and capabilities, not only graph connectivity. A theoretical edge is insufficient if it requires a consumed key, equipment left in a recovery cache, an unreachable switch, or a gate state that an anchor prevents. The first slice should have a permanent basic refuge connection outside the conditional graph. Optional one-way hazards must disclose and implement their separate recovery rule.
+
+15.2 Keep local coordinates stable
+
+Store each region in stable local coordinates. Fold connections refer to explicit source and destination thresholds and supported transforms. A player's world location includes the region identity as well as its local position.
+
+Persistent records need to include discovered places, route states, edits, constructions, markers, mechanisms, claimed treasures, relationships, recovery containers, and the active topology version.
+
+Do not reseed visited districts on entry. Keep generation versioning and a migration policy so later generator improvements do not overwrite existing player work.
+
+15.3 Treat a connection change as a coordinated operation
+
+1. Announce the proposed destination state through the district's visible mechanism.
+2. Validate protected routes, escape access, and established anchors.
+3. Detect occupants, cargo, vehicles, and player structures at affected thresholds.
+4. Keep occupied crossings open, postpone the change, or require a clear physical disconnect action. Never delete or shear content silently.
+5. Prepare the actual destination geometry, collision, and required entity state.
+6. Commit one authoritative topology version.
+7. Update route instruments and maps without removing earlier discoveries.
+
+All players share the same authoritative destination state. A delayed client must not cross into an obsolete destination. Resolve transfer ownership atomically so objects, relics, and creatures are not duplicated or lost during transitions.
+
+Player-built networks that cross a dynamic threshold need a clear policy. The first version may only allow persistent cables, pipes, rails, and conveyors through anchored connections. Loose supported objects can cross under ordinary transfer rules. Unsupported interactions must be visibly unavailable rather than silently corrupting a build.
+
+An obstructed crossing enters a visible transition-blocked state. Keep its current destination and update the advertised forecast. If independent local transitions are supported, defer only the affected one; otherwise the complete mechanism is visibly arrested. Reserve a clear swept volume around dynamic thresholds and require conversion to an anchored connection before permanent construction can occupy it. Multiplayer permissions and maintenance controls should allow authorized players to resolve obstruction without deleting someone else's cargo or forcing a destructive closure.
+
+15.4 Make illusions explicit phenomena
+
+Separate the apparent surface from the physical geometry. Give the phenomenon a family, a source or maintenance rule, a detectable signature, and consistent interactions with contact, light, sound, water, particles, and creatures where those systems exist.
+
+Do not implement a false floor as an arbitrary player-only trigger if thrown objects and NPCs are supposed to obey it too. Use simplified but consistent interaction rules when full simulation is too costly.
+
+15.5 Keep portal rendering bounded
+
+The first version should use a small number of simultaneously visible traversable folds. Limit recursive portal visibility and use a deliberate visual treatment beyond the supported depth. Maintain destination loading and collision correctness before pursuing spectacular recursive views.
+
+For the first slice, traversable folds preserve the local up direction: translation and rotation about that up axis are supported; pitch and roll transitions are deferred. Rendering, collision, velocity, camera orientation, and transferred entities use the same transform. The stair can still emerge below its entrance. Vertical relocation follows the defined energy policy. Actual inverted walking and the Downward Shoes require a later movement-and-physics milestone.
+
+Projectiles, objects, and entities need an explicit supported transfer set. Full fluid simulation through moving arbitrary-orientation folds is a later feature, not a requirement to prove the first expedition.
+
+15.6 Distant terrain must represent the same place
+
+Derive near geometry and distant structural proxies from the same district and wall records. Major walls, bridges, holes, terrace heights, and silhouettes must agree. Decorative chips and plants can simplify with distance; meaningful openings cannot relocate.
+
+Use actual coverage state while streaming. Every visible sample should have resident geometry or an appropriate loaded proxy. Avoid gaps that reveal sky through supposedly solid architecture. Update or retire stale proxy geometry after visible edits.
+
+The Manyfold contains overhangs, several stacked layers, and inverted spaces. A simple heightfield cannot represent all of these structures; use representations appropriate to each district and reserve heightfield-like proxies for terrain that truly has that shape.
+
+Do not render every distant wall as an independent high-detail object. Use aggregate structures, instancing or merged geometry as appropriate, simplified far representations, and actual visibility. Profile the chosen strategy in the real engine.
+
+15.7 Creature scope
+
+Simulate the Long Guest's distant travel as persistent route state where appropriate, then activate detailed local behavior near players. Arrivals, passage occupancy, damage, and the effects of prior actions must remain consistent. Avoid a fully simulated planet-length articulated body before the smaller encounter is proven.
+
+The initial dragon occupies one stable precinct, with several visible coils and a bounded set of routes. It blocks one important passage, affects one illusion, and supports one noncombat objective. A continuous body simultaneously spanning multiple folded spaces belongs to a later expansion, after segment ownership, collision, occupied thresholds, streaming, and multiplayer synchronization are supported. The dragon's full proposed fiction must not obscure this production boundary.
+
+16. PRODUCTION ORDER
+
+Stage 0 — Audit and baseline
+
+Inspect the existing world generation, variable-voxel geometry, streaming, collision, portals, physics, AI, inventory, save system, and multiplayer authority. Find working reusable components. Record existing performance and make one current visual capture. Do not claim a new feature is implemented merely because a type or configuration entry exists.
+
+Stage 1 — The inhabited maze terrace
+
+Build one beautiful Foldfields district and Stillcourt. Provide elevation changes, a real vista, useful ordinary excavation, two routes to an objective, one working shortcut, and persistent markers and construction. Prove ordinary navigation and a satisfying return.
+
+Stage 2 — The illusion vocabulary
+
+Add the painted abyss, veiled shaft, and false wall, each with inexpensive tests and recoverable introductory examples. Add one terrain-aware enemy and a meaningful use for a revealed passage.
+
+Stage 3 — One spatial fold
+
+Deliver a seamless or otherwise deliberately presented connection with stable destination identity, actual collision, safe loading, save/load continuity, and supported entity transfer. Create the stair that emerges beneath its own entrance.
+
+Stage 4 — A conditional connection
+
+Add one Bellworks mechanism with a small family of validated configurations, observable advance warnings, protected return access, and multiplayer agreement. Demonstrate occupancy handling and anchored connections.
+
+Stage 5 — A relic and its economy
+
+Implement one genuinely powerful item, one clearly disclosed drawback, a way to exploit it, and persistence across every inventory and travel path. Provide a known unbinding route where relevant.
+
+Stage 6 — The Long Guest
+
+Add a bounded precinct with one impressive dragon encounter, readable movement, an environmental effect, a noncombat objective, and multiple viable player approaches. Expand its body and route complexity only after this encounter works.
+
+Stage 7 — Expand districts and authored variety
+
+Only now extend the generator, add further regional laws, deepen settlements and industrial use, and build the Room with an Outside. The full seven-region dimension is the direction of travel, not a sensible first patch.
+
+17. VERTICAL-SLICE ACCEPTANCE CRITERIA
+
+Play quality:
+
+- A new player can describe why an introductory illusion behaved as it did.
+- A learned probing method continues to work on later examples of the same phenomenon.
+- The player can name several landmarks after a session without reading the map.
+- A first expedition offers at least two materially different viable routes.
+- An intelligent excavation, bridge, or climbing solution produces a real benefit.
+- Returning to the refuge is easier because of something the player accomplished.
+- Meaningful optional branches provide information, resources, encounters, or useful routes.
+- The relic changes the player's options and its drawback can be explained in one clear sentence.
+- The dragon has an observed environmental effect and at least one rewarding noncombat interaction.
+
+Persistence and authority:
+
+- Departing and returning preserves excavation, construction, markings, loot state, and chosen mechanism state.
+- Save/load preserves active route destinations and recovery locations.
+- Two players see the same destination after a gate transition, including reconnection and delayed updates.
+- An occupied threshold is not reassigned beneath a player, vehicle, or supported object.
+- Transferring an artifact cannot create duplicates or lose ownership.
+- A route change cannot strand a player in nonexistent geometry.
+- A validated return or explicit recovery path exists in every intended normal-play state.
+
+Rendering and movement:
+
+- Near and far views agree on major walls, bridges, openings, and elevations.
+- Streaming does not expose sky through required solid coverage.
+- Actual player and creature collision can traverse the intended voxelized routes.
+- A visual illusion and its physical counterpart produce consistent probe behavior.
+- Portal recursion and loading are bounded and visible failures have a deliberate treatment.
+- A representative performance capture identifies actual costs; no unmeasured claim of outperforming another game is made.
+
+Review evidence:
+
+Capture the grand vista, an eye-level corridor, Stillcourt, the folded stair, each illusion under test, a useful construction bypass, and the dragon interaction. Include a short continuous playthrough showing outward travel, discovery, and the return. Static screenshots and passing unit tests alone cannot establish that the expedition is enjoyable.
+
+18. READY-TO-USE IMPLEMENTATION HANDOFF
+
+Implement the first playable expedition of The Manyfold in the existing Axiom/Meridian Rust + raw wgpu voxel game, following this design brief and the repository's actual architecture.
+
+Start by inspecting current code and established project instructions. Reuse working systems. Preserve unrelated work and existing saves. Do not invent repository paths or claim features already exist without checking them.
+
+Prioritize a polished, persistent, inhabited Foldfields district with a clear objective, two distinct routes, a useful excavation or bridge bypass, an illusion lesson, an impossible stair connection, a powerful relic with a readable drawback, and a satisfying shortcut home. Introduce the dragon only within a bounded functional encounter. Keep ordinary local gravity in the first folded interior unless the engine already supports reliable arbitrary gravity.
+
+Build relationships and walkable routes before decorative wall noise. Keep navigation meaningful and avoid long stretches of equivalent empty corridor. Curves must survive voxelization with adequate clearance. Preserve local places and change only designated connections through observable rules.
+
+Treat every illusion as a consistent relationship between appearance and physics. Throwing objects, water, creatures, and player motion must follow the supported rule set. Teach new dangers where recovery is possible. Never add an exception solely because the player learned a good test.
+
+Let construction, digging, climbing, flight, surveying, and automation produce valuable solutions. Use real spatial separation and visible mechanisms to create harder problems. Keep a credible return and recovery route.
+
+Persist changes and validate shared topology before expanding scale. Derive distant structural geometry from the same place records as near geometry. Inspect actual gameplay captures at eye level and at the horizon, and profile the real scene. Finish the vertical slice before generating a vast amount of shallow content.
+
+Report what actually works, what was visually inspected, what was exercised in gameplay, and the specific limitations that remain. Do not present decorative placeholders, a compiled configuration, or a concept image as a completed dimension.
+
+19. REFERENCE GROUNDING
+
+The content above is an original proposal. The named works inform different aspects of its design rather than supplying characters or a copied plot.
+
+The provided Labyrinth exterior image informs inhabited monumental maze scenery. The provided stair image informs impossible architectural relationships. The provided Maze of Ith images inform rolling, serpentine maze topography and enormous scale.
+
+Labyrinth: Sony's official synopsis describes a maze of illusion inhabited by mystical creatures. The proposed transfer is social variety, wonder, and misleading appearances.
+https://www.sonypictures.com/movies/labyrinth
+
+The Battle of the Labyrinth: Rick Riordan's official page identifies it as book four and describes a sprawling underground world. Disney's Read Riordan material describes the maze as changing and connecting distant places. The proposed transfer is a hidden geographical network with immense historical depth.
+https://rickriordan.com/book/the-battle-of-the-labyrinth/
+https://www.readriordan.com/book/the-battle-of-the-labyrinth/feed/
+
+The Maze Runner: Penguin Random House's description establishes a refuge enclosed by towering walls with a dangerous changing maze beyond. The proposed transfer is the contrast between secure shelter and deliberate expedition planning.
+https://www.penguinrandomhouse.com/books/36941/the-maze-runner-by-james-dashner/
+
+Witch Hat Atelier: Kodansha's volume two synopsis confirms the transported apprentices, eerily quiet city, and dragon encounter. The official anime episode five synopsis describes the dragon obstructing approach to a potentially useful escape circle and Coco developing an idea from Tetia's magic. The proposed transfer is an enormous creature as an environmental problem that invites magical ingenuity.
+https://kodansha.us/series/witch-hat-atelier/volume-2/
+https://tongari-anime.com/story/detail/?id=1001529
+
+Backrooms: used here as the user's stated aesthetic inspiration for repetition, uncertain habitation, abandoned infrastructure, and liminal unease. This brief makes no claim about a single canonical Backrooms history or setting.
+
+20. EXPANSION: THE DESCENT AND THE DAWNWARD
+
+The expanded Manyfold combines monumental maze exploration with literary, gothic, and cosmic horror. Its strongest unsettling moments begin with recognizable human things: a familiar person, an occupied room, a timetable, a family archive, the sound of someone working behind a wall. Something about the evidence refuses to fit.
+
+The player should sometimes understand a local mechanism and become more disturbed by what that understanding implies. A station still works because its machinery is maintained. That explains its warm waiting room. It does not explain why its service ledger has recorded the same absent passenger for nine centuries.
+
+Preserve the original dimension's open terraces, beautiful cisterns, practical workshops, strange wildlife, residents, and the Long Guest. Horror occupies particular neighborhoods, deeper routes, sealed estates, and anomalous connections. Stillcourt remains a dependable home. Some empty places remain empty. Some welcoming people mean what they say.
+
+20.1 A widening mystery
+
+The documented evacuation network is one historical layer. Its builders discovered or inherited the underlying space. Their machines make parts of it navigable. Their wards may protect against something real, even where later custodians use those wards oppressively.
+
+The Last Surveyor is an important administrator and a possible final opponent in the main journey, but it did not create every law of the Manyfold. Defeating or persuading it grants useful authority. It does not explain away every older presence or exhaust the optional depths.
+
+Use several kinds of evidence: structural repairs, archaeological strata, living testimony, ecological behavior, instruments, correspondence, and folklore. Different sources can be incomplete or mistaken. The player's own actions and authenticated records remain dependable.
+
+20.2 Four bands of descent
+
+The outer inhabited maze establishes ordinary life and the value of shelter. Its unsettling details are local: a sealed doorway, an unknown repair crew, a bell with no visible tower.
+
+The familiar districts introduce problematic memory and hospitality. Houses resemble places from the character's established history; residents remember events differently; belonging becomes an attractive but potentially coercive offer.
+
+The buried estates and institutions expose accumulated choices. Quarantine systems, neglected promises, suppressed archives, and entombed routes have physical effects that players can investigate and change. Architecture expresses obsession, avoidance, grief, responsibility, and dependence without assigning a medical diagnosis to a location.
+
+The deepest districts make human assumptions about distance, identity, scale, and observation inadequate. Hyperbolic chapels, higher-dimensional sections, and artificial boundary phenomena have repeatable local rules even when their ultimate origin remains unresolved.
+
+These bands are a pacing and worldbuilding framework. They are not four mandatory sequential levels. Routes can cross them, and experienced players can prepare for a specific kind of expedition.
+
+20.3 Infernal depth
+
+Some deep routes breach the existing crimson hell universe. The Manyfold itself remains a distinct place with refuges and communities. The Crimson Nexus retains its own role.
+
+The deepest infernal encounter can be almost silent: a frozen black reservoir, figures suspended far below its surface, and motionless wind instruments above it. Dante's lowest circle is associated with the frozen Cocytus, so cold and stillness provide a grounded allusion. The game should develop its own imagery and practical rules rather than reproduce the poem's historical judgments.
+
+Source for Dante's ninth circle: https://danteworlds.laits.utexas.edu/circle9.html
+
+21. PURGATORIO: THE DAWNWARD
+
+21.1 Where it belongs
+
+In Dante's geography, Purgatory is an island-mountain opposite Jerusalem, with Ante-Purgatory below its gate, seven terraces above, and the Earthly Paradise at its summit. Its inhabitants have a prospect of completing the ascent. The game's Dawnward takes that structure as an allusion and develops an original cosmology.
+
+Source: https://dante.princeton.edu/cgi-bin/dante/DispToynbeeByTitOrId.pl?INP_ID=214720
+
+Place the Dawnward in a separate connected realm at the edge of the Manyfold: the Shore of the Unfinished and a mountain rising beyond a pale sea. One passage reaches it from the Cistern of Borrowed Rain. Another is discovered after a deep descent. Later, restored pilgrimage routes connect it to ordinary worlds.
+
+The Room with an Outside remains the Manyfold's preserved reference and main-story destination. It contains or reveals a threshold to the Dawnward; it is not silently redefined as the entire mountain or its summit. The ordinary garden and the mountain can be visible through paired apertures, establishing their relationship.
+
+Players can reach the Dawnward through more than one route. A mandatory journey through every infernal district is unnecessary. Its existence can be foreshadowed early through a persistent sunrise visible beyond a sealed gate, wet footprints carrying pale beach sand, or a pilgrim's practical account.
+
+21.2 What changes there
+
+The defining activity is repair that produces visible progress. Roads reopen, water reaches houses, damaged roofs become habitable, a community arrives, an echo gains the freedom to leave. The ascent grows into a functioning landscape.
+
+The region still contains storms, difficult travel, damaged infrastructure, dangerous remnants, and enemies that benefit from keeping things unresolved. Progress should feel earned through action. Rest, conversation, construction, and cooperation have practical value alongside combat.
+
+Avoid a hidden morality score. The setting can express spiritual and psychological ideas while allowing players to argue with its inhabitants, choose methods, keep valuable possessions, automate work, and take shortcuts. Finishing a project demonstrates a material achievement; it does not certify the player's virtue or diagnose their mental state.
+
+21.3 Seven terraces
+
+These are original thematic names, not the canonical names of Dante's terraces. Each offers several ways to achieve its practical objective.
+
+The Terrace of Burdens: a caravan cannot move its overloaded equipment across a damaged ascent. Players redistribute loads, build a crane, repair transport, trade, or choose what can safely be left behind. The reward is a freight route, skilled residents, and equipment useful in the main sandbox. Cooperation is materially effective without being the sole permitted method.
+
+The Terrace of Witness: accounts of a failed evacuation disagree. Physical evidence, surviving people, and machine records allow the player to reconstruct enough of the event to reopen a safe route. Honest uncertainty is an acceptable conclusion where evidence is absent. The reward is a dependable archive and a route that no longer relies on a false account.
+
+The Terrace of Embers: defensive machinery keeps attacking old recorded threats, causing real damage that produces further alarms. Players can interrupt the feedback, repair sensors, redirect energy, or dismantle the dangerous system. The reward includes usable components and a settlement that can finally operate without repeated destruction.
+
+The Terrace of Vigil: a storm isolates shelters when their beacons fail. Players restore a functioning network through lighting, power, drainage, signaling, and transport. Automation and alternate routes are valid. The challenge is maintaining a service through an event, not waiting passively for a prescribed real-world duration.
+
+The Terrace of Measure: water or power allocation has been trapped in an old priority scheme. Some facilities receive useless excess while inhabited areas fail. Survey the real demand, repair the distribution, and establish a sustainable arrangement. Multiple system designs should succeed, and useful surplus remains a legitimate reward.
+
+The Terrace of Shelter: a settlement needs protection from wind, rain, or debris. The game evaluates actual shelter, access, light, and drainage rather than requiring one exact blueprint. The player sees the result inhabited. This turns base-building systems into a meaningful part of the ascent.
+
+The Terrace of Departure: an echo maintains a perfect home for someone who will never return. The player can establish a new destination, give the echo a stable independent form, or help willing inhabitants leave. The objective concerns an agreed departure, not forcing every grieving character to accept the same resolution. Its reward can include an unbinding method and a permanent return connection.
+
+At the summit is the Garden at First Light: cultivated land, ordinary work, broad sightlines, and a sky whose changes can be understood. It is useful as a place to settle, recover, experiment, and connect routes. Its calm should remain emotionally credible after the descent.
+
+21.4 Powers and progression
+
+Flight or exceptional traversal may let a player reach high ground early. Physical elevation alone does not restore the mountain's network. The projects unlock practical services, routes, residents, and artifacts. A player who flies to the summit gains reconnaissance and access; the useful work below remains available.
+
+Rewards include an improved recovery service, a portable-room anchor, an artifact-unbinding practice, reliable regional signals, and routes that carry freight as well as explorers. The Dawnward should materially enrich the wider game.
+
+22. FOUR DISTINCT SPATIAL LANGUAGES
+
+Use different rules for unusual connectivity, curved space, higher-dimensional objects, and spacetime-inspired effects. The player should eventually recognize which kind of problem they are confronting.
+
+22.1 Folded architecture: the Impossible Tenements
+
+Locally ordinary rooms connect through extraordinary thresholds. A stair emerges below its entrance. Two buildings share one cellar despite standing far apart. A window overlooks a street that belongs to a different preserved district.
+
+The investigative problem is reconstructing connections. Wet footprints, utility pipes, entry records, and objects sent through doors reveal the actual route. A misleading witness can be wrong about distance while accurately describing the room they saw.
+
+This is the foundation for the first expansion because it extends the original Manyfold architecture. Calling every such connection hyperbolic would obscure its actual behavior.
+
+22.2 Hyperbolic space: the Cathedral of Too Many Aisles
+
+A region of genuine three-dimensional negative spatial curvature changes distance and direction continuously. Nearby outward routes diverge rapidly, and more territory can fit within a given distance than the player expects from Euclidean intuition. The effect is part of the metric, not merely a stretched screen.
+
+The Cathedral contains persistent chapels, galleries, and workshops. Walking farther into it reveals a growing breadth of neighboring destinations. Familiarity remains useful because each chapel has a stable identity and history.
+
+Signature puzzle: carry a constrained survey instrument around a marked loop. Parallel transport around the route changes its orientation relative to its starting frame. Select and combine loops to align a lock. A small demonstration makes this measurable before danger is introduced. The instrument must enforce the intended transport; an ordinary free-turning object is not automatically a proof of curvature.
+
+Additional play includes coordinating separated explorers, establishing signal relays, and finding a short lateral route through a region where outward movement has carried companions far apart. Maintain an understandable way to retrace the approach.
+
+Primary implementation references: https://www.roguetemple.com/z/hyper/dev.php and https://www.roguetemple.com/z/hyper/geoms.php
+
+22.3 Higher-dimensional sections: the Smallest Observatory
+
+A tiny black object unfolds into a vast engraved sheet. The sheet resolves into different visible sections of an apparatus larger than the surrounding building. What first looked like several unrelated organisms becomes recognizable as portions of one body.
+
+This borrows the emotional shock of the fictional sophon: a tiny object revealing an overwhelming extent and purpose. It does not claim that proton engineering of that kind is established physics. Netflix's official account of its adaptation explicitly presents the sophon as a fictional proton computer that can unfold.
+
+Reference for the adaptation: https://www.netflix.com/tudum/articles/3-body-problem-episode-5-recap
+
+Give the Observatory a phase instrument. Changing its alignment reveals different sections of the same object. Cavities become accessible, pillars divide into rings, and a sealed specimen can be retrieved without breaking its ordinary visible container.
+
+The sections share object identity, construction history, and inventory. Moving to another section must not duplicate a chest or its contents. Occupied playable areas remain safely supported during a transition, or the transition waits for clearance with a visible explanation.
+
+The first version uses a bounded set of authored sections or one small explicitly modeled four-dimensional object. The whole voxel world does not need to become a four-dimensional simulation.
+
+22.4 AdS-inspired effects: the Choir at the Edge
+
+Anti-de Sitter space is a spacetime geometry. Standard global AdS4 has hyperbolic constant-time spatial slices and a timelike conformal boundary. Reflection at that boundary requires a boundary condition. These facts do not imply that an arbitrary confusing room is an AdS simulation.
+
+Physics reference: https://www.damtp.cam.ac.uk/user/tong/gr/grhtml/S4.html
+
+The proposed Choir is an explicitly fictional, AdS-inspired optical chamber. Its boundary returns particular light or spell pulses after a measurable delay. A low-energy test pulse teaches the effect. Shutters absorb, redirect, or release the returning signals.
+
+A mage sees an old attack become a later hazard. An engineer constructs a timed optical circuit. A careful player uses return delays to locate a hidden boundary mechanism. An enemy may depend on a repeating pattern that can be disrupted or redirected.
+
+Ordinary sound need not behave this way. The sound design can represent the apparatus without making a false physics claim. Delayed events reproduce actual earlier inputs; they do not predict future player choices.
+
+23. LITERARY ENCOUNTERS WITH PLAYABLE CAUSES
+
+23.1 The Guest Who Remembers You
+
+A street in the Unfinished Borough resembles a place established in the character's history. A resident appears to be a lost companion, a missing acquaintance, or someone described in an old quest. Their welcome is emotionally convincing.
+
+The reconstruction uses events and records created inside the game. It does not read the player's real personal history or accounts. The entity knows what it has actually encountered, absorbed, or been told.
+
+Clues arise from incomplete reconstruction. It recalls a public conversation but misplaces the furniture. A repaired object lacks a repair the real person made. The street contains imported details from mutually incompatible places. A second traveler sees a different familiar face on the same physical host.
+
+The shared body, position, collision, doors, and carried objects remain the same for everyone. Personalized appearance and dialogue are perception layers, not inconsistent simulation. Independent physical evidence allows the party to investigate.
+
+One encounter variant is predatory: the household closes its exits to retain guests and feed on repeated recollection. Its constraints are local and discoverable. Another is sympathetic: the host is overwhelmed by competing expectations and needs help existing without impersonating anyone.
+
+Choices include escape, exposure, negotiation, disabling the household's sustaining system, or providing the host with a stable independent identity. Do not select a new secret motive after the player has already gathered clues. The variant and its evidence are committed with the encounter.
+
+Persistent outcomes include a known dangerous house, a genuinely consensual refuge, a rescued being, or a sealed empty street. A comforting encounter is not automatically an ambush.
+
+Bradbury reference: the Ray Bradbury Center describes the familiar town and deceased relatives in The Third Expedition, originally Mars Is Heaven!: https://raybradburycenter.substack.com/p/mars-is-heaven
+
+23.2 The House Held Together by a Note
+
+A gothic manor stands beside black water. One structural crack repeats in foundation repairs, a family portrait, and an archived drawing. A recurring musical phrase sustains its old resonant supports.
+
+An inhabitant has kept repeating the phrase because stopping it transfers stress into an occupied wing. Their fear has a concrete basis. Their account can be limited without making them an irrational obstacle.
+
+Players investigate load paths, resonators, structural indicators, dust, and the relationship between sound and movement. Playing the phrase in another position can stabilize one section while endangering another. Instrumental and physical observations agree on the local mechanics.
+
+Solutions include replacement supports, repaired resonance equipment, evacuation, or deliberate collapse of an unoccupied wing to reveal a buried transit route. Books, residents, and important objects can be moved first. A warning and preparation period make major structural change reviewable in play.
+
+The house can become an unusual settlement, a transformed ruin, or a research station. Its history survives the intervention.
+
+Poe reference for the architectural and familial allusion: https://eapoe.org/works/tales/usherc.htm
+
+23.3 The Cellar of Unfinished Hospitality
+
+A courteous invitation promises a rare vintage, alchemical solvent, or mineral stored below. The guide flatters the visitor's expertise and repeatedly offers permission to turn back.
+
+The actual danger is a former quarantine cellar with an operating sealing system. Fresh mortar, warm channels, brick carts, warning shutters, and missing ventilation expose its behavior. The guide may be exploiting the system, trapped within it, or trying to keep a real danger contained; commit that truth before entry and provide appropriate clues.
+
+Voices travel through different acoustic paths. A pipe probe, opened vent, scouting device, or physical excavation can reveal where speakers actually stand. Doors close through visible machinery rather than an unexplained loss of control.
+
+Players can release a captive, isolate the hazardous occupant, redirect the sealing process, recover the valuable material, or leave after understanding the situation. A maintenance lintel or shutter provides a physical escape from within. The threat of entombment can be serious without an unavoidable scripted burial.
+
+The resulting system can become a secure vault, a useful route, or a controlled containment facility.
+
+Poe reference for manipulated expertise, hospitality, descent, and immurement: https://www.eapoe.org/works/tales/caskb.htm
+
+23.4 The Heart Beneath the Street
+
+A pulse sounds beneath the floorboards of several occupied buildings. It appears to accelerate when someone investigates. Residents disagree about where it comes from and what it means.
+
+Two systems overlap: the district's pressure-driven water machinery and an organism responding to footsteps through those same pipes. The player can compare measurements, damp a branch, remain still, interrupt a valve, or observe from another building.
+
+The task is to isolate a real mechanism without assuming every witness explains it correctly. Breaking the entire system stops the sound but also stops the neighborhood's water. A more careful intervention preserves the service and captures or removes the organism.
+
+Rewards include a pressure-sensitive organ usable in sensing and rhythm magic, functioning water infrastructure, and the community's response to what was actually done. The deeper question of why the organism imitates certain rhythms can remain unresolved.
+
+This is an original material mystery. It does not assert that the heartbeat in Poe's story has a definitively supernatural explanation.
+
+Poe reference: https://www.eapoe.org/works/reading/pt043r1.htm
+
+23.5 The Waiting Room at the End of Service
+
+An immaculate waiting room sits beneath archaeological layers that should have crushed it. Its clock works. One chair remains warm. A ticket machine uses an obsolete calendar. The timetable lists destinations that no longer exist.
+
+There is no enemy in this encounter.
+
+The original evacuation terminal kept preparing for travelers who never arrived. Utility traces, old service logs, delivery access, and the heating system reveal its operation. Understanding the machinery leaves the absence itself disturbing.
+
+The player can repair the terminal's routing, connect it to a living settlement, preserve its archive, salvage it, or adopt it as a shelter. It remains quiet afterward. Do not attach a final jump scare merely to reward the player's investigation with another attack.
+
+23.6 The Green Door Between Expeditions
+
+A green doorway recurs in several districts, always accompanied by the same smell of wet leaves and a particular afternoon light. It leads to a bounded real garden through different known folds. The garden has a stable identity and is not regenerated whenever entered.
+
+An inhabitant offers peace and practical shelter. The tension concerns timing, obligations, and the desire to remain. The garden may close a particular entrance when the surrounding district changes state, but its established return connection remains available.
+
+The player can use it as a genuine refuge, investigate its history, help its keeper reach another place, or choose to establish a home there. Some other doors may imitate its appearance, but independent signatures and ordinary probes distinguish them. A verified garden does not become hostile simply because the player trusts it.
+
+Wells reference: https://www.gutenberg.org/files/456/456-h/456-h.htm
+
+23.7 The Survey That Cannot Be Reconciled
+
+A field expedition has left measurements, specimens, photographs, repair notes, and competing accounts of a district. One surveyor claims a corridor bends. Another records a straight route. A third insists that the expedition visited two buildings at once.
+
+Some disagreements have practical causes: a gate changed destination, an instrument was calibrated in the wrong frame, or a witness confused a copied facade with the original. Another discrepancy survives every local explanation and points toward a deeper spatial domain.
+
+Let the player collect evidence and perform tests. A notebook can organize observations and possible explanations, but progress should depend on acting on sufficient evidence rather than selecting the author's exact sentence from a deduction menu.
+
+This is the occasional Doyle mode: concrete observations, expeditions, material proof, and competing explanations. Other regions can remain lyrical, spiritual, or fragmentary. The whole game need not become a detective procedural.
+
+Expedition-fiction reference: https://www.gutenberg.org/files/139/139-h/139-h.htm
+
+23.8 The Fossil Sea
+
+One rescued landscape opens beyond the dense architecture: a pale dry basin, old mooring towers, wind moving through mineral gardens, and an almost empty city whose material culture is recognizably different from the later human refuge network.
+
+The city should have an ecological and cultural history that can be investigated. Its inhabitants had purposes beyond frightening newcomers. What appears to be a memorial may also regulate water; what appears to be a street may have served creatures with a different scale or mode of movement.
+
+A settlement wants to extract the basin's valuable material. A surviving caretaker or archive reveals what that extraction will interrupt. The player can prospect, restore a service, negotiate a limited industrial use, preserve a site, or choose a more destructive approach with visible consequences. Avoid a single dialogue choice that substitutes for understanding the physical system.
+
+This broadens the Bradbury influence to ruined beauty, contact, nostalgia, and the ways settlers change a place. Familiar-face horror remains one element of a larger world.
+
+Author-site reference: https://www.raybradbury.com/book/the-martian-chronicles
+
+24. PSYCHOLOGICAL DESCENT AND PLAYER TRUST
+
+24.1 Metaphors with room for interpretation
+
+Repetition can suggest rumination: an institution keeps processing a finished event, or a house keeps preparing a room for someone absent.
+
+Avoidance can become architectural: an estate has built each new corridor around a sealed room until the entire building depends on the detour.
+
+Grief can become maintenance: an echo continues a loved person's routines because it has no other way to understand its purpose.
+
+Exhaustion can become an environment that demands constant service while providing no usable refuge. The player's intervention creates shelter and redistributes work.
+
+Alienation can appear through incompatible interpretations of the same host, a familiar street assembled from imperfect memories, or a society whose ordinary behavior is unreadable to outsiders.
+
+Recovery can become concrete: another route opens, a burden becomes shareable, an echo gains a choice, an inhabited room remains repaired, or a place acquires an understandable history.
+
+These are artistic metaphors. They are not clinical models, diagnoses, or claims that a condition makes someone dangerous. The fiction can place vulnerable, frightened, or grieving characters among the most reliable witnesses and most capable residents.
+
+24.2 The source of danger
+
+Place the dangerous agency in entities, coercive institutions, damaged mechanisms, exploitative bargains, and actual environmental conditions. A character's suffering is not proof that their testimony is false. A charming person is not proof of safety.
+
+If a mechanical exposure system is useful, describe what is accumulating: an entity's attention, resonance with a device, a debt created by an artifact, or fatigue already supported by the game. Do not collapse all of these into a single number that equates mental illness, evil, and hallucination.
+
+Each exposure needs a source, readable symptoms, practical countermeasures, and a known recovery route. Optional intense effects must not secretly erase the player's progress.
+
+24.3 Distinguish perception from shared reality
+
+The simulation owns physical locations, collision, inventories, entity identity, and the causes of events. A personalized apparition can change what a traveler sees or hears while preserving that shared foundation.
+
+Use in-game history for personalized memories: established NPC relationships, chosen character background, previous visits, and discovered records. Do not use real-world private records, unsolicited voice cloning, or the user's personal vulnerabilities.
+
+Keep direct player communication, actual system messages, saved journals, and authenticated map markers trustworthy. The game can present misleading in-world letters, signs, voices, and recreations without impersonating the interface that documents what the player actually did.
+
+Treat accessibility options as ways to present the same evidence. Substitute visual pulse indicators for important audio, shapes for important colors, and comfortable transitions for involuntary camera roll. The challenge should survive these changes because it depends on inference and action.
+
+25. BEINGS, BOSSES, AND NEW REWARDS
+
+25.1 The Remembered
+
+A category of beings shaped by encountered memories rather than a single alignment or predictable enemy type. Some cultivate comforting identities to retain visitors. Others become trapped in the roles people impose on them. A few learn to maintain an independent form and become residents.
+
+Their capabilities and knowledge are bounded. They cannot know a private event they have never accessed through an established in-game mechanism. Their apparent familiarity therefore supports investigation rather than omniscient improvisation.
+
+25.2 The Pallbearers
+
+Tall quiet constructs carry closed doorframes through funeral routes. A frame contains a registered pocket: a room, a sealed archive, or a procession of preserved objects. Their destination and cargo can be studied.
+
+Combat, interception, negotiation, and route redirection all become possible. Opening an authorized frame can create a temporary crossing; stealing it has an explicit consequence. The pocket's contents retain one identity, and the route has enough width and clearance for the actual carrier.
+
+The image is unsettling because a door is being transported as though something inside it has died, while the handle sometimes turns from the other side.
+
+25.3 The Tenant Beyond the Wall
+
+An optional deep encounter reveals a being whose visible portions occupy several cavities. Those portions belong to one persistent entity intersecting the playable domain through a controlled spatial apparatus.
+
+Its attacks follow the apparatus's alignment. A warning instrument predicts which portion will emerge next. Players can interrupt the connection, redirect an exposure into an empty chamber, contain a portion, negotiate a local exchange, or fight the accessible manifestation.
+
+A victory changes the local incursion and yields a usable component. It need not imply that the player killed a universe-sized organism. Preserve unknowable scale through what remains outside the encounter, while keeping the active confrontation mechanically understandable.
+
+The Last Surveyor may possess incomplete evidence about this being. Some old defenses were built for a reason. Players can still challenge oppressive uses of those defenses without the narrative declaring every restriction justified.
+
+25.4 Reward: the Witness Glass
+
+Shows discrepancies between an active appearance field and the shared physical body or apparatus producing it. It helps identify borrowed views and some remembered forms. It does not reveal moral alignment or automatically solve motives.
+
+Its strongest version also makes the observer noticeable to entities that ordinarily overlook them. The range, activation, and cost are explicit. Players can use it in brief tests or prepare a deliberate encounter.
+
+25.5 Reward: the Plumb Line of Unburial
+
+A survey tether records a supported route back to an established anchor and provides consistent local orientation information across compatible domains. Its display distinguishes a known route from a temporarily unavailable connection. It does not invent a passage through a destroyed mechanism.
+
+This is an important uncursed exploration tool. Its value comes from turning knowledge into dependable equipment. Existing ordinary markers remain useful, so losing the artifact does not make recovery impossible.
+
+25.6 Reward: the Key of Reprieve
+
+Earned through the Dawnward, this key converts one eligible pocket into an anchored refuge with a registered return. Only one such commitment is supported initially. Moving the commitment requires a clear relocation process and preserves stored possessions, occupied rooms, and one authoritative interior identity.
+
+Its value is portable belonging: after learning how places trap people, the player gains a way to create a place that lets them leave and return freely.
+
+25.7 Reward: the Fifth Hinge
+
+A late instrument exposes a bounded alternate section of a compatible higher-dimensional container. It enables unusual access and construction. The same opening admits whatever the established section allows, so using it in a hostile domain requires preparation.
+
+It cannot fabricate arbitrary destinations, copy contents, or ignore every protection in the game. Its limitations follow the chosen domain model. A sophisticated player should still be able to use it for surprising solutions.
+
+The existing Crown of the Second Self remains the major sinister personal relic. This expansion gives its projection and pursuit a richer context without changing its persistent curse rules.
+
+26. ART DIRECTION, PACING, AND THE FIRST HORROR EXPEDITION
+
+26.1 Keep a coherent visual world
+
+Use the same crafted voxel materials, strong silhouettes, controlled detail, and landscape composition as the wider Axiom/Meridian world. Gothic additions include steep roofs, narrow clerestories, ironwork, flooded cloisters, black water, aged copper, pale stone, and small domestic lights within enormous architecture.
+
+Preserve the faded magitech identity. An old control panel can share ceramic, brass, mineral glass, and repair marks with a chapel or pumping station. A strange modern object should have material presence and a reason to stand out.
+
+Reserve saturated crimson for infernal contact and specific danger. Other districts can use dusk violet, mineral blue, tarnished gold, dirty ivory, overcast silver, and small warm windows. Horror must not make every room unreadably dark.
+
+26.2 Anachronisms that imply something
+
+The wider world already mixes eras, so an old object beside a new one is not enough. Make the anomaly concern provenance, function, or an impossible relationship.
+
+Examples:
+
+- An emergency-exit diagram accurately shows the building's outside as a room within its cellar.
+- A powered waiting room receives maintenance through a route bricked up centuries ago; a fold or hidden service path must account for it.
+- A delivery bell announces a settlement whose evacuation record says it was never admitted.
+- A telephone-like service device connects to another preserved district, with its exchange traceable through the Bellworks.
+- A meticulously repaired plastic chair sits in an otherwise untouched tomb, beside a log of the visits needed to maintain it.
+- A nursery mobile reproduces the motions of celestial bodies visible only through a distant observatory.
+- An elevator's orchard landing opens onto a real orchard contained within a wall, with workers who treat the elevator as ordinary infrastructure.
+
+Some explanations end in an enemy. Others end in a harmless service, a useful shortcut, a sympathetic resident, or an unanswered larger question.
+
+26.3 Sound and pacing
+
+Let sound describe causality. Mortar machinery has a rhythm. A pressure organism responds to footsteps. The recurring note in the manor changes its structural behavior. A boundary-return instrument marks the delay before an old pulse arrives.
+
+Use silence, low activity, and long sightlines between intense encounters. A workshop should sometimes sound only like a workshop. A beautiful cistern should sometimes remain beautiful. The opportunity to rest makes another descent a meaningful choice.
+
+Lucid Blocks is a useful reference for this range: its official material combines dreamlike expanses, serene fields, warehouses, unusual threats, powerful tools, construction, and friendly creatures. The adaptation here is the coexistence of curiosity, agency, unease, and tenderness, not a copy of its particular creatures or crafting system.
+
+Sources: https://lucidblocks.com/ and https://store.steampowered.com/app/3495730/Lucid_Blocks/
+
+26.4 One coherent first horror expedition
+
+Begin at the end of a familiar Stillcourt route. An old evacuation ticket identifies a waiting room beneath the Unfinished Borough. The player finds it warm, quiet, and functional. There is no attack.
+
+Its records point to a manor whose caretaker maintains a recurring note. Following utility and structural evidence reveals the relationship between the sound, the house's failing supports, and an older cellar quarantine system.
+
+The cellar offers a valuable material and a recoverable captive or dangerous occupant, depending on its committed encounter template. The player can trace the voices, manipulate the sealing machinery, build an alternate route, or leave after securing enough information.
+
+A successful intervention opens a maintenance stair to the Shore of the Unfinished. The Dawnward becomes visibly real before the entire mountain is playable. The player can return through a registered connection carrying a useful discovery and a permanent change to the district.
+
+This expedition uses existing folded architecture, physical clues, construction, one modest actor interaction, and one bounded mechanism. True H3 geometry, whole-world time manipulation, and a multi-portal cosmic body are separate later milestones.
+
+26.5 The player-facing promise
+
+The player can discover why a door is dangerous, learn how to pass it, make a useful place beyond it, and still wonder what originally made the door possible.
+
+26.6 Souls-inspired approaches, shortcuts, and combat
+
+Use the Elden Ring and Dark Souls references to guide a proposed rhythm of monumental approaches, difficult thresholds, readable combat spaces, and satisfying reconnection. A hostile estate should have a legible silhouette, several approaches suited to different capabilities, a sanctuary within reach, and a useful shortcut that changes later travel.
+
+The player should see a chapel, tower, or bridge from a distance, lose sight of it within the architecture, then recognize it from an unexpected side. Vertical routes make those discoveries meaningful. A shortcut is valuable because it connects places the player already understands.
+
+Combat needs local clarity even when the larger world is strange. A Bellwarden's strike, a Pallbearer's carried threshold, or the Tenant's emerging limb has a readable source, motion, and affected region. A gate transition may change the arena, but it is announced and shares one authoritative state. Useful pillars, stairs, ledges, water, and destructible structures affect the encounter.
+
+Keep optional elite guardians and rare treasures in distinctive locations. Repeated encounters should vary their terrain, goals, and interactions rather than only health and damage. The final Surveyor and optional deep manifestation should demand different strategies.
+
+This is an art and gameplay interpretation of the named inspirations. It does not require importing their lore, exact characters, death systems, or a uniform degree of combat pressure into the entire dimension.
+
+27. PROCEDURAL MYSTERY AND PUZZLE GENERATION
+
+This appendix specifies proposed generation and verification behavior. It does not report an inspected implementation or tests already executed. Generate a physical explanation, useful evidence, and viable actions before decorating the space. The player may remain uncertain about who built the mechanism or what its occupant remembers while becoming confident about how to operate it.
+
+27.1 TYPED CAUSAL TEMPLATES
+
+Represent each encounter as a bounded causal model with an objective, state variables, permitted transitions, observations, costs, and recovery rules. Separate the underlying physical state from what characters believe and what an illusion displays.
+
+State variables have explicit types and ranges: valve position, gate destination, reservoir volume, support integrity, electrical supply, creature location, inventory ownership, or a bounded mechanism phase. A belief or historical interpretation cannot silently substitute for a physical predicate.
+
+An action declares prerequisites, affected objects, resource cost, duration where relevant, resulting state changes, and observable feedback. Examples include opening a valve, moving a supported weight, interrupting a conductor, excavating a designated wall, or applying an existing spell effect. Define interruptions and failed attempts explicitly. An action must not consume a unique resource before checking prerequisites unless that risk is communicated.
+
+An objective consists of world predicates, such as restoring inhabited buildings' water supply while isolating a pulsating chamber. A particular sequence is one solution witness, not the objective itself. This distinction allows construction, excavation, magic, negotiation, and other supported interventions to succeed.
+
+27.2 CLUES AND ACCESSIBLE EVIDENCE
+
+For each dangerous or necessary inference, place at least two independent usable clues before the relevant commitment. Independence means that losing access to one clue does not also remove the other. Two inscriptions behind the same locked door are one access opportunity. Two sounds generated by the same inaudible signal are one sensing dependency.
+
+Useful pairs include a visible contraction and an audible pulse, a traced physical conduit and a functioning flow indicator, or a recoverable experiment and a historical diagram. Where sound or color carries necessary information, provide another readable representation.
+
+Record each clue's location, access prerequisites, sensing requirements, proposition supported, and conditions under which it changes. Verify that clues needed to operate a mechanism are reachable before that mechanism must be operated. Optional lore may remain incomplete; required physical evidence must not depend on a rare spell, companion, or purchased interpretation.
+
+Preserve observation history. A repaired pump can invalidate an old pressure reading without erasing the player's record of it. Mark observations with their place and relevant mechanism state. A misleading document is an in-world claim that can be tested; the authoritative journal must distinguish claims from measurements.
+
+27.3 DETERMINISTIC AND PERSISTENT GENERATION
+
+Derive each encounter from the world seed, stable region and encounter identifiers, template identifier, and explicit template and generator versions. Use a documented stable hash and deterministic ordering. Do not make outcomes depend on thread completion, container iteration, player arrival order, or an unrelated decoration draw.
+
+Keep separate random streams for causal structure, spatial embedding, occupants, rewards, and decoration. Changing moss placement should not alter a valve's function. Once an encounter is materialized, persist its chosen parameters and live state. Leaving, reconnecting, or revisiting must not reroll its solution, clues, ownership, or claimed treasure.
+
+Generation retries use bounded deterministic candidates. If none pass validation, select a known valid fallback rather than producing an unverified encounter. Existing encounters retain their versioned behavior through updates or receive an explicit migration that preserves player work.
+
+Deterministic generation does not establish deterministic physics. Multiplayer should agree on the encounter definition and use the game's authoritative state transitions for interactions, destruction, and ownership.
+
+27.4 SPATIAL AND CAPABILITY VALIDATION
+
+Embed the causal model into actual geometry, then validate that geometry. Check player clearance, reachable controls, line of sight to evidence, object handling, load-bearing surfaces, relevant creature routes, and the final voxelized openings. An abstract graph connection is insufficient if a stair, doorway, or carried object cannot traverse it.
+
+Validate a baseline capability set that the encounter actually supplies or the player can reliably possess. A mandatory solution must work for one player. Timed switches can support wedges, latches, weights, or other physical substitutes for a second participant. Cooperative play may enable faster or more elaborate solutions without becoming an undeclared prerequisite.
+
+Evaluate additional capability sets, including flight, excavation, remote manipulation, and relevant spells. An advanced ability bypassing part of the route can be an intended reward. The objective predicates should still identify whether the player achieved the result. Avoid adding hidden immunity after discovering a successful alternative.
+
+Check meaningful destructive cases: a broken lever, removed wall, dead mechanism operator, collapsed bridge, dropped unique object, or severed supply. Each should lead to another intervention, an explicit repair opportunity, or a recoverable failed objective. Basic escape must not require the reward being sought, equipment trapped in the recovery cache, or a consumed objective item.
+
+27.5 SOLVER WITNESSES AND LIMITS
+
+Run a small state-space simulator over the template's finite abstraction. Retain at least one solution witness, its resource requirements, and a baseline escape witness. Check reachable hazardous states and relevant irreversible transitions, including timing conditions that a pinned gate or blocked threshold could prevent.
+
+The witness establishes solvability under declared assumptions. It does not prove every possible continuous physics outcome or sandbox intervention. Follow the abstract check with targeted geometry and interaction verification. Preserve a failure reason when rejecting a generated candidate so generation defects can be diagnosed.
+
+Required test scenarios should include minimum equipment, depleted optional supplies, single-player timing, cooperative separation, interrupted actions, save/load, reconnect, object transfer, designated destruction, and previously constructed shortcuts. These are proposed checks, not claims that testing has occurred.
+
+27.6 EXAMPLE: THE HEART BENEATH THE STREET
+
+Objective: preserve water delivery to the neighborhood while stopping the abnormal pulse transmitted through its pipes.
+
+Initial state: the main pump runs; its normal rhythm is audible. Two isolation valves remain open around a side chamber. A bypass is closed. A living membrane occupies the side chamber and adds a second pulse. The chamber has an inspection window and a drain. The bypass and drain have readable physical connections.
+
+Independent diagnostic evidence: stopping the flywheel briefly silences the pump's rhythm while the second pulse continues; separately, the inspection window shows the membrane contracting with that second rhythm. The pump courtyard and inspection gallery are independently accessible. Their evidence remains valid regardless of the story told in the maintenance records.
+
+Baseline solution witness: open the bypass; verify neighborhood flow through a downstream indicator or visible fountain; close both chamber isolation valves; drain the isolated chamber; contain or remove the membrane; close the drain; restore the repaired main route. The template supplies the necessary containment equipment or another baseline removal method.
+
+Alternatives: construct a temporary gravity-fed supply before shutting down the whole branch; repair a disused parallel pipe; or use an established immobilizing effect to assist safe removal. Each must produce the same relevant supply and pulse predicates.
+
+Failure and recovery: shutting the wrong valve interrupts water and produces immediate visible feedback. Reopening it restores supply. Breaking the chamber can contaminate its branch, requiring isolation and flushing through an accessible repair path. Dropped components collect in a recoverable sump. Leaving is always possible. The neighborhood's appearance and services reflect the final physical result.
+
+The membrane's origin can remain disputed: parasite, abandoned instrument, or preserved fragment of something larger. Solving the mechanism does not require resolving that history.
+
+27.7 MECHANICAL VARIETY AND HORROR PACING
+
+Track recently encountered causal patterns: isolate-and-drain, redistribute-load, compare-signals, redirect-route, infer-provenance, contain-creature, and restore-supply. Repeated wall textures are harmless; repeated explanations exhaust discovery. Vary relationships and interventions before multiplying scenery.
+
+Pacing selects which stable encounter the player finds next. It must not secretly change a solved mechanism because a player progressed quickly. Interleave pressure with useful work, quiet observation, inhabited refuge, beauty, and occasional unresolved strangeness. Some anomalous rooms contain no enemy.
+
+Every substantial encounter should leave a meaningful result: a safer route, a working service, a rescued inhabitant, an understood danger, a valuable tool, or a deliberate transformation. This makes the descent consequential while giving return and recovery material form.
+
+28. SPATIAL ENGINEERING APPENDIX
+
+This appendix proposes an incremental implementation strategy for the existing Rust and raw wgpu engine. It describes requirements to verify against the repository; it makes no claim that these systems exist, have been implemented, or meet a particular performance target.
+
+28.1 FOUR SPATIAL MODELS WITH SEPARATE RESPONSIBILITIES
+
+Preserve ordinary Euclidean simulation for the main world and most Manyfold districts. Add unusual geometry through explicitly bounded domains:
+
+- Portal charts: locally ordinary regions connected by declared threshold transforms. This supports impossible adjacencies without curved local geometry.
+- Hyperbolic spatial domains: regions whose distances, movement, directions, and visibility follow an H3 metric. Reserve these for a later, independently validated subsystem.
+- Higher-dimensional sections: bounded objects or rooms whose currently exposed three-dimensional section changes through a controlled parameter.
+- Returning-light domains: fictional boundary mechanisms that schedule delayed manifestations of emitted light or selected spells.
+
+Give each domain a declared capability set. A folded stair does not require every industrial machine to operate in hyperbolic space. Unsupported cross-domain interactions should have visible, deliberate limits. Reuse existing chunk, inventory, save, and networking interfaces when they can represent the required behavior correctly.
+
+28.2 STABLE PLACE IDENTITY
+
+A position requires a domain identity, stable region or cell identity, local coordinates, and orientation. Store edits, actors, inventories, mechanisms, and map observations against those identities.
+
+Never identify a cell only by hashing the sequence of turns used to reach it. Two paths may reach the same place; treating them as different identities would duplicate rooms, treasure, or inhabitants. Conversely, identical-looking rooms may intentionally be different places.
+
+For the initial portal network, use explicit persistent region identifiers and adjacency records. A finite hyperbolic prototype can use a prevalidated cell complex. An expanding hyperbolic implementation needs a canonical identity scheme appropriate to its tessellation, including correct equivalences between routes. Do not assume a convenient tree of exploration paths proves those equivalences.
+
+HyperRogue's developer documentation separates discrete cell identity from continuous local geometry and explains local coordinate frames and lazy generation. These are useful precedents rather than a ready-made three-dimensional voxel architecture.
+https://www.roguetemple.com/z/hyper/dev.php
+
+28.3 ONE GEOMETRIC CONTRACT FOR INTERACTION
+
+For portal charts, rendering, collision, velocity, camera orientation, sound routing, targeting, and supported entity transfers must use the same threshold transform and destination version. Begin with transforms preserving local up and handedness. Introduce pitch, roll, reflection, and altered gravity only when their effects on every supported interaction are defined.
+
+For actual H3 regions, define metric-aware distance, direction transport, movement, intersection, and visibility operations. A vertex distortion over ordinary Euclidean collision is a visual effect, not complete curved-space gameplay. Straight visual rays, projectile paths, collision queries, and player motion must agree on what their domain calls straight and how distance is measured.
+
+Existing voxel assets may supply materials and structure. Their placement and collision still require a suitable geometric representation; a global array of uniform Euclidean cubes cannot simply be declared a uniform H3 world. Begin with authored geometry and restricted dynamics before enabling general excavation, fluids, vehicles, or factories there.
+
+28.4 THRESHOLD OCCUPANCY AND AUTHORITATIVE TRANSITIONS
+
+The server owns connection changes. A transition should announce its pending state, validate usable return access, prepare destination geometry and collision, inspect the crossing volume, and then commit one topology version.
+
+An occupied threshold retains its existing destination and enters a visible blocked state. Forecasts update accordingly. A player, vehicle, carried creature, or supported object spanning the threshold must never be silently severed or transferred twice. Permanent cables, pipes, and rails initially require an anchored connection instead of crossing an independently changing gate.
+
+Transfers need unique operation identities and atomic ownership changes. Retries must return the existing result. A delayed client must wait for the authoritative destination rather than enter a stale one. Protect recovery caches and occupied pockets even when their entrance becomes inactive.
+
+Return validation must include mechanism states, required equipment, resources, and supported transitions. A route requiring a consumed key or equipment inside a death cache is not a dependable return. Preserve a basic recovery option independent of those requirements.
+
+28.5 HYPERBOLIC GROWTH AND STREAMING BUDGETS
+
+Hyperbolic volume grows exponentially with distance, making a fixed-radius load policy potentially expensive. A deterministic seed does not remove the cost of generated cells, changed cells, visible meshes, navigation, or simulation. Large global floating-point coordinates also create precision problems; the HyperRogue documentation discusses both growth and the need for discrete identities with local frames.
+https://www.roguetemple.com/z/hyper/dev.php
+
+Bound active work by explicit budgets for visible cells, simulation, destination preparation, and mesh uploads. Combine actual occlusion, distance, importance, and expected player movement. Architectural occlusion and environmental visibility should have an in-world cause. Persistent modified cells can remain inactive without losing their data.
+
+Near and distant representations must derive from compatible structural records. Simplification may remove detail, but should preserve significant openings, silhouettes, and route landmarks. A streaming proxy must represent actual available coverage rather than conceal missing collision.
+
+28.6 A THIN MODEL FOR CHANGING SECTIONS
+
+The first unfolding object should have a bounded set of validated section states. One canonical object owns its inventory, mechanisms, and persistent modifications; the visible pieces are views or exposed parts of that object.
+
+Changing section may reveal a cavity or remove a supporting surface. Before committing, account for occupants and supported cargo. Hold the transition, provide a visible displacement rule, or require evacuation where necessary. Do not discard an occupied section or create a fresh inventory for the newly visible one.
+
+Taking a relic from one section removes that same relic from every other section. Destroying an exposed component updates its canonical state. The experiment should first establish these relationships with one room, one movable specimen, and one safe recovery path. Continuous 4D rotation and general matter transfer can follow only after this simpler model is coherent.
+
+28.7 SHARED SIMULATION AND PERSONAL PERCEPTION
+
+Keep physical surfaces, mechanisms, ownership, and hostile actions authoritative and shared. A player-specific apparition may differ in appearance or dialogue, but its interaction rules need an explicit relationship to shared state.
+
+For example, two players can see different familiar faces on the same mimetic entity while agreeing about its location, obstruction, and attacks. If only one player hears a memory echo, mark that channel as a perception effect in the implementation; do not let it secretly replace a required shared timing cue.
+
+Player journals and authenticated markings remain stable evidence. In-world characters and signs can mislead, while the interface correctly records observations, uncertainty, and the distinction between a claim and a verified event.
+
+28.8 FINITE RETURNING-LIGHT SCHEDULER
+
+AdS is a spacetime model. Standard global AdS4 has hyperbolic constant-time spatial slices and a timelike conformal boundary. Radial light approaches that boundary in finite global coordinate time but infinite affine parameter. Reflection requires a chosen boundary condition. The usual universal cover unwraps the embedding's periodic time. These facts motivate the fictional encounter; the encounter is not a claim of full relativistic simulation.
+https://www.damtp.cam.ac.uk/user/tong/gr/grhtml/S4.html
+
+Implement the encounter as a finite causal event system. Each eligible emission records its identity, origin, direction, energy budget, mechanism version, and arrival time. State whether shutter changes affect only later emissions or also intercept scheduled returns; communicate that rule visibly.
+
+Use monotonic server time, nonnegative delays, deduplication, finite lifetimes, and bounded reflection counts or dissipating energy. A returned ray retains its causal lineage rather than becoming an unlimited source of new rays. Catch-up after reconnection resolves expired events without recreating them. Persistent damage occurs once. The scheduler should make no prediction about future player inputs.
+
+28.9 GENERATOR VERSIONING AND PUZZLE VALIDATION
+
+Persist generation versions alongside stable place identities. Newly generated frontiers may use a later generator, while visited places retain their existing geometry and edits unless an explicit migration preserves identity and content. A version change must not reissue unique treasure.
+
+Generate puzzle relationships before dressing them with rooms and props. Represent mechanism states, allowed operations, capabilities, consumed resources, alternative solutions, clue locations, and recovery conditions. Search the actual supported state graph for at least one intended completion and return route. Connectivity alone proves little when a door depends on a weight or a consumed resource.
+
+Validation should also ensure the introductory evidence is reachable before commitment. Reserve deliberate alternative solutions through construction or magic where the broader game supports them. Avoid a solver model that declares the puzzle valid by assuming a tool the player cannot obtain.
+
+28.10 STAGED ACCEPTANCE CRITERIA
+
+First, validate one portal district: persistent markings, two routes, consistent ray and body transfer, occupied-gate handling, save/load, and two-player agreement under delayed updates.
+
+Second, validate one section puzzle: unchanged inventory identity across every section, consistent edits, safe occupancy handling, and recovery after entrance destruction.
+
+Third, evaluate a small optional H3 domain: consistent motion and targeting, valid cell identities when reached by different routes, stable local precision, and bounded active work as exploration expands. Broader physics remain gated until tested there.
+
+Fourth, validate the returning-light chamber: predictable timing, visible boundary controls, bounded event growth, no duplicate effects, and consistent reconnection behavior.
+
+Finally, play a continuous expedition using the intended clues. Record which rules players infer, where their observations fail, and whether the return preserves their accomplishments. Profile the implemented scenes before setting performance targets. Expand only the spatial mechanisms that improve the actual exploration.
+
+29. ADDITIONAL IMPLEMENTATION REFERENCE
+
+HyperEngine is the MIT-licensed Unity backend released by CodeParade for Hyperbolica. Its repository states that it is not actively maintained and is not the complete game source. It can inform study of curved-space techniques, but it is not a drop-in dependency for the Rust/wgpu engine. Investigate and adapt only the required ideas within the existing project architecture.
+https://github.com/HackerPoet/HyperEngine
+
+The literary and scientific sources for the expansion are linked beside the relevant claims in sections 20-28. All proposed regions, characters, encounters, mechanics, and production decisions are original adaptations. The original reference grounding remains in section 19.
+
+30. HORROR IMPLEMENTATION HANDOFF
+
+Extend the existing Manyfold design with the first horror expedition in section 26.4. Preserve the original navigation, persistence, recovery, construction, and shared-world rules. Begin by inspecting the actual repository; reuse functioning systems and do not assume any feature in this design already exists.
+
+Implement one quiet waiting room, one gothic structural mystery, one bounded cellar encounter, and a discoverable threshold to the Dawnward. Keep the first implementation within locally ordinary regions and explicitly connected folds. Prove the complete outward journey, meaningful intervention, and return before expanding the content set.
+
+Use causal templates and evidence accessible before commitment. Store the encounter's chosen truth, parameters, clues, mechanism states, and consequences. Generate variants deterministically without changing their answer after entry. Validate actual movement clearance, mechanism reachability, baseline equipment, single-player completion, cooperative separation, supported destruction, and escape. An abstract solution witness is necessary evidence, not a guarantee of every physical outcome.
+
+Separate shared physical state from personalized apparitions. Give memories and anomalies explicit in-game sources. Do not falsify player journals, authenticated markers, direct player communication, or operating-system messages to manufacture horror. Preserve dependable sanctuaries and ordinary quiet encounters.
+
+Build the Dawnward as a distinct ascent with tangible projects and visible changes. Let player construction, engineering, magic, exploration, and cooperation offer alternative methods. It is a region of the game, not a clinical model or hidden morality score.
+
+Keep true H3 space, continuous higher-dimensional slicing, multi-portal creature bodies, and AdS-inspired optical effects as individually validated later milestones. A visual warp alone does not complete their interaction requirements. Demonstrate movement, targeting, collision, persistence, and multiplayer consistency in each supported domain.
+
+Review actual continuous gameplay and readable visual captures. Record what players infer, which options they use, how the world changes, and whether their investment survives return. Report implementation and verification truthfully. Expand only after the first expedition is distinctive, understandable, unsettling, and worth revisiting.
+
+31. NEW DESIGN DIRECTION: THE HANGING PARISH
+
+The Forest Temple, Uncharted, and Zork references add a particular kind of pleasure: becoming competent inside an ancient place. A distant opening becomes a destination, an apparent ornament becomes machinery, and a structure that first seemed irrational becomes partially understandable through exploration.
+
+The Manyfold's landscape can remain enormous and uncertain. Within it, major landmarks should have strong spatial identities, comprehensible mechanisms, and loops that reward remembering what the player has seen. The original seven regions remain intact; the Hanging Parish is a substantial precinct connecting existing regions rather than a replacement cosmology.
+
+31.1 What comes from the references
+
+The Forest Temple supplies forest reclaiming formal architecture, a central place repeatedly understood from new approaches, and local architectural reorientation. Nintendo's guide describes a switch straightening a twisted corridor and changing access within its adjoining room. The new design extends that idea into systemic local gravity; it does not claim that Ocarina of Time gives the player arbitrary control of gravity. [F1]
+
+Uncharted supplies reachable archaeological vistas, confident physical traversal, and changes to a ruin that the player experiences while moving through it. PlayStation's Lost Legacy report describes intersecting routes, prominent landmarks, an in-world map, and a grapple-based navigation challenge. Naughty Dog's retrospective emphasizes fluid player and companion movement. Our interpretation is to make spectacle depend on dependable traversal and intelligible causes. [F2, F3]
+
+Zork supplies underground history expressed through useful objects, public works, strange institutions, and restrained humor. Its original source includes a dam, maintenance facilities, and a public guidebook describing imperial construction. Veyr Below takes that civic density as inspiration for an original society. [F4]
+
+31.2 The precinct
+
+The Hanging Parish occupies a wooded fold between the Foldfields, the House of Contrary Stairs, and the Cistern of Borrowed Rain. From the approach it resembles a ruined sanctuary: pointed windows, mossy galleries, a broken belfry, glasshouse ribs, ivy, and an enormous ash tree growing through its central courtyard.
+
+Inside, its practical history emerges. The sanctuary incorporated a public garden, a gravity calibration station, a freight interchange, and the upper entrance to an underground refuge city. Later generations made its engineers into saints, enclosed service routes as chapels, and misunderstood some surviving machinery as ritual objects. The devotional culture was real; it also grew around older civic functions.
+
+Several generations of construction remain distinguishable. Bronze freight guides cut across older dressed stone. A later carved tomb uses an abandoned inspection recess. The ash's roots have cracked ceremonial floors while leaving parts of the original load-bearing frame intact. A recent salvager has installed a plastic chair at an ancient observation window; its position makes sense once the player notices the warm inspection vent below it.
+
+The central court uses ordinary downward gravity. A fallen belfry, a split statue, and the ash trunk establish persistent orientation. Special fields occupy clearly bounded perimeter galleries and mechanism chambers. Through their open arcades, the player can see people walking on a distant wall or underside without the whole courtyard changing gravity.
+
+The major expedition objective is concrete: restore the old freight descent and establish a usable route into Veyr Below. Two practical conditions control ordinary lift service: its drive-chain tensioner must be secured, and its lower landing must be drained. Skilled explorers can reach parts of the city by other routes. Restoring the lift remains valuable because people, supplies, and heavy cargo need reliable access.
+
+31.3 The emotional sequence
+
+Begin with a place that feels abandoned but beautiful. Introduce one small contradiction, then let the player test and use it. Return them to a familiar view in a changed orientation. Below that comfortable understanding, reveal the scale of the buried city. Its engineering explains the sanctuary while its oldest foundations deepen the mystery.
+
+Quiet persists between challenges. Sunlight through a cracked roof, leaves in an empty reading room, and a usable bench can be allowed to remain exactly what they seem. Some rooms contain no enemy and no trick.
+
+32. GRAVITY AS A LEARNABLE PART OF THE WORLD
+
+32.1 Four distinct mechanisms
+
+Keep four mechanisms separate even when they appear in the same expedition:
+
+- A stationary room with a changing gravity field. The room stays put; loose objects accelerate toward a new down direction.
+- A physically rotating platform or chamber. Its material and collision move; surrounding gravity need not change.
+- A fixed twisting passage with a spatially varying gravity field. Moving through it gradually changes local down.
+- A folded threshold connecting coordinate frames. Its declared transfer changes position, orientation, and velocity together.
+
+The Hanging Parish begins with the first three. Its basic puzzles need no portal, hyperbolic space, or fourth spatial coordinate. Those systems may connect the precinct to the wider Manyfold later without replacing its local physical logic.
+
+32.2 Visible boundaries and reliable tests
+
+Bronze ribs, chains, dust, and plumb seeds mark the special fields. Shape and movement reinforce color. A player can drop a small object before committing their body to a route. The instrument, dropped object, and eventual fall agree.
+
+A fixed quarter-turn passage gradually rotates down by ninety degrees about the direction of travel. Its floor curves into the adjoining wall route. There are continuous foot surfaces and enough clearance for a turning body. The player can stop, look back, turn around, and retreat.
+
+Changing a whole chamber's field is a separate action. A lever in a stable vestibule shows the current and proposed direction. Mechanical pointers move before the field changes. The vestibule retains ordinary gravity and provides a place to watch. The controller refuses an unsafe transition with a visible cause, such as a blocked moving joint; it does not silently crush a player to force the puzzle state.
+
+The courtyard and the adjoining settlements do not participate in a chamber's changes. Entering or leaving a special area has a visible boundary and a predictable effect.
+
+32.3 Momentum and parkour
+
+A jump begins away from the surface that currently supports the player. Entering another gravity field changes acceleration; it does not arbitrarily rotate or erase existing velocity. A leap from a wall gallery into the ordinary-gravity courtyard therefore follows a learnable curved path.
+
+Use this for optional traversal after a safe demonstration. A fixed wall gallery ends at a marked opening above a broad receiving platform. Leaves and thrown objects demonstrate the fall. The player chooses the launch point and momentum, can catch a lower ledge, and has a stair back from the practice basin. A more difficult side route reaches a cache earlier; the essential expedition has another route.
+
+Moving platforms contribute their actual motion to a departing jump. Grapple lines have visible attachment points and declared lengths. The first rope challenge remains within a uniform field; ropes spanning several fields belong to a later supported feature set.
+
+32.4 Consistent objects and an explicit power source
+
+People, physical projectiles, loose stones, and ordinary carried objects obey the same supported gravity field. Anchored machinery, rooted trees, and braced enemies can resist it through visible supports. An arrow curves according to its physical model; an optical beam retains its optical behavior.
+
+The field apparatus consumes power when it performs useful lifting work. The design must account for repeated cargo cycles rather than accidentally granting unlimited power through a closed gravity loop. A reserve sustains a reachable exit or staged safe shutdown. Loss of power is announced and does not instantly drop an occupied ceiling settlement into the central court.
+
+For the first playable version, keep free water inside ordinary-gravity rooms and use bounded reservoirs. General fluids crossing several gravity fields are a separate capability. This does not prevent a later room with sideways rain; it sets a clear condition for implementing it convincingly.
+
+33. THE HANGING PARISH: A CONNECTED PLAYABLE EXPEDITION
+
+The route consists of a recognizable hub, two service wings that can be approached in either order, an optional traversal loop, and a descent into the city. The challenge progression teaches observation, applies a rule, combines it with movement, then uses the player's understanding during a larger event.
+
+33.1 The Ash Court — inspect the objective
+
+The player arrives beside the fallen belfry. Across the courtyard, a freight cage hangs above a flooded lower landing. Its exposed load chain leads into the Counterweight Chapel. A drainage pipe leads toward the Rain Choir. A service model beside the lift makes the two faults visible: the weight indicator rests below its catch, and the landing gauge remains submerged.
+
+The model is an aid, not the only source of knowledge. The actual chain, flooding, wear, and blocked sightlines tell the same story. A readable inscription can name the old functions without substituting for physical evidence.
+
+The player can climb the fallen belfry to inspect the upper galleries. A damaged handrail and a low ledge introduce clambering over a recoverable drop. Placing a ladder, repairing the original stairs, or using suitable movement magic also works.
+
+The visible objective remains useful even if the player flies directly to the cage. Reaching the cage does not secure its load or clear the flooded destination. An advanced player who reaches the city independently has earned that access; restoring the freight route still changes the region.
+
+33.2 The Turning Cloister — learn a quarter turn
+
+At the entrance, a glass-covered demonstration trough contains brass plumb seeds. In ordinary gravity they settle into its lower end. Farther along the fixed passage, identical loose seeds rest against what initially appears to be the wall. The bronze ribs and floor curve show the transition before the player enters.
+
+The first crossing is continuous walking. The view gradually turns until the wall district becomes a normal place to stand. The ash court remains visible through successive openings, providing a stable reference. The final doorway leads into a gallery that was plainly unreachable from the first courtyard view.
+
+The initial connector contains no timed hazard. One small missing slab after its safe landing teaches a jump under the new orientation. A catch balcony lies below in local gravity. A side hatch opens a return stair into the ordinary part of the precinct.
+
+Persistent outcome: the player understands one real spatial rule and has opened a shortcut. No map entry is erased by crossing the twist.
+
+33.3 The Counterweight Chapel — make weight climb
+
+The chapel contains a heavy tensioning-pulley carriage captured on an L-shaped guide track. In the room's original frame, the track runs horizontally across the floor to the east corner, then vertically up the east wall to a high loading socket. Raising and securing this carriage takes the slack out of the freight lift's drive chain. The lift's actual moving counterweight occupies a separate shaft. The corners, travel direction, and socket are visible through an open inspection grille. The carriage cannot leave its guide accidentally.
+
+The control vestibule offers three illustrated directions: original floor, east wall, and original ceiling. A separate mechanical brake holds the carriage during inspection. Old wear in the track and a cutaway service model explain why the upper catch exists.
+
+One intended solution is:
+
+1. Set gravity toward the east wall and release the brake. The carriage travels along the horizontal leg into its corner stop.
+2. Engage the visible corner clamp, then set gravity toward the original ceiling.
+3. Release the clamp. The carriage rises along the vertical leg into the high catch. Eastward gravity alone would only press it against the wall; it cannot perform this lift.
+4. Let the mechanical catch engage, then restore original downward gravity. The supported carriage holds the drive chain at its proper tension without falling back.
+
+The latch, rather than a hidden completion flag, preserves success. The freight indicator in the Ash Court visibly changes. A corresponding chain movement can be seen from both locations. Securing the tensioner releases the drive's service interlock. Subsequent lift journeys use the established drive or a manual crank, with a separate traveling counterweight balancing the cage. The captured carriage is a fixed tensioning assembly, not the lift's moving counterweight; raising it does not provide unlimited lift energy.
+
+A mistimed brake stops progress safely. Reversing gravity returns an uncaught carriage to an earlier stop. A maintenance winch offers recovery if the player has physically obstructed the track. Players may remove the obstruction, repair the winch, use a suitable lifting spell, or build a hoist capable of handling the load. If another physically valid sequence reaches and secures the same socket, it counts.
+
+The puzzle controls freight infrastructure rather than demanding that the player stand on a particular plate. Flight is useful for inspection and work but does not make a heavy load automatically secure.
+
+33.4 The Roof Orchard — platform through a familiar place
+
+A fixed connector beyond the chapel leads to an inverted gallery under the roof. Its field is bounded by the bronze frame. From there, the player looks through the arcade at the same ash, broken belfry, and lift below. Within the gallery, pruning ledges, trellises, and service beams make an orchard walkway on the underside of the structure.
+
+The traversal contains three different decisions: choose a broad root or a shorter narrow beam; transfer from a stationary ledge to a slow maintenance platform; then use a rope within one uniform-gravity bay to reach a latch. The moving platform has a repeatable cycle, a visible drive, and stationary waiting points.
+
+Opening the latch lowers an ordinary maintenance ladder toward the central court. Its top is on an ordinary-gravity landing reached through a clearly marked fixed transition from the special gallery. This is a useful permanent route, not a timed reset. Players can also build a bridge or use equipment to bypass a gap. They save time or resources without causing the game to declare their solution invalid.
+
+An optional side passage follows a fixed quarter-turn connector from the ceiling gallery into a marked wall-side launch alcove. From that alcove, a momentum leap exits the wall field into the court's ordinary field. A broad landing and lower catch route make the first experiment recoverable. An optional harder landing reaches an old survey cache. The standard return uses the maintenance ladder.
+
+One quiet unease remains: the ceiling orchard has a gardener's bench polished by recent use, while the route to it was sealed from the inside. No attack is required to make that discovery effective.
+
+33.5 The Rain Choir — enter high, leave low
+
+This wing stays in ordinary gravity. Its flooded cistern communicates with the lower freight landing. The low drain is closed by a screw-operated shutter whose service balcony can only be reached from above. A tethered inspection raft rests in the basin. An upper header tank has enough usable water to raise the connected basin and landing to a marked service level. A visible float valve closes the header supply at that level, and an overflow prevents uncontrolled flooding of the rest of the precinct. The player can also close and latch the supply manually from the service balcony. The low drain discharges into a spillway below the freight landing.
+
+The player opens the header supply, rides or climbs from the rising raft, and enters the service balcony. From there they lower a maintenance ladder, close and latch the header supply, and turn the drain shutter screw. The shutter latches open, water drains into the lower spillway, and the freight landing becomes accessible. The closed supply prevents refill as the float drops. The ladder provides a reliable return after the raft descends.
+
+The observations are independent: high water marks show the raft's maximum reach, while the service diagram and visible shutter linkage show what must be opened. The water level can be tested before committing to a jump. Falling into the basin returns the player to shore or the raft; it does not erase progress.
+
+Construction, flight, or climbing equipment can reach the shutter directly. The objective is still to open and retain the actual drainage route. Breaking a wall into the correct safe spillway can be an engineering alternative if the fluid system supports it. Breaking a different wall has the consequences its physical connections imply.
+
+Draining exposes several domestic objects below the official flood line: a child's shoe, a folded market awning, and a repair tally. The civic story becomes more complicated than the monument's account of an orderly evacuation.
+
+Persistent outcome: the low landing remains drained unless the player deliberately changes the waterworks. The freight route is ready when the drive-chain tensioner is also secured.
+
+33.6 The Survey Rotunda — use archaeology to choose a route
+
+The freight descent reaches a stationary rotunda containing a mechanically rotating survey platform and a short bridge tongue. Gravity remains ordinary. Turning the platform physically aligns its bridge with different service openings around the circumference.
+
+Three survey records disagree because they were made in different construction periods. The oldest depicts a river passage now blocked by a later flood wall. The ceremonial record re-labels engineering features as sacred landmarks. A maintenance revision records a replacement buttress and an emergency inspection route.
+
+The player matches evidence in the chamber: a patched ceramic drain, the actual replacement buttress, and the direction of its load chain. The corresponding platform position reaches the intact service passage. A sighting tube or held model can help compare the plan to the real geometry. Text is helpful but not essential; forms and repairs provide parallel evidence.
+
+Other alignments are inspectable. One leads to a small archive and another to a collapsed passage with recoverable salvage. There is no arbitrary instant death for trying a plausible hypothesis. A player who has brought suitable tools can traverse or excavate those routes according to their actual state.
+
+This is an archaeological inference about changes to a building. It does not require knowing a fictional date that appears only on one obscure collectible. The usable map is saved as an observation with its survey epoch.
+
+33.7 The Counterpoise Bridge — a consequential setpiece
+
+The service passage opens onto a broad cavern containing Veyr Below. A bridge crosses to the public archive. Its deck, suspension stays, and counterweight system are visible from the arrival balcony. One stay is badly corroded; a service walkway and lower inspection landings remain intact. The player can inspect the route before loading the mechanism.
+
+To bring the bridge into position, the player releases the old transport brake and operates the winch. If they have not repaired or supplemented the damaged stay, the increasing load produces unmistakable warning: rust falls, strands separate, the deck tilts, and an old overload bell rings. The player can stop the operation before the final release.
+
+Continuing with the damaged stay creates the dramatic route. The stay fails, one bridge segment settles into a steep ramp, and another hangs from its surviving supports. The player moves across practiced ledges, chooses a rope swing or the service walkway, and reaches a secure pier. The local gravity does not also change during this first setpiece. The visual drama comes from a known structure changing under a known load.
+
+Repairing the stay or building sufficient bracing prevents the failure. Taking the maintenance route bypasses the scramble. Those approaches produce valid, rewarding outcomes. The sequence does not secretly break a different support to force the same animation.
+
+Afterward the bridge keeps its resulting shape. A fallen deck can become a climbable ramp to a formerly inaccessible district. The archive route can be repaired and used for freight. Shared play never assumes that all players are on the same segment; each player occupies the real structure, and warnings are available from every affected approach.
+
+Only supported breakable elements participate in the authored event. Player objects retain identities and follow ordinary support and collision rules. If a new structure prevents the intended motion, the mechanism reports the obstruction or physically loads the support according to its implemented rules. It never deletes a player-built bridge or teleports a teammate to make the spectacle happen.
+
+34. VEYR BELOW: A CITY WORTH EXCAVATING
+
+34.1 The reveal
+
+The first vista shows a city built along an underground river: terraces of dark slate roofs, long arcades, bathhouses, workshops, public gardens, and a civic tower whose top vanishes into roots. Farther up one cavern wall, a bounded ancient gravity district supports another street at a different orientation. Most of the first playable neighborhood retains ordinary gravity.
+
+Warm points in the distant buildings are meaningful. Some are maintained lamps. One is an inhabited enclave. Another is a machine heating an empty laundry. At least part of the visible city should be traversable during the expedition, with the remaining districts established as future destinations rather than interchangeable scenery.
+
+The sanctuary above was a small public entrance to a much larger refuge. The player has been climbing around a piece of its transport system.
+
+34.2 Three legible historical layers
+
+The earliest accessible stratum belongs to the civic settlement: river control, reservoirs, workshops, dwellings, gardens, and freight infrastructure built within the preexisting Manyfold. Street widths, sightlines, drains, and load marks show how daily life worked.
+
+A later custodial culture expanded the sanctuary and turned machinery into ceremonial landmarks. Some conversions improved safety and some hid access. Religious, political, and engineering explanations can coexist in the same structure.
+
+The final occupation left evacuation repairs, contested closures, improvised accommodation, and disagreement over who could leave. It did not erase all life. Descendant communities, newcomers, and maintenance creatures still use fragments of the city. They have present goals and knowledge; they are more than exposition about their ancestors.
+
+Beneath these layers, the oldest folded substrate remains unexplained. A pre-civic cavity may have no plausible human access. A drain may enter stone without an excavated continuation. Such a feature is introduced as an exceptional phenomenon, not used to invalidate the player's entire map.
+
+34.3 Archaeology changes the player's options
+
+Keep discoveries actionable:
+
+- A mason's repair mark identifies a later, weaker infill wall and suggests an excavation route.
+- Polished axle grooves reveal that a monumental statue once covered a freight turntable.
+- A refuse layer distinguishes an abandoned service channel from a maintained drinking-water line.
+- Tool marks show where a bridge accepted temporary bracing, allowing the player to prevent its failure.
+- A household shrine incorporates a discarded regulator. Recognizing its function enables a respectful trade, a newly fabricated replacement, or a different repair route.
+- Two incompatible survey plans become useful when their dates and construction phases are understood.
+
+The archaeological action is observe, compare, form a hypothesis, and test it against material evidence. A journal keeps the evidence and can annotate a confirmed route. It should not replace interpretation with an automatic objective arrow after every discovery.
+
+34.4 Public works, useful objects, and institutional humor
+
+An old bathhouse has functioning heat but no water pressure. A records clerk still processes freight permits for three districts, although one has been a lake for centuries. A public information board accurately reports that the eastern stairs are temporarily unavailable; the oldest repair application is now part of the museum display.
+
+Some puzzles are ordinary object reasoning within an extraordinary place. A cork seals an inspection tube long enough to read pressure. A mirror makes a valve indicator visible from a cramped operating position. A pry bar releases a jammed brake. A weighted bucket reveals whether a shaft has real depth or a projected void. These affordances are visible and generalize beyond one room.
+
+Avoid replacing object reasoning with a search for the one uniquely named inventory item. Equivalent materials and tools work when their relevant properties match. A translated plaque can teach an operation without requiring a parser or an obscure verb.
+
+The humor comes from the continuing institution and its situation. A clerk can be dry, helpful, proud, and faintly alarming without blocking essential recovery behind a joke.
+
+34.5 Darkness and inhabited refuges
+
+Deep utility routes make light valuable through perception, navigation, and declared creature behavior. The first unlit route provides warning, obtainable replacement light, and a retreat. It never kills a first-time visitor instantly because an invisible timer expired.
+
+Create one genuine sanctuary in the city: a working lamp room beside a kitchen, a cistern tap, and a lift-repair bench. Reopening the freight route makes contact with Stillcourt possible. Residents can supply context, request concrete services, and help build the new connection. Completing the expedition enlarges the inhabitable world.
+
+35. PLATFORMING, ENCOUNTERS, AND REWARDS
+
+35.1 A movement vocabulary with real choices
+
+Build a small, dependable set of verbs: walk and run, jump, mantle, hang and move along a ledge, climb supported surfaces, place a tether, swing, and ride machinery. Each needs readable geometry and consistent contact rules under the supported gravity orientations.
+
+Place clues in the physical scene: worn parapets, old piton holes, accessible beams, hanging ropes, and intact service stairs. Avoid making every climbable surface depend on an unexplained color stripe. The world can still use selective visual emphasis for clarity.
+
+Use a progression:
+
+1. Demonstrate one movement over a safe short drop.
+2. Repeat it in a new orientation with a visible catch route.
+3. Combine it with a slow moving platform or a chosen gravity boundary.
+4. Offer an optional timed or precise route to a valuable side discovery.
+5. Use already practiced movement during the archaeological setpiece.
+
+Reachability should have a safety margin. Essential jumps should not require the exact maximum theoretical distance, a single frame of input, or unexplained midair correction. Slightly late jumps, buffered jump inputs, and forgiving ledge catches are candidate controls to tune through playtesting. They are proposed settings, not verified implementation.
+
+Speed challenges concern traversal of a known course, such as crossing before a pump completes a useful cycle. The first route can be inspected beforehand. Bracing, construction, or an alternate path can solve the practical objective without winning the race. Optional mastery routes may impose stricter conditions, clearly presented before entry.
+
+35.2 Failure that teaches place
+
+A missed early jump lands on a lower service route, in a catch garden, or in a shallow basin with a return. The player may find something useful there. Later dangerous gaps can injure or kill, but the ordinary recovery rules still apply.
+
+Do not reset solved counterweights, relock drainage shutters, or erase discovered shortcuts after a fall. Reset only the local attempt state that actually changes. Recovery of a required tool must not require that same missing tool.
+
+35.3 A local guardian
+
+The Keeper on the Lintel is an old maintenance construct with ceramic limbs and visible bronze claws. It braces onto surfaces before a field changes. When it releases its grip to advance, it obeys the same gravity as other bodies.
+
+The player can watch that rhythm before fighting. They can lure it onto a moving platform, use a supported gravity transition to interrupt an exposed step, block its route with construction, restore its work assignment, or take the service route. Bracing explains why it resists a force; hidden immunity does not.
+
+Keep combat staging roomy enough for the local camera and for meaningful retreat. Do not demand a precision leap, an unfamiliar gravity transition, a concealed timing rule, and combat in the same first encounter.
+
+35.4 Relics that extend the learned mechanics
+
+Use established Manyfold tools before adding redundant powers. The Downward Shoes can become a major optional reward after the fixed gravity routes have taught the player how unusual down directions work. Their existing departure and release rules still apply. The Surveyor's Aperture helps inspect a limited section of ruins without turning every archaeological mystery into an automatic solution.
+
+An additional rare reward, the Rigger's Spindle, provides a durable retractable tether with a finite declared length and supported load. It attaches to suitable material, retains its attachment identity, and can be recovered. Its value is dependable access and hauling, not an unlimited rope or an automatic guarantee that every anchor survives.
+
+For a cursed optional treasure, place the Testament Weight in a clearly marked civil vault. Once deliberately bound, it can arrest one qualifying falling load within its stated range and power limit. Until that load is safely supported or released, its bearer is fixed to the place where the arrest began. The inscription and a safe demonstration disclose this consequence before binding. A visible tether of light identifies the held load and the anchor point.
+
+The Testament Weight has rescue and construction uses. A companion can build support while the bearer holds a fallen beam; a solo player can prepare a landing cradle or use the returnable release control. Its stored force is bounded by the relic's power model. Deliberate release gives warning and restores the load's supported physical behavior, with a safe opportunity for the bearer to step away where geometry allows. Unbinding and ordinary retreat use the existing recovery rules; the effect cannot strand the character indefinitely or duplicate an arrested object.
+
+The major expedition reward remains the freight connection, the city refuge, a revised map, and usable knowledge. Equipment complements that regional change.
+
+36. PROCEDURAL ROOMS THAT PRESERVE SPATIAL REASONING
+
+The named expedition should be authored before its mechanisms become a grammar for generated precincts. Use it to establish what players can read, how much camera motion is comfortable, and which alternate solutions the simulation supports.
+
+36.1 Generate dependencies before decoration
+
+A useful room template declares an objective, physical state, supported actions, evidence, access paths, fall destinations, recovery operations, and persistent outcomes. Gravity direction, carriage position, catch state, water level, shutter state, platform position, and damaged supports are real variables.
+
+Examples of functional templates include moving a guided load into a catch, reaching and latching a drainage control, bridging a known gap, aligning a service platform, and unloading a damaged structure. Combine them into loops and alternative routes with actual affordances. Decorative variation follows the validated mechanism.
+
+A room is not varied merely because the key symbol or wall texture changes. Variation should affect approach, order, load, available observation, route choice, or a meaningful tradeoff.
+
+36.2 Validate movement and state together
+
+A connectivity graph alone cannot prove a platforming route. Check collision clearance, supported gravity transitions, launch and landing geometry, ladder and ledge reach, moving-platform windows, and the baseline player's capabilities. Store a concrete witnessed route for the authored or generated state model. Abstract validation does not prove every continuous physical outcome.
+
+For the chapel, explicitly represent the corner stop and high catch. Confirm that eastward gravity moves the horizontal leg and ceilingward gravity moves the vertical leg. Ensure the reset control remains reachable when the carriage occupies any supported stop.
+
+For the Rain Choir, verify that the balcony can be reached at the marked service level, the shutter remains accessible, the descent persists after draining, and the spillway can accept the planned water volume.
+
+For changing structures, verify both intact and damaged return routes. Construction and digging may alter them; show consequences and preserve recovery rather than pretending all future player edits can be exhaustively pre-proved.
+
+36.3 Stable history and maps
+
+Commit a room's physical mechanism and causal history before the player's investigation. Do not choose a different explanation after seeing which hypothesis they test. Preserve marks, evidence, modifications, and discovered routes across visits and saves.
+
+The route atlas records gravity state where relevant and separates it from a room's stable identity. A turned platform remains the same platform. A field change does not generate a new copy of the chamber or its loot.
+
+37. IMPLEMENTATION BOUNDARIES AND STAGED HANDOFF
+
+These are design requirements for Axiom / Meridian, not claims about inspected code or measured capabilities.
+
+37.1 Shared physical rules
+
+Keep voxel terrain in stable canonical coordinates. A gravity volume changes acceleration; it does not rotate the saved terrain. Physically moving machinery has a separate transform, collision representation, and persistent state. Portals, if later introduced, remain distinct transfer operations.
+
+The character controller derives grounding, walkable slopes, jump direction, step-up, and ledge interactions from local up. Reorienting its body requires clearance and swept collision handling. A ninety-degree connector needs enough space to turn the collision shape without intersecting its own handrails.
+
+For a field transition, preserve current world-space velocity and alter subsequent acceleration. For a departing moving platform, carry its point velocity, including rotation, once. For a portal transfer, apply the declared transform to every supported quantity. These are different operations and should not be accidentally composed twice.
+
+Small loose bodies can initially sample gravity at their centers under a declared approximation. Long free bodies spanning very different fields need a later force-and-torque model. The first slice should not depend on an unsupported vehicle, rope, fluid, or machine spanning the boundary.
+
+37.2 Camera, comfort, and readable information
+
+Provide an orientation guide tied to local down and tune roll rate separately from aiming. The player keeps control of where they look. A comfort option may reorient presentation briefly at a safe landing while preserving the same physical route and evidence. It must not alter puzzle outcomes or produce an interaction ray that disagrees with the view.
+
+Camera changes, reticles, sound clues, and color codes need alternative readable cues. The physical mechanism remains legible when motion effects are reduced. A later optional precision course can remain challenging without making camera discomfort part of the required solution.
+
+37.3 Shared play, persistence, and power
+
+The authoritative simulation owns gravity and machinery state. Players in different zones sample the field where they actually stand; a switch affects everyone inside its declared volume. An occupied connector remains fixed in the first implementation. Time-varying mechanisms warn affected players and validate supported occupancy and exit conditions before committing a transition.
+
+Save gravity configuration, catches, water state, platform transforms, damaged components, edits, and inventory identities. Reloading does not restore a collapsed bridge, free a cursed load, duplicate a carriage, or reset a freight lift merely because its occupants are elsewhere.
+
+Field power must fund useful mechanical work or follow a consistent conservative model. A visually smooth field is not automatically conservative. Any intended energy generation needs a declared source and limits. A legible reserve and staged shutdown preserve the established return rules.
+
+37.4 Build order and acceptance
+
+Stage A: a dry test precinct with two fixed cardinal gravity zones, one quarter-turn connector, a stable courtyard view, loose test objects, one short jump, a catch route, and a persistent return hatch. Acceptance is an enjoyable complete outward-and-return traversal with consistent physics and comfortable controls.
+
+Stage B: add the third cardinal direction and the guided counterweight chamber. Prove the actual lift sequence, catches, braking, resets, alternate hoisting route, persistence, and agreement between two players occupying different relevant spaces.
+
+Stage C: add the ordinary-gravity Rain Choir, bounded water levels, the freight descent, one inverted perimeter gallery, and one grapple bay in a uniform field. The full service route must be usable and recoverable before optional momentum challenges are added.
+
+Stage D: reveal the first Veyr neighborhood, survey evidence, a useful refuge, and the bridge setpiece. Validate intact, braced, obstructed, failed, repaired, and bypassed cases. Movement must already work before spectacle depends on it.
+
+Stage E: extract verified room rules into a procedural grammar. Test generated routes with the supported capability set, persistent modifications, and state transitions. Keep unfamiliar geometry, multi-field fluids, large spanning bodies, and hyperbolic districts separate until each has its own complete interaction model.
+
+The earlier horror handoff in section 30 remains a compatible content path. A waiting room, a structural mystery, or a sealed cellar can sit along this expedition once the core traversal is reliable. The immediate gravity prototype should stay small enough to establish whether the experience is enjoyable before building a whole city around it.
+
+38. SOURCES FOR THE FOREST, TRAVERSAL, AND UNDERGROUND-CITY EXPANSION
+
+These references support the factual observations about the inspirations. The Hanging Parish, Veyr Below, named puzzles, relics, inhabitants, and implementation requirements are original proposals.
+
+[F1] Nintendo of America, The Legend of Zelda: Ocarina of Time Official Player's Guide (1998), Forest Temple section. Nintendo-authored guide preserved as an OCR scan on a third-party host. Relevant observation: local corridor and adjoining-room reorientation; the systemic gravity model here is our extension.
+https://www.scribd.com/document/492995769/Nintendo-Players-Guide-N64-Legend-of-Zelda-Ocarina-of-Time-Text
+
+[F2] Sid Shuman, PlayStation Blog, “Uncharted: The Lost Legacy New Gameplay Video, Hands-on Details” (25 July 2017). Relevant observations: landmarks and intersecting routes, in-world map, traversal challenge using grappling between towers.
+https://blog.playstation.com/2017/07/25/uncharted-the-lost-legacy-new-gameplay-video-hands-on-details/
+
+[F3] Naughty Dog, “Uncharted 4: A Thief's End: The 5-Year Anniversary Retrospective” (10 May 2021). Relevant observation: designing for intended emotion and fluid player/companion traversal.
+https://www.naughtydog.com/blog/uncharted_4_a_thiefs_end_the_5_year_anniversary_retrospective
+
+[F4] Infocom, original Zork I source, 1DUNGEON, preserved in Andrew Plotkin's annotated source browser. Original game material is distinguishable from the site's later commentary. Relevant observations: dam, public guidebook, lobby, maintenance rooms, and civic infrastructure within the Great Underground Empire.
+https://eblong.com/infocom/visi/zork1/static/zil-1dungeon.html
+
+39. UNDERGROUND MAPPING THAT PRESERVES DISCOVERY
+
+39.1 The map records acquired knowledge
+
+Keep the Xaero-inspired top-right minimap, Backquote fullscreen map, orientation controls, waypoints, and persistence. Replace broad underground reveal based on loaded chunks or radius with a separate knowledge store. World generation, collision, AI, streaming, and remote portal prefetch do not reveal geometry by themselves.
+
+The local map renders remembered observations, not live hidden world data underneath a fog overlay. A wall seen earlier remains on the map after an unseen excavation until new evidence teaches the character that it changed. Even a public 'changed offscreen' badge needs evidence; an internal world revision cannot justify it.
+
+Separate observed appearance, current perception, traveled footprint, tested property, and reported information. These facts can coexist. Hearing water can create an uncertain directional clue without drawing an unseen reservoir. Walking through darkness can retain a narrow route without surveying the room.
+
+39.2 The same illusions affect the map
+
+The map must reflect supported perception. An apparent floor over a shaft initially appears as a floor; an apparent abyss over stone appears as an abyss. A false wall conceals its passage. A successful test records the property actually learned rather than exposing all underlying collision geometry.
+
+The trustworthy journal records what was observed and tested, including uncertainty. It does not become an unconditional illusion detector. A genuine portal and an equivalent Borrowed View cannot receive distinguishable map symbols until the character has evidence distinguishing them.
+
+39.3 Separate cave layers and local charts
+
+Persist discovery against stable three-dimensional patches and world/dimension-instance/region identities. Project observed data into readable charts. Stacked caves remain separate; seeing one does not reveal the next, even within the same loaded chunk or coarse map cell.
+
+The layer picker lists only discovered strata. Known stairs, ladders, ramps, shafts, and lifts establish their relationships. Do not flood-fill a whole generated cave component to decide what the character knows. Local-gravity presentation changes do not erase discoveries or merge unrelated surfaces.
+
+39.4 Portals reveal bounded views and learned edges
+
+A glimpse through an opening records the perceived fragment, clipped by the actual opening and visible scene. Before localization, present it as a provisional view associated with that opening. Hidden destination metadata must not provide a realm name, exact location, or guaranteed traversability.
+
+Verified crossing establishes a directed connection to the arrival observation. It does not imply a reverse route, reveal the whole destination, or automatically localize an unfamiliar arrival against a previously mapped place. Merge with an established chart only from witnessed continuity, recognizable evidence, an authorized instrument, or an already-established connection; otherwise keep a provisional arrival chart. Preserve last-observed gate conditions and make predictions from learned schedules explicit. Unknown changes remain unknown.
+
+Thus the journey from an ordinary cave into a hell pocket and onward into the Manyfold becomes a graph of acquired connections between separate charts. It does not force all dimensions onto one global X/Z map, grant new access powers, or bypass the wider cosmology's restrictions.
+
+Use known route lengths and transition counts where useful. Do not display a straight-line distance between unrelated coordinate frames or route through undiscovered navigation data.
+
+39.5 Stable, bounded implementation
+
+Both map UIs should consume acquired knowledge through a restricted interface. A tile builder should not reach into live hidden terrain to fill its missing pixels. Keep tile/cache identity separate from temporary GPU pages and include the observer, world, dimension instance, region, chart, and knowledge revision.
+
+Acquire observations and rebuild tiles under explicit budgets. Use asynchronous GPU results if needed, never a map-only blocking readback in the gameplay path. Reject incompatible epochs after teleportation. A valid older capture may update historical memory if it does not overwrite newer evidence, but it must not be labeled currently visible. Current perception and saved knowledge have separate lifetimes.
+
+Share acquired observations only under the game's authorized map-sharing policy, preserving source and age. Different players have different knowledge even if they simulate the same world. This UI behavior is distinct from anti-cheat against clients that already possess hidden world data.
+
+39.6 Companion implementation material
+
+Axiom_Underground_Exploration_Map_Implementation_Prompt.txt contains the focused engine handoff, migration plan, primary-source references, performance requirements, and twenty integration scenarios covering thin walls, stacked caves, illusions, offscreen edits, portal glimpses, one-way links, stale GPU results, save/reload, and sharing.
+
+exploration_atlas_reference.rs is an original standard-library-only reference for observation storage and disclosure boundaries. It is not integrated into the game and does not implement perception, portal rendering, cave-layer extraction, or disk serialization. Its test-execution status is stated in the focused delivery. The current game repository was not available for an actual engine patch.
+
+40. MULTIPLAYER WARPED SPACE AND THE DEEP VOID
+
+40.1 The shared experience
+
+The deeper void is a place to investigate together. A player inside an old lens enclosure sees the outside forest wrap around its ribs. A friend outside sees the first player's body stretched through the same apparatus. A measuring staff, a thrown object, and a shared control wheel let them learn which effects change an image and which change a physical route.
+
+Keep room for comedy, experiments, ordinary refuge, and useful construction within the horror. A distorted portrait can simply be funny. Later the lens becomes a scouting tool; a sideways-gravity opening becomes a freight route; an unfamiliar beach becomes a surveyed landing on another planet.
+
+40.2 Distinguish the spatial systems
+
+Portals connect explicit apertures in separate local regions. They permit impossible global adjacency while most local simulation remains ordinary.
+
+Mirrors and lenses change the rays that form a view. Reflected images retain the same actor identity, pose, equipment, and animation. Ordinary reflective surfaces do not automatically permit traversal or projectile passage.
+
+Invertible regional deformations reshape a finite volume. If a warped bridge is physical, collision, picking, surface normals, and support must agree with its visible shape. A cosmetic vertex offset is not a collision implementation.
+
+Genuine H3 changes intrinsic distance, geodesics, and spatial growth. A nonlinear reparameterization of ordinary Euclidean geometry is still flat. Introduce H3 only as a separate supported domain after movement, visibility, and collision can use its metric consistently.
+
+The focused companion brief provides primary-source research for these distinctions and their implementation limits. It treats Immersive Portals and HyperEngine as architectural references, not maintained dependencies for the Rust engine.
+
+40.3 More depth means more relationships to learn
+
+Store depth and field parameters as shared region properties. Players arriving through different routes agree on the same local geometry. Progress from dependable refuge thresholds through lens galleries, bounded twisted rooms, linked chambers with different gravity, and eventually a genuine hyperbolic research region. Deep routes can combine these rules around rare interplanetary exits.
+
+Distortion increases through changed relationships between position, appearance, and travel. Keep camera embellishment independently adjustable. A low-effects setting must preserve cover, visible openings, relevant silhouettes, and optical restrictions. Ordinary kitchens, measuring frames, and quiet shelters can exist deep inside the void.
+
+40.4 Durable random links and useful travel
+
+Resolve an unknown portal from a versioned world recipe and persistent gate identity, then commit and save its endpoint. Use generation independent of player exploration order. Reloading or reconnecting does not reroll the destination. Every player crosses the same current relation.
+
+A connection may reach another planet without simulating the intervening astronomical distance. Its destination remains specific and subject to established world access rules. This does not replace the Crimson Nexus's wider role or grant a universal coordinate selector.
+
+Learned route cost combines the appropriate local travel lengths and transition costs. Avoid subtracting coordinates from unrelated regions. Surveying an unfamiliar exit can reveal a landing before the planet's identity is known.
+
+Anchors stabilize discovered relations through concrete frames, surveys, capacity, and power. Show maintenance and return reserves explicitly. Pin a connection while a supported object straddles it or a crossing is committing. Preserve player builds and observed map history when a conditional connection later changes.
+
+40.5 One actor, several views
+
+Keep one authoritative entity with one inventory, health state, and persistent identity. Several clipped renderings or reflections are views of that entity. Location includes world/instance, region or canonical cell, local pose, frame, and applicable revision.
+
+Clients simulate locally while a host peer orders persistent shared events, without mandatory developer-run hosting. The newer AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt controls replication: deterministic accepted-command replication is the preferred normal path for supported, verified complete domains. Shared generation seeds alone do not establish that contract. State synchronization remains an explicit mode for incompatible, open, oversized, or recovering domains, with fallback use measured rather than hidden.
+
+A crossing validates the aperture, direction, transform version, supported entity class, swept movement, and destination readiness. Commit it once with an idempotent transaction and domain epoch. Late source updates cannot duplicate an inventory or pull the entity back. Transform velocity under the declared law and continue the remaining simulation step in the destination.
+
+Begin with fixed rotation/translation portals and simple bodies. Physical scaling, moving apertures, jointed vehicles, cables, ropes, fluids, and continuously changing fields each need explicit additional support. Optical apparent scale can arrive earlier.
+
+40.6 Rendering and disclosure
+
+Build bounded view graphs that include the full transform, clipping, parity, and topology state. One region may appear through multiple legitimate views. Curved optical surfaces require appropriate ray mapping or a bounded approximation; a distorted texture cannot reveal missing offscreen geometry.
+
+Keep separate budgets for recursive views, remote content, and active simulation. Performance limits must not change where a crossing goes. A live combat portal cannot become an opaque client-only fallback that hides an attacker; readiness and closure need coherent shared behavior.
+
+Use the perception rules from section 39. A warped glimpse reveals only the observed patch. Crossing records a directed connection without automatically proving return travel, identifying a planet, or merging charts the character cannot recognize. Shared simulation does not imply shared map knowledge.
+
+40.7 First expedition and companion material
+
+Connect an ordinary refuge, a shared lens chamber, a sideways-gravity freight room, and one remote planetary landing. Recover a useful machine that initially does not fit the aperture. Allow survey, a tested return, hoists, dismantling, and supported route changes. A threat can follow the same openings and be contained by a player-built shutter. Retained mechanisms and slower handling keep the expedition possible alone.
+
+Axiom_Multiplayer_Warped_Space_Research_and_Implementation_Brief.txt contains the complete technical handoff, multiplayer contracts, concrete play interactions, source URLs, implementation stages, and integration acceptance scenarios.
+
+void_warp_reference.wgsl supplies original reusable math for a finite twist/stretch field with an exact inverse, analytic Jacobian, smooth identity caps, and a declared-domain derivative bound. Only its two end caps match ordinary space; a lateral connection needs its own compatible transition or explicit portal. verify_void_warp.py executed numerical checks of the mirrored algebra in Python float64: 4,096 seeded interior samples, 144 deterministic extreme cases, and six sanitation edge cases passed. WGSL compilation, GPU behavior, physical collision, and multiplayer were not tested. This is a static geometry reference, not an H3 metric or a completed renderer.
+
+41. CONSERVATIVE FLUIDS AND LEARNABLE REALITY CHANGES
+
+41.1 A common rule for spectacular places
+
+AXIOM_Reality_Contract_v1.txt defines an original project standard for versioned region rules. Each effect declares its physical geometry, optical paths, directed connections, forces, material reactions, fluid interfaces, observation limits, lifecycle, and work budgets. The engine should compile those rules into compatible rendering, collision, simulation, networking, and persistence representations.
+
+Canonical material coordinates retain persistent identity. Physical deformation changes the embedding of attached geometry. Optical maps change how rays travel. Portal edges change adjacency. These operations have explicit order and consequences; one camera filter cannot substitute for them all.
+
+The ordinary Euclidean deformation reference remains distinct from true H3. An angular lens can magnify and compress apparent directions, but one invertible branch does not create several images. Multiple images require several optical paths, still referring to the same actor. The complete ray origin, aperture, scene capture, and reverse relation remain explicit.
+
+41.2 Real aftermath
+
+A shared event can leave an arcade bent into an accessible causeway, a newly anchored passage, an altered mineral seam, an irrigation arrangement under unusual gravity, or a captured source of illumination. Player construction and acquired knowledge persist through the supported changes.
+
+Prepare consequential changes under a common epoch and commit tick. Reserve work for collision, fluid remapping, topology, rendering, and persistence before activation. Occupied crossings retain their defined destination. A client cannot independently decide that a wall has become a door because its shader finished first.
+
+For occupied moving geometry, support velocity, swept collision, contacts, attached machinery, and fluids require explicit support. Begin with a bounded static field, then one validated moving walkway. A purely presentational optical change does not compress air or wake an entire sea; declared light heating or reactions activate the affected thermal and fluid domains.
+
+41.3 Cheap water with useful motion
+
+Use hydrostatic storage for genuinely settled basins, with volume-level capacity derived from accessible geometry. Active free surfaces retain depth and horizontal momentum. Falling streams carry owned mass and momentum in bounded physical parcels; cosmetic spray is separate. Pipes, pumps, and tanks use hydraulic networks. Local three-dimensional domains are reserved for flows that need them.
+
+Breaking a dam creates a finite-rate connection and a flood; it does not instantly average both reservoirs into equilibrium. Thin walls and stacked cave layers need correct connectivity and face apertures. Promotion, demotion, chunk boundaries, and portals transfer conserved quantities under one ownership contract.
+
+41.4 Gas, fire, and visibility
+
+Pressure and bulk gas inventories use compartments, vertical strata, and ventilation links. Long tunnels retain finite transport; local fronts, jets, and plumes use bounded detail. Pressure equalization does not instantly distribute poison everywhere. Splitting, merging, loading, or resizing a room does not create ambient air.
+
+A physical warp may change volume according to its local Jacobian. Compute available capacity from the mapped enclosure and actual physical obstacles. Preserve species amounts and account for work and heat; derive concentration and pressure from the resulting physical state. Portals have explicit sealed, exchange, or regulated atmosphere policies. Ordinary low-speed gas models do not become explosion-wave solvers simply by increasing a force value.
+
+Every graphics preset retains a mandatory obscuration component from the shared gas model. Optional smoke wisps and lighting cannot let a low-quality client see through consequential smoke. Physics, AI perception, and exposure read authoritative state, not decorative particles.
+
+41.5 Phenomena to combine
+
+A street rises into a stone wave, bringing a maintenance opening within reach. A friend can brace, survey, climb, or anchor it; a loose measuring rod stays rigid.
+
+A window borrows light from another region without admitting bodies. Shutters and lenses direct a bounded input into a receiver, greenhouse, or mechanism. Useful power has a declared source and capacity.
+
+Selected shadows become supporting surfaces inside a known apparatus. Shared lamp/occluder proxies generate a bounded physical footprint; visible edges and preparation make its collision dependable. A weighted stand permits solo use. This does not turn every screen-space shadow into terrain.
+
+A finite cistern gains a different down direction while ordinary rain remains visible outside. Closing its feed, opening an overflow, pumping, and managing the field's reserve are practical solutions. Capturing the field can support an inverted garden.
+
+A refuge acquires several outsides. Its interior remains dependable while specific openings reveal different regions or planets. The party tests conditions and anchors a chosen connection, retaining the Crimson Nexus's wider role.
+
+A visible exposure front changes selected susceptible materials. Sampling, shielding, exposure, harvesting, and neutralization make the process reproducible. Persistent reactions have inputs and byproducts; unrelated homes and remote inventories are not arbitrarily rewritten.
+
+41.6 Inscriptions teach through evidence
+
+Use short practical clues, nearby confirming evidence, and deeper records with conflicting explanations of the void. Reading suggests a test rather than granting an invisible quest permission.
+
+"The rod remains a rod. Measure the road again." Survey marks and rigid tools demonstrate attached deformation.
+
+"The image turns at the third stroke. The passage follows at the fourth." Separate cams show that optical routing and traversal change at different moments in this apparatus.
+
+"Upward water spends the reserve. Shut the feed before the bell falls silent." Gauges, overflow channels, and a real shutoff teach the cistern's operating limits.
+
+"Where the light refuses us, we set our feet." Hooded lamps, occluder mounts, and a safe short crossing demonstrate shadow support.
+
+"Finish both anchors before accepting freight." Scales, aperture marks, and abandoned oversized cargo explain capacity and return obligations.
+
+The original full inscriptions, reinforcing environmental evidence, and layered historical voices are specified in AXIOM_Reality_Contract_v1.txt. The cosmology can remain uncertain while local measurements remain useful.
+
+41.7 Companion implementation material
+
+AXIOM_Low_End_Physics_Water_and_Gas.txt expands the engine-wide optimization work with concrete hydraulic, atmospheric, collision, scheduling, memory, and validation requirements. It preserves the preferred verified deterministic-command path and explicitly labels performance targets as unmeasured.
+
+reality_lens_reference.wgsl adds a small original angular-map implementation. verify_reality_lens.py passed float64 checks on 8,192 seeded directions and 410 deterministic edge cases, plus pole, monotonicity, invalid-input, and normalization checks. WGSL compilation, GPU execution, actual rendering, and multiplayer remain untested. This reference supplies direction mapping, not a complete optical device or renderer.
+
+42. OPEN MAZES AND TWISTING GRAVITY
+
+42.1 The sky is another district
+
+Inside an enormous open tube, the entire inward-facing shell carries maze ground. The player looks up through open space at gardens, ruins, and people on the opposite side. There is no separate artificial roof. A continuous wrapping route leads from the apparent floor to the apparent ceiling while the same landmarks remain visible.
+
+Axial travel advances through the region; circumferential travel changes local orientation. Gravity points outward from the tube axis toward the shell. A person on the opposite side samples the same shared field at a different physical position. Their district is persistent, editable, collidable, and reachable.
+
+42.2 Different geometry families
+
+Open tubes offer routes along and around a region. Bent and branching tubes change the axis of travel and reveal substantial junctions. Incomplete nested shells let a floor breach lead outward to a deeper service layer. Broad helical ribbons make transfers between turns, layers, and islands important. Concave shell interiors place districts in every direction around a central sky. Folded return loops connect familiar places through rotated openings and supported landings. Deep branching chart networks can later lead into separately validated genuine hyperbolic domains.
+
+These families vary navigation, falls, construction, and logistics. Decorative changes alone do not make repeated corridors meaningfully different. Give districts recognizable uses, inhabitants, silhouettes, quiet space, and a few useful orientation features.
+
+42.3 A finite, explicit gravity field
+
+For a straight tube, remove the axial component from the physical position offset to obtain radial vector r. A simple conservative field is g=(g_wall/R)*r, with potential Phi=-(g_wall/(2R))*dot(r,r). It has the chosen strength at radius R and zero gravity on the axis. Apply it only in its declared bounded domain, including any supported outer catch layer.
+
+Do not normalize a zero radial vector. Retain or transport a valid orientation for input and presentation at the center without adding a hidden physical force. Give advanced central crossings actual propulsion, supports, or recovery equipment.
+
+An inward jump initially works against gravity. A broken floor drops a body outward toward larger radius. Under the ideal linear field, a purely radial launch needs speed greater than sqrt(g_wall*R) to cross the center in finite time; ordinary jumps should not accidentally traverse the whole tube. Collision and equipment still determine the actual game trajectory.
+
+Bent tubes need stable frames, usable projection domains, compatible seams, and global clearance. Branches need their own continuous or explicitly powered field design. Ambient gravity cannot depend on which nearest tube an individual player remembers. The same physical location and shared state must produce the same field.
+
+42.4 Twisting geometry and twisting down
+
+A route winding around a tube turns the traveler's down direction through space while using a fixed radial field. A bend changes the tube axis. A field whose preferred down rotates along a straight corridor is a third, distinct operation. Its full force and energy model must be specified; a mesh-frame rotation does not supply it.
+
+Ordinary gravity changes acceleration without arbitrarily rotating existing world velocity. Portal transfers apply declared transforms once. The character controller must use local up for grounding, input, slopes, stepping, jumps, and clearance. Safe capsule rotation is an explicit requirement; an arbitrary-up translation controller alone is insufficient.
+
+42.5 Generate routes and accept construction
+
+Build a spatial skeleton, gravity profiles, and validated connections first. A tube's surface network uses periodic angular coordinates and physical widths. Place useful destinations, returns, observation terraces, and route alternatives before filling secondary maze walls.
+
+Graph connectivity alone does not prove traversal. Validate real clearance, support, turning space, launch and landing regions, and recovery. Reuse tested modules until the native controller can validate more general generated arrangements. Preserve the earlier fixed-gravity and quarter-turn milestones if unfinished.
+
+Players may bridge, climb, brace, launch, and exploit supported equipment. Open mazes should contain practical objectives beyond following a prescribed corridor. A good bypass remains useful and persistent.
+
+42.6 Readable consequences
+
+Chains, drips, plants, smoke, inhabitants, and loose test objects reveal local orientation. The first tube should offer a visible continuous route to the district overhead. An outer catch terrace and a return ladder demonstrate what a floor breach does.
+
+Original practical inscriptions include: "The garden over your head is reached by the wall." "Down is beneath your feet. The hollow is above us all." "A broken floor takes you farther out." Each needs confirming evidence and a safe opportunity to test the rule. Reading is not an invisible permission flag.
+
+Local water, gas, vehicles, and machinery retain the Reality Contract's supported-domain and accounting rules. A global horizontal water surface does not represent a wrapped channel. Start with small basins and explicit connections; large spanning bodies and flows require their own validated models.
+
+An unwrapped tube map records observed surface patches and the circumferential seam. Radial layers keep separate discovered identities. Seeing another district exposes visible surfaces without revealing hidden corridors or marking the whole district visited.
+
+42.7 First complete expedition
+
+Connect an opposed pair of districts with a wrapping garden route, one broad bend, one spacious junction, and an outer service layer. A visible workshop provides the goal. A damaged crossing accepts repair, construction, or a lower bypass. A small folded optical mechanism unlocks a permanent maintenance route. The workshop becomes a useful outpost, with a specific opening toward a later shell interior.
+
+AXIOM_Open_Maze_Geometry_and_Gravity.txt supplies the complete geometry families, analytical fields, controller limitations, generation rules, primary references, and acceptance plan. No native engine integration or performance result is implied by this design extension.
+
+End of expanded brief.

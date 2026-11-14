@@ -5,6 +5,8 @@ Start with `CLAUDE.md` at the repo root.
 - `plans/download-coverage/README.md`: reconciliation of 37 recent project downloads (22 unique texts), complete source preservation, revision differences and explicit implementation gaps, including the newly found hardware addendum.
 
 - `MASTER_PLAN.md`: session-2 human review draft: 140 separate systems, acyclic dependency inventory, all 24 claim routes, expanded A.16 feature ownership and proposed session order. Research and system plans remain separate from acceptance.
+- [Mod inspiration delivery backlog](plans/MOD_PARITY_DELIVERY.md) and [Axiom Dev Toolkit specification](plans/AXIOM_DEV_TOOLKIT.md) connect the full feature inventory to implementation, acceptance evidence, and bounded automation.
+- [Axiom world simulation audit and watershed plan](plans/2026-11-05-axiom-causal-world.md): current source evidence, simulation boundaries and the next regional slice.
 - `specs/README.md`: original briefs, hashes, precedence and description rules. `specs/downloads-2026-10-24/README.md` indexes recent downloaded sources and coverage.
 - `recovery/2026-10-24-inventory.md`: scattered worktree/archive inventory, preservation artifacts and integration dispositions. Recover from those records before recreating a subsystem.
 - `recovery/2026-10-24-spec-audit.md`: conflicts and missing inputs across the supplied documents and current code.
@@ -32,6 +34,8 @@ Start with `CLAUDE.md` at the repo root.
 - `plans/`: execution-ready task plans with verified file:line facts. `docs/plans/2026-10-22-render-arena-and-horizon-evidence.md` covers the capture-tool fix, a render baseline, the chunk mesh arena and multi-draw indirect (the detailed spec of PLAN2 B1), and horizon agreement measurement.
   - `plans/2026-10-24-engine-and-world-refinement.md`: current integration order, 12–18-month planning envelope, painterly/architecture dependencies, contract corrections and the sparse CPU activity increment.
 - `design/`: design references that code still follows. They describe intent, not current code; verify against the source before acting on a detail.
+  - `MANYFOLD_HORROR_AND_MULTIPLAYER.md`: integrated Manyfold horror brief, Purgatorio, literary encounters, procedural puzzle rules, and shared spatial-state requirements. Includes current source anchors and future acceptance criteria.
+  - `EXPLORATION_MAP_IMPLEMENTATION_20261029.md`: acquired map observations and the counterweight source slice, archive compatibility, work limits, and remaining portal/illusion/sharing integration.
   - `NORTH_STAR_UNDERSTAND_BUILD_CARRY.md` (the design promise, discipline roles, fab and electronics ladders, first slice, verdict ledger), `WORLD_LORE.md` (voice rules for player-facing text), `PIXEL_ART_DIRECTION.md`, `VISUAL_DIRECTION_EXECUTION.md` (review evidence policy), `SPELLS_AND_DISCOVERY.md`, `POWER_MULTIBLOCKS_AND_RECIPES.md`, `UNDERCROWN_SCHEMA.md`, `EXPEDITION_DEPTH_DESIGN.md`, `MIRAGE_AND_COSMOS_UPDATE.md` (benchmark flags), `CODE_ADVISOR.md` (local review hints).
 - `licenses/`: third-party notices.
 

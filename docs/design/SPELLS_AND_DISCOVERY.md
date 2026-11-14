@@ -5,36 +5,18 @@ update, how a player finds spells, and the save-format change that persists it.
 
 ## How a spell is wired
 
-A spell is a plain `u32` id (`0..=MAX_SPELL_ID`, currently 95). Everything that
-describes it lives in **one row** of the table in
-`src/world/adventure/spell_defs.rs`: name, flavor, hover hint, badge, colour,
-mana cost, cooldown, cast-delay / recharge / spread deltas, base damage and
-speed, sound family and pitch, its `Class` (projectile, modifier, effect,
-other) and its `Unlock` rule. The old per-field `match` functions
-(`spell_name`, `spell_cost`, ...) are now lookups into that table; the
-migration was proved value-for-value over ids 0..=100.
+A spell is a stable `u32` ID. The sorted table in
+[assets/spells.ron](../../assets/spells.ron) defines names, colors, mana costs,
+base timings, sound, class, wand tier and Gear category. Hover hints and Shift codex copy live
+in [assets/descriptions.ron](../../assets/descriptions.ron).
 
-To add a spell:
+Gear and the Field Guide Spell Index discover spells from this catalog. Add a
+row in ID order and keep IDs within the four-word save log. New behaviors
+belong in the casting, projectile or deck evaluator. Author a glyph in
+[gen_spell_icons.py](../../tools/gen_spell_icons.py) for a custom icon.
 
-1. Add a row to `SPELLS`, keeping it sorted by id.
-2. If it needs new behaviour, add it where the behaviour lives:
-   - bolts and utility casts: the cast `match` in `wands.rs` `cast_wand`;
-   - stat-only modifiers: `paint_shot` in `wands.rs`; control-flow cards in
-     `evaluate_programmed`; new `ShotMods` fields if needed;
-   - flight and impact effects: the projectile loop in `adventure.rs` `update`.
-3. Put it on a palette tab in `src/egui_ui/wands.rs` (`BOLTS`, `EFFECTS`,
-   `SHOT_MODIFIERS`, `PROGRAM_MODIFIERS`). A spell on no tab can never be
-   placed; a test fails if you forget.
-4. Add icon art in `tools/gen_spell_icons.py` and run it to regenerate
-   `src/egui_ui/icons_spells.rs`.
-
-Tests check that rows are sorted and unique, complete, inside the id space,
-that classes agree with the wand predicates, that every spell is reachable from
-the palette and from the top wand, and that unknown ids fall back to documented
-defaults.
-
-Unknown ids read "Unknown spell". IDs in use: `0..=27`, `28..=32`, `34..=63`,
-`64..=79`. Free: `33`, `80..=95`.
+Use Spell Wiring in Axiom Dev or the shared command interface to tune balance
+and library settings. See the [Dev Panel guide](../../tools/axiom-dev/README.md).
 
 ### Aiming helper
 
@@ -60,6 +42,19 @@ Wand tier is the lowest wand that can hold the spell.
 | 68 | Blood price | modifier | 0 | 3 | Pay half the mana cost in health instead; refuses when it would leave you under 4 health. |
 | 69 | Fork | modifier | 10 | 2 | On impact, splits into three weak sparks that cannot fork again. |
 | 70 | On timer | trigger | 7 | 2 | Like Trigger bolt, but the next spell fires 0.6 s into flight. |
+
+## Don't Panic
+
+A tier-I utility (ID 100) from the ordinary spell discovery pool. Equip it under
+Effects as a single spell card. It costs 18 mana and has a 5-second base cooldown.
+For 4.2 seconds after the cast, the ward absorbs the next damaging landing.
+A harmless landing leaves the ward armed until it expires.
+
+The cover of Douglas Adams's
+[The Hitchhiker's Guide to the Galaxy](https://www.panmacmillan.com/authors/douglas-adams/the-hitchhikers-guide-to-the-galaxy/9780330513081)
+inspired the name and the field-guide glyph. A scuffed teal cover, brass clasp
+and folded towel use Axiom's existing pixel materials and lighting roles.
+The codex places the joke in the local transit office's paperwork.
 
 ## Noita-style spells and the Chaotic chassis
 
@@ -117,6 +112,44 @@ chance and the 24-spell slowdown reference in `discovery.rs` after playing.
 - **Ready**: found and holdable.
 - **Undiscovered**: the wand can hold it but it has not been found yet.
 - **Locked**: the wand tier (or rare magic) is not high enough yet.
+
+## Bookcase study and grimoire casting
+
+Interact with an ordinary bookcase to open the field guide and choose a lesson.
+Hydromancy costs 20 XP and teaches Water Transfer. Protective Magic costs 35 XP
+and teaches Ice Wall and Aegis Field. Celestial Magic costs 60 XP and teaches
+Meteor and Plasma Cross. Each lesson is independent. Existing Magic Affinity
+ranks are carried forward as the corresponding completed lessons.
+
+Threshold Survey costs 20 XP. It adds frame diagnostics to the guide and shows
+sanctuary coordinates in the Hills after reading a porter's record. Horticulture
+costs 30 XP and adds one ripe crop per harvest.
+
+Studied spells appear in the Gear palette. Place them on an instrument of the
+required tier. Channel Aegis Field or Plasma Cross from a single card by holding
+Cast. A Focus Grimoire reduces their base upkeep from 8 to 6 mana/s and from
+16 to 12 mana/s respectively. A Reservoir Grimoire increases capacity by 25%.
+
+## Circle and gate travel
+
+- **Circle link** · Gear → Effects → Teleportation Circle. Starting spell,
+  tier I wand. Sneak-cast alone at each endpoint, then stand inside either
+  circle and cast to travel. One saved pair per world. Sneak-cast elsewhere
+  to move the far end, or inside to clear the pair.
+- **Quick return** · Cast outside a linked circle, release, then cast again to
+  return. One mark, 24 m range, 30 s lifetime. Successful casts cost 18 base mana.
+- **Crystal Gates** · Build two upright Resonant Crystal frames with matching
+  clear openings. Interact with the first to attune it and the second to link.
+  Walk through either opening. Gear → Teleportation Circle · Guide links to
+  the Crystal Gates diagram and recipe.
+
+## Learning from materials
+
+Thunder charge visibly discharges when it enters a pool. When the discharge
+spreads across connected water, the caster can discover Storm Surge. The
+observation belongs to that player and travels with their progression.
+Storm Surge requires a tier III instrument, costs 42 mana, and has a stronger,
+wider discharge. Dry breaks interrupt it. The machine charge budget stays fixed.
 
 ## Save format
 

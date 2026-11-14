@@ -1,0 +1,15 @@
+AXIOM / MERIDIAN — IMPLEMENTATION AGENT KICKOFF
+
+Read AXIOM_COMPLETE_IMPLEMENTATION_PROMPT.md as the consolidated implementation directive. Read sections 0–5 and 22–26 first, then the relevant subsystem chapters before editing. Inspect the supplied reference_art files when working on art or environments; they are visual references, not production assets.
+
+Work inside the existing Windows-first Rust/raw-WGPU game. Preserve its engine, saves, identity/authority model, working content, and other contributors’ changes. Do not introduce Bevy, a replacement game, a web demo, or a second authoritative simulation.
+
+Begin by reading repository instructions and inspecting the actual branch/HEAD, working-tree ownership, dependency versions, world/save formats, current feature state, and native test/capture harness. Treat historical implementation reports as leads to verify. Establish a reproducible baseline and identify the earliest unmet high-priority gate. Do not restart systems that already pass their gates.
+
+Implement one complete player-visible slice now, with source, original assets where needed, persistence, failure handling, and the appropriate tests. If stability, memory, authoritative edits, or ownership is broken, repair the blocking foundation first. Otherwise advance the existing home/expedition/workshop experience. Later planets, realms, spacecraft, and bosses remain explicit targets, not permission to fill the project with empty placeholders.
+
+Use AXIOM_ACCEPTANCE_MATRIX.json to track the relevant acceptance cases. Every case begins NOT_RUN. It is a tracking catalog, not an executable test suite. Record PASS only with actual matching evidence; distinguish automated checks, native observation, playtesting, and measured performance.
+
+Report the exact changed files, observed player behavior, commands executed, test results, native captures and profiling where performed, save/network compatibility, unresolved defects, and the next dependency. Do not claim unexecuted tests, asset-tool use, engine integrations, or benchmark improvements. Keep changes scoped; do not overwrite peer work, stage everything, reset the worktree, or push without authorization.
+
+The required output is a tested native improvement—not another planning-only response. When an environmental blocker prevents execution, state it precisely and deliver only the safe work actually completed.

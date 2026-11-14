@@ -38,6 +38,29 @@ Both `headless::Session::tick` and the window now call executable `simulation::f
 
 `--headless=<path> --ca-cpu-region=x,y,z` activates the bounded CPU development path: an exact 8³ interior, immutable sealed halo, ordered commands, a 60 Hz divider and tick-labelled two-tick mirror. Player queries use that mirror; unmigrated writers are suspended for the isolated session. Ordinary window play and persistence retain legacy authority. No CA-to-legacy rounding or save migration is performed; ordinary saves reject an active experimental mirror.
 
+The same path accepts `--ca-checkpoint-out=<path>` and `--ca-checkpoint-in=<path>`
+for exact region cells, awake state, pending commands, clocks and delayed mirrors.
+Restoration precedes the continuation document's actions. This is region persistence;
+the player and surrounding session are initialized normally. See
+[ADR 0025](adr/0025-cpu-region-checkpoints.md) for compatibility and remaining gates.
+
+Conditional CPU edits now resolve against exact observed cells and retain bounded
+outcomes. Published CA views also feed immutable world snapshots and existing mesh
+dirty revisions. Ordinary block placement uses the shared admitted effect before
+charging a selected stack. See [ADR 0026](adr/0026-acknowledged-edits-and-ca-publication.md).
+
+`--ca-backend=gpu` selects the existing resident GPU solver for that same headless
+region. It retains an acknowledged CPU cache, stages one command batch, and stalls
+before gameplay until the result is ready. Default CPU operation and ordinary
+window authority are unchanged. See [ADR 0028](adr/0028-isolated-resident-gpu-adapter.md).
+
+`--ca-session-out=<directory>` and `--ca-session-in=<directory>` save and restore
+the isolated application cut: normal paged world records, exact cellular state,
+player, held input and day clock. The directory includes required region files;
+continuation writes stay beside that store. Checksummed commits, previous-slot
+recovery and region reclamation share the existing persistence machinery. This
+does not enable windowed CA saves. See [ADR 0029](adr/0029-isolated-application-checkpoints.md).
+
 ## Scale and LOD
 
 One world has one `VoxelScalePreset` (1 m, 0.5 m, 0.25 m per cell). Generation is written in metres and converted with `WorldSampleConfig::blocks_for_height`, so the same seed gives the same landscape at every scale. Near chunks are meshed per voxel (`mesh/solid.rs`); farther chunks use `mesh::coarsened_mesh`; beyond the resident ring the renderer draws a horizon backdrop (`render/horizon/`) built from the generator's distant surface plus authoritative edited columns.

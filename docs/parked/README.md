@@ -1,6 +1,9 @@
 # Parked work
 
-Status: out of scope for M1–M3 per [decision 0022](../decisions/0022-master-plan-review.md).
+Status: historically out of scope for M1–M3 per [decision 0022](../decisions/0022-master-plan-review.md).
+The human reopened the Axiom implementation track on 2026-10-26 and requested
+continuing through its milestones. Current work and evidence are tracked in the
+[execution ledger](../plans/2026-10-26-axiom-execution.md).
 No work proceeds on anything here unless the human reopens it. Code already
 landed from these tracks stays as legacy substrate; it is neither extended nor
 removed on their account.

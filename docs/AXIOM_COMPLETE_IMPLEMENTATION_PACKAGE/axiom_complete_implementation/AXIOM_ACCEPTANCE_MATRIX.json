@@ -1,0 +1,1797 @@
+{
+  "schema_version": 1,
+  "title": "Axiom consolidated acceptance catalog",
+  "prepared_date": "2026-10-29",
+  "canonical_directive": "AXIOM_COMPLETE_IMPLEMENTATION_PROMPT.md",
+  "purpose": "Test specifications and tracking seeds; not executable game tests and not evidence of execution.",
+  "allowed_status": [
+    "NOT_RUN",
+    "BLOCKED",
+    "FAIL",
+    "PASS"
+  ],
+  "evidence_fields": [
+    "build_commit",
+    "dirty_state",
+    "manifest",
+    "fixture_seed_save",
+    "hardware_settings",
+    "command_or_manual_procedure",
+    "output_paths",
+    "observed_result",
+    "remaining_limits"
+  ],
+  "case_count": 122,
+  "cases": [
+    {
+      "id": "AUD-01",
+      "category": "Repository, execution, and evidence",
+      "gate": "P0",
+      "requirement_sections": [
+        "0",
+        "2",
+        "25"
+      ],
+      "kind": "mixed",
+      "scenario": "Reproduce the current native baseline",
+      "acceptance": "The actual repository, branch, dirty files, executable, seed/save, dependencies, and source ownership are recorded; prior reported status is not substituted for inspection.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-02",
+      "category": "Repository, execution, and evidence",
+      "gate": "P0",
+      "requirement_sections": [
+        "0",
+        "2",
+        "25"
+      ],
+      "kind": "automated",
+      "scenario": "Clean checkout and asset dependencies",
+      "acceptance": "All required owned source and original asset inputs are tracked/reproducible; unrelated work is untouched and no hidden local file is required.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-03",
+      "category": "Repository, execution, and evidence",
+      "gate": "P0",
+      "requirement_sections": [
+        "0",
+        "2",
+        "25"
+      ],
+      "kind": "automated",
+      "scenario": "Existing save migration and rollback safety",
+      "acceptance": "Backups and migrations preserve canonical entities, construction, quantities, and versions; an incompatible migration fails safely without silent regeneration.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-04",
+      "category": "Repository, execution, and evidence",
+      "gate": "P0",
+      "requirement_sections": [
+        "0",
+        "2",
+        "25"
+      ],
+      "kind": "mixed",
+      "scenario": "Authored asset to native interaction",
+      "acceptance": "An original authored item retains editable source, scale, pivots, materials, collider/ports and import provenance, and is inspected while used in the native game.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-05",
+      "category": "Repository, execution, and evidence",
+      "gate": "P0",
+      "requirement_sections": [
+        "0",
+        "2",
+        "25"
+      ],
+      "kind": "review",
+      "scenario": "Completion report truthfulness",
+      "acceptance": "Implemented, unit-tested, native-observed, playtested and performance-validated are reported separately; failed/unavailable checks and placeholders remain visible.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-01",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Purpose-isolated deterministic generation",
+      "acceptance": "Same manifest produces the same canonical results across visit orders and worker schedules; adding cosmetic decoration does not move rivers, settlements or deposits.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-02",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Planetary seam and pole traversal",
+      "acceptance": "Terrain, gravity, ownership, roads, drainage and saved edits remain continuous at all supported region-face seams and exceptional topology locations.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-03",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Shared map, terrain and orbit facts",
+      "acceptance": "All representations use the same body parameters and canonical geography; changing camera scale does not create another mutable world.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-04",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "mixed",
+      "scenario": "Coherent geology and connected water",
+      "acceptance": "The default fixture contains explained lithology, catchments, outlets, strata, springs and actual volumetric openings; refinement preserves macro boundaries.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-05",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "High-precision frame round trip",
+      "acceptance": "At large system coordinates, frame transforms preserve declared player-scale tolerance, rotation and point velocity without early f32 truncation.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-06",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Operation identity through retries and compaction",
+      "acceptance": "Duplicate requests, reconnect, journal compaction and expired receipt detail never repeat a successful cost, reward, transfer or damage event.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-07",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Crash injection at transaction boundaries",
+      "acceptance": "Interrupt before/after activation, persistence and receipt; restore one coherent allowed state and correct Applied-versus-Durable semantics.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-08",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Stale derived publication",
+      "acceptance": "Old mesh, collision, navigation, light or proxy results cannot overwrite newer relevant source projections; unrelated inventory changes do not force full rebuilds.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-09",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "automated",
+      "scenario": "Mutable overlays and changed generators",
+      "acceptance": "A world upgrade preserves installed geography, sites, identities, recorded knowledge and player edits; caches can be rebuilt without rewriting canon.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-10",
+      "category": "Canonical world, generation, and persistence",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "3",
+        "6"
+      ],
+      "kind": "mixed",
+      "scenario": "Indexed resume after long play",
+      "acceptance": "Saved entry reads a current indexed state plus bounded suffix, not full history or global erosion; genuine collision-ready first interaction is measured.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-01",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Default-preset freeze reproduction",
+      "acceptance": "Capture the actual failing timeline and isolate CPU work, GPU work, memory pressure, waits, pipeline compilation or driver causes before claiming a fix.",
+      "status": "FAIL",
+      "evidence": [
+        {
+          "build_commit": "ce66ace672505d76828163e55ffdfc49c6cb83c4",
+          "dirty_state": "Shared checkout; launch snapshot and source hashes in capture directory, not a clean compiler-input manifest.",
+          "manifest": "Executable SHA256 368C5A496E6CC92CE588E7A7E5A64916D4EED242146578ED57CA1FBB5C6A5DF5",
+          "fixture_seed_save": "Generated hills, seed 74, isolated save; synthetic cross-chunk edit fixture.",
+          "hardware_settings": "i7-13700K, RTX 4090 Vulkan, 1280x720; benchmark presentation disables vsync/auto quality; competing builds observed.",
+          "command_or_manual_procedure": "tools/Review-EngineEnvelope.ps1 -Executable target/release-fast/minecraft_style_voxel_prototype.exe -Label event-scope-edits-20261029 -Scene edits -Seconds 90 -TraceStages",
+          "output_paths": ["target/engine-envelope/event-scope-edits-20261029/diagnostic-summary.json", "docs/reviews/2026-10-29-unified-engine-pass.md"],
+          "observed_result": "7930 warmed successful frames; p99 21.0437 ms, maximum 5006.4136 ms. Trace isolates a 4995 ms upload interval and a separate 11921 ms final recorder interval.",
+          "remaining_limits": "Freeze gate remains open. Upload subcause and original ordinary-play freeze are not established; this is not a matched performance comparison or exact default-presentation run. Final cleanup/async-recorder changes postdate this capture."
+        },
+        {
+          "build_commit": "90832e92ea5c3536dd18001e2c9e128e73bfd4d3",
+          "dirty_state": "Shared checkout; see launch tree-status.txt and source-hashes.csv.",
+          "manifest": "Executable SHA256 ED34BD9F1C2D9A81FE6263660ADA2307D0EB8F3C682D8AA6136E0385A26D9991",
+          "fixture_seed_save": "Generated hills seed 74; same isolated synthetic edit fixture, verbose tracing disabled.",
+          "hardware_settings": "i7-13700K, RTX 4090 Vulkan, 1280x720; benchmark presentation, competing builds observed.",
+          "command_or_manual_procedure": "tools/Review-EngineEnvelope.ps1 -Executable target/release-fast/minecraft_style_voxel_prototype.exe -Label bounded-cleanup-edits-20261029 -Scene edits -Seconds 90",
+          "output_paths": ["target/engine-envelope/bounded-cleanup-edits-20261029/diagnostic-summary.json", "target/engine-envelope/bounded-cleanup-edits-20261029/frames.csv", "docs/reviews/2026-10-29-unified-engine-pass.md"],
+          "observed_result": "Final build and native run passed execution. Complete benchmark export: 11714 warmed samples, p99 17.5236 ms, max 2123.2048 ms, 22 frames over 50 ms. Bounded asynchronous CSV writer reported 5398 omitted route rows and no I/O error.",
+          "remaining_limits": "Freeze acceptance still fails. Route spans are incomplete; cadence uses the complete separate sample export. No matched improvement, uncontended run, normal minimized-window acceptance or complete root cause established."
+        }
+      ]
+    },
+    {
+      "id": "REN-02",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "automated",
+      "scenario": "Whole-job peak admission",
+      "acceptance": "Saturate producers and stall GPU completion; descriptors, ready outputs, staging and retirements plateau within declared credits without deadlock.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-03",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "automated",
+      "scenario": "Cancellation and stale completion",
+      "acceptance": "Cancel before/after encoding, supersede a region repeatedly, and reuse handles; no premature reclaim, leaked staging, dropped completion or double release.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-04",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Minimize, resize and device epoch",
+      "acceptance": "Rapid resize/minimize and simulated device recovery keep authority state intact; transitions are bounded, zero-size surfaces handled, and cleanup makes progress.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-05",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Native budget pressure and pool backing",
+      "acceptance": "Lower available budget during replacement; optional admission stops, real backing or reuse is demonstrated, and essential correct geometry remains available.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-06",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Coarse-fine seams and edited holes",
+      "acceptance": "Traverse edge/corner transitions with caves, fine railings, bridges and destroyed landmarks; no sky leaks, filled tunnels, overlap flicker or restored distant tower.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-07",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "automated",
+      "scenario": "LOD publication frontier",
+      "acceptance": "Delay arbitrary child uploads and empty results; the published frontier keeps complete valid coverage, bounded transitions and no unbounded neighbor-refinement cascade.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-08",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Occlusion after cover removal",
+      "acceptance": "Remove a wall, move occluders and turn rapidly at non-power-of-two resolutions; compare with unculled output and detect no false hidden actor or stale cover.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-09",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Shadow and depth correctness",
+      "acceptance": "Near/far casters, moving fragments, foliage and interiors use correct depth/bias/material behavior without broad black patches or missing geometry.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-10",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "review",
+      "scenario": "Art identity at actual camera scales",
+      "acceptance": "Matched native day/night/motion captures show coherent silhouettes, pixel clusters, distinct materials, grouped plants, quiet spaces and accessible original architecture.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-11",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Fast travel and turnaround",
+      "acceptance": "Move at supported speed toward an uncached site and reverse; collision/readiness deadlines, upload age and memory remain bounded without missing ground.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-12",
+      "category": "Rendering, memory, assets, and streaming",
+      "gate": "P1/P3",
+      "requirement_sections": [
+        "4",
+        "7",
+        "8",
+        "23"
+      ],
+      "kind": "mixed",
+      "scenario": "Persistent surface complexity",
+      "acceptance": "Compare solid, hollow, checkerboard, perforated and material-fragmented regions at equal voxel count; measure real output/collision/memory costs and preserve supported geometry.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-01",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Cross-machine command replay",
+      "acceptance": "On the declared compatibility profile, accepted commands reproduce complete canonical state across machines, worker counts and render rates without routine corrective state traffic.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-02",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Complete checkpoint continuation",
+      "acceptance": "Restore terrain, solver/cache, controller, RNG, material and attachment state; continued hashes match an uninterrupted run, not merely object poses.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-03",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "mixed",
+      "scenario": "A deliberately stalled client",
+      "acceptance": "Host and other peers continue; the stalled peer exhausts bounded prediction then recovers or receives an explicit readiness result, without global waiting.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-04",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Missing commands and sealed ticks",
+      "acceptance": "Reorder/drop accepted frames and no-event ranges; confirmed time never passes a gap, axes follow bounded hold policy, and one-shot actions never repeat.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-05",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "mixed",
+      "scenario": "Immediate break and dependent movement",
+      "acceptance": "A predicted hole, selection ray, local motion and crate contacts use the same branch; authority rejection restores coherent dependencies without overwriting others edits.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-06",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Target generation contention",
+      "acceptance": "Two players mine/replace one cell; only one gets original loot and a late request cannot destroy a newly placed unrelated machine at the same coordinate.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-07",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Receipt before canonical patch",
+      "acceptance": "Receipt/data arrival orders never flash a wall back, spend provisional loot, duplicate sound, or discard unresolved dependent actions.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-08",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Baseline capture versus compaction",
+      "acceptance": "Race snapshot publication and suffix pinning with edits/compaction; every committed event remains represented exactly once.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-09",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Late baseline versus newer live state",
+      "acceptance": "Old epochs and same-epoch stale candidates cannot regress the installed frontier or overwrite newer geometry.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-10",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "mixed",
+      "scenario": "Bulk transfer saturation",
+      "acceptance": "First join, repair and content transfer under limited upload do not starve controls/receipts; queued bytes, age and processing cost are bounded.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-11",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Domain merge, split and mode transition",
+      "acceptance": "Before physical coupling, install a coherent merged baseline; splitting and fallback preserve contacts, momentum, frames, caches and ownership under tested rules.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-12",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "automated",
+      "scenario": "Hidden information boundary",
+      "acceptance": "Portal interest and domain membership reveal only authorized facts; exact-mode convenience does not expose secret inventories or undiscovered private structures.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-13",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "mixed",
+      "scenario": "Changed-cover combat policy",
+      "acceptance": "Test accepted/rejected break-then-shot, replacement blocks, current new cover, moving doors, exhausted history and duplicate fire; authority selects one damage/cost outcome.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-14",
+      "category": "Authority, local physics, prediction, and deterministic domains",
+      "gate": "P2/P6",
+      "requirement_sections": [
+        "3",
+        "4",
+        "5"
+      ],
+      "kind": "mixed",
+      "scenario": "Impairment and full traffic accounting",
+      "acceptance": "Configured RTT, asymmetry, loss, burst loss, reorder, duplication and relay migration converge within declared limits; report complete traffic, state age, corrections and replay costs.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-01",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "automated",
+      "scenario": "One material owner through fracture",
+      "acceptance": "Cut a structure and collect fragments; original terrain, debris, salvage and inventory never own the same quantity twice.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-02",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "automated",
+      "scenario": "Load versus connectivity",
+      "acceptance": "Connected but overloaded construction can fail under the defined model; unknown unloaded support is not automatically detached or a certified anchor.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-03",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "mixed",
+      "scenario": "Support deletion with cyclic and cross-brick bonds",
+      "acceptance": "Repeated cuts and moving attachments yield correct bounded component work, mass/inertia, point velocities, cargo and collider publication.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-04",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "mixed",
+      "scenario": "Heated tank, powered hinge and floating crate",
+      "acceptance": "Breach the tank while inlet and obstacle move; real flow, pressure, heat and two-way impulses operate once within declared numerical tolerances.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-05",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "automated",
+      "scenario": "Fluid boundary activation/deactivation",
+      "acceptance": "Across active/inactive or adjacent patches, preserve mass/composition/heat/motion as supported; no invisible drain/wall, duplicated flux or camera-dependent disappearance.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-06",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "mixed",
+      "scenario": "Freeze, cable support and melt",
+      "acceptance": "Freeze flowing water around a cable, load/cut it and melt it; latent heat, fluid/solid ownership, tension and collision remain coherent.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-07",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "automated",
+      "scenario": "Grains on belt, settling and reload",
+      "acceptance": "Transport, settle, save, reopen and excavate material without a body per grain, duplicated quantity or reset provenance.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-08",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "mixed",
+      "scenario": "Fast projectile and rotating thin cover",
+      "acceptance": "Swept contacts use the correct revised geometry for both moving participants; render approximation does not grant tunneling or phantom obstruction.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-09",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "mixed",
+      "scenario": "Dense contact and wake amplification",
+      "acceptance": "Converge existing bodies, alter gravity near sleepers and drive joint loops; common physics stays correct with measured contacts/constraints and no private accuracy reduction.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-10",
+      "category": "Coupled physical materials and bounded destruction",
+      "gate": "P1/P4/P5",
+      "requirement_sections": [
+        "4",
+        "9"
+      ],
+      "kind": "automated",
+      "scenario": "Already admitted impact under pressure",
+      "acceptance": "After projectile activation, saturate derived queues; reserved effects and costs occur once at the defined stage/tick rather than disappearing or being indefinitely delayed.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-01",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "mixed",
+      "scenario": "Tool-family functional loop",
+      "acceptance": "Actual mine/build/hoe/harvest/bucket/shear/fish/ignite/map/repair affordances use correct tags, feedback and authoritative results, not inventory icons only.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-02",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "automated",
+      "scenario": "Mixed-resolution construction",
+      "acceptance": "Place, rotate, remove and repair supported fine shapes on large cells; collision/selection/quantity and seam behavior agree.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-03",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "mixed",
+      "scenario": "Blueprint, mirror and creative distinctions",
+      "acceptance": "Ghosts show real fit/resources; survival consumes once, creative sources are labeled, undo respects ownership, and construction does not steal neighbouring structures.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-04",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "automated",
+      "scenario": "Stack, sort and consolidate",
+      "acceptance": "Repeated sorting/stacking preserves lot compatibility, quality, identity/quantity and locked/favourite slots across saves and concurrent edits.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-05",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "automated",
+      "scenario": "Storage scanner permissions and movement",
+      "acceptance": "Incremental index follows container moves, locks, range/connections and destruction without full-world scans or access to private containers.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-06",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "automated",
+      "scenario": "Concurrent last-item crafting/withdrawal",
+      "acceptance": "Exactly one valid transaction acquires the final input; duplicate ingredients/overflow/partial capacity are handled without partial unrecorded consumption.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-07",
+      "category": "Ordinary tools, building and storage",
+      "gate": "P2/P3",
+      "requirement_sections": [
+        "1",
+        "10"
+      ],
+      "kind": "review",
+      "scenario": "Comfort without late-game gates",
+      "acceptance": "A fresh survival fixture provides useful storage, shelter, food/light and simple work without compulsory boss kills, slaughter, AFK or advanced-chip fabrication.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-01",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "automated",
+      "scenario": "Material recovery and process lots",
+      "acceptance": "Alternate ore routes change recovery/purity/byproducts while conserving represented feedstock and inputs; reload does not reroll yield.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-02",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "automated",
+      "scenario": "Circuit and storage limits",
+      "acceptance": "Closed DC network, resistance/heating, source/provider/port limits and capacitor behavior agree with the declared model; large capacity does not grant unlimited power.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-03",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "automated",
+      "scenario": "Conversion and thermal loops",
+      "acceptance": "Converters, electrolysis/fuel-cell or equivalent loop, pumps, heat exchange and cooling cannot create free energy through missing losses or erased heat.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-04",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "automated",
+      "scenario": "Interrupted or blocked production",
+      "acceptance": "Stop power, fill output, change a valve and save mid-stage; quantities and partial state remain coherent with useful player-facing diagnoses.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-05",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "automated",
+      "scenario": "Deterministic wake scheduling",
+      "acceptance": "Two networks wake one consumer, reused entities and canceled events; no duplicate activation/transfer and no unbounded stale scheduler storage.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-06",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "automated",
+      "scenario": "Dormant factory oracle comparison",
+      "acceptance": "Coarse/batched advancement matches the defined tick model through thresholds and interruptions; broken logistics and blocked outputs do not produce offline goods.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-07",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "mixed",
+      "scenario": "Functional multilayer IC",
+      "acceptance": "Two distinct layouts show different real IO/memory/control/throughput behavior with test-bench diagnostics; design save, manufacture and installation preserve function.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-08",
+      "category": "Scientific industry, electricity and control",
+      "gate": "P4/P8/P13",
+      "requirement_sections": [
+        "11"
+      ],
+      "kind": "mixed",
+      "scenario": "Complete useful product chain",
+      "acceptance": "Prospect or salvage, process, fabricate a controller, power/automate a pump and improve a place; statistics expose actual throughput, losses, quality and bottlenecks.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-01",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "automated",
+      "scenario": "Wand compiler limits and order",
+      "acceptance": "Deck order/shuffle, triggers, cost, delay and modifier composition behave as declared; recursive expansion is bounded and errors are understandable.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-02",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "mixed",
+      "scenario": "Earthfold physical closure",
+      "acceptance": "Donor material becomes constrained panels with actual voids/collision, force limits and occupant handling; payload activation follows real supported closure state.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-03",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "automated",
+      "scenario": "Mining spell exclusive yield destination",
+      "acceptance": "Hammerhand/additional heads and output modifiers perform paid work; debris/store/transmute/XP paths cannot duplicate the same resource.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-04",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "mixed",
+      "scenario": "Cultivated creature and size change",
+      "acceptance": "An actual organism gains supported behavior, anatomy/collider/mass or explicit magic-source changes and persistent identity, not only a scaled visual.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-05",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "mixed",
+      "scenario": "Dark spell anchor and alternatives",
+      "acceptance": "A restricted technique uses discoverable dependencies and effective counters; consent and legitimate alternatives matter, not just a purple damage type.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-06",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "automated",
+      "scenario": "Unreturned bounded knowledge",
+      "acceptance": "Only allowed observations/anchors influence behavior; reload and networking preserve limits, respite and ownership without omniscient inventory counters.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-07",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "mixed",
+      "scenario": "Unreturned resolution and safe home",
+      "acceptance": "Supported investigative/resolution path works; wards and uninvolved co-op players remain protected, with no fake chat or offscreen storage deletion.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-08",
+      "category": "Magic, living transformations and personal threat",
+      "gate": "P5/P12",
+      "requirement_sections": [
+        "12"
+      ],
+      "kind": "review",
+      "scenario": "First-person equipment quality",
+      "acceptance": "Original held wand/tool has useful grip, scale, animation, cast origin and coherent world/icon appearance; native use is reviewed rather than inferred from Blender output.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-01",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "automated",
+      "scenario": "Coarse-to-detailed resident and cargo",
+      "acceptance": "Repeated activation of adjacent districts refines one household/journey/consignment, never duplicates stock or overlaps abstract and physical work.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-02",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Friendly daily life and habitat",
+      "acceptance": "Different supported body plans can reach home/work/services; organisms follow habitat and ordinary routines without meal-by-meal micromanagement.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-03",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Wizard compound alternate access",
+      "acceptance": "Public work, restricted rooms, service routes and actual containment exist; research/trade/service/infiltration have distinct consequences and alarms do not instantly fail the site.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-04",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "automated",
+      "scenario": "City growth and player ownership",
+      "acceptance": "New construction respects plots, resources, access and player edits; no overnight overwrite or visit-order reroll.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-05",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Radio and scheduled delivery",
+      "acceptance": "Broadcast/map information has a real source/window/uncertainty and authorized destination; missed windows have supported alternatives rather than permanent ordinary lockout.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-06",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "automated",
+      "scenario": "Consignment custody through transport",
+      "acceptance": "Warehouse, carrier, coarse travel, pod, dock and recipient transfer one recorded cargo identity; disconnect/reload cannot award it twice.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-07",
+      "category": "People, ecology, institutions and real consignments",
+      "gate": "P3/P9",
+      "requirement_sections": [
+        "6",
+        "13",
+        "18"
+      ],
+      "kind": "review",
+      "scenario": "Peaceful settlement viability",
+      "acceptance": "Hospitality, trade, restoration, gardens and specialist work create real benefits; prosperity does not mandate endless escalating raids or city-government chores.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-01",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "review",
+      "scenario": "Complete first journey and return",
+      "acceptance": "Stream/embankment/gallery loop offers visible invitation, several approaches, evidence, optional action/understanding, quiet discovery and a meaningful return.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-02",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "mixed",
+      "scenario": "Player-created alternate route",
+      "acceptance": "Digging, building, gliding or another supported bypass discovers a coherent site and valid clues rather than broken scripting or blanket immunity.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-03",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "mixed",
+      "scenario": "Physical puzzle consistency",
+      "acceptance": "At least one pressure/gravity/false-wall/fold interaction uses real state and multiple solutions with legible consequences, not hidden matching-key flags.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-04",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "automated",
+      "scenario": "Knowledge provenance and reconstruction",
+      "acceptance": "Observed/reported/inferred/tested records retain source/time; clues and old maps do not become omniscient exact markers or reroll on visit order.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-05",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "review",
+      "scenario": "Quiet exploration and accessible guidance",
+      "acceptance": "A view/person/specimen is worthwhile without obligatory loot/combat; optional guidance supports players who cannot rely on subtle sound or color.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-06",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "mixed",
+      "scenario": "Boss and enemy readability",
+      "acceptance": "Distinct roles, telegraphs, recovery, paths and actual counterplay work alone and in co-op; damage persists and no instant input-reading defeats clever methods.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-07",
+      "category": "Exploration, regional composition and systemic dungeons",
+      "gate": "P3/P5",
+      "requirement_sections": [
+        "7",
+        "14",
+        "20"
+      ],
+      "kind": "mixed",
+      "scenario": "Farming and restoration persistence",
+      "acceptance": "Supported ecosystem/ritual resets have real costs/population/provenance; repaired routes and player changes remain useful without duplicate experience/material.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-01",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "automated",
+      "scenario": "Multi-family realm policy",
+      "acceptance": "Universe family, realm, body and frame remain separate; direct requests cannot forge discovery/private permissions or restricted cross-family travel.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-02",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "automated",
+      "scenario": "Crimson pocket isolation",
+      "acceptance": "Local travel and valid paired return work; ordinary flight or ordinary forged portals cannot connect different Crimson planet pockets.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-03",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "mixed",
+      "scenario": "Null Choir revised rule",
+      "acceptance": "An ordinary electrical machine continues functioning while a sustained magical binding attenuates; material fire and unsupported magical structures follow distinct rules.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-04",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "automated",
+      "scenario": "Static arbitrary portal orientation",
+      "acceptance": "Position, direction, orientation and handedness map correctly for nonparallel apertures and different gravity frames.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-05",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "automated",
+      "scenario": "Moving endpoints and point velocity",
+      "acceptance": "Rotating/translating source and destination preserve intended portal-relative motion, angular state and explicit energy accounting without giant accidental orbital impulses.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-06",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "mixed",
+      "scenario": "Native visible doorway and mid-crossing view",
+      "acceptance": "Parallax, near-plane behavior, occlusion and clipped actors work from oblique angles and halfway through, with no black frame, fake screenshot or source fog contamination.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-07",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "mixed",
+      "scenario": "Destination not ready or unauthorized",
+      "acceptance": "Pending aperture is visibly blocked; preview sends no private data and traversal waits only for that valid transfer rather than pausing every player.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-08",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "automated",
+      "scenario": "Opposite crossings, disconnect and replay",
+      "acceptance": "Simultaneous travelers and retries at the exact transfer tick produce one entity/cargo owner each and a consistent save/reload result.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-09",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "mixed",
+      "scenario": "Nested portal and coupled-effect limits",
+      "acceptance": "Recursion/render-target/interest budgets are bounded; closed-while-occupied and unsupported ropes/fluid/networks follow explicit policies rather than deletion or hidden fake continuity.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-10",
+      "category": "Realm topology and immersive portal correctness",
+      "gate": "P7/P10",
+      "requirement_sections": [
+        "15",
+        "16"
+      ],
+      "kind": "mixed",
+      "scenario": "Remote edits and players through a portal",
+      "acceptance": "Two clients see actual destination movement and current terrain; source/destination view histories and authoritative interest remain coherent during editing and recovery.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-01",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Creative category and editable starter",
+      "acceptance": "Spacecraft & Space Building contains functional parts/blueprints; Kestrel can be edited and built from the same survival-compatible kit.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-02",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "automated",
+      "scenario": "Assembly boundary and stable identity",
+      "acceptance": "Launching/staging/landing never swaps to an unrelated prefab, carries the hangar, duplicates hulls or loses module/cargo ownership.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-03",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Airtightness actual geometry",
+      "acceptance": "Thin walls, corners, windows, partial shapes and fine/coarse joints produce correct seal/leak diagnostics; a missing canopy corner cannot be concealed by a seat bubble.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-04",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "automated",
+      "scenario": "Compartment split, merge and equalization",
+      "acceptance": "Hatches, breaches, docking and moving volumes conserve gas/enthalpy under the model; unknown topology never certifies safety and closing a door does not refill a room.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-05",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Life support and thermal state",
+      "acceptance": "Separate pressure/composition, scrubber, power, heat and supplies persist during travel/unload; breach is repairable and a suit enables declared contingency behavior.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-06",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Aero, actuator and load diagnostics",
+      "acceptance": "Wings require usable airflow/exposure, actuators and finite power; mass/fuel/cargo changes affect steering; vacuum-only craft need no decorative wing blocks.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-07",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Real propulsion and guidance",
+      "acceptance": "Installed engines consume finite actual supplies and guidance uses available control authority; insufficient capability is diagnosed rather than corrected by free forces.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-08",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Altitude versus orbit and round trip",
+      "acceptance": "A returning arc and stable orbit are distinguished; launch, insertion, rendezvous, deorbit, entry and landing use one consistent configured model without unlabeled cheats.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-09",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Walking passengers on moving ship",
+      "acceptance": "Clients can walk/drop objects during translation, rotation, acceleration and correction with coherent collision time and no double deck velocity or lost passengers.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-10",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "automated",
+      "scenario": "Dock, service, disconnect and depart",
+      "acceptance": "Compatible capture/permissions/seals/equalization precede opening; both vessel identities and all inventory survive repeat docking and restart.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-11",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "Station construction and skyhook fit",
+      "acceptance": "A built station needs supported orbital state; tether/elevator/transfer geometry has explicit eligibility, load/clearance and schedule rather than a generic hovering prop.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-12",
+      "category": "Voxel spacecraft, pressure, orbit and space building",
+      "gate": "P8/P9",
+      "requirement_sections": [
+        "17",
+        "18"
+      ],
+      "kind": "mixed",
+      "scenario": "First useful orbital return and vehicle portal",
+      "acceptance": "A real platform mission returns useful cargo to the same workshop; a supported fitting ship can transfer through a legal portal with crew/compartments intact and no Crimson loophole.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-01",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "review",
+      "scenario": "Original hanging machine-city composition",
+      "acceptance": "Approach/interior/reverse/distant native views establish scale, voids, original structures and useful space; no generic castle or copied finale geometry.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-02",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "mixed",
+      "scenario": "Independent route families",
+      "acceptance": "Foundry, vertical machinery/choir and underworks offer distinct routes and systemic choices; damaged paths and player construction remain coherent.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-03",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "mixed",
+      "scenario": "Warden functional counterplay",
+      "acceptance": "Each completed warden has readable combat and at least one real environmental/engineering intervention tied to functioning machinery, not just a switch counter.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-04",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "automated",
+      "scenario": "Any two of four progression",
+      "acceptance": "All valid orders and co-op joins persist correctly; remaining wardens affect the King through declared systems and no client can forge the shared state.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-05",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "mixed",
+      "scenario": "King combat and realignment",
+      "acceptance": "Fair telegraphs, actual hit volumes, dynamic routes, player-built interventions and persistence work without arbitrary immunity or deleting the players tools.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-06",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "mixed",
+      "scenario": "Extraction and reconnect",
+      "acceptance": "Multiple supported exit/rescue paths preserve participants through disconnect and failure; pre-victory return is available and ordinary possessions are not wiped.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-07",
+      "category": "Crimson Hall, wardens and enduring progression",
+      "gate": "P11/P12",
+      "requirement_sections": [
+        "19"
+      ],
+      "kind": "automated",
+      "scenario": "Charted nexus and replay-safe farming",
+      "acceptance": "Successful extraction unlocks only authorized discovered edges; return visits/reset costs/rewards preserve identity, avoid duplicate loot and do not erase the whole location.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-01",
+      "category": "Whole-game acceptance and release evidence",
+      "gate": "P13",
+      "requirement_sections": [
+        "22",
+        "23",
+        "25"
+      ],
+      "kind": "mixed",
+      "scenario": "Four simultaneous player intentions",
+      "acceptance": "Explorer, factory operator, fighter/builder and joining player share the actual inhabited world under impairment and forced relay with bounded state age and queues.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-02",
+      "category": "Whole-game acceptance and release evidence",
+      "gate": "P13",
+      "requirement_sections": [
+        "22",
+        "23",
+        "25"
+      ],
+      "kind": "mixed",
+      "scenario": "Long-run memory and recovery",
+      "acceptance": "Travel, edits, plants, scripts, saves, frames, portals and vehicles stop growing retained state after expected steady demand; post-burst debt drains under continued normal use.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-03",
+      "category": "Whole-game acceptance and release evidence",
+      "gate": "P13",
+      "requirement_sections": [
+        "22",
+        "23",
+        "25"
+      ],
+      "kind": "mixed",
+      "scenario": "Reduced visual quality and accessibility",
+      "acceptance": "Lower effects/resolution/detail preserve collision, hazards, clues, cover, material distinction and operable UI; color/sound-only dependencies have alternatives.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-04",
+      "category": "Whole-game acceptance and release evidence",
+      "gate": "P13",
+      "requirement_sections": [
+        "22",
+        "23",
+        "25"
+      ],
+      "kind": "mixed",
+      "scenario": "Current world at every representation",
+      "acceptance": "Globe, far skyline, near terrain, interior, vehicle frame, portal view and reload agree on consequential edits and identities through extended play.",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-05",
+      "category": "Whole-game acceptance and release evidence",
+      "gate": "P13",
+      "requirement_sections": [
+        "22",
+        "23",
+        "25"
+      ],
+      "kind": "review",
+      "scenario": "Honest finished-slice delivery",
+      "acceptance": "Provide original code/assets, executable native procedures, observed failures, measured comparisons and remaining scope; no synthetic screenshot or unrun test presented as proof.",
+      "status": "NOT_RUN",
+      "evidence": []
+    }
+  ]
+}

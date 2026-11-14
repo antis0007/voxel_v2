@@ -1,0 +1,3231 @@
+{
+  "schema": 1,
+  "scope": "Unexecuted game acceptance requirements. SPEC_VALIDATION.json reports only document checks; it never changes these statuses.",
+  "source_count": 122,
+  "review_added_count": 38,
+  "status_values": [
+    "NOT_RUN",
+    "BLOCKED",
+    "FAIL",
+    "PASS"
+  ],
+  "cases": [
+    {
+      "id": "AUD-01",
+      "origin": "inherited_verbatim",
+      "title": "Reproduce the current native baseline",
+      "requirement": "The actual repository, branch, dirty files, executable, seed/save, dependencies, and source ownership are recorded; prior reported status is not substituted for inspection.",
+      "design_sections": [
+        "D00",
+        "D13",
+        "D18"
+      ],
+      "task_routes": [
+        "T00"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-02",
+      "origin": "inherited_verbatim",
+      "title": "Clean checkout and asset dependencies",
+      "requirement": "All required owned source and original asset inputs are tracked/reproducible; unrelated work is untouched and no hidden local file is required.",
+      "design_sections": [
+        "D00",
+        "D13",
+        "D18"
+      ],
+      "task_routes": [
+        "T00"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-03",
+      "origin": "inherited_verbatim",
+      "title": "Existing save migration and rollback safety",
+      "requirement": "Backups and migrations preserve canonical entities, construction, quantities, and versions; an incompatible migration fails safely without silent regeneration.",
+      "design_sections": [
+        "D00",
+        "D13",
+        "D18"
+      ],
+      "task_routes": [
+        "T00"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-04",
+      "origin": "inherited_verbatim",
+      "title": "Authored asset to native interaction",
+      "requirement": "An original authored item retains editable source, scale, pivots, materials, collider/ports and import provenance, and is inspected while used in the native game.",
+      "design_sections": [
+        "D00",
+        "D13",
+        "D18"
+      ],
+      "task_routes": [
+        "T00"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "AUD-05",
+      "origin": "inherited_verbatim",
+      "title": "Completion report truthfulness",
+      "requirement": "Implemented, unit-tested, native-observed, playtested and performance-validated are reported separately; failed/unavailable checks and placeholders remain visible.",
+      "design_sections": [
+        "D00",
+        "D13",
+        "D18"
+      ],
+      "task_routes": [
+        "T00"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-01",
+      "origin": "inherited_verbatim",
+      "title": "Purpose-isolated deterministic generation",
+      "requirement": "Same manifest produces the same canonical results across visit orders and worker schedules; adding cosmetic decoration does not move rivers, settlements or deposits.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-02",
+      "origin": "inherited_verbatim",
+      "title": "Planetary seam and pole traversal",
+      "requirement": "Terrain, gravity, ownership, roads, drainage and saved edits remain continuous at all supported region-face seams and exceptional topology locations.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-03",
+      "origin": "inherited_verbatim",
+      "title": "Shared map, terrain and orbit facts",
+      "requirement": "All representations use the same body parameters and canonical geography; changing camera scale does not create another mutable world.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-04",
+      "origin": "inherited_verbatim",
+      "title": "Coherent geology and connected water",
+      "requirement": "The default fixture contains explained lithology, catchments, outlets, strata, springs and actual volumetric openings; refinement preserves macro boundaries.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-05",
+      "origin": "inherited_verbatim",
+      "title": "High-precision frame round trip",
+      "requirement": "At large system coordinates, frame transforms preserve declared player-scale tolerance, rotation and point velocity without early f32 truncation.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-06",
+      "origin": "inherited_verbatim",
+      "title": "Operation identity through retries and compaction",
+      "requirement": "Duplicate requests, reconnect, journal compaction and expired receipt detail never repeat a successful cost, reward, transfer or damage event.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-07",
+      "origin": "inherited_verbatim",
+      "title": "Crash injection at transaction boundaries",
+      "requirement": "Interrupt before/after activation, persistence and receipt; restore one coherent allowed state and correct Applied-versus-Durable semantics.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-08",
+      "origin": "inherited_verbatim",
+      "title": "Stale derived publication",
+      "requirement": "Old mesh, collision, navigation, light or proxy results cannot overwrite newer relevant source projections; unrelated inventory changes do not force full rebuilds.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-09",
+      "origin": "inherited_verbatim",
+      "title": "Mutable overlays and changed generators",
+      "requirement": "A world upgrade preserves installed geography, sites, identities, recorded knowledge and player edits; caches can be rebuilt without rewriting canon.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "WLD-10",
+      "origin": "inherited_verbatim",
+      "title": "Indexed resume after long play",
+      "requirement": "Saved entry reads a current indexed state plus bounded suffix, not full history or global erosion; genuine collision-ready first interaction is measured.",
+      "design_sections": [
+        "D05",
+        "D06",
+        "D16"
+      ],
+      "task_routes": [
+        "T01",
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-01",
+      "origin": "inherited_verbatim",
+      "title": "Default-preset freeze reproduction",
+      "requirement": "Capture the actual failing timeline and isolate CPU work, GPU work, memory pressure, waits, pipeline compilation or driver causes before claiming a fix.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-02",
+      "origin": "inherited_verbatim",
+      "title": "Whole-job peak admission",
+      "requirement": "Saturate producers and stall GPU completion; descriptors, ready outputs, staging and retirements plateau within declared credits without deadlock.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-03",
+      "origin": "inherited_verbatim",
+      "title": "Cancellation and stale completion",
+      "requirement": "Cancel before/after encoding, supersede a region repeatedly, and reuse handles; no premature reclaim, leaked staging, dropped completion or double release.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-04",
+      "origin": "inherited_verbatim",
+      "title": "Minimize, resize and device epoch",
+      "requirement": "Rapid resize/minimize and simulated device recovery keep authority state intact; transitions are bounded, zero-size surfaces handled, and cleanup makes progress.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-05",
+      "origin": "inherited_verbatim",
+      "title": "Native budget pressure and pool backing",
+      "requirement": "Lower available budget during replacement; optional admission stops, real backing or reuse is demonstrated, and essential correct geometry remains available.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-06",
+      "origin": "inherited_verbatim",
+      "title": "Coarse-fine seams and edited holes",
+      "requirement": "Traverse edge/corner transitions with caves, fine railings, bridges and destroyed landmarks; no sky leaks, filled tunnels, overlap flicker or restored distant tower.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-07",
+      "origin": "inherited_verbatim",
+      "title": "LOD publication frontier",
+      "requirement": "Delay arbitrary child uploads and empty results; the published frontier keeps complete valid coverage, bounded transitions and no unbounded neighbor-refinement cascade.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-08",
+      "origin": "inherited_verbatim",
+      "title": "Occlusion after cover removal",
+      "requirement": "Remove a wall, move occluders and turn rapidly at non-power-of-two resolutions; compare with unculled output and detect no false hidden actor or stale cover.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-09",
+      "origin": "inherited_verbatim",
+      "title": "Shadow and depth correctness",
+      "requirement": "Near/far casters, moving fragments, foliage and interiors use correct depth/bias/material behavior without broad black patches or missing geometry.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-10",
+      "origin": "inherited_verbatim",
+      "title": "Art identity at actual camera scales",
+      "requirement": "Matched native day/night/motion captures show coherent silhouettes, pixel clusters, distinct materials, grouped plants, quiet spaces and accessible original architecture.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-11",
+      "origin": "inherited_verbatim",
+      "title": "Fast travel and turnaround",
+      "requirement": "Move at supported speed toward an uncached site and reverse; collision/readiness deadlines, upload age and memory remain bounded without missing ground.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REN-12",
+      "origin": "inherited_verbatim",
+      "title": "Persistent surface complexity",
+      "requirement": "Compare solid, hollow, checkerboard, perforated and material-fragmented regions at equal voxel count; measure real output/collision/memory costs and preserve supported geometry.",
+      "design_sections": [
+        "D13",
+        "D14",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-01",
+      "origin": "inherited_verbatim",
+      "title": "Cross-machine command replay",
+      "requirement": "On the declared compatibility profile, accepted commands reproduce complete canonical state across machines, worker counts and render rates without routine corrective state traffic.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-02",
+      "origin": "inherited_verbatim",
+      "title": "Complete checkpoint continuation",
+      "requirement": "Restore terrain, solver/cache, controller, RNG, material and attachment state; continued hashes match an uninterrupted run, not merely object poses.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-03",
+      "origin": "inherited_verbatim",
+      "title": "A deliberately stalled client",
+      "requirement": "Host and other peers continue; the stalled peer exhausts bounded prediction then recovers or receives an explicit readiness result, without global waiting.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-04",
+      "origin": "inherited_verbatim",
+      "title": "Missing commands and sealed ticks",
+      "requirement": "Reorder/drop accepted frames and no-event ranges; confirmed time never passes a gap, axes follow bounded hold policy, and one-shot actions never repeat.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-05",
+      "origin": "inherited_verbatim",
+      "title": "Immediate break and dependent movement",
+      "requirement": "A predicted hole, selection ray, local motion and crate contacts use the same branch; authority rejection restores coherent dependencies without overwriting others edits.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-06",
+      "origin": "inherited_verbatim",
+      "title": "Target generation contention",
+      "requirement": "Two players mine/replace one cell; only one gets original loot and a late request cannot destroy a newly placed unrelated machine at the same coordinate.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-07",
+      "origin": "inherited_verbatim",
+      "title": "Receipt before canonical patch",
+      "requirement": "Receipt/data arrival orders never flash a wall back, spend provisional loot, duplicate sound, or discard unresolved dependent actions.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-08",
+      "origin": "inherited_verbatim",
+      "title": "Baseline capture versus compaction",
+      "requirement": "Race snapshot publication and suffix pinning with edits/compaction; every committed event remains represented exactly once.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-09",
+      "origin": "inherited_verbatim",
+      "title": "Late baseline versus newer live state",
+      "requirement": "Old epochs and same-epoch stale candidates cannot regress the installed frontier or overwrite newer geometry.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-10",
+      "origin": "inherited_verbatim",
+      "title": "Bulk transfer saturation",
+      "requirement": "First join, repair and content transfer under limited upload do not starve controls/receipts; queued bytes, age and processing cost are bounded.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-11",
+      "origin": "inherited_verbatim",
+      "title": "Domain merge, split and mode transition",
+      "requirement": "Before physical coupling, install a coherent merged baseline; splitting and fallback preserve contacts, momentum, frames, caches and ownership under tested rules.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-12",
+      "origin": "inherited_verbatim",
+      "title": "Hidden information boundary",
+      "requirement": "Portal interest and domain membership reveal only authorized facts; exact-mode convenience does not expose secret inventories or undiscovered private structures.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-13",
+      "origin": "inherited_verbatim",
+      "title": "Changed-cover combat policy",
+      "requirement": "Test accepted/rejected break-then-shot, replacement blocks, current new cover, moving doors, exhausted history and duplicate fire; authority selects one damage/cost outcome.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "NET-14",
+      "origin": "inherited_verbatim",
+      "title": "Impairment and full traffic accounting",
+      "requirement": "Configured RTT, asymmetry, loss, burst loss, reorder, duplication and relay migration converge within declared limits; report complete traffic, state age, corrections and replay costs.",
+      "design_sections": [
+        "D05",
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-01",
+      "origin": "inherited_verbatim",
+      "title": "One material owner through fracture",
+      "requirement": "Cut a structure and collect fragments; original terrain, debris, salvage and inventory never own the same quantity twice.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-02",
+      "origin": "inherited_verbatim",
+      "title": "Load versus connectivity",
+      "requirement": "Connected but overloaded construction can fail under the defined model; unknown unloaded support is not automatically detached or a certified anchor.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-03",
+      "origin": "inherited_verbatim",
+      "title": "Support deletion with cyclic and cross-brick bonds",
+      "requirement": "Repeated cuts and moving attachments yield correct bounded component work, mass/inertia, point velocities, cargo and collider publication.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-04",
+      "origin": "inherited_verbatim",
+      "title": "Heated tank, powered hinge and floating crate",
+      "requirement": "Breach the tank while inlet and obstacle move; real flow, pressure, heat and two-way impulses operate once within declared numerical tolerances.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-05",
+      "origin": "inherited_verbatim",
+      "title": "Fluid boundary activation/deactivation",
+      "requirement": "Across active/inactive or adjacent patches, preserve mass/composition/heat/motion as supported; no invisible drain/wall, duplicated flux or camera-dependent disappearance.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-06",
+      "origin": "inherited_verbatim",
+      "title": "Freeze, cable support and melt",
+      "requirement": "Freeze flowing water around a cable, load/cut it and melt it; latent heat, fluid/solid ownership, tension and collision remain coherent.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-07",
+      "origin": "inherited_verbatim",
+      "title": "Grains on belt, settling and reload",
+      "requirement": "Transport, settle, save, reopen and excavate material without a body per grain, duplicated quantity or reset provenance.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-08",
+      "origin": "inherited_verbatim",
+      "title": "Fast projectile and rotating thin cover",
+      "requirement": "Swept contacts use the correct revised geometry for both moving participants; render approximation does not grant tunneling or phantom obstruction.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-09",
+      "origin": "inherited_verbatim",
+      "title": "Dense contact and wake amplification",
+      "requirement": "Converge existing bodies, alter gravity near sleepers and drive joint loops; common physics stays correct with measured contacts/constraints and no private accuracy reduction.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "PHY-10",
+      "origin": "inherited_verbatim",
+      "title": "Already admitted impact under pressure",
+      "requirement": "After projectile activation, saturate derived queues; reserved effects and costs occur once at the defined stage/tick rather than disappearing or being indefinitely delayed.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T14"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-01",
+      "origin": "inherited_verbatim",
+      "title": "Tool-family functional loop",
+      "requirement": "Actual mine/build/hoe/harvest/bucket/shear/fish/ignite/map/repair affordances use correct tags, feedback and authoritative results, not inventory icons only.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-02",
+      "origin": "inherited_verbatim",
+      "title": "Mixed-resolution construction",
+      "requirement": "Place, rotate, remove and repair supported fine shapes on large cells; collision/selection/quantity and seam behavior agree.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-03",
+      "origin": "inherited_verbatim",
+      "title": "Blueprint, mirror and creative distinctions",
+      "requirement": "Ghosts show real fit/resources; survival consumes once, creative sources are labeled, undo respects ownership, and construction does not steal neighbouring structures.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-04",
+      "origin": "inherited_verbatim",
+      "title": "Stack, sort and consolidate",
+      "requirement": "Repeated sorting/stacking preserves lot compatibility, quality, identity/quantity and locked/favourite slots across saves and concurrent edits.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-05",
+      "origin": "inherited_verbatim",
+      "title": "Storage scanner permissions and movement",
+      "requirement": "Incremental index follows container moves, locks, range/connections and destruction without full-world scans or access to private containers.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-06",
+      "origin": "inherited_verbatim",
+      "title": "Concurrent last-item crafting/withdrawal",
+      "requirement": "Exactly one valid transaction acquires the final input; duplicate ingredients/overflow/partial capacity are handled without partial unrecorded consumption.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "KIT-07",
+      "origin": "inherited_verbatim",
+      "title": "Comfort without late-game gates",
+      "requirement": "A fresh survival fixture provides useful storage, shelter, food/light and simple work without compulsory boss kills, slaughter, AFK or advanced-chip fabrication.",
+      "design_sections": [
+        "D02",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-01",
+      "origin": "inherited_verbatim",
+      "title": "Material recovery and process lots",
+      "requirement": "Alternate ore routes change recovery/purity/byproducts while conserving represented feedstock and inputs; reload does not reroll yield.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-02",
+      "origin": "inherited_verbatim",
+      "title": "Circuit and storage limits",
+      "requirement": "Closed DC network, resistance/heating, source/provider/port limits and capacitor behavior agree with the declared model; large capacity does not grant unlimited power.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-03",
+      "origin": "inherited_verbatim",
+      "title": "Conversion and thermal loops",
+      "requirement": "Converters, electrolysis/fuel-cell or equivalent loop, pumps, heat exchange and cooling cannot create free energy through missing losses or erased heat.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-04",
+      "origin": "inherited_verbatim",
+      "title": "Interrupted or blocked production",
+      "requirement": "Stop power, fill output, change a valve and save mid-stage; quantities and partial state remain coherent with useful player-facing diagnoses.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-05",
+      "origin": "inherited_verbatim",
+      "title": "Deterministic wake scheduling",
+      "requirement": "Two networks wake one consumer, reused entities and canceled events; no duplicate activation/transfer and no unbounded stale scheduler storage.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-06",
+      "origin": "inherited_verbatim",
+      "title": "Dormant factory oracle comparison",
+      "requirement": "Coarse/batched advancement matches the defined tick model through thresholds and interruptions; broken logistics and blocked outputs do not produce offline goods.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-07",
+      "origin": "inherited_verbatim",
+      "title": "Functional multilayer IC",
+      "requirement": "Two distinct layouts show different real IO/memory/control/throughput behavior with test-bench diagnostics; design save, manufacture and installation preserve function.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "IND-08",
+      "origin": "inherited_verbatim",
+      "title": "Complete useful product chain",
+      "requirement": "Prospect or salvage, process, fabricate a controller, power/automate a pump and improve a place; statistics expose actual throughput, losses, quality and bottlenecks.",
+      "design_sections": [
+        "D04",
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T15"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-01",
+      "origin": "inherited_verbatim",
+      "title": "Wand compiler limits and order",
+      "requirement": "Deck order/shuffle, triggers, cost, delay and modifier composition behave as declared; recursive expansion is bounded and errors are understandable.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-02",
+      "origin": "inherited_verbatim",
+      "title": "Earthfold physical closure",
+      "requirement": "Donor material becomes constrained panels with actual voids/collision, force limits and occupant handling; payload activation follows real supported closure state.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-03",
+      "origin": "inherited_verbatim",
+      "title": "Mining spell exclusive yield destination",
+      "requirement": "Hammerhand/additional heads and output modifiers perform paid work; debris/store/transmute/XP paths cannot duplicate the same resource.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-04",
+      "origin": "inherited_verbatim",
+      "title": "Cultivated creature and size change",
+      "requirement": "An actual organism gains supported behavior, anatomy/collider/mass or explicit magic-source changes and persistent identity, not only a scaled visual.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-05",
+      "origin": "inherited_verbatim",
+      "title": "Dark spell anchor and alternatives",
+      "requirement": "A restricted technique uses discoverable dependencies and effective counters; consent and legitimate alternatives matter, not just a purple damage type.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-06",
+      "origin": "inherited_verbatim",
+      "title": "Unreturned bounded knowledge",
+      "requirement": "Only allowed observations/anchors influence behavior; reload and networking preserve limits, respite and ownership without omniscient inventory counters.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-07",
+      "origin": "inherited_verbatim",
+      "title": "Unreturned resolution and safe home",
+      "requirement": "Supported investigative/resolution path works; wards and uninvolved co-op players remain protected, with no fake chat or offscreen storage deletion.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MAG-08",
+      "origin": "inherited_verbatim",
+      "title": "First-person equipment quality",
+      "requirement": "Original held wand/tool has useful grip, scale, animation, cast origin and coherent world/icon appearance; native use is reviewed rather than inferred from Blender output.",
+      "design_sections": [
+        "D10",
+        "D11"
+      ],
+      "task_routes": [
+        "T10",
+        "T20",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-01",
+      "origin": "inherited_verbatim",
+      "title": "Coarse-to-detailed resident and cargo",
+      "requirement": "Repeated activation of adjacent districts refines one household/journey/consignment, never duplicates stock or overlaps abstract and physical work.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-02",
+      "origin": "inherited_verbatim",
+      "title": "Friendly daily life and habitat",
+      "requirement": "Different supported body plans can reach home/work/services; organisms follow habitat and ordinary routines without meal-by-meal micromanagement.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-03",
+      "origin": "inherited_verbatim",
+      "title": "Wizard compound alternate access",
+      "requirement": "Public work, restricted rooms, service routes and actual containment exist; research/trade/service/infiltration have distinct consequences and alarms do not instantly fail the site.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-04",
+      "origin": "inherited_verbatim",
+      "title": "City growth and player ownership",
+      "requirement": "New construction respects plots, resources, access and player edits; no overnight overwrite or visit-order reroll.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-05",
+      "origin": "inherited_verbatim",
+      "title": "Radio and scheduled delivery",
+      "requirement": "Broadcast/map information has a real source/window/uncertainty and authorized destination; missed windows have supported alternatives rather than permanent ordinary lockout.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-06",
+      "origin": "inherited_verbatim",
+      "title": "Consignment custody through transport",
+      "requirement": "Warehouse, carrier, coarse travel, pod, dock and recipient transfer one recorded cargo identity; disconnect/reload cannot award it twice.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "LIFE-07",
+      "origin": "inherited_verbatim",
+      "title": "Peaceful settlement viability",
+      "requirement": "Hospitality, trade, restoration, gardens and specialist work create real benefits; prosperity does not mandate endless escalating raids or city-government chores.",
+      "design_sections": [
+        "D07",
+        "D08"
+      ],
+      "task_routes": [
+        "T08",
+        "T12",
+        "T18"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-01",
+      "origin": "inherited_verbatim",
+      "title": "Complete first journey and return",
+      "requirement": "Stream/embankment/gallery loop offers visible invitation, several approaches, evidence, optional action/understanding, quiet discovery and a meaningful return.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-02",
+      "origin": "inherited_verbatim",
+      "title": "Player-created alternate route",
+      "requirement": "Digging, building, gliding or another supported bypass discovers a coherent site and valid clues rather than broken scripting or blanket immunity.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-03",
+      "origin": "inherited_verbatim",
+      "title": "Physical puzzle consistency",
+      "requirement": "At least one pressure/gravity/false-wall/fold interaction uses real state and multiple solutions with legible consequences, not hidden matching-key flags.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-04",
+      "origin": "inherited_verbatim",
+      "title": "Knowledge provenance and reconstruction",
+      "requirement": "Observed/reported/inferred/tested records retain source/time; clues and old maps do not become omniscient exact markers or reroll on visit order.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-05",
+      "origin": "inherited_verbatim",
+      "title": "Quiet exploration and accessible guidance",
+      "requirement": "A view/person/specimen is worthwhile without obligatory loot/combat; optional guidance supports players who cannot rely on subtle sound or color.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-06",
+      "origin": "inherited_verbatim",
+      "title": "Boss and enemy readability",
+      "requirement": "Distinct roles, telegraphs, recovery, paths and actual counterplay work alone and in co-op; damage persists and no instant input-reading defeats clever methods.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "EXP-07",
+      "origin": "inherited_verbatim",
+      "title": "Farming and restoration persistence",
+      "requirement": "Supported ecosystem/ritual resets have real costs/population/provenance; repaired routes and player changes remain useful without duplicate experience/material.",
+      "design_sections": [
+        "D03",
+        "D06",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T07",
+        "T11",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-01",
+      "origin": "inherited_verbatim",
+      "title": "Multi-family realm policy",
+      "requirement": "Universe family, realm, body and frame remain separate; direct requests cannot forge discovery/private permissions or restricted cross-family travel.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-02",
+      "origin": "inherited_verbatim",
+      "title": "Crimson pocket isolation",
+      "requirement": "Local travel and valid paired return work; ordinary flight or ordinary forged portals cannot connect different Crimson planet pockets.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-03",
+      "origin": "inherited_verbatim",
+      "title": "Null Choir revised rule",
+      "requirement": "An ordinary electrical machine continues functioning while a sustained magical binding attenuates; material fire and unsupported magical structures follow distinct rules.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-04",
+      "origin": "inherited_verbatim",
+      "title": "Static arbitrary portal orientation",
+      "requirement": "Position, direction, orientation and handedness map correctly for nonparallel apertures and different gravity frames.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-05",
+      "origin": "inherited_verbatim",
+      "title": "Moving endpoints and point velocity",
+      "requirement": "Rotating/translating source and destination preserve intended portal-relative motion, angular state and explicit energy accounting without giant accidental orbital impulses.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-06",
+      "origin": "inherited_verbatim",
+      "title": "Native visible doorway and mid-crossing view",
+      "requirement": "Parallax, near-plane behavior, occlusion and clipped actors work from oblique angles and halfway through, with no black frame, fake screenshot or source fog contamination.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-07",
+      "origin": "inherited_verbatim",
+      "title": "Destination not ready or unauthorized",
+      "requirement": "Pending aperture is visibly blocked; preview sends no private data and traversal waits only for that valid transfer rather than pausing every player.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-08",
+      "origin": "inherited_verbatim",
+      "title": "Opposite crossings, disconnect and replay",
+      "requirement": "Simultaneous travelers and retries at the exact transfer tick produce one entity/cargo owner each and a consistent save/reload result.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-09",
+      "origin": "inherited_verbatim",
+      "title": "Nested portal and coupled-effect limits",
+      "requirement": "Recursion/render-target/interest budgets are bounded; closed-while-occupied and unsupported ropes/fluid/networks follow explicit policies rather than deletion or hidden fake continuity.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "POR-10",
+      "origin": "inherited_verbatim",
+      "title": "Remote edits and players through a portal",
+      "requirement": "Two clients see actual destination movement and current terrain; source/destination view histories and authoritative interest remain coherent during editing and recovery.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D14",
+        "D16"
+      ],
+      "task_routes": [
+        "T16",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-01",
+      "origin": "inherited_verbatim",
+      "title": "Creative category and editable starter",
+      "requirement": "Spacecraft & Space Building contains functional parts/blueprints; Kestrel can be edited and built from the same survival-compatible kit.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-02",
+      "origin": "inherited_verbatim",
+      "title": "Assembly boundary and stable identity",
+      "requirement": "Launching/staging/landing never swaps to an unrelated prefab, carries the hangar, duplicates hulls or loses module/cargo ownership.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-03",
+      "origin": "inherited_verbatim",
+      "title": "Airtightness actual geometry",
+      "requirement": "Thin walls, corners, windows, partial shapes and fine/coarse joints produce correct seal/leak diagnostics; a missing canopy corner cannot be concealed by a seat bubble.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-04",
+      "origin": "inherited_verbatim",
+      "title": "Compartment split, merge and equalization",
+      "requirement": "Hatches, breaches, docking and moving volumes conserve gas/enthalpy under the model; unknown topology never certifies safety and closing a door does not refill a room.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-05",
+      "origin": "inherited_verbatim",
+      "title": "Life support and thermal state",
+      "requirement": "Separate pressure/composition, scrubber, power, heat and supplies persist during travel/unload; breach is repairable and a suit enables declared contingency behavior.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-06",
+      "origin": "inherited_verbatim",
+      "title": "Aero, actuator and load diagnostics",
+      "requirement": "Wings require usable airflow/exposure, actuators and finite power; mass/fuel/cargo changes affect steering; vacuum-only craft need no decorative wing blocks.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-07",
+      "origin": "inherited_verbatim",
+      "title": "Real propulsion and guidance",
+      "requirement": "Installed engines consume finite actual supplies and guidance uses available control authority; insufficient capability is diagnosed rather than corrected by free forces.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-08",
+      "origin": "inherited_verbatim",
+      "title": "Altitude versus orbit and round trip",
+      "requirement": "A returning arc and stable orbit are distinguished; launch, insertion, rendezvous, deorbit, entry and landing use one consistent configured model without unlabeled cheats.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-09",
+      "origin": "inherited_verbatim",
+      "title": "Walking passengers on moving ship",
+      "requirement": "Clients can walk/drop objects during translation, rotation, acceleration and correction with coherent collision time and no double deck velocity or lost passengers.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-10",
+      "origin": "inherited_verbatim",
+      "title": "Dock, service, disconnect and depart",
+      "requirement": "Compatible capture/permissions/seals/equalization precede opening; both vessel identities and all inventory survive repeat docking and restart.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-11",
+      "origin": "inherited_verbatim",
+      "title": "Station construction and skyhook fit",
+      "requirement": "A built station needs supported orbital state; tether/elevator/transfer geometry has explicit eligibility, load/clearance and schedule rather than a generic hovering prop.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "SHP-12",
+      "origin": "inherited_verbatim",
+      "title": "First useful orbital return and vehicle portal",
+      "requirement": "A real platform mission returns useful cargo to the same workshop; a supported fitting ship can transfer through a legal portal with crew/compartments intact and no Crimson loophole.",
+      "design_sections": [
+        "D05",
+        "D12",
+        "D15",
+        "D16"
+      ],
+      "task_routes": [
+        "T17"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-01",
+      "origin": "inherited_verbatim",
+      "title": "Original hanging machine-city composition",
+      "requirement": "Approach/interior/reverse/distant native views establish scale, voids, original structures and useful space; no generic castle or copied finale geometry.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-02",
+      "origin": "inherited_verbatim",
+      "title": "Independent route families",
+      "requirement": "Foundry, vertical machinery/choir and underworks offer distinct routes and systemic choices; damaged paths and player construction remain coherent.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-03",
+      "origin": "inherited_verbatim",
+      "title": "Warden functional counterplay",
+      "requirement": "Each completed warden has readable combat and at least one real environmental/engineering intervention tied to functioning machinery, not just a switch counter.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-04",
+      "origin": "inherited_verbatim",
+      "title": "Any two of four progression",
+      "requirement": "All valid orders and co-op joins persist correctly; remaining wardens affect the King through declared systems and no client can forge the shared state.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-05",
+      "origin": "inherited_verbatim",
+      "title": "King combat and realignment",
+      "requirement": "Fair telegraphs, actual hit volumes, dynamic routes, player-built interventions and persistence work without arbitrary immunity or deleting the players tools.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-06",
+      "origin": "inherited_verbatim",
+      "title": "Extraction and reconnect",
+      "requirement": "Multiple supported exit/rescue paths preserve participants through disconnect and failure; pre-victory return is available and ordinary possessions are not wiped.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "HALL-07",
+      "origin": "inherited_verbatim",
+      "title": "Charted nexus and replay-safe farming",
+      "requirement": "Successful extraction unlocks only authorized discovered edges; return visits/reset costs/rewards preserve identity, avoid duplicate loot and do not erase the whole location.",
+      "design_sections": [
+        "D10",
+        "D11",
+        "D12"
+      ],
+      "task_routes": [
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-01",
+      "origin": "inherited_verbatim",
+      "title": "Four simultaneous player intentions",
+      "requirement": "Explorer, factory operator, fighter/builder and joining player share the actual inhabited world under impairment and forced relay with bounded state age and queues.",
+      "design_sections": [
+        "D00",
+        "D05",
+        "D13",
+        "D16",
+        "D17",
+        "D18"
+      ],
+      "task_routes": [
+        "T13",
+        "T17",
+        "T19",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-02",
+      "origin": "inherited_verbatim",
+      "title": "Long-run memory and recovery",
+      "requirement": "Travel, edits, plants, scripts, saves, frames, portals and vehicles stop growing retained state after expected steady demand; post-burst debt drains under continued normal use.",
+      "design_sections": [
+        "D00",
+        "D05",
+        "D13",
+        "D16",
+        "D17",
+        "D18"
+      ],
+      "task_routes": [
+        "T13",
+        "T17",
+        "T19",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-03",
+      "origin": "inherited_verbatim",
+      "title": "Reduced visual quality and accessibility",
+      "requirement": "Lower effects/resolution/detail preserve collision, hazards, clues, cover, material distinction and operable UI; color/sound-only dependencies have alternatives.",
+      "design_sections": [
+        "D00",
+        "D05",
+        "D13",
+        "D16",
+        "D17",
+        "D18"
+      ],
+      "task_routes": [
+        "T13",
+        "T17",
+        "T19",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-04",
+      "origin": "inherited_verbatim",
+      "title": "Current world at every representation",
+      "requirement": "Globe, far skyline, near terrain, interior, vehicle frame, portal view and reload agree on consequential edits and identities through extended play.",
+      "design_sections": [
+        "D00",
+        "D05",
+        "D13",
+        "D16",
+        "D17",
+        "D18"
+      ],
+      "task_routes": [
+        "T13",
+        "T17",
+        "T19",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "MIX-05",
+      "origin": "inherited_verbatim",
+      "title": "Honest finished-slice delivery",
+      "requirement": "Provide original code/assets, executable native procedures, observed failures, measured comparisons and remaining scope; no synthetic screenshot or unrun test presented as proof.",
+      "design_sections": [
+        "D00",
+        "D05",
+        "D13",
+        "D16",
+        "D17",
+        "D18"
+      ],
+      "task_routes": [
+        "T13",
+        "T17",
+        "T19",
+        "T21"
+      ],
+      "review_kind": [
+        "automated_or_manual_as_applicable"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-01",
+      "origin": "review_addition",
+      "title": "Scope before patch",
+      "requirement": "One selected bounded proof names actual source owners, allowed changes, native steps and stop condition; no unrelated subsystem rewrite.",
+      "design_sections": [
+        "D00",
+        "D18"
+      ],
+      "task_routes": [
+        "T00"
+      ],
+      "review_kind": [
+        "design_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-02",
+      "origin": "review_addition",
+      "title": "Correctness before cosmetic diagnosis",
+      "requirement": "A suspicious dark region is separated into geometry/depth, CSM, distant visibility and final radiance before any asserted root cause.",
+      "design_sections": [
+        "D14"
+      ],
+      "task_routes": [
+        "T01",
+        "T02"
+      ],
+      "review_kind": [
+        "native_and_automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-03",
+      "origin": "review_addition",
+      "title": "No invented terrain fallback",
+      "requirement": "Known cave/arch and edited openings remain open through delayed child uploads; unknown state does not become fabricated solid terrain.",
+      "design_sections": [
+        "D05",
+        "D14"
+      ],
+      "task_routes": [
+        "T01"
+      ],
+      "review_kind": [
+        "native_and_automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-04",
+      "origin": "review_addition",
+      "title": "Shadow domain overlap",
+      "requirement": "Valid distant and near blockers remain effective; no max/average/min change passes solely because it makes an artifact lighter.",
+      "design_sections": [
+        "D14"
+      ],
+      "task_routes": [
+        "T02"
+      ],
+      "review_kind": [
+        "native_and_automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-05",
+      "origin": "review_addition",
+      "title": "Shader semantic layout",
+      "requirement": "Material kind/flags, host layouts and shared declarations are checked in current source; any formerly overloaded family ID has explicit supported meaning.",
+      "design_sections": [
+        "D14"
+      ],
+      "task_routes": [
+        "T02",
+        "T03"
+      ],
+      "review_kind": [
+        "automated_and_source_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-06",
+      "origin": "review_addition",
+      "title": "Ground identity without labels",
+      "requirement": "Bedrock, sediment, bare soil and maintained ground differ through appropriate shape/edges/use; native unlabeled scenes are understandable beyond green-gray color masks.",
+      "design_sections": [
+        "D06",
+        "D13"
+      ],
+      "task_routes": [
+        "T03"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-07",
+      "origin": "review_addition",
+      "title": "Terrain mass hierarchy",
+      "requirement": "Ordinary uncurated clay views show connected masses/ridges/valleys and quiet sections; new peak noise alone is insufficient.",
+      "design_sections": [
+        "D06",
+        "D13"
+      ],
+      "task_routes": [
+        "T07"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-08",
+      "origin": "review_addition",
+      "title": "Geological counterfactual",
+      "requirement": "Alter lithology or hydraulic connectivity in a disposable fixture; valid cave/spring/habitat/excavation consequences differ without rerolling runtime worlds.",
+      "design_sections": [
+        "D06"
+      ],
+      "task_routes": [
+        "T07"
+      ],
+      "review_kind": [
+        "automated_and_native"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-09",
+      "origin": "review_addition",
+      "title": "Regional schedule independence",
+      "requirement": "Generation order, worker count and cosmetic content streams preserve immutable geological/river/site identities under the same manifest.",
+      "design_sections": [
+        "D05",
+        "D06"
+      ],
+      "task_routes": [
+        "T07",
+        "T13"
+      ],
+      "review_kind": [
+        "automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-10",
+      "origin": "review_addition",
+      "title": "Fine-edit amount invariance",
+      "requirement": "Equivalent physical removed/placed volumes across supported cell sizes preserve material accounting and rounding remainder under repeated edits.",
+      "design_sections": [
+        "D04",
+        "D05",
+        "D15"
+      ],
+      "task_routes": [
+        "T01",
+        "T06",
+        "T14"
+      ],
+      "review_kind": [
+        "automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-11",
+      "origin": "review_addition",
+      "title": "Botanical anatomy and origin",
+      "requirement": "One fern/shrub has coherent attachment, recognizable form and actual production source; a procedural blob or unexecuted script does not pass native art review.",
+      "design_sections": [
+        "D07",
+        "D13"
+      ],
+      "task_routes": [
+        "T04"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-12",
+      "origin": "review_addition",
+      "title": "Specimen identity under recruitment",
+      "requirement": "Adding seedlings or changing cohort membership does not move/reidentify existing harvested or protected plants; reload preserves modifications.",
+      "design_sections": [
+        "D05",
+        "D07"
+      ],
+      "task_routes": [
+        "T08"
+      ],
+      "review_kind": [
+        "automated_and_native"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-13",
+      "origin": "review_addition",
+      "title": "Ecology open-system balance",
+      "requirement": "Growth ledger declares environmental material/energy inputs and outputs; promotion/demotion alone changes no harvestable biomass or stock.",
+      "design_sections": [
+        "D07",
+        "D15"
+      ],
+      "task_routes": [
+        "T08"
+      ],
+      "review_kind": [
+        "automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-14",
+      "origin": "review_addition",
+      "title": "Foliage coverage and motion",
+      "requirement": "Near-to-far plant coverage preserves recognizable crowns without detached trunks, uncontrolled alpha overdraw or significant camera-dependent flicker.",
+      "design_sections": [
+        "D07",
+        "D14"
+      ],
+      "task_routes": [
+        "T04"
+      ],
+      "review_kind": [
+        "native_and_measured"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-15",
+      "origin": "review_addition",
+      "title": "Construction-kit parity",
+      "requirement": "Player-accessible roof/door/frame interfaces reproduce the promised visual language; site access and structure work from reverse/ground-level approaches.",
+      "design_sections": [
+        "D04",
+        "D08",
+        "D13"
+      ],
+      "task_routes": [
+        "T05"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-16",
+      "origin": "review_addition",
+      "title": "Building condition is legible",
+      "requirement": "Intact/ruined/repaired state has structural and usage evidence, not arbitrary missing walls beside pristine surfaces.",
+      "design_sections": [
+        "D08",
+        "D13"
+      ],
+      "task_routes": [
+        "T05"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-17",
+      "origin": "review_addition",
+      "title": "Early convenience playtest",
+      "requirement": "Fresh builder/explorer can obtain useful storage and tools without boss completion, forced factory, hostile grinder or external tutorial; observed friction is recorded.",
+      "design_sections": [
+        "D02",
+        "D03",
+        "D04"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "human_playtest"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-18",
+      "origin": "review_addition",
+      "title": "Death recovery trial",
+      "requirement": "Repeated failures do not create default permanent fragility/gear-loss spiral; recovery has understandable stakes and voluntary experimentation remains viable.",
+      "design_sections": [
+        "D02"
+      ],
+      "task_routes": [
+        "T06"
+      ],
+      "review_kind": [
+        "human_playtest"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-19",
+      "origin": "review_addition",
+      "title": "Offscreen autonomy parity",
+      "requirement": "Same functioning factory receives the same elapsed simulation and real inputs while owner explores versus stands nearby; comparable outcomes follow the declared reduced model.",
+      "design_sections": [
+        "D03",
+        "D09"
+      ],
+      "task_routes": [
+        "T09"
+      ],
+      "review_kind": [
+        "automated_and_native"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-20",
+      "origin": "review_addition",
+      "title": "Heat-pump source accounting",
+      "requirement": "Thermal output, environmental extraction and electrical work reconcile; a useful coefficient of performance is not confused with closed-loop free energy.",
+      "design_sections": [
+        "D09",
+        "D15"
+      ],
+      "task_routes": [
+        "T09",
+        "T14"
+      ],
+      "review_kind": [
+        "automated"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-21",
+      "origin": "review_addition",
+      "title": "Discovery without forced human trigger",
+      "requirement": "Sensors/drones can perform supported observations; UI only reveals legitimately obtained facts and distinguishes generated knowledge from inaccessible private state.",
+      "design_sections": [
+        "D03",
+        "D16"
+      ],
+      "task_routes": [
+        "T12",
+        "T13"
+      ],
+      "review_kind": [
+        "automated_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-22",
+      "origin": "review_addition",
+      "title": "Guidance is optional and factual",
+      "requirement": "Help can be disabled or requested; it explains known next actions without inventing an event, source, buried reward or mandatory objective.",
+      "design_sections": [
+        "D03",
+        "D11"
+      ],
+      "task_routes": [
+        "T12"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-23",
+      "origin": "review_addition",
+      "title": "Familiarity versus stale repetition",
+      "requirement": "Playtest ordinary building/production/travel and record unwanted repetition without treating all recognizable motifs or quiet sessions as failure.",
+      "design_sections": [
+        "D01",
+        "D03",
+        "D18"
+      ],
+      "task_routes": [
+        "T05",
+        "T09",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "human_playtest"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-24",
+      "origin": "review_addition",
+      "title": "Accessible cue redundancy",
+      "requirement": "A required clue/operational signal is not solely color, tiny pixels, sound or flashing; alternate supported cues preserve the same knowledge.",
+      "design_sections": [
+        "D03",
+        "D13"
+      ],
+      "task_routes": [
+        "T05",
+        "T12",
+        "T20"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-25",
+      "origin": "review_addition",
+      "title": "Seed secrecy boundary",
+      "requirement": "Security review explicitly distinguishes reconstructible generated geography from protected mutable inventories/claims; shared seed is not asserted to prevent datamining.",
+      "design_sections": [
+        "D16"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "source_and_security_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-26",
+      "origin": "review_addition",
+      "title": "Partial proof does not finish a feature",
+      "requirement": "Tether visual acceptance never marks cargo/orbit ready; moving assembly never marks orbital return ready; only the selected proof and its evidenced cases change status.",
+      "design_sections": [
+        "D18"
+      ],
+      "task_routes": [
+        "T00",
+        "T17",
+        "T18",
+        "T19"
+      ],
+      "review_kind": [
+        "design_and_status_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-27",
+      "origin": "review_addition",
+      "title": "Task prerequisite independence",
+      "requirement": "A local encounter or art correction is not blocked by unrelated new gliding, fab, civilization or fluid systems; required behaviors can come from proven existing code.",
+      "design_sections": [
+        "D18"
+      ],
+      "task_routes": [
+        "T00",
+        "T20"
+      ],
+      "review_kind": [
+        "design_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-28",
+      "origin": "review_addition",
+      "title": "Subpixel tether compositing",
+      "requirement": "A narrow/widened tether displays against land, cloud and sky without opaque background erasure; motion and crossings preserve projected coverage and depth policy.",
+      "design_sections": [
+        "D14"
+      ],
+      "task_routes": [
+        "T18"
+      ],
+      "review_kind": [
+        "native_and_measured"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-29",
+      "origin": "review_addition",
+      "title": "Matched visual evidence",
+      "requirement": "Before/after record same save, seed, camera, exposure/settings and build identity plus motion; any changed conditions are disclosed.",
+      "design_sections": [
+        "D13",
+        "D17"
+      ],
+      "task_routes": [
+        "T00",
+        "T02",
+        "T03",
+        "T04",
+        "T05"
+      ],
+      "review_kind": [
+        "evidence_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-30",
+      "origin": "review_addition",
+      "title": "First-person construction framing",
+      "requirement": "Held material is identifiable without unnecessarily obscuring placement target/scene; viewport/FOV/movement and other-player representation are checked.",
+      "design_sections": [
+        "D02",
+        "D13"
+      ],
+      "task_routes": [
+        "T05",
+        "T06",
+        "T10"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-31",
+      "origin": "review_addition",
+      "title": "Production provenance and tool reality",
+      "requirement": "Authored sources/imports/licences are recorded; executed Blender or asset tools have real outputs; unsupported formats/tools are marked blocked, not claimed.",
+      "design_sections": [
+        "D13",
+        "D18"
+      ],
+      "task_routes": [
+        "T04",
+        "T05"
+      ],
+      "review_kind": [
+        "evidence_review"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-32",
+      "origin": "review_addition",
+      "title": "Supported overload retains accepted effects",
+      "requirement": "When work queues saturate, already admitted damage/transfers occur under declared staged semantics; optional presentation is shed without deleting reality.",
+      "design_sections": [
+        "D05",
+        "D15",
+        "D17"
+      ],
+      "task_routes": [
+        "T01",
+        "T10",
+        "T14"
+      ],
+      "review_kind": [
+        "automated_and_measured"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-33",
+      "origin": "review_addition",
+      "title": "Capability diversity without compulsory curriculum",
+      "requirement": "An advanced system provides useful presets and alternative acquisition/use paths; ordinary house/expedition play does not require every industrial discipline.",
+      "design_sections": [
+        "D03",
+        "D09",
+        "D12"
+      ],
+      "task_routes": [
+        "T09",
+        "T15",
+        "T17"
+      ],
+      "review_kind": [
+        "human_playtest"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-34",
+      "origin": "review_addition",
+      "title": "Ordinary place without forced spectacle",
+      "requirement": "Remove lore labels, special-event scripts and quest markers in a test copy; ordinary movement/building/observation remains worthwhile to sampled players.",
+      "design_sections": [
+        "D01",
+        "D03",
+        "D06",
+        "D18"
+      ],
+      "task_routes": [
+        "T03",
+        "T07",
+        "T12"
+      ],
+      "review_kind": [
+        "human_playtest"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-35",
+      "origin": "review_addition",
+      "title": "Two-client proof before planetary multiplication",
+      "requirement": "Early shared crate/edit/local physics/reconnect evidence exists; low routine traffic is not claimed from a seed or localhost connection alone.",
+      "design_sections": [
+        "D16"
+      ],
+      "task_routes": [
+        "T13",
+        "T19"
+      ],
+      "review_kind": [
+        "automated_native_measured"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-36",
+      "origin": "review_addition",
+      "title": "Second-world mechanical difference",
+      "requirement": "Transport existing equipment to a different environment; at least one meaningful changed decision and valid return are observed, not just a palette or crafting lock.",
+      "design_sections": [
+        "D12"
+      ],
+      "task_routes": [
+        "T19"
+      ],
+      "review_kind": [
+        "native_and_human"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-37",
+      "origin": "review_addition",
+      "title": "Cultural/editorial integrity",
+      "requirement": "Culture, body plan, job and morality remain separate; source-specific folklore is reviewed with appropriate expertise before final direct portrayal, and origin need not be explained away as machinery.",
+      "design_sections": [
+        "D01",
+        "D08",
+        "D11"
+      ],
+      "task_routes": [
+        "T12",
+        "T21"
+      ],
+      "review_kind": [
+        "human_editorial"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "REV-38",
+      "origin": "review_addition",
+      "title": "No environmental global freeze",
+      "requirement": "A deliberately stalled client, renderer minimization or device recovery does not erase listen-host state or freeze other supported players; retained work and retirement stay bounded.",
+      "design_sections": [
+        "D16",
+        "D17"
+      ],
+      "task_routes": [
+        "T13"
+      ],
+      "review_kind": [
+        "automated_native_measured"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    }
+  ]
+}

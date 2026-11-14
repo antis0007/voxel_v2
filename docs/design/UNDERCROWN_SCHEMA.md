@@ -36,7 +36,7 @@ prop:     8 bits (256 per room)
 | 4 | Ashen Foundry | 1 furnace mouth |
 | 5 | Glass Archive | 1 archive (generator 32) |
 | 6 | Frozen Choir | 1 choir antechamber |
-| 7 | Hollow Sea | Reserved |
+| 7 | Hollow Sea | Generator 291: 1 rift, 2 rift stair, 3 hollow sea, 4 sea isle |
 
 ## Generator 32 region
 
@@ -56,6 +56,18 @@ The site is the best of 40 seeded hills 220–480 m from spawn whose whole footp
   - Also: the ferry landing, a duct above the flood line, the bathhouse and the aqueduct house.
 - **Ashen Foundry (C + 2).** A lava channel across the furnace hall. The Glass Archive lies beyond it.
 - **Glass Archive.** Sealed in tombstone, its passage too, so nothing digs around the door. It holds shelves and a reliquary.
+
+## Generator 291 wilds (dormant)
+
+`v2/wilds.rs`, gated on `wilds::VERSION`. Lantern Gardens gains room 3, the sunken grove.
+
+- **The Rift.** A ravine (`Shape::Rift`) west of the halls, 170 m long and about 55 m deep, with a stream between two banks. The door behind the first camp opens onto a stone span across it. A stair in the west wall goes down to a balcony half way and to the west bank.
+- **Sunken grove.** A mushroom cavern with a pond under the halls, entered from the Rift's east bank.
+- **Hollow Sea.** Two overlapping caverns over one water level, south of the borough: an isle with a cache and a wreck, rock stacks, a fall from the roof. The Rift's stream runs into it.
+- **Gating.** The ferry landing's dock is a jetty 8 m over the water, so the sea is a way out of the borough, not into it. Nothing joins the Crown Chasm.
+- **Rock.** Cavern and Rift shells are bedded rock with crystal veins (`wilds::natural`); built rooms keep masonry.
+
+Run this module's tests against the gate with `UC_GEN=291`. `ids_match_the_generator_19_plan_and_the_archive_is_new` counts rooms and is expected to fail there.
 
 ## Mechanisms
 

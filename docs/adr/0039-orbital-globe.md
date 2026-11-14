@@ -52,13 +52,60 @@ by the driver, and an unchanged request list is not resent.
 
 ## Cloud shell and night lights
 
-The cloud shell sits at R + 1,600 m, 512² texels per face, rebaked every 30 s
-from `world::weather::coverage_at` on its own thread, and shadows the ground
-below it. Night lights are capped at 256, chosen nearest-first, with per-site
+The cloud shell sits at R + 1,600 m, 512² texels per face, rebaked on its own
+thread from `world::weather::coverage_at`, and shadows the ground below it.
+
+One weather state feeds the shell, the cloud march and play (2026-11-05):
+
+- Climate: latitude belts in `world::weather::synoptic::zonal`, fixed.
+- Synoptic weather: continental noise and seven cyclones in body-direction
+  space, turned east by 0.08 rad per day and evolving on the weather clock
+  `synoptic::days` (saved, replicated day index plus time of day, never wall
+  time). Each cyclone lives 6 days and its strength is zero at both ends of a
+  life, so respawns never jump.
+- `synoptic::controls_at` adjusts the day's `CloudControls` per ground point:
+  coverage gets the synoptic bias, cumulonimbus becomes `max(day, cyclone core)`.
+  Outside cyclone cores precipitation is exactly the day's; cores rain and
+  thunder on fair days (about 1-3 % of the planet at a time).
+- Local detail: the clipmap's field (`evaluate_sample`) at the advected position
+  `q = ground + wind_offset(sky time)`, under those controls. The clipmap and
+  the shell call the same `canonical_sample`. Overlapping face projections
+  blend by body direction near cube edges and corners, so local detail agrees
+  from either chart. The clipmap refreshes at 60 Hz, 2 rows per tick on one
+  level, with at most 4 ticks per frame. A full cycle takes about 3.2 seconds
+  at 15 FPS or higher; excess catch-up after stalls is dropped.
+- Gameplay (`storms::local_cumulonimbus`), the soundscape, surface wetness and
+  sky dimming read `controls_at` at the player, so they agree with the deck
+  overhead. Cell-scale rain shafts in the march ride the local wind and are
+  render-only detail; play reads the synoptic layer only, which is synced.
+
+The shell remaps advected samples across cube edges instead of clamping them
+to a face. The volumetric renderer uses the shared coverage directly; its
+former additional bank and street coverage biases are removed. Shape noise
+still provides cloud lobes and erosion.
+
+`DayNightCycle` serializes the weather seed and cloud controls with the day
+clock. Multiplayer gameplay replication sends and applies that complete value
+in its header; save sessions also retain it. This is source evidence, not a
+two-client runtime acceptance result.
+
+Limits: gameplay precipitation uses the synoptic layer; local rain shafts are
+render-only detail. Independent cloud layers retain their own heights and
+advection rates. Night lights are capped at 256, chosen nearest-first, with per-site
 hashed intensity (1.5 to 3.0) and radius factor (0.6 to 1.0). The chart-wide
 anchorage walk runs on the shell thread (cached per seed) and comes back as a
 message; the render thread only counts factory nodes per chunk on a refresh and
 uploads the 256 x 32 B list.
+
+2026-11-05 recovery evidence: `target/reviews/abandoned-recovery-20261105/index.html`
+and `receipt.json`. A frozen release-fast build validated all 25 composed shaders.
+Native views cover terrain at 150 m, 600 m and 3 km; overcast weather at 2, 4,
+6 and 9 km, orbit and the planet edge; dusk and two night days at 4 km.
+The snapshot needed completed industry/habitat dependencies and a value-preserving
+RON fixed-array syntax correction. Those adjustments were confined to the snapshot.
+Later live cloud-flow and relief edits remain outside this capture set. No unit
+tests or CI were run, as requested; continuous storm descent, multiplayer replay
+and performance acceptance remain unverified.
 
 The lean tier only lowers limits (256 draws, 256² shell). The globe shader
 already uses the distance limb approximation without a LUT pass, so there is no
@@ -165,3 +212,72 @@ load; a quiet re-record would tighten them. globe_ms max (0.92 ms) still
 exceeds the 0.5 ms budget on isolated frames. Globe lighting does not match the world shader where the globe is the
 visible ground; `max_frame_ms` is recorded but not enforced by
 `frame-bench-check`.
+
+## Claude atmosphere recovery (2026-11-05)
+
+The source audit covered D:, C:/dev, Claude scratch/temp worktrees, downloads,
+and relevant Claude session logs. It catalogued 2,046 atmospheric/rendering
+files into 297 distinct versions; 239 differing shader versions are preserved
+under `target/claude-atmosphere-recovery/shader-candidates`. Inventories, source
+hashes, search exclusions and build/capture receipts live alongside them.
+Protected recycle/system folders and unrelated canwxlab caches were unreadable.
+
+The `efeeeb39-4982-4dfd-abad-b817a7660cdb` session left two weather candidates:
+`wt-weather` has the pressure/Coriolis/advection/moisture solver; `wt-integ`
+adds explicit frontal/tropical cloud templates, eyes, spiral bands, latitude
+belts and dry slots. Both now contribute to orbital coverage. Localized positive
+pressure forcing complements the recovered low-pressure seeds. Cloud snapshots
+are immutable during each face bake. Solver steps run cooperatively on the
+existing worker; ordinary weather remains available during spin-up. Sampling
+the solver's reconstructed coverage no longer allocates per texel.
+
+The pressure field is a dimensionless reduced model. Its recovered surface
+initialization is ocean-only; terrain forcing and authoritative gameplay weather
+are not connected to it. The original synoptic system still owns gameplay.
+
+The active shared flow shader supplies Karman streets and shear billows to both
+the local march and orbital lookup. It is not also baked into coverage. Existing
+mip filtering, temporal face blending and cloud shadows are retained. Handoff
+uses optical depth, fades premultiplied radiance with opacity, and clips the flat
+march to the curved cloud limb. Orbital extinction increases for grazing rays;
+sprites follow the same handoff. Source/build validation and native visual
+acceptance remain separate evidence.
+
+## Continuous globe detail (2026-11-05)
+
+The selector now targets one projected pixel per lattice cell and measures the
+nearest projected patch point, rather than only the tile centre. It retains all
+ancestors and the six roots. Newly selected children blend from parent heights,
+normals, climate, water and material colours for 350 ms; they cannot refine
+again until that handoff finishes. A distance-dependent detail weight converges
+to the parent before the merge threshold, while hysteresis prevents oscillation.
+The shader reconstructs the parent's actual triangle diagonal for the blend.
+Its atmospheric emission now follows the same segment composition on clouds
+and ground. Existing palette choices and the voxel surface treatment remain.
+
+The design follows the geometry-and-texture transition principle in
+[GPU geometry clipmaps](https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-2-terrain-rendering-using-gpu-based-geometry)
+and the spatial refinement principles of [CDLOD](https://github.com/fstrugar/CDLOD).
+The atmosphere comparison uses [Hillaire's production atmosphere model](https://onlinelibrary.wiley.com/doi/full/10.1111/cgf.14050).
+This is not an assertion of identical algorithms or unlimited streaming quality:
+the existing draw/upload budgets still apply. Motion, grazing views and cold-cache
+acceptance need native captures, separately from composed-WGSL validation.
+
+### Native review receipt (2026-11-05)
+
+The frozen source in `target/claude-atmosphere-recovery/isolated-source` built
+successfully with release-fast, locked/offline dependencies. All 27 composed
+WGSL programs validated. The reviewed binary SHA256 is
+`AB73E7B8D302AE010AE4861C0D01065918007B809CDE506F7F4BAFD04A9AB408`.
+No tests or hosted CI were run. Concurrent chats remained active; later live
+Hell-planet shader/driver additions are outside this binary's receipt.
+
+`native-retry/4000` and `native-retry/orbit` contain native static captures.
+The first capture attempt exited without a frame; the retry completed. The
+4 km view reduces the oversized bright flat cloud shelf and restores the curved
+limb, but a narrow horizon band remains. The orbit log confirms 24,576 active
+pressure cells at model time 40.80, anomaly range [-1.4192, 1.0793], mean cover
+0.2876. `native-ascent` contains 17 PNGs; three sampled frames were inspected.
+Frame-pacer timeouts and host hitches occurred, so neither smooth performance
+nor universally invisible LOD changes are accepted by this review. Source
+hashes and detailed limits are in `receipt.json` and `review-source-sha256.json`.

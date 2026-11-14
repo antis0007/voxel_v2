@@ -203,3 +203,21 @@ extra ticks to drain them; extend the command document explicitly.
   one acknowledged player-edit path and revision-tagged mesh publication. Only then
   enable the region in a saved/windowed world. Reuse the existing GPU resident pool
   and readback lifecycle for the later backend; keep legacy rollback until its gates pass.
+
+## Follow-on: exact CPU-region checkpoints (2026-10-26)
+
+The next concrete checkpoint increment above is now source-implemented:
+[ADR 0025](../adr/0025-cpu-region-checkpoints.md). The headless runner can save and
+restore all reserved cells, awake flags, ordered pending commands, delayed
+snapshots and player/CA scheduling clocks using separate bounded checkpoint files.
+The complete player/legacy session remains outside this format. Ordinary saves,
+generator versions, windowed authority and rendering are unchanged.
+
+Verification: source review and local offline application compilation passed:
+`cargo check --offline --locked -p minecraft_style_voxel_prototype --bin
+minecraft_style_voxel_prototype --message-format=short` (47 app warnings).
+An earlier unrelated private-method error was resolved in the concurrent work;
+no unrelated source was changed by this increment. No tests, scenarios,
+benchmarks, hosted CI or game launches were added or run. Exact resumed behavior
+is an implementation contract awaiting runtime validation. Acknowledged player
+edits and revision-tagged mesh publication remain the next cutover gate.

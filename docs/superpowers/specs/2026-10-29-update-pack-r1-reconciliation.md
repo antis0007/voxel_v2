@@ -173,3 +173,70 @@ the allow-list term in `main.rs`, gate rows 80 and 81 in GENERATOR_GATES.md.
 Next smallest step: scree aprons downhill of knobs (talus from the same bed),
 then a motion capture along the walking route, then the owner decides the
 gate-81 bump.
+
+## 7. T01 first proof: border edits remesh and persist
+
+Owner asked for the remaining packets the same day. No defect was found; the
+proof is the fixture the packet asks for, `crates/app/src/world/edit_border_tests.rs`.
+
+| Check | Result |
+|---|---|
+| `mark_chunk_and_neighbors_dirty` vs brute-force halo readers: 125 cells per chunk at chunks 0, -1, (-1,0,2), (70000,-3,-70001) | identical sets; a corner dirties 8 |
+| Dig/place on the 8 cells meeting at the (-32, k, -32) corner, Hills seed 11, writeback, fresh World on the same region records | every edit reloads; cells two away keep generator output |
+
+Not covered: stale generation jobs racing an edit, coarse/fine LOD seams,
+0.5 m and 0.25 m scales, native approach/recede in motion. Ran in the D:
+snapshot (shared tree still blocked on `Obsidian`).
+
+## 8. T11 first proof: glide frame
+
+Worn Kinetic chest armour (existing item, no save change) offers a glide frame:
+Jump while falling opens it, Jump again or landing closes it. Model in
+`crates/app/src/player/glide.rs`: lift across the airflow, drag along it,
+sideslip drag toward the heading, pitch sets the lift coefficient; no thrust
+term. Coefficients scale with world gravity (`world::GRAVITY` 28 m/s2): trim
+12 m/s, best glide about 7. Hook: one branch in `player.rs` after flight,
+`glide.available` refreshed in `simulation/fixed.rs`, `Inventory::glide_frame`,
+`kinetic_vest` description row.
+
+| Check | Result |
+|---|---|
+| Kernel tests (6): energy never rises in still air at 9.81 and 28 m/s2, glide ratio 5..9, dive vs flare, stall recovery, heading turn, 3 m/s updraft | pass |
+| Controller tests (3) through `update_player`: 60 m drop hurts without, glides over 150 m with no harm at 1 m and 0.5 m; Jump in the air without the frame changes nothing; pitch pumping never climbs above launch | pass |
+| Bug found by the heading test | lift was flipped whenever its y was negative; in f32 a level crossflow has y of -4e-8, which reversed the lift and flew the frame backwards. Flip removed |
+
+Open: no world wind or updraft source (kernel takes `wind`, caller passes
+zero); state is transient, so loading mid-air starts stowed; multiplayer
+joiners never get the frame (`multiplayer.rs` not touched) because the host
+movement validator's hover/ascent rules need a glide case first; no viewmodel
+or HUD cue; no native observation. Next step: a headless glide scenario and a
+native capture, then a validator rule so joiners can glide.
+
+## 9. T10 first proof: wand spells change matter
+
+Existing operators already reach the world on impact (`adventure.rs`
+dispatches `cryo_bloom` for card 13 and `arcana_impact` for the arcana bolts).
+`crates/app/src/world/adventure/spell_matter_tests.rs` proves it through the
+real cast path, not by calling the effect directly:
+
+| Check | Result |
+|---|---|
+| Cryo nova cast down into a 9x9 stone-floored pool | at least 20 cells freeze, mana spent, a walker dropped on the ice stands on it |
+| Magma glob cast at the same spot | ice count falls |
+| Zero mana | pool unchanged |
+| Magma glob in the deck but absent from the starter spell log | no cast, no mana spent |
+
+Harness note: the adventure tick sets `wand` from the held item, so a test
+without a held wand item must set it before each cast.
+
+Not covered: a new operator pair (the packet's "two reusable operators"
+beyond freeze and melt), yields into inventory, save/reload of spell-made
+ice, multiplayer replay, and the first-person cast origin.
+
+## 10. Packets not started in this session
+
+T02 shadows, T04 fern and shrub assets, T05 building site, T07 watershed,
+T08 plant persistence, T09 production line, T12 inhabitant, T14 coupled
+physics, T15 controller, T16 portal, T17 vehicle, T18 Meridian, T19 second
+world, T20 encounter, T21 realm. T06 (quick-stack, sorting) and T13 (netcode)
+have active owners. All their acceptance cases stay NOT_RUN.

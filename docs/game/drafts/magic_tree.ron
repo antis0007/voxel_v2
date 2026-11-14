@@ -25,6 +25,7 @@
         (id: "wand.first", tier: Wands, requires: ["mana.leyline_well"], unlocks: ["lumen_twig", "spark_card"], grants: []),
         (id: "wand.modifiers", tier: Wands, requires: ["wand.first"], unlocks: ["speed_card", "bounce_card", "split_card", "trigger_card"], grants: []),
         (id: "wand.table", tier: Wands, requires: ["wand.modifiers", "mana.crystal"], unlocks: ["wand_table"], grants: []),
+        (id: "wand.storm_surge", tier: Wands, requires: ["wand.table"], unlocks: ["storm_surge"], grants: []),
         // Runes: mana-signal cells
         (id: "rune.conduit", tier: Runes, requires: ["mana.crystal"], unlocks: ["rune_conduit", "mana_pipe"], grants: [ItemTransport]),
         (id: "rune.gates", tier: Runes, requires: ["rune.conduit"], unlocks: ["rune_emit", "rune_amplify", "rune_delay", "rune_aspect_gate"], grants: []),

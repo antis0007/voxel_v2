@@ -13,9 +13,9 @@ Decision 0039 applies: briefs are backlog, not inputs of record. MASTER_PLAN M1
 ## 1. Name
 
 "Webway" is the name of the Aeldari portal network in Games Workshop's
-Warhammer 40,000. 0039 §3 already declines designs that follow other works,
-and new proper nouns need approval. Code uses `portal_network`; no player text
-or RON row uses the brief's name. Navigator tier names (§14.2) are unapproved.
+Warhammer 40,000. The owner approved the name on 2026-10-30 (0039 addendum);
+designs, art and text stay original to this game. Code keeps `portal_network` as
+the module name. Navigator tier names (§14.2) remain unapproved.
 
 ## 2. Already present
 
@@ -75,3 +75,60 @@ shows the fallback state and blocks traversal (§11.4). Needs a MASTER_PLAN row.
 2. Drop the brief's name; `portal_network` as the code placeholder?
 3. Lockstep for matter stands over the brief's §1.2? (0039 assumes yes.)
 4. Re-paste or stage sections 15.5 onward; they were cut off.
+
+## 7. Update, same day: crystal gates landed (uncommitted at writing)
+
+Correction to section 4: there was no crossing at all before this work, not a
+client position change; the portal modules were declared and never called.
+
+Implemented, same-realm only:
+- Gates: a closed `Crystal` ring around a rectangular opening in a vertical
+  plane (`world/portals/gates.rs`). F on the ring attunes, links, releases or
+  closes. Matching sizes only (no scaling). Both faces link, four portals per pair.
+- Crossing: the eye triggers it, the body follows, velocity and yaw turn with
+  the portal; an obstructed exit holds the walker at the plane
+  (`world/portals/traverse.rs`). Host or solo only: links live in the host's
+  `gates.ron` sidecar, so the save version is unchanged.
+- Windows: each destination renders from its virtual eye into a pooled target
+  (terrain, horizon, models, sky; no clouds or indirect light), clipped at the
+  exit plane through `Camera::portal_clip`, then composited with the veil
+  (`render/portals*`, `shaders/portal_composite.wgsl`). Depth two, four
+  destinations, resolution follows screen coverage.
+- Openings without a window get a mist membrane; openings into a realm that
+  is not loaded (the surface hell gate) get a raymarched underworld stand-in
+  drawn from the owner's concept art. It is a stand-in until a second world
+  can be resident and rendered.
+
+Still missing: cross-realm windows and crossings, mobs and projectiles through
+portals, multiplayer replication of links, drift and the region graph.
+
+## 8. Update, 2026-10-30: gate visuals
+
+- Every window and veil now carries light in the inside of its ring (violet
+  for crystal gates, cold blue for realm gates) and a ripple that runs inward
+  from the ring and dies within about a metre (`portal_composite.wgsl`).
+- Realm gates report whether they show a vista (`realm::Gate::vista`). The
+  underworld side of the hell gate gets a dark mist membrane instead of a bare
+  opening.
+- The hell gate's red threads and backing plate are gone; the vista fills the
+  arch. Surface approach ruins are generator 89 (`docs/design/BURIED_HELL_GATES.md`).
+
+## 9. Update, 2026-11-02: pearl membrane and crystal film
+
+- Membrane and window share a nacre film (`pearl()` in `portal_composite.wgsl`):
+  interference colour that drifts across terraces and walks with the viewing
+  angle, one-texel growth lines and rare stepped sparks, all on the world's
+  20 texels/m grid and faded out once a texel is under a pixel. Window tint
+  keeps the destination's luminance. Rim bands carry the same spectral colours.
+- Within 1.5 m of the plane, inside the outline, refraction, colour split and
+  film strength swell: stepping through reads as pushing through a film.
+- Windows under 0.12 % of the screen (`views::MIN_WINDOW_SHARE`) get no terrain
+  pass; the shader fades a window into the membrane up to twice that share, so
+  the hand-over does not pop. Test: `a_distant_gate_gets_the_membrane_instead_of_a_window`.
+- Underworld vista march 110 to 72 steps with distance-relaxed tolerance. A/B
+  with `VOXEL_PORTALS=0` on the underworld pose: frame GPU time within noise.
+- Resonant crystal (`world_shader.wgsl`, kind 22): per-shard thin-film
+  iridescence that re-hues the received light at equal luminance, faint
+  face-on, stronger at grazing angles. Applies to all crystal, not only gates.
+- Evidence: `target/portals-20261029/pearl-before-*` and `pearl4-*`
+  (`pearl3-far`, `pearl4-front-r2`), review pose `threshold` added.

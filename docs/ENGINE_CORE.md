@@ -8,6 +8,8 @@ Source: `docs/specs/ENGINE_CORE_PROMPT_v2.md`, sections III, VIII, X, XI and XII
 
 ---
 
+Implemented renderer facilities and their game consumers: [Orbital renderer foundations](design/ORBITAL_ENGINE_FOUNDATIONS_20261105.md). This records source integration separately from runtime acceptance.
+
 ## 0. The code today (what the plan starts from)
 
 | Area | Today | Where |
@@ -111,6 +113,19 @@ brick.sleep_check()                                                      # clear
 ## 5. Physics rules (M1)
 
 Each rule is a data-driven row where possible. The numbers below are targets set in RON, not constants in code.
+
+Fluid target clarified 2026-11-05: the simulation lattice is internal storage.
+Liquid surfaces must be continuous across cells and chunks, including waterfalls;
+gases must read as density volumes rather than blocks. Material parameters use
+physical units: density, viscosity, surface tension, temperature and buoyancy.
+Pressure and momentum determine transport; shaders display that transport.
+Rendering interpolation alone does not satisfy the physics target.
+
+The windowed runtime still uses a conservative cellular approximation. Its
+current recovery adds surface interpolation, current advection and bounded
+remesh publication. A pressure/velocity solver and continuous gas rendering
+remain separate implementation work, with sealed-container, outlet, gravity,
+mass-conservation and frame-time acceptance required before claiming realism.
 
 - **Powder:** per-cell velocity in `motion`, gravity from material, sub-cell accumulator in `aux`. Blocked cells spread two-thirds of the velocity laterally, biased by existing motion. Angle of repose per material. Shatter above `shatter_speed` in the reaction table.
 - **Liquids:** volume-based (0..=64). Hydrostatic pressure per column computed in phase 0 into the cell's `pressure`. Face flow by pressure gradient, capped by `flow_rate`. Lateral spread at most 3 cells per tick. Interior cells sleep. Compression above full under ceilings, for U-tubes. Viscosity, surface tension threshold, evaporation, freezing, boiling from temperature.

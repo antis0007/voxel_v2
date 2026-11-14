@@ -1,0 +1,330 @@
+AXIOM / MERIDIAN — THE MANYFOLD
+OPEN LABYRINTH GEOMETRY AND TWISTING GRAVITY
+Design and implementation extension — 29 October 2026, America/Edmonton
+
+STATUS AND PRECEDENCE
+
+This document proposes traversable open labyrinths for the existing Rust + raw wgpu game, Windows first, without Bevy. It extends The_Manyfold_Design_and_Implementation_Brief.txt and AXIOM_Reality_Contract_v1.txt. The controlling deterministic-engine prompt retains precedence: accepted-command replication is the preferred normal path for verified complete domains, with explicit synchronization fallback where needed.
+
+No game repository was available, and no engine integration, native collision test, GPU performance measurement, or multiplayer session was performed. Geometry families, dimensions, controller requirements, and acceptance scenes below are design specifications. Equations are analytical models with stated domains, not a delivered native solver. One force/torque identity was numerically checked as described in section 10. The accompanying interactive geometry study illustrates a tube and its local down directions; it is not a game screenshot or a simulation benchmark.
+
+1. THE PRIMARY EXPERIENCE: THE SKY IS ANOTHER DISTRICT
+
+The player enters a wide stone passage and looks upward. There is no separate roof. Across an open central volume, another maze curls over the apparent sky. Trees grow toward the player from that distant ground. A person walks there with their feet against the stone and their head pointing into the same open space.
+
+A continuous planted path curves around the tube. Following it turns the original floor into a wall, then into the district overhead. The player can recognize the place they entered from because its belfry, water stains, and repairs remain in the same physical locations. Their friend can stay behind and watch the entire journey.
+
+The tube bends ahead, hiding its next district. Open shafts in its pavement expose deeper radial layers. Some layers are inhabited; some have collapsed into bridges, terraces, and half-supported streets. Farther on, openings lead into a shell world where architecture occupies every direction around an empty center.
+
+This is the central promise: visible upper mazes are persistent places with geometry, collision, inhabitants, edits, and routes. Distant optical scenery may coexist with them, but the rules and evidence must let players distinguish a view from a reachable district.
+
+2. A FAMILY OF DIFFERENT SPATIAL PROBLEMS
+
+Use these as reusable generative structures, not a checklist of mandatory named landmarks. Each family should alter route choice, orientation, falling, construction, or logistics.
+
+2.1 Open tube: progress along or around
+
+The entire inward-facing shell carries maze ground. Axial travel advances along the region; circumferential travel changes the player's physical orientation. Low walls divide paths without sealing the central volume. Courtyards, gardens, arcades, bridges, and machinery occupy selected parts of the shell.
+
+Gravity points outward from the axis toward the shell. From any one surface, local up points into the open interior. A person opposite the player has an opposing down direction but samples the same world field at their own position.
+
+The baseline route wraps around the shell. A direct crossing through the center is an optional engineering or movement challenge. Open wall-top routes can support reconnaissance and shortcuts; do not invalidate building and climbing merely to protect a maze solution.
+
+Generate an identifiable transverse seam, an aqueduct, or a band of vegetation that can be followed around the circumference. It demonstrates continuity before the player must trust an unfamiliar transition.
+
+2.2 Bent and branching tubes: progress changes its axis
+
+The tube follows a broad curve, coils through a cavern, or branches into several substantial openings. The far district bends out of sight. A destination first seen above may later be reached by following a continuous floor around a bend.
+
+The branch chamber is a designed transition space with adequate width and clear supported routes. It is not a point where several nearest-axis calculations compete. Gutters, structural ribs, chains, and floor materials reveal the chosen routes. A visible apparatus can alter a bounded connection after teaching its supported states.
+
+Keep a fixed route through introductory junctions. An optional mechanism, bridge, or assisted transfer can provide a shorter route. Changes require warning, occupancy handling, and a return path.
+
+2.3 Nested, broken shells: a fall reveals another layer
+
+Place several incomplete maze-bearing shells outside a primary tube. Openings in a floor lead radially outward into a lower service layer under the outward field. Erosion and collapse expose layers through large gaps, avoiding a uniform stack of identical ceilings.
+
+The next layer contains useful routes, supports, access to machinery, or a way back. It should not exist only to punish mistakes. A construction project can turn a dangerous fall into a reliable freight drop or ladder connection.
+
+A breach underfoot sends the traveler outward. A leap into the visible central void initially travels against gravity. Keep those behaviors distinct. Catch surfaces must be placed along the actual trajectory and field, not below the scene's global Y coordinate.
+
+2.4 Broad helical ribbons: a maze becomes a route around open air
+
+A broad strip carrying paths, courtyards, and low walls winds around a void. It overlaps other ribbons, widens into neighborhoods, narrows into bridges, and passes identifiable ruins on successive turns.
+
+The safest first version is a helical route on or near a cylindrical shell, using the same established radial field. As the path winds around, the traveler’s local down turns through the world. Merely twisting a texture or rotating a tube frame does not change the physical gravity field.
+
+Detached ribbons require declared gravity patches, supports, and transitions. Begin with one walkable face. A thin mathematical Möbius strip cannot supply a continuous everywhere-nonzero normal as global down; its non-orientability is explained in UBC's surface-orientation text. If a route should return on another side, use a properly modeled thick track or an explicit folded threshold with a real destination landing. [S6]
+
+The route problem is selecting useful transfers between turns. A player may build across a gap, lower a ladder, divert water to a lower supported channel, or use a maintenance branch instead of following the whole helix.
+
+2.5 Shell interior: the world surrounds its own sky
+
+The inside of a concave shell carries streets and districts in every direction. Unlike a tube, it has no privileged open axis or distant end. Several large, distinguishable features provide orientation across the center.
+
+Gravity points outward from the shell center. A linear radial field can give a finite zero-gravity point at the center under an explicit model. Normal walking follows the shell; direct crossings need sufficient propulsion, grapples, bridges, or specialized machinery.
+
+Start with one playable sector and a consistent distant representation of the rest. Regions that become reachable must be generated and admitted under the normal streaming contract before traversal. An attractive complete sphere is not evidence that its whole population and fluid system can be simulated at once.
+
+2.6 Folded return loops: adjacency changes orientation
+
+A sequence of declared thresholds returns to a familiar district through a different opening or on a different supported surface. The ordered portal transforms can rotate a transported frame relative to its original relationship with the district.
+
+Numbered rails, arrow-shaped cargo, inspection windows, and persistent marks let players investigate the loop. It can direct a beam behind a mechanism, provide a freight connection, or create a useful defended shortcut.
+
+Arrival gravity belongs to the destination region. A return onto a wall needs an actual wall-supported landing and compatible field. Two players at the same physical point and epoch cannot receive different ambient gravity merely because they took different paths. Path-dependent personal equipment, if later introduced, must be an explicit separate force with its own state and cost.
+
+Do not describe an ordinary bent corridor as a topological identification. Portal rotation and ordinary movement have distinct velocity rules. Immersive Portals' documentation is a useful precedent for transformed connections, while its Minecraft-version compatibility notes are not a dependency recommendation for this standalone engine. Quarter-turn and half-turn identifications also have precise examples in Hitchman's geometry text. [S4, S8]
+
+2.7 Deep branching regions: more places than the visible outline suggests
+
+At greater depth, a compact set of openings leads to many distinct persistent districts. The practical first implementation is a graph of local spaces with explicit folds. Limit simultaneously visible remote connections and preserve particular discovered return routes.
+
+A later genuine hyperbolic region needs a shared metric for distance, motion, collision, and rays. A distorted perspective or branching graph does not establish that mathematical geometry. HyperRogue's primary geometry documentation is a useful reference for varied tilings and three-dimensional spaces, without promising its features or performance for Axiom. [S5]
+
+An expedition still needs a finite objective and useful anchors. Exponential branching must not turn mandatory progression into an exhaustive search of indistinguishable corridors.
+
+3. A CLEAN FIRST GRAVITY MODEL
+
+3.1 Straight tube
+
+Let c be a point on a straight axis, t its unit tangent, and p a physical position. Let R be the nominal walkable-shell radius and g_wall the desired acceleration magnitude at that radius.
+
+    r = (p - c) - t * dot(p - c, t)
+    lambda = g_wall / R
+    g(p) = lambda * r
+    Phi(p) = -0.5 * lambda * dot(r, r)
+
+This is a conservative static field with g = -gradient(Phi). It points outward, is zero on the axis, and has magnitude g_wall on the nominal shell. Lambda has units of inverse seconds squared. R must be finite and positive; t must be valid and normalized.
+
+The field applies only inside its declared physical domain. If an outer catch shell lies at R_max, its maximum magnitude under this profile is lambda*R_max. Bound that domain and magnitude explicitly. The formula does not authorize an unbounded force extending throughout the world.
+
+An axial end cap or a connection to ordinary gravity requires a designed transition. Multiplying acceleration by an arbitrary fade does not automatically preserve conservativeness. Blend supported potentials and differentiate the complete expression, or declare a powered nonconservative apparatus and account for work.
+
+3.2 The center is a real condition
+
+Never normalize r at the axis. The physical field is zero there. The controller retains or transports its last valid orientation for presentation and input, while free-flight motion retains its actual velocity. A deterministic orientation fallback is not an extra force.
+
+A small central region needs an understandable movement and recovery rule. Introductory routes can avoid it. Advanced crossings can provide rails, grapples, tethers, propulsion, or a marked rescue platform. Reaching exactly zero speed in the center should not trap a player with no available action.
+
+For a purely radial inward launch from rest on the shell, the energy threshold to reach the center is:
+
+    u_threshold = sqrt(g_wall * R)
+
+Under the ideal linear model, equality approaches the center asymptotically; crossing in finite time requires greater speed. Ordinary jumps should therefore return to their own side unless intentionally strong enough or assisted. An outward drop through broken flooring instead accelerates toward the next outer layer.
+
+This analytic relation is a design diagnostic, not a promise about the final collision controller. Drag, air control, equipment, impacts, and time-varying fields alter actual gameplay trajectories.
+
+3.3 A shell world
+
+For a spherical shell centered at c, replace the perpendicular-axis vector with r = p-c. The same linear radial construction has a finite zero at the center and a prescribed magnitude at the shell radius. Keep the same bounded-domain and transition requirements.
+
+4. CURVES, BRANCHES, AND TWISTING DOWN
+
+4.1 Bend geometry without accidental roll
+
+Represent a bent tube with an arc-length parameterized centerline C(s), a tangent T(s), and a stable perpendicular frame N(s), B(s). A conceptual shell is:
+
+    P(s,theta) = C(s) + R(s) * (cos(theta)N(s) + sin(theta)B(s))
+
+Use a rotation-minimizing or parallel-transport-style frame as the geometric baseline, then add an explicitly authored roll if wanted. The published double-reflection method provides an accurate, stable RMF construction for swept geometry. This is a modeling reference, not a measured implementation in Axiom. [S1]
+
+A Frenet-style frame can become ill-defined where curvature vanishes; do not let that numerical event flip a neighborhood. Closed loops also need an explicit seam condition: distribute intended twist or define a supported connection instead of silently forcing inconsistent end frames.
+
+Admit only domains with a unique usable projection onto the centerline. A local radius-versus-curvature bound helps avoid local folding, but does not prove distant parts of the tube cannot collide. Check global self-clearance, body clearance, branch geometry, and intersections separately.
+
+Within a unique-projection region, squared distance to the centerline can define a conservative outward potential. Branch points and overlapping influence regions require their own field construction; they are not covered by simply reusing the nearest segment.
+
+4.2 Physical down must be shared
+
+The physical field is a function of region identity, position, shared state, and tick. Stabilize contact selection, camera orientation, and coordinate lookup with suitable hysteresis, but do not let two bodies choose contradictory physical fields at the same point because each remembers a different nearest tube.
+
+Coordinate charts may overlap only when their representations agree on the physical result, unless they explicitly represent different portal-connected places. Stable identifiers and tie-breaking solve reproducibility; they do not make a discontinuous or contradictory field pleasant to traverse.
+
+Junctions can use a continuous authored potential with known critical regions, a finite powered transition, or a distinct chamber with a simpler field. Put supported walking paths and catches around any zero or saddle region that the chosen construction creates. A mathematical smooth blend still needs a gameplay inspection.
+
+For a blended potential Phi=sum(w_i*Phi_i), compute the full gradient: g=sum(w_i*g_i)-sum(Phi_i*gradient(w_i)). Potential offsets must be chosen consistently before blending; constants multiplied by spatially varying weights affect the result. The conservative-force and energy framework follows ordinary mechanics. [S7]
+
+4.3 Three different meanings of twist
+
+First, the route can wind around a tube while radial gravity stays fixed in space. The player's down turns because their position changes.
+
+Second, a bent tube can turn its axis through space. Geometry and the declared field follow that admitted domain.
+
+Third, down can rotate with longitudinal travel even in a straight passage. This is an actual force-field design, not a mesh-frame setting. A potential that changes its preferred transverse direction along the passage generally also creates an axial acceleration term. Omitting that term changes the model and may allow useful net work around a loop.
+
+For example, a chosen transverse field g0*(cos(theta(z)), sin(theta(z)), 0) is nonconservative where theta changes with z. The conservative potential Phi=-g0*(x*cos(theta(z))+y*sin(theta(z))) has the same transverse components plus g_z=g0*theta'(z)*(-x*sin(theta(z))+y*cos(theta(z))). Bound the field domain, acceleration, angular variation, and supported controller response. A powered version may intentionally supply the missing work, with a declared source and limit.
+
+Start a truly rotating-down passage with a broad helical support route matched to the force. Provide shelves or landings for inspection. If the mechanism deliberately supplies work, make its source and operating limit part of the apparatus. Do not introduce an arbitrary push merely because the camera rolled.
+
+5. CONTROLS, COLLISION, AND CAMERA
+
+Every relevant movement operation must use local up: grounding, slope limits, step-up, crouch clearance, jump launch, ledge grabs, landing, swimming, and camera alignment. Down is determined by the field or explicit equipment, not by whichever wall the camera faces.
+
+Project movement directions into the plane perpendicular to local up and build a stable orthonormal input basis. Looking parallel to up can make a naive projected forward vector vanish. Retain a valid transported heading or use a deterministic alternate axis; never normalize a near-zero vector. Catlike Coding's original custom-gravity tutorial demonstrates why fixed world-plane controls fail and develops gravity-relative movement and camera alignment. Adapt the ideas to Rust; no Unity dependency is proposed. [S2]
+
+The current Rapier Rust controller guide permits an arbitrary up vector but explicitly says its built-in character controller supports translations, not rotational movement. Changing up alone does not supply safe capsule reorientation. The engine needs swept rotation/clearance handling, a supported intermediate shape, or another deliberately validated controller approach. Do not replace the existing solver merely because this guide exists. [S3]
+
+Keep body orientation, visual camera roll, and aiming related but separately controlled. Use minimal rotation/transport to retain heading, with a defined axis for an exact antiparallel transition. Bound presentation roll and allow an appropriate comfort option without changing physical outcomes or making the interaction ray disagree with the view.
+
+Ambient gravity changes acceleration; it does not arbitrarily rotate an airborne object's current world velocity. A portal applies its declared velocity transform once. Departure from a rotating platform carries its point velocity once. These cases must not share a shortcut that adds or removes momentum unpredictably.
+
+Center-of-mass gravity sampling is an explicit small-body approximation for a general field. Long rigid bodies, articulated machines, and vehicles spanning substantially different fields need distributed forces and torque or a restricted supported interaction. A rope across the center likewise requires actual rope support; it cannot be assumed from a rendered line.
+
+There is an exact analytical shortcut for the straight linear cylinder field: with P=I-t*t^T, total force is M*lambda*P*(p_COM-c), and torque about the center of mass is -lambda*cross(t, I_world*t). I_world is the body's inertia tensor about its center of mass. This supplies the gradient-induced torque without per-voxel gravity samples. It applies only when the entire represented mass lies in the same admitted linear field; clipped fields, blends, bends, and portal-spanning bodies need their appropriate model. This is an original derivation for the proposed profile, not a statement about an implemented solver.
+
+6. GENERATION THAT PRODUCES PLACES AND ROUTES
+
+6.1 Establish the spatial skeleton first
+
+Generate a district graph with tube segments, open chambers, branch junctions, ribbon transfers, radial layers, and selected folded edges. Assign stable identities and a gravity recipe to each admitted region. Validate boundary relationships before decorating.
+
+For a simple tube, generate a surface route network in longitudinal and angular coordinates, with angular periodicity. Its physical circumference determines path widths and cell spacing. The seam is an ordinary connection, not an accidental dead end or duplicated column.
+
+The first implementation can stamp the resulting geometry into ordinary Euclidean voxel chunks. Curved-looking architecture does not require a nonlinear physics renderer. If the existing deformation system is later used, rendering, collision, edits, and bounds must use the same versioned geometry.
+
+6.2 Design navigation before walls
+
+Place entrances, destinations, observation terraces, supplies, return routes, and a few useful cross-links. Reserve witnessed routes with real clearance and supported gravity transitions. Then add secondary branches and hazards around them.
+
+Vary route shape, openness, movement demands, uses, inhabitants, materials, and history. One section may be a garden with broad paths, another a narrow maintenance band, another a damaged aqueduct crossing. Uniform random maze density around every tube will feel repetitive even if the topology is unusual.
+
+Give each substantial district a readable silhouette, a dominant function, and a small number of orientation features. Leave quiet spaces around focal structures. Opposite surfaces should not all have the same contrast, activity, or detail at once.
+
+6.3 Prove the actual route
+
+A graph path does not establish that the character can walk or jump it. Validate support orientation, width, headroom, wall overhangs, capsule turning space, step height, launch and landing regions, platform states, and recoverability.
+
+For the initial generator, use a limited library of tested transition modules and replay representative paths with the actual controller once integrated. Graph checks can reject obvious failures early, but must not be reported as continuous physics proof.
+
+Generated state is stable before observation. Never alter a maze because a player looks away or retroactively decide what lies beyond a previously seen opening. An explicit shared reality event can change a place under its own warning and persistence rules.
+
+6.4 Accept good bypasses
+
+Players should be able to build bridges, use appropriate flight or grapples, brace structures, and exploit well-understood fields. An open maze needs objectives beyond merely following the intended corridor: recovering equipment, operating infrastructure, containing a threat, restoring a route, or moving a finite load.
+
+Use material hardness, ownership, structural load, power, or explicit magical protection where those rules make sense. Do not place arbitrary invisible restrictions on every useful wall-top route. A clever shortcut should become part of the world's history.
+
+7. WATER, GAS, MACHINERY, AND ECOLOGY
+
+Use local gravity consistently for water surfaces, buoyancy, gas stratification, falling material, and supported devices. A global horizontal water plane cannot represent a channel wrapping around the inside of a tube.
+
+In an outward radial field, quiet liquid against the shell has an inner free surface compatible with its potential. Gas and hot plumes require the corresponding local directions and transport. Keep the prior conservative ownership, finite sources, and coarse/detailed interface rules.
+
+For early content, use separated catch basins and channels with small gravity variation, joined by explicit transfers. Large flows crossing the center or a branch saddle require a bounded transient model. Do not implement a whole-tube dense fluid volume to obtain a few visible gutters.
+
+Mechanical devices need meaningful support and energy accounting. A crane may move cargo between districts; a powered launch frame may cross the center; a gravity field can be stabilized by established magitech. New power machines must retain the prior throughput and work rules, rather than quietly turning a changed coordinate frame into an energy source.
+
+Plants, chains, drips, smoke, pendulums, and creatures provide orientation evidence. Keep enough stable cues visible when colour effects or camera roll are reduced. Creatures use the same valid surfaces and transitions as their supported movement abilities; unexplained wall clipping destroys the lesson.
+
+8. VISIBILITY, MAPS, AND THE LOW-END BASELINE
+
+Open geometry exposes much more of a district than an ordinary cave. Budget visible walls, actors, lights, shadows, particles, and remote views accordingly. Sparse occlusion does not mean the scene is free simply because the field formula is short.
+
+Use local Euclidean chunks, cached geometry and collision, and separate actor/physics activation from distant decorative detail. Curves and corners can naturally limit sightlines. Use distant representations that preserve silhouettes and visible changes. Avoid an overhead blanket of fog that defeats the entire visual idea.
+
+Do not put a recursive portal in every wall. Ordinary curved geometry should carry most of the first tube district. Add a small admitted set of useful folded connections. Mandatory multiplayer visibility and concealment remain part of the common baseline; a weak client cannot hide a reachable attacker by dropping a required view.
+
+Store surface observations under stable local chart identities. A tube map can unwrap its discovered angular/longitudinal patches, with its seam and known circumferential links explicit. Radial layers need their own discovered identities. Known transitions connect the charts; internal world identifiers do not reveal destinations to the character.
+
+Seeing the opposite district reveals visible surfaces, not every hidden corridor behind them. An observed place and a personally visited place may be distinct records. Undiscovered openings, unobserved topology changes, and unexplored layers remain uncertain. Camera roll must not rotate or erase saved knowledge.
+
+9. IN-WORLD EVIDENCE AND A COMPLETE EXPEDITION
+
+Original inscriptions:
+
+"The garden over your head is reached by the wall."
+Place it beside a continuous planted route and a visible person on the opposite surface.
+
+"Down is beneath your feet. The hollow is above us all."
+Use hanging chains around the circumference and a safe falling-weight demonstration to establish the radial field.
+
+"A broken floor takes you farther out."
+Pair it with an inspection opening, an outer catch terrace, and an identifiable route back.
+
+"The hollow does not carry the unprepared."
+Show a failed inward jump returning to its own side and a working assisted crossing apparatus. Avoid requiring a dangerous experiment to discover the basic rule.
+
+"Keep the marked rail on your right until the second landing."
+Use a real continuous rail through an introductory twisting route. A later damaged section can ask the player to apply what they learned.
+
+"This door returns to the workshop. The workshop has more than one floor."
+Place it at a folded return loop with persistent visible exit markers.
+
+Reading supplies information; it is not an invisible permission flag. A player who independently understands the mechanism can act. Historical texts can disagree about cosmology while measurements and apparatus remain useful.
+
+The first expedition begins on one side of a tube. An occupied workshop is visible across the center beside a broken aqueduct. A continuous wrapping garden route teaches local down and leads to a broad junction.
+
+Beyond it, several incomplete layers offer a damaged bridge, a lower service route, and construction opportunities. A fall into the service layer reveals access and a return ladder. The player can repair, bypass, or build their own crossing.
+
+At the workshop, a small folded optical loop directs light behind a mechanism. Inspection windows and retained indicator positions make it solvable alone; a friend can watch another stage while adjustments are made. The beam activates a bounded receiver under the Reality Contract's light-energy rules.
+
+Opening the mechanism deploys or unlocks a permanent maintenance route. The workshop becomes a useful outpost. Its next opening reveals a shell interior reachable through a specific newly discovered branch. The return journey demonstrates that the places initially seen overhead belong to one persistent expedition.
+
+10. IMPLEMENTATION ORDER AND ACCEPTANCE
+
+Retain the existing ordinary-gravity and fixed-quarter-turn controller milestones if they are unfinished. The open tube is the next expansion after reliable arbitrary-up movement; it does not cancel those prerequisites.
+
+Stage A — One dry straight tube. Use a complete wrapping route, two distinguishable opposed districts, low maze walls, a central open view, a small-body test object, and a short return. Establish stable gravity, contact, and camera control.
+
+Stage B — One broad bend and one spacious fixed branch. Validate geometric frames, projection domains, seams, movement clearance, and identical field samples at shared positions. Add an outer catch layer with a usable return.
+
+Stage C — One helical route and one assisted crossing. Confirm the difference between a route winding through a fixed radial field and a genuine rotating-down mechanism. Add explicit support for the chosen equipment; do not assume unimplemented rope or vehicle physics.
+
+Stage D — One persistent folded return, one simple local water circuit, and the workshop expedition. Preserve cargo identity, actual source quantities, return capacity, and discovered map relationships.
+
+Stage E — Extract the verified modules into generation. Add shell interiors, more complex fields, and genuine non-Euclidean metric domains only as separately validated capabilities.
+
+Acceptance requirements:
+
+1. Two players can occupy opposite surfaces and see each other with correct support and local down.
+2. A complete circumferential walk returns to the same persistent district without a hidden teleport or duplicated loot.
+3. Looking directly along up or down does not break movement input.
+4. The controller cannot rotate its capsule through nearby walls, rails, or ceilings.
+5. Axis and critical-field queries remain finite; zero gravity has an explicit orientation and recovery policy.
+6. A dropped object, inward launch, and floor breach follow the declared field rather than camera orientation.
+7. The same physical point, region, tick, and state produce the same ambient gravity for all peers and supported bodies.
+8. Portal transfer changes supported state exactly once and lands in the destination's declared field.
+9. A built bridge, edited wall, deployed return route, and acquired observation survive saving, loading, and revisiting.
+10. A generated route has a concrete supported traversal and recovery, with controller replay used once integrated.
+11. Distant details can vary by quality while relevant actors, routes, and concealment remain consistent.
+12. Baseline hardware measurements include the open view, both players, collision, streaming, effects, and activation bursts together.
+
+These engine acceptance requirements have not been executed in this workspace. Evaluate whole-frame timing, simulation age, memory peaks, and queue growth before promising a minimum frame rate.
+
+A separate Python float64 check compared the straight-cylinder analytical force and torque against explicit sums over 1,000 seeded finite point-mass systems (seed 2901026). Cases used varying mass distributions, field axes, positions, and strengths. Maximum scaled error was 4.676922e-15 for force and 6.254140e-13 for torque, below the declared 1e-10 tolerance. This verifies the tested algebraic identity numerically; it does not verify rigid-body integration, collision, rendering, GPU arithmetic, or multiplayer.
+
+11. PRIMARY REFERENCES
+
+[S1] Wang, Juttler, Zheng, and Liu. Computation of Rotation Minimizing Frames, ACM Transactions on Graphics, 2008. Primary author/publication page; stable framing for swept geometry.
+https://www.microsoft.com/en-us/research/publication/computation-rotation-minimizing-frames/
+
+[S2] Catlike Coding, Custom Gravity. Original implementation tutorial; gravity-relative input, local up, and camera alignment. Conceptual reference only, not an engine dependency.
+https://catlikecoding.com/unity/tutorials/movement/custom-gravity/
+
+[S3] Rapier Rust user guide, Controllers, retrieved guide version 0.36. Arbitrary up and explicit translation-only limitation of the built-in character controller. Inspect the project's actual pinned version before implementation.
+https://rapier.rs/docs/user_guides/rust/character_controller/
+
+[S4] Immersive Portals, Spatial Transformation. Primary project documentation for transformed connections; its version-specific mod compatibility is not generalized here.
+https://qouteall.fun/immptl/wiki/Spatial-Transformation.html
+
+[S5] HyperRogue, Experiments with geometry. Primary developer discussion of varied tilings, wrapping, and three-dimensional geometries.
+https://www.roguetemple.com/z/hyper/geoms.php
+
+[S6] UBC CLP Vector Calculus, Orientation of Surfaces. Author text deriving the orientation reversal of a Möbius strip.
+https://personal.math.ubc.ca/~CLP/CLP4/clp_4_vc/sec_orientation.html
+
+[S7] David Tong, Classical Dynamics, Newton's Laws of Motion. Author notes on conservative forces, potentials, and energy.
+https://www.damtp.cam.ac.uk/user/tong/dynamics/dynhtml/S1.html
+
+[S8] Michael P. Hitchman, Geometry with an Introduction to Cosmic Topology, Three-Dimensional Geometry and 3-Manifolds. Author text with quarter-turn and half-turn Euclidean identifications.
+https://mphitchman.com/geometry/section8-1.html
+
+Project companions:
+The_Manyfold_Design_and_Implementation_Brief.txt
+AXIOM_Reality_Contract_v1.txt
+AXIOM_Low_End_Physics_Water_and_Gas.txt
+Axiom_Underground_Exploration_Map_Implementation_Prompt.txt
+AXIOM_Deterministic_Voxel_Engine_Optimization_Prompt.txt
+
+END

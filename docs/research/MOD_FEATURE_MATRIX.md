@@ -14,6 +14,8 @@
 
 ## Coverage ledger
 
+Use the [delivery backlog](../plans/MOD_PARITY_DELIVERY.md) to turn these stable feature IDs into implementation work with player-facing acceptance criteria.
+
 | Scope | Feature rows | Stable IDs |
 |---|---:|---|
 | Preserved legacy features | 153 | L001–L153 |
