@@ -1225,23 +1225,23 @@ fn append_torch_mesh(mesh: &mut ChunkMesh, chunk_data: &GeneratedChunk, lod: u8,
                     // floating torch, especially beside thin voxel trims.
                     BlockId::TorchWallNorth => (
                         base + Vec3::new(0.50, 0.30, 0.92),
-                        base + Vec3::new(0.50, 0.68, 0.60),
-                        base + Vec3::new(0.50, 0.74, 0.56),
+                        base + Vec3::new(0.50, 0.70, 0.76),
+                        base + Vec3::new(0.50, 0.77, 0.73),
                     ),
                     BlockId::TorchWallSouth => (
                         base + Vec3::new(0.50, 0.30, 0.08),
-                        base + Vec3::new(0.50, 0.68, 0.40),
-                        base + Vec3::new(0.50, 0.74, 0.44),
+                        base + Vec3::new(0.50, 0.70, 0.24),
+                        base + Vec3::new(0.50, 0.77, 0.27),
                     ),
                     BlockId::TorchWallWest => (
                         base + Vec3::new(0.92, 0.30, 0.50),
-                        base + Vec3::new(0.60, 0.68, 0.50),
-                        base + Vec3::new(0.56, 0.74, 0.50),
+                        base + Vec3::new(0.76, 0.70, 0.50),
+                        base + Vec3::new(0.73, 0.77, 0.50),
                     ),
                     BlockId::TorchWallEast => (
                         base + Vec3::new(0.08, 0.30, 0.50),
-                        base + Vec3::new(0.40, 0.68, 0.50),
-                        base + Vec3::new(0.44, 0.74, 0.50),
+                        base + Vec3::new(0.24, 0.70, 0.50),
+                        base + Vec3::new(0.27, 0.77, 0.50),
                     ),
                     _ => continue,
                 };

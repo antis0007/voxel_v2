@@ -1089,10 +1089,10 @@ fn collect_nearby_torches(
             let amber = block == BlockId::AmberCap;
             let light_offset = match block {
                 BlockId::Torch => Vec3::new(0.50, 0.82, 0.50),
-                BlockId::TorchWallNorth => Vec3::new(0.50, 0.74, 0.56),
-                BlockId::TorchWallSouth => Vec3::new(0.50, 0.74, 0.44),
-                BlockId::TorchWallWest => Vec3::new(0.56, 0.74, 0.50),
-                BlockId::TorchWallEast => Vec3::new(0.44, 0.74, 0.50),
+                BlockId::TorchWallNorth => Vec3::new(0.50, 0.77, 0.73),
+                BlockId::TorchWallSouth => Vec3::new(0.50, 0.77, 0.27),
+                BlockId::TorchWallWest => Vec3::new(0.73, 0.77, 0.50),
+                BlockId::TorchWallEast => Vec3::new(0.27, 0.77, 0.50),
                 _ => Vec3::new(0.50, 0.82, 0.50),
             };
             TorchLight {
