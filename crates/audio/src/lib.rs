@@ -1,6 +1,7 @@
 //! Bounded, asynchronous combat audio. Original synthesized Foley lives in memory;
 //! no network assets, file decoding, or device calls run on the rendering thread.
 mod beds;
+mod binaural;
 mod dsp;
 mod fauna;
 mod layers;
@@ -119,8 +120,10 @@ pub struct Event {
 }
 pub(crate) struct Play {
     cue: Cue,
-    left: f32,
-    right: f32,
+    gain: f32,
+    ears: binaural::Ears,
+    /// Samples of flight time before the sound arrives.
+    wait: f32,
     rate: f32,
     /// Wet send into the short spatial delay/reverb bus.
     reverb: f32,
@@ -227,26 +230,27 @@ impl Audio {
         }
     }
     pub fn play(&mut self, event: Event, eye: Vec3, forward: Vec3) {
+        self.play_occluded(event, eye, forward, 0.0);
+    }
+
+    /// As `play`, with `occlusion` of the path to the source blocked, 0 clear to 1 sealed.
+    pub fn play_occluded(&mut self, event: Event, eye: Vec3, forward: Vec3, occlusion: f32) {
         if !self.active.load(Ordering::Relaxed) {
             return;
         }
-        let (gain, pan) = if let Some(pos) = event.pos {
+        let (gain, cues) = if let Some(pos) = event.pos {
             let delta = pos - eye;
             let distance = delta.length();
             if distance > 42.0 {
                 return;
             }
-            let pan = delta
-                .normalize_or_zero()
-                .dot(forward.cross(Vec3::Y).normalize_or_zero())
-                .clamp(-0.9, 0.9);
             (
                 (1.0 - distance / 42.0).max(0.0) / (1.0 + distance * distance * 0.025)
                     * layers::carry(distance),
-                pan,
+                binaural::Cues::toward(delta, forward).occluded(occlusion),
             )
         } else {
-            (1.0, 0.0)
+            (1.0, binaural::Cues::HEAD_LOCKED)
         };
         self.serial = self.serial.wrapping_mul(1664525).wrapping_add(1013904223);
         let cue_index = event.cue as usize;
@@ -263,11 +267,12 @@ impl Audio {
         let duck = if rapid || family_rapid { 0.36 } else { 1.0 };
         // Keep spells clear under rapid fire while letting isolated impacts
         // retain enough body to read as meaningful feedback.
-        let gain = gain * event.gain.clamp(0.0, 1.0) * duck * 0.62;
+        let gain = gain * event.gain.clamp(0.0, 1.0) * duck * 0.62 * binaural::CENTRE_GAIN;
         let _ = self.tx.try_send(Play {
             cue: event.cue,
-            left: gain * ((1.0 - pan) * 0.5).sqrt(),
-            right: gain * ((1.0 + pan) * 0.5).sqrt(),
+            gain,
+            ears: binaural::Ears::new(cues, synth::RATE as f32),
+            wait: cues.flight_s() * synth::RATE as f32,
             rate: ((0.96 + (self.serial >> 24) as f32 / 255.0 * 0.08)
                 * event.pitch.clamp(0.60, 1.70))
             .clamp(0.55, 1.80),

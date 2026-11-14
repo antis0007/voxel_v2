@@ -19,6 +19,7 @@ pub(super) struct Builder {
     spaces: Vec<Space>,
     tunnels: Vec<Tunnel>,
     features: Vec<Feature>,
+    version: u32,
 }
 
 impl Builder {
@@ -36,13 +37,25 @@ impl Builder {
     }
 
     pub(super) fn prop(&mut self, room: usize, kind: PropKind, label: &'static str, x: f32, y: f32, z: f32, style: Style) {
+        self.prop_n(room, 1, kind, label, x, y, z, style);
+    }
+
+    /// A prop with an explicit save index `n` within its room. Index 1 is
+    /// every room's original prop; later layers use 2 and up.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prop_n(&mut self, room: usize, n: u8, kind: PropKind, label: &'static str, x: f32, y: f32, z: f32, style: Style) {
         let r = self.rooms[room].id;
-        let id = ObjectId::new(r.district(), r.room(), 1).unwrap_or_else(|| unreachable!("authored prop id"));
+        let id = ObjectId::new(r.district(), r.room(), n).unwrap_or_else(|| unreachable!("authored prop id"));
         let pos = self.v(x, y, z);
-        self.props.push(Prop { id, kind, label, pos, yaw: 0.0 });
-        // A pedestal under the prop, its top 0.6 m below the prop point.
-        let base = pos - Vec3::new(0.6, 1.8, 0.6);
-        self.features.push(Feature::new(base, base + Vec3::new(1.2, 1.2, 1.2), F::Pedestal { style }));
+        let prop = Prop { id, kind, label, pos, yaw: 0.0 };
+        self.props.push(prop);
+        if self.version >= super::props::VERSION {
+            let (lo, hi) = super::props::model_box(kind, pos);
+            self.features.push(Feature::new(lo, hi, F::Prop { kind, style, floor: super::props::floor_point(pos) }));
+        } else {
+            let (lo, hi) = prop.model_box();
+            self.features.push(Feature::new(lo, hi, F::Pedestal { style }));
+        }
     }
 
     pub(super) fn space(&mut self, room: usize, shape: Shape, style: Style, water: Option<(f32, Option<Mech>)>, sealed: bool) {
@@ -51,6 +64,7 @@ impl Builder {
             Shape::Round { x, z, r, floor, h, dome } => Shape::Round { x: x + self.ax, z: z + self.az, r, floor, h, dome },
             Shape::Cave { c, rad, floor } => Shape::Cave { c: self.v(c.x, c.y, c.z), rad, floor },
             Shape::Shaft { x, z, r, y0, y1, gap, landings } => Shape::Shaft { x: x + self.ax, z: z + self.az, r, y0, y1, gap, landings },
+            Shape::Rift { a, b, half, top } => Shape::Rift { a: self.v(a.x, a.y, a.z), b: self.v(b.x, b.y, b.z), half, top },
         };
         self.spaces.push(Space { room, shape, style, water, sealed });
     }
@@ -114,12 +128,19 @@ pub(super) fn build(cfg: &WorldSampleConfig, ax: f32, az: f32, s: f32, ground: f
     let l = s - 30.0;
     let c = l - 34.0;
     let bo = c - 14.0;
-    let mut b = Builder { ax, az, rooms: Vec::new(), props: Vec::new(), spaces: Vec::new(), tunnels: Vec::new(), features: Vec::new() };
+    let mut b = Builder { ax, az, rooms: Vec::new(), props: Vec::new(), spaces: Vec::new(), tunnels: Vec::new(), features: Vec::new(), version: cfg.generator_version };
     let v3 = Vec3::new;
 
     // Rootbound Halls, at the landing.
     let well = b.room(D::RootboundHalls, 1, K::WellHead, "Ruined well", S::Rootbound, Damage::Collapsed, v3(-3.0, l, -3.0), v3(3.0, ground + 1.0, 3.0));
-    b.space(well, Shape::Shaft { x: 0.0, z: 0.0, r: 3.5, y0: l, y1: ground + 1.0, gap: None, landings: [None, None] }, S::Rootbound, None, false);
+    let entry = ground + cfg.voxel_meters();
+    let accessible = cfg.generator_version >= 66;
+    b.space(well, Shape::Shaft { x: 0.0, z: 0.0, r: 3.5, y0: l,
+        y1: if accessible { entry } else { ground + 1.0 }, gap: None,
+        landings: [accessible.then_some(entry), None] }, S::Rootbound, None, false);
+    if accessible {
+        b.feature((-6.5, ground - 4.0, -6.5), (6.5, entry + 4.0, 6.5), F::Wellhead { floor: entry });
+    }
     let landing = b.room(D::RootboundHalls, 2, K::Landing, "First landing", S::Rootbound, Damage::Intact, v3(-8.0, l, -12.0), v3(10.0, l + 8.5, 6.0));
     b.space(landing, hall(-8.0, 10.0, -12.0, 6.0, l, 6.0, 2.5), S::Rootbound, None, false);
     b.prop(well, PropKind::Marker, "Blue lamp", 4.5, l + 1.2, 3.5, S::Rootbound);
@@ -180,8 +201,18 @@ pub(super) fn build(cfg: &WorldSampleConfig, ax: f32, az: f32, s: f32, ground: f
     super::layout_dress::chasm(&mut b, c);
     super::layout_dress::borough(&mut b, bo);
     super::layout_dress::foundry(&mut b, c);
+    if cfg.generator_version >= super::wilds::VERSION {
+        super::wilds::author(&mut b, cfg.seed, l, c, bo);
+    }
+    if cfg.generator_version >= super::life::VERSION {
+        super::life::author(&mut b, bo);
+    }
 
-    let Builder { rooms, props, spaces, tunnels, features, .. } = b;
+    let Builder { rooms, props, spaces, tunnels, mut features, version, .. } = b;
+    if version >= super::props::VERSION {
+        // A prop model is what the player aims at; nothing may paint over it.
+        features.sort_by_key(|f| !matches!(f.kind, F::Prop { .. }));
+    }
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
     for r in &rooms {
@@ -209,6 +240,11 @@ pub(super) fn build(cfg: &WorldSampleConfig, ax: f32, az: f32, s: f32, ground: f
     let index = Index::build(min, max, &feature_boxes, &space_boxes, &tunnel_boxes);
     let clear = props.iter().map(|p| p.pos).collect();
     let mut layout = Layout { anchor: Vec3::new(ax, l + 1.0, az), spaces, tunnels, features, min, max, clear, index, version: cfg.generator_version };
+    if let Some(gallery) = layout.flooded_observatory() {
+        let (lo, hi) = gallery.bounds();
+        layout.min = layout.min.min(lo);
+        layout.max = layout.max.max(hi);
+    }
     if layout.version >= super::settle::VERSION {
         super::settle::settle(&mut layout);
     }

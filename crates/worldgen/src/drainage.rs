@@ -1,7 +1,7 @@
 //! Shared watershed graph in physical metres. Every node chooses the same
 //! downhill neighbor regardless of the requesting chunk, LOD or voxel size.
 //! Strictly decreasing head prevents cycles; minima are explicit closed basins.
-//! This is an initial drainage plan, not a continuously replenished water source.
+//! Terrain drainage and bounded headwater outlets for runtime aquifer inflow.
 use super::{WorldSampleConfig, WorldType, hash_u32, landscape};
 use engine_core::fast_hash::FastMap;
 use engine_core::{VoxelScalePreset, environment::ENVIRONMENT_GENERATOR};
@@ -17,12 +17,12 @@ const MEANDER_JITTER: f32 = 0.38;
 const MEANDER_AMPLITUDE: f32 = 0.14;
 /// Generator 53: node heads come from the current terrain, and wet channels
 /// get a cross-section whose banks contain the water surface.
-pub const RIVER_FIT_GENERATOR: u32 = 53;
+pub const RIVER_FIT_GENERATOR: u32 = crate::gates::LAKES_AND_CLIMATE_GENERATOR;
 /// Most a bank may be raised above the terrain to hold the water surface.
 pub const LEVEE_CAP_M: f32 = 2.5;
 /// Bank distance beyond the water edge that a fitted channel can still carve.
 const FIT_REACH_M: f32 = 16.0;
-type Key = (u32, u8, u32, i32, i32);
+type Key = (u32, u8, u32, u64, i32, i32);
 /// Entries per thread-local plan cache. Horizon workers walk kilometres, and a
 /// fitted node costs 36 terrain evaluations, so a full clear must stay rare.
 const CACHE_CAP: usize = 32_768;
@@ -69,7 +69,7 @@ thread_local! {
 }
 
 pub fn node(cfg: &WorldSampleConfig, x: i32, z: i32) -> Node {
-    let key = (cfg.seed, cfg.world_type as u8, plan_id(cfg), x, z);
+    let key = (cfg.seed, cfg.world_type.code(), plan_id(cfg), cfg.planet_fingerprint(), x, z);
     if let Some(n) = NODES.with(|nodes| nodes.borrow().get(&key).copied()) {
         return n;
     }
@@ -105,7 +105,7 @@ pub fn outlet(cfg: &WorldSampleConfig, x: i32, z: i32) -> Outlet {
         return Outlet::Ocean;
     }
     if meanders(cfg) {
-        let key = (cfg.seed, cfg.world_type as u8, plan_id(cfg), x, z);
+        let key = (cfg.seed, cfg.world_type.code(), plan_id(cfg), cfg.planet_fingerprint(), x, z);
         if let Some(o) = OUTLETS.with(|outlets| outlets.borrow().get(&key).copied()) {
             return o;
         }
@@ -277,6 +277,52 @@ pub(crate) fn catchment_at(cfg: &WorldSampleConfig, x: f32, z: f32) -> u32 {
     }
     let (ix, iz) = ((x / SPACING).round() as i32, (z / SPACING).round() as i32);
     fit::flow(cfg, ix, iz)
+}
+
+/// Aquifer outlets at wet upper-river nodes. The runtime stops discharge at
+/// this head, so damming a spring cannot create an ever-rising water column.
+#[derive(Clone, Copy, Debug)]
+pub struct Spring {
+    pub position_m: glam::Vec3,
+    pub microlitres_per_second: u64,
+}
+
+/// A regional reach entering a locally simulated volume.
+#[derive(Clone, Copy, Debug)]
+pub struct Inlet {
+    pub source: Spring,
+    pub weather_point: Vec2,
+}
+
+pub fn springs_near(cfg: &WorldSampleConfig, center: (i32, i32)) -> Vec<Spring> {
+    if !fits(cfg) || cfg.world_type == WorldType::Superflat { return Vec::new(); }
+    if crate::geo::active(cfg) {
+        return crate::geo::river_sources(cfg, Vec2::new(center.0 as f32 * SPACING, center.1 as f32 * SPACING), SPACING * 2.0);
+    }
+    let mut springs = Vec::new();
+    for z in center.1 - 1..=center.1 + 1 {
+        for x in center.0 - 1..=center.0 + 1 {
+            if !matches!(outlet(cfg, x, z), Outlet::Downhill(..)) { continue; }
+            let catchment = fit::flow(cfg, x, z);
+            if !(4..=12).contains(&catchment) { continue; }
+            let n = node(cfg, x, z);
+            // Use the same final head as voxel generation, including lake and
+            // valley intersections. An obsolete higher plan must not flood it.
+            use crate::Profiles;
+            let scale = cfg.voxel_meters();
+            if let Some(head) = crate::CachedProfiles.river_top(cfg, (n.center_m.x / scale).floor() as i32, (n.center_m.y / scale).floor() as i32) {
+                springs.push(Spring {
+                    position_m: glam::Vec3::new(n.center_m.x, head, n.center_m.y),
+                    microlitres_per_second: u64::from(catchment) * 8_000_000,
+                });
+            }
+        }
+    }
+    springs
+}
+
+pub fn spring_region(position_m: Vec2) -> (i32, i32) {
+    ((position_m.x / SPACING).round() as i32, (position_m.y / SPACING).round() as i32)
 }
 #[cfg(test)]
 mod tests;

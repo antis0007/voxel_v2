@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 fn terrain(c: &mut Criterion) {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: CURRENT_GENERATOR_VERSION,
         seed: 424242,
         world_type: WorldType::Hills,

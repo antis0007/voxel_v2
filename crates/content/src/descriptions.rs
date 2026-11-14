@@ -30,17 +30,42 @@ pub struct Keyword {
     pub definition: String,
 }
 
+/// One optional line of colour under an item's stats, keyed by display name.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Flavour {
+    pub name: String,
+    pub line: String,
+}
+
+/// One plain line saying what a named trait or modifier means, keyed by display name.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hint {
+    pub name: String,
+    pub line: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     pub entries: Vec<Description>,
     pub keywords: Vec<Keyword>,
+    #[serde(default)]
+    pub flavours: Vec<Flavour>,
+    #[serde(default)]
+    pub hints: Vec<Hint>,
 }
 
 const SOURCE: &str = include_str!("../../../assets/descriptions.ron");
 const SHARED_KEYWORDS: [&str; 4] = ["Burning", "Wet", "Charged", "Sealed"];
 static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
-    parse(SOURCE).unwrap_or_else(|errors| panic!("assets/descriptions.ron:\n{}", errors.join("\n")))
+    parse(SOURCE).unwrap_or_else(|errors| {
+        // Editorial copy is optional presentation, never gameplay authority.
+        // Keep authoring validation strict without taking down a live session.
+        eprintln!("[descriptions] Copy omitted: {}", errors.join("; "));
+        Catalog::default()
+    })
 });
 
 /// Shared entry point for runtime loading and the author-facing lint command.
@@ -52,6 +77,27 @@ pub fn parse(source: &str) -> Result<Catalog, Vec<String>> {
 
 pub fn get(key: &str) -> Option<&'static Description> {
     CATALOG.entries.iter().find(|entry| entry.key == key)
+}
+
+/// Flavour for the thing a player sees under this display name, if any.
+pub fn flavour(name: &str) -> Option<&'static str> {
+    CATALOG.flavours.iter().find(|f| f.name == name).map(|f| f.line.as_str())
+}
+
+/// Hints load on their own: a flawed entry elsewhere in the file must not hide
+/// these lines, so each is checked individually and bad ones are skipped.
+static HINTS: LazyLock<Vec<Hint>> = LazyLock::new(|| {
+    let Ok(catalog) = ron::from_str::<Catalog>(SOURCE) else { return Vec::new() };
+    catalog.hints.into_iter().filter(|hint| {
+        let mut errors = Vec::new();
+        check_hint(hint, &mut errors);
+        errors.is_empty()
+    }).collect()
+});
+
+/// Plain explanation of a trait or modifier shown under its display name, if any.
+pub fn hint(name: &str) -> Option<&'static str> {
+    HINTS.iter().find(|h| h.name == name).map(|h| h.line.as_str())
 }
 
 /// Definitions are attached only to keywords actually present in this copy.
@@ -127,7 +173,54 @@ pub fn validate(catalog: &Catalog) -> Vec<String> {
         check_keywords(key, &entry.text, &mut errors);
         check_keywords(key, &entry.codex, &mut errors);
     }
+    // Flavour is never mechanical: no numbers (check_copy), no sentence
+    // punctuation, under ten words, and none of the banned mood words.
+    let mut names = HashSet::new();
+    for flavour in &catalog.flavours {
+        let name = flavour.name.as_str();
+        if name.is_empty() || !names.insert(name) {
+            errors.push(format!("flavour {name}: empty or duplicate name"));
+        }
+        let count = words(&flavour.line).count();
+        if count == 0 || count > 9 {
+            errors.push(format!("flavour {name}: line must contain 1..9 words"));
+        }
+        if flavour.line.contains(['.', '?', ';', '\n', '\r']) || flavour.line.trim() != flavour.line {
+            errors.push(format!("flavour {name}: one unpunctuated line"));
+        }
+        if words(&flavour.line).any(|word| matches!(word.to_ascii_lowercase().as_str(),
+            "amazing" | "powerful" | "ultimate" | "epic" | "seamless" | "unleash" | "journey"
+            | "adventure" | "immersive" | "explore" | "harness" | "mysterious" | "ancient"
+            | "forgotten" | "echo" | "essence" | "resonance" | "mighty" | "legendary")) {
+            errors.push(format!("flavour {name}: remove mood words"));
+        }
+        check_copy(name, &flavour.line, false, &mut errors);
+    }
+    // Hints explain a name in plain words: one short clause, no numbers (check_copy).
+    let mut hint_names = HashSet::new();
+    for hint in &catalog.hints {
+        if !hint_names.insert(hint.name.as_str()) {
+            errors.push(format!("hint {}: duplicate name", hint.name));
+        }
+        check_hint(hint, &mut errors);
+    }
     errors
+}
+
+fn check_hint(hint: &Hint, errors: &mut Vec<String>) {
+    let name = hint.name.as_str();
+    if name.is_empty() {
+        errors.push("hint: empty name".to_owned());
+    }
+    let count = words(&hint.line).count();
+    if count == 0 || count > 12 {
+        errors.push(format!("hint {name}: line must contain 1..12 words"));
+    }
+    if hint.line.contains([';', '\n', '\r']) || hint.line.trim() != hint.line {
+        errors.push(format!("hint {name}: one plain line"));
+    }
+    check_copy(name, &hint.line, false, errors);
+    check_keywords(name, &hint.line, errors);
 }
 
 fn check_keywords(key: &str, text: &str, errors: &mut Vec<String>) {

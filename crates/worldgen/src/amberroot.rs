@@ -48,11 +48,12 @@ fn plan(cfg: &WorldSampleConfig) -> Option<Arc<Plan>> {
         || cfg.world_type == WorldType::Superflat
         || PROBING.get()
         || super::valley::probing()
+        || super::basin::solved_face(cfg)
     {
         return None;
     }
     // Every voxel scale shares one plan, surveyed at one metre.
-    let key = (cfg.seed, cfg.generator_version, cfg.world_type as u8);
+    let key = (cfg.seed, cfg.generator_version, cfg.world_type.code());
     if let Some(found) = LOCAL_PLAN.with(|c| {
         c.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, p)| p.clone())
     }) {
@@ -93,7 +94,7 @@ fn centre(cfg: &WorldSampleConfig) -> Option<Vec2> {
     {
         return None;
     }
-    let key = (cfg.seed, cfg.generator_version, cfg.world_type as u8);
+    let key = (cfg.seed, cfg.generator_version, cfg.world_type.code());
     match CENTRE.get() {
         Some((k, centre)) if k == key => centre,
         _ => {

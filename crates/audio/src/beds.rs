@@ -1,4 +1,5 @@
 //! Continuous ambience beds, each cross-faded toward a level the game sets.
+use crate::binaural::{Cues, Ears};
 use crate::dsp::{advance, coefficient, sine, Noise, OnePole, Svf};
 use crate::suit::Suit;
 
@@ -29,6 +30,8 @@ impl Bed {
 const AUDIBLE: f32 = 1.0e-4;
 /// Cross-fade time constant in seconds.
 const FADE_S: f32 = 2.5;
+/// Keep wind behind nearby gameplay sounds (about -12 dB).
+const WIND_GAIN: f32 = 0.25;
 
 pub(crate) struct Beds {
     pub(crate) room_send: f32,
@@ -53,7 +56,7 @@ pub(crate) struct Beds {
     drip_age: u32,
     drip_phase: f32,
     drip_hz: f32,
-    drip_pan: f32,
+    drip_ears: Ears,
     /// Band and ceiling filters per channel.
     water: [Svf; 4],
     swell: [OnePole; 2],
@@ -61,7 +64,7 @@ pub(crate) struct Beds {
     /// Wash band and ceiling per channel, then the drop resonance.
     rain: [Svf; 5],
     crackle: f32,
-    crackle_pan: f32,
+    crackle_ears: Ears,
     insect: [f32; 4],
     /// Hurt or exerted, 0 calm to 1; breathing quickens and roughens with it.
     pub(crate) strain: f32,
@@ -70,6 +73,10 @@ pub(crate) struct Beds {
     cuts: [f32; 2],
     /// Lift speed and signed drive load, each -1..1 or 0..1, set by the game.
     pub(crate) drive_speed: f32,
+    pub(crate) wind_pan_target: f32,
+    /// Wind force at the listener, 0 calm to 1 storm; raises the rush and the whistle.
+    pub(crate) wind_force: f32,
+    wind_pan: f32,
     pub(crate) drive_load: f32,
     /// Hum fundamental and the slow beat between its two motors, in turns.
     drive: [f32; 3],
@@ -85,7 +92,7 @@ struct Bubble {
     hz: f32,
     age: u32,
     gain: f32,
-    pan: f32,
+    ears: Ears,
 }
 
 /// Bubbles started per second in the water bed.
@@ -116,7 +123,7 @@ impl Beds {
             drip_age: u32::MAX,
             drip_phase: 0.0,
             drip_hz: 900.0,
-            drip_pan: 0.0,
+            drip_ears: Ears::default(),
             water: [
                 Svf::new(520.0, 0.6, rate),
                 Svf::new(520.0, 0.6, rate),
@@ -133,10 +140,13 @@ impl Beds {
                 Svf::new(2500.0, 2.0, rate),
             ],
             crackle: 0.0,
-            crackle_pan: 0.0,
+            crackle_ears: Ears::default(),
             insect: [0.0, 0.0, 0.0, 0.5],
             strain: 0.0,
             drive_speed: 0.0,
+            wind_pan_target: 0.0,
+            wind_force: 0.0,
+            wind_pan: 0.0,
             drive_load: 0.0,
             drive: [0.0, 0.0, 0.0],
             drive_bands: [Svf::new(400.0, 1.2, rate), Svf::new(420.0, 1.2, rate), Svf::new(2400.0, 6.0, rate)],
@@ -171,9 +181,11 @@ impl Beds {
             if enclosed { send += (pair[0] + pair[1]) * 0.5 * gain; }
         };
         let [wind, cave, water, rain, insects, suit, drive] = self.level;
+        self.wind_pan += (self.wind_pan_target - self.wind_pan) * self.fade;
         if wind > AUDIBLE {
-            let pair = self.wind(l, r, wind);
-            add(wind, pair, false);
+            let [left, right] = self.wind(l, r, wind);
+            let pair = [left * (1.0 - self.wind_pan), right * (1.0 + self.wind_pan)];
+            add(wind * WIND_GAIN, pair, false);
         }
         if cave > AUDIBLE {
             add(cave, self.cave(l), true);
@@ -201,12 +213,14 @@ impl Beds {
     fn wind(&mut self, l: f32, r: f32, level: f32) -> [f32; 2] {
         // The cutoff exp() runs at 1/64 of the sample rate; gusts are slow.
         if self.frame.is_multiple_of(64) {
-            advance(&mut self.gust[0], 0.071 * 64.0, self.rate);
-            advance(&mut self.gust[1], 0.173 * 64.0, self.rate);
-            self.gust_now = 0.55 + 0.30 * sine(self.gust[0]) + 0.15 * sine(self.gust[1]);
-            self.wind_cut = coefficient(140.0 + 760.0 * self.gust_now, self.rate);
-            // The whistle bends up with each gust, a little apart in each ear.
-            let hz = 420.0 + 520.0 * self.gust_now;
+            advance(&mut self.gust[0], 0.031 * 64.0, self.rate);
+            advance(&mut self.gust[1], 0.067 * 64.0, self.rate);
+            // Shallow, slow changes avoid the constant rhythmic whoosh.
+            self.gust_now = 0.55 + 0.08 * sine(self.gust[0]) + 0.04 * sine(self.gust[1]);
+            let force = self.wind_force.clamp(0.0, 1.0);
+            self.wind_cut = coefficient(140.0 + 480.0 * self.gust_now + 900.0 * force, self.rate);
+            // The whistle bends up with each gust and with the wind's force, a little apart in each ear.
+            let hz = (420.0 + 520.0 * self.gust_now) * (1.0 + 0.8 * force);
             self.howl[0].tune(hz, 9.0, self.rate);
             self.howl[1].tune(hz * 1.06, 9.0, self.rate);
         }
@@ -214,9 +228,9 @@ impl Beds {
         let first = [self.wind[0].low(l, a), self.wind[2].low(r, a)];
         let left = self.wind[1].low(first[0], a);
         let right = self.wind[3].low(first[1], a);
-        let g = self.gust_now * self.gust_now * 2.4;
-        // Only loud wind whistles; a calm field keeps the plain rush.
-        let howl = ((level - 0.6) / 0.4).clamp(0.0, 1.0) * self.gust_now * 0.5;
+        let g = self.gust_now * self.gust_now * 1.7;
+        // Only a gale whistles; a calm field keeps the plain rush.
+        let howl = ((level - 0.75) / 0.25).clamp(0.0, 1.0).max((self.wind_force - 0.4) / 0.6) * self.gust_now * 0.1;
         if howl <= 0.0 {
             return [left * g, right * g];
         }
@@ -232,14 +246,16 @@ impl Beds {
         let drone = (sine(self.cave[0]) * 0.5 + sine(self.cave[1]) * 0.3 + sine(self.cave[2]) * 0.12)
             * breath
             * 0.16;
-        let rumble = self.cave_low.low(l, self.cuts[0]) * 1.6;
+        let rumble = self.cave_low.low(l, self.cuts[0]) * 1.0;
         let mut drip = 0.0;
         if self.drip_age == u32::MAX {
             self.drip_wait = self.drip_wait.saturating_sub(1);
             if self.drip_wait == 0 {
                 self.drip_age = 0;
                 self.drip_hz = 700.0 + self.events.unit() * 900.0;
-                self.drip_pan = self.events.next() * 0.7;
+                // Drops fall anywhere around, a few metres off and mostly overhead.
+                let (bearing, rise, range) = (self.events.next() * 0.5, self.events.unit() * 0.6, 2.0 + self.events.unit() * 8.0);
+                self.drip_ears = Ears::new(Cues::polar(bearing, rise, range), self.rate);
                 self.drip_wait = ((0.6 + self.events.unit() * 3.4) * self.rate) as u32;
             }
         } else {
@@ -253,10 +269,8 @@ impl Beds {
             }
         }
         let mono = drone + rumble;
-        [
-            mono + drip * (1.0 - self.drip_pan) * 0.5,
-            mono + drip * (1.0 + self.drip_pan) * 0.5,
-        ]
+        let drip = self.drip_ears.process(drip);
+        [mono + drip[0] * 0.5, mono + drip[1] * 0.5]
     }
 
     fn water(&mut self, l: f32, r: f32) -> [f32; 2] {
@@ -276,7 +290,7 @@ impl Beds {
                 hz: 280.0 + size * size * 900.0,
                 age: 0,
                 gain: 0.03 + 0.05 * self.events.unit(),
-                pan: self.events.next() * 0.8,
+                ears: Ears::new(Cues::polar(self.events.next() * 0.5, -0.1 + self.events.unit() * 0.2, 1.5 + self.events.unit() * 6.0), self.rate),
             };
         }
         for bubble in &mut self.bubbles {
@@ -286,8 +300,9 @@ impl Beds {
             let t = bubble.age as f32 / self.rate;
             advance(&mut bubble.phase, bubble.hz * (1.0 + t * 14.0).min(2.0), self.rate);
             let v = sine(bubble.phase) * bubble.gain * (t / 0.001).min(1.0) * (-t * 55.0).exp();
-            out[0] += v * (1.0 - bubble.pan) * 0.5;
-            out[1] += v * (1.0 + bubble.pan) * 0.5;
+            let ears = bubble.ears.process(v);
+            out[0] += ears[0] * 0.5;
+            out[1] += ears[1] * 0.5;
             bubble.age = if t > 0.09 { u32::MAX } else { bubble.age + 1 };
         }
         out
@@ -298,15 +313,13 @@ impl Beds {
         let (wash_l, wash_r) = (self.rain[2].low(wash_l), self.rain[3].low(wash_r));
         if self.events.unit() < 0.0009 {
             self.crackle = 0.25 + self.events.unit() * 0.35;
-            self.crackle_pan = self.events.next() * 0.8;
+            self.crackle_ears = Ears::new(Cues::polar(self.events.next() * 0.5, -0.3 + self.events.unit() * 0.4, 1.0 + self.events.unit() * 12.0), self.rate);
         }
         self.crackle *= 0.985;
         // A drop is a short knock, not a raw noise click.
         let tick = self.rain[4].band(self.crackle * l) * 1.2;
-        [
-            wash_l * 0.32 + tick * (1.0 - self.crackle_pan) * 0.5,
-            wash_r * 0.32 + tick * (1.0 + self.crackle_pan) * 0.5,
-        ]
+        let tick = self.crackle_ears.process(tick);
+        [wash_l * 0.32 + tick[0] * 0.5, wash_r * 0.32 + tick[1] * 0.5]
     }
 
     fn insects(&mut self) -> [f32; 2] {
@@ -322,8 +335,8 @@ impl Beds {
             let pulse = sine(group * rate).max(0.0);
             pulse * pulse
         };
-        let a = sine(self.insect[0]) * chirp(self.insect[2], 24.0) * 0.17;
-        let b = sine(self.insect[1]) * chirp(self.insect[3], 19.0) * 0.15;
+        let a = sine(self.insect[0]) * chirp(self.insect[2], 24.0) * 0.09;
+        let b = sine(self.insect[1]) * chirp(self.insect[3], 19.0) * 0.08;
         [a * 0.8 + b * 0.25, a * 0.25 + b * 0.8]
     }
 }

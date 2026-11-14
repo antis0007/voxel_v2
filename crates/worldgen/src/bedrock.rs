@@ -40,7 +40,7 @@ mod tests {
     use glam::IVec3;
 
     fn cfg(version: u32, scale: VoxelScalePreset) -> WorldSampleConfig {
-        WorldSampleConfig { generator_version: version, seed: 424242, world_type: WorldType::Hills, voxel_scale: scale }
+        WorldSampleConfig { planet: None, generator_version: version, seed: crate::test_world::seed(), world_type: WorldType::Hills, voxel_scale: scale }
     }
 
     #[test]

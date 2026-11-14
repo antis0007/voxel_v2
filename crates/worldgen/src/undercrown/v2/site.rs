@@ -53,6 +53,19 @@ fn profile(cfg: &WorldSampleConfig) -> Vec<(f32, f32, f32)> {
             }
             // Shafts are meant to reach the surface.
             Shape::Shaft { .. } => {}
+            Shape::Rift { a, b, half, top } => {
+                let reach = half * super::shape::REACH;
+                let d = (b - a).with_y(0.0);
+                let across = glam::Vec3::new(-d.z, 0.0, d.x).normalize_or_zero();
+                let n = (d.length() / STEP).ceil().max(1.0) as i32;
+                for k in 0..=n {
+                    let t = k as f32 / n as f32;
+                    let p = a + d * t;
+                    for w in [-reach, 0.0, reach] {
+                        out.push((p.x + across.x * w, p.z + across.z * w, super::shape::rift_top(top, t)));
+                    }
+                }
+            }
         }
     }
     for t in &probe.tunnels {

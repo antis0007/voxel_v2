@@ -1,5 +1,6 @@
 //! Footsteps, ambience beds and music, mixed after the effects bus.
 use crate::beds::{Beds, BED_COUNT};
+use crate::binaural::{Cues, Ears, CENTRE_GAIN};
 use crate::music::Piece;
 use crate::perform::Performer;
 use crate::steps::{Contact, StepPlay, Steps, Surface, VARIANTS};
@@ -21,6 +22,10 @@ static SUBMERGED: AtomicU32 = AtomicU32::new(0.0_f32.to_bits());
 static STRAIN: AtomicU32 = AtomicU32::new(0.0_f32.to_bits());
 /// Listener yaw in turns clockwise from -z; animal calls pan against it.
 static YAW: AtomicU32 = AtomicU32::new(0.0_f32.to_bits());
+/// Incoming wind bearing in listener-yaw turns, or NaN for calm air.
+static WIND_BEARING: AtomicU32 = AtomicU32::new(f32::NAN.to_bits());
+/// Wind force at the listener, 0 calm to 1 storm.
+static WIND_FORCE: AtomicU32 = AtomicU32::new(0.0_f32.to_bits());
 /// Lift drive speed 0..1 and signed load -1..1 (stored as 0..1 about 0.5).
 static DRIVE_SPEED: AtomicU32 = AtomicU32::new(0.0_f32.to_bits());
 static DRIVE_LOAD: AtomicU32 = AtomicU32::new(0.5_f32.to_bits());
@@ -134,7 +139,15 @@ impl Layers {
         // Same glide as the effects bus in `output`, so steps and cues thin together.
         self.muffle.approach(clarity(), 0.012, self.rate);
         self.beds.strain = f32::from_bits(STRAIN.load(Ordering::Relaxed));
-        self.fauna.yaw(f32::from_bits(YAW.load(Ordering::Relaxed)));
+        let yaw = f32::from_bits(YAW.load(Ordering::Relaxed));
+        self.fauna.yaw(yaw);
+        let wind = f32::from_bits(WIND_BEARING.load(Ordering::Relaxed));
+        self.beds.wind_pan_target = if wind.is_finite() {
+            ((wind - yaw) * std::f32::consts::TAU).sin() * 0.32
+        } else {
+            0.0
+        };
+        self.beds.wind_force = f32::from_bits(WIND_FORCE.load(Ordering::Relaxed));
         self.beds.drive_speed = f32::from_bits(DRIVE_SPEED.load(Ordering::Relaxed));
         self.beds.drive_load = f32::from_bits(DRIVE_LOAD.load(Ordering::Relaxed)) * 2.0 - 1.0;
     }
@@ -205,20 +218,35 @@ impl Audio {
         eye: Vec3,
         forward: Vec3,
     ) {
+        self.contact_occluded(contact, surface, pos, gain, seed, eye, forward, 0.0);
+    }
+
+    /// As `contact`, with `occlusion` of the path to the source blocked, 0 clear to 1 sealed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn contact_occluded(
+        &mut self,
+        contact: Contact,
+        surface: Surface,
+        pos: Option<Vec3>,
+        gain: f32,
+        seed: u32,
+        eye: Vec3,
+        forward: Vec3,
+        occlusion: f32,
+    ) {
         if !self.active.load(Ordering::Relaxed) {
             return;
         }
-        let (distance_gain, pan) = match pos {
+        let (distance_gain, cues) = match pos {
             Some(pos) => {
                 let delta = pos - eye;
                 let distance = delta.length();
                 if !distance.is_finite() || distance > AUDIBLE_M {
                     return;
                 }
-                let pan = delta.normalize_or_zero().dot(forward.cross(Vec3::Y).normalize_or_zero()).clamp(-0.9, 0.9);
-                ((1.0 - distance / AUDIBLE_M) / (1.0 + distance * distance * 0.04) * carry(distance), pan)
+                ((1.0 - distance / AUDIBLE_M) / (1.0 + distance * distance * 0.04) * carry(distance), Cues::toward(delta, forward).occluded(occlusion))
             }
-            None => (1.0, 0.0),
+            None => (1.0, Cues::HEAD_LOCKED),
         };
         // Steps carry their energy at 1 to 3 kHz, where hearing is most
         // sensitive, so they sit well under the effects bus.
@@ -230,14 +258,15 @@ impl Audio {
             Contact::Break => 1.6,
             Contact::Place => 1.3,
         };
-        let gain = distance_gain * gain.clamp(0.0, 1.0) * 0.35 * level;
+        let gain = distance_gain * gain.clamp(0.0, 1.0) * 0.35 * level * CENTRE_GAIN;
         let key = dsp::hash(seed, surface as u32 ^ (contact as u32) << 8);
         let _ = self.layer_tx.try_send(Command::Step(StepPlay {
             contact,
             surface,
             variant: key as usize % VARIANTS,
-            left: gain * ((1.0 - pan) * 0.5).sqrt(),
-            right: gain * ((1.0 + pan) * 0.5).sqrt(),
+            gain,
+            ears: Ears::new(cues, crate::synth::RATE as f32),
+            wait: cues.flight_s() * crate::synth::RATE as f32,
             rate: 0.93 + dsp::unit(key, 9) * 0.14,
         }));
     }
@@ -257,6 +286,16 @@ impl Audio {
     pub fn set_listener_yaw(&self, turns: f32) {
         let value = if turns.is_finite() { turns.rem_euclid(1.0) } else { 0.0 };
         YAW.store(value.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Bearing the wind comes from. Calm air keeps the stereo bed centered.
+    pub fn set_wind_bearing(&self, turns: Option<f32>) {
+        WIND_BEARING.store(turns.unwrap_or(f32::NAN).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Wind force at the listener, 0 calm to 1 storm: the bed brightens and a gale whistles higher.
+    pub fn set_wind_force(&self, force: f32) {
+        store(&WIND_FORCE, force, 0.0);
     }
 
     pub fn start_music(&self, piece: Piece) {
@@ -301,8 +340,9 @@ mod tests {
                     contact: Contact::Break,
                     surface: Surface::Metal,
                     variant: 1,
-                    left: 0.4,
-                    right: 0.4,
+                    gain: 0.4,
+                    ears: Ears::default(),
+                    wait: 0.0,
                     rate: 1.0,
                 });
             }

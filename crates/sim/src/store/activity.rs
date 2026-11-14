@@ -40,8 +40,10 @@ impl BrickStore {
     /// Every dirty brick in canonical (chunk z, y, x, brick) order. Enumerate
     /// set bits only; swap-removing a chunk never changes dispatch order.
     pub fn dirty_bricks(&self) -> Vec<BrickCoord> {
+        let mut chunks = self.awake_chunks.clone();
+        chunks.sort_unstable_by_key(|chunk| (chunk.z, chunk.y, chunk.x));
         let mut out = Vec::new();
-        for &chunk in &self.awake_chunks {
+        for chunk in chunks {
             let entry = &self.chunks[&chunk];
             let mut dirty = entry.dirty;
             while dirty != 0 {
@@ -50,7 +52,6 @@ impl BrickStore {
                 dirty &= dirty - 1;
             }
         }
-        out.sort_unstable_by_key(|b| (b.chunk.z, b.chunk.y, b.chunk.x, b.brick));
         out
     }
 

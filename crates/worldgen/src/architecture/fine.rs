@@ -8,7 +8,7 @@ use super::{Wing, Windows};
 use crate::BlockId as B;
 
 /// First generator with fine facades.
-pub const VERSION: u32 = 51;
+pub const VERSION: u32 = crate::gates::FINE_ARCHITECTURE_GENERATOR;
 /// Width of the frame round an opening, metres.
 const FRAME: f32 = 0.25;
 

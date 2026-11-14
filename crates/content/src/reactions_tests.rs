@@ -2,7 +2,7 @@ use super::*;
 use crate::BlockId as B;
 
 fn row(a: Reactant, b: Option<Reactant>) -> ReactionRow {
-    ReactionRow { why: String::new(), a, b, a_above: None, a_below: None, rate: 1.0, a_into: Some(B::Ash), b_into: None, a_temp: None, b_temp: None }
+    ReactionRow { why: String::new(), batch_counts: None, a, b, a_above: None, a_below: None, rate: 1.0, a_into: Some(B::Ash), b_into: None, a_temp: None, b_temp: None }
 }
 
 fn compile_one(r: ReactionRow) -> Result<ReactionTable, Vec<String>> {
@@ -78,6 +78,57 @@ fn a_duplicate_pair_is_refused_with_both_orders_counted() {
     let text = ron::ser::to_string_pretty(&rows, ron::ser::PrettyConfig::new()).unwrap();
     let errors = compile(&rows, &text, &crate::SIM_TABLE).unwrap_err();
     assert!(errors.iter().any(|e| e.contains("Water + Lava already has a row")), "{errors:?}");
+}
+
+#[test]
+fn reaction_drafts_share_runtime_validation_and_accept_edited_batch_ratios() {
+    let mut rows = parse(REACTIONS_RON).unwrap();
+    assert_eq!(rows, *ROWS);
+    let bronze = rows.iter_mut().find(|row| row.a_into == Some(B::MoltenBronze)).unwrap();
+    bronze.batch_counts = Some((5, 2));
+    let draft = ron::ser::to_string_pretty(&rows, ron::ser::PrettyConfig::new()).unwrap();
+    let accepted = parse(&draft).unwrap();
+    assert_eq!(accepted.iter().find(|row| row.a_into == Some(B::MoltenBronze)).unwrap().batch_counts, Some((5, 2)));
+    let table = compile(&accepted, &draft, &crate::SIM_TABLE).unwrap();
+    assert!(table.pair(B::MoltenCopper as u8, B::MoltenTin as u8).is_none(), "exact batches stay out of 1:1 GPU pairs");
+    assert!(table.pair(B::Lava as u8, B::Water as u8).is_some());
+}
+
+#[test]
+fn reaction_drafts_reject_invalid_batches_with_source_diagnostics() {
+    let bronze = parse(REACTIONS_RON).unwrap().into_iter().find(|row| row.batch_counts.is_some()).unwrap();
+    let cases = [
+        (ReactionRow { batch_counts: Some((0, 1)), ..bronze.clone() }, "positive"),
+        (ReactionRow { batch_counts: Some((16, 1)), ..bronze.clone() }, "at most 16"),
+        (ReactionRow { b_into: Some(B::MoltenIron), ..bronze.clone() }, "one shared product"),
+        (ReactionRow { rate: 0.5, ..bronze.clone() }, "rate 1"),
+        (ReactionRow { a_above: Some(Threshold::Ignition), ..bronze.clone() }, "numeric bounds"),
+        (ReactionRow { a_above: Some(Threshold::K(f32::NAN)), ..bronze.clone() }, "invalid batch temperature"),
+        (ReactionRow { a_below: Some(Threshold::K(100.0)), ..bronze }, "lower bound exceeds upper bound"),
+    ];
+    for (row, expected) in cases {
+        let source = ron::ser::to_string_pretty(&vec![row], ron::ser::PrettyConfig::new()).unwrap();
+        let errors = parse(&source).unwrap_err();
+        assert!(errors.iter().any(|error| error.starts_with("assets/reactions.ron:2:") && error.contains(expected)), "{expected}: {errors:?}");
+    }
+    assert!(parse(&REACTIONS_RON.replace("MoltenTin", "Unobtainium")).is_err());
+    let errors = parse(&REACTIONS_RON.replacen("batch_counts:", "batch_count:", 1)).unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("Unexpected field") && error.contains("batch_count")), "{errors:?}");
+}
+
+#[test]
+fn reaction_drafts_reject_ambiguous_batch_products_and_unordered_pairs() {
+    let bronze = parse(REACTIONS_RON).unwrap().into_iter().find(|row| row.batch_counts.is_some()).unwrap();
+    let different_pair = ReactionRow { a: Reactant::Block(B::MoltenIron), ..bronze.clone() };
+    let reversed_pair = ReactionRow {
+        a: Reactant::Block(B::MoltenTin), b: Some(Reactant::Block(B::MoltenCopper)),
+        a_into: Some(B::MoltenSteel), b_into: Some(B::MoltenSteel), ..bronze.clone()
+    };
+    for (second, expected) in [(different_pair, "batch product"), (reversed_pair, "batch pair")] {
+        let source = ron::ser::to_string_pretty(&vec![bronze.clone(), second], ron::ser::PrettyConfig::new()).unwrap();
+        let errors = parse(&source).unwrap_err();
+        assert!(errors.iter().any(|error| error.contains(expected) && error.contains("already has a row")), "{expected}: {errors:?}");
+    }
 }
 
 #[test]

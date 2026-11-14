@@ -17,7 +17,7 @@ use glam::{IVec3, Vec3};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub const VERSION: u32 = 32;
+pub const VERSION: u32 = crate::gates::DUNGEON_V2_GENERATOR;
 /// Half-width of the square around a region centre that the site sampler
 /// offers to the complex: 15 m site jitter + 26 m to the shrine + 29 m of
 /// complex, rounded up.

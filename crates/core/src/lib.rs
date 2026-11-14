@@ -17,7 +17,11 @@ pub mod planet_frame;
 pub mod reaction;
 pub mod scale;
 pub mod time;
+pub mod work;
+pub mod lod;
 
 pub use coords::{CHUNK_SIZE, PADDED_CHUNK_SIZE, chunk_coord_from_world_block, floor_div};
 pub use scale::VoxelScalePreset;
 pub use time::Budget;
+
+pub mod modifiers;

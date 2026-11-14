@@ -1,7 +1,7 @@
 //! Generator 3 exploration sites. Every feature is a pure function of seed and
 //! metre coordinates; edits always override it through World/WorldSnapshot.
 use super::{BlockId as B, WorldSampleConfig, WorldType, hash2, sample_column, value_noise2};
-use glam::{IVec3, Vec3};
+use glam::{IVec3, Vec2, Vec3};
 use std::cell::RefCell;
 use engine_core::fast_hash::FastMap;
 use std::collections::HashMap;
@@ -9,10 +9,15 @@ use std::collections::HashMap;
 pub mod boss_access;
 pub mod modifiers;
 mod workings;
+pub mod kind;
+pub use kind::SiteKind;
 mod footprints;
+mod review;
+pub use review::place_review_view;
 mod workshop_route;
+mod workshop_supplies;
 
-pub(super) fn region_span(cfg: &WorldSampleConfig) -> f32 {
+pub(crate) fn region_span(cfg: &WorldSampleConfig) -> f32 {
     if cfg.generator_version >= 9 {
         192.0
     } else {
@@ -105,22 +110,14 @@ fn gallery_floor(cfg: &WorldSampleConfig, p: IVec3, m: Vec3) -> Option<f32> {
     result
 }
 
-fn site(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Site> {
-    let cached = SITES.with(|s| {
-        let mut c = s.borrow_mut();
-        if c.0 != Some(*cfg) {
-            *c = (Some(*cfg), FastMap::default());
-        }
-        c.1.get(&(rx, rz)).copied()
-    });
-    if let Some(s) = cached {
-        return s;
-    }
+fn site_roll(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> (u32, Vec2, bool) {
     let starter = rx == 0 && rz == 0;
     let seed = cfg
         .seed
         .wrapping_add((rx as u32).wrapping_mul(73856093))
         .wrapping_add((rz as u32).wrapping_mul(19349663));
+    let curated = cfg.generator_version >= engine_voxel::CURATED_SURFACE_GENERATOR;
+    let admitted = starter || !curated || crate::hash3(rx, rz, 41, seed) < 0.28;
     let x = if starter {
         0.0
     } else {
@@ -143,14 +140,56 @@ fn site(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Site> {
                     70.0
                 }
     };
-    let ground = sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z)).height
-        as f32
-        * cfg.voxel_meters();
-    let result = if (starter
-        || (ground > 17.0 && ground < 105.0 && hash2(rx, rz, seed.wrapping_add(3)) > 0.18))
+    (seed, Vec2::new(x, z), admitted)
+}
+
+/// Potential legacy site centres without probing columns during the Planet bake.
+pub(crate) fn trail_keepouts(cfg: &WorldSampleConfig, centre: Vec2) -> Vec<Vec2> {
+    let cell = (centre / region_span(cfg)).round().as_ivec2();
+    (-5..=5).flat_map(|z| (-5..=5).filter_map(move |x| {
+        let (ix, iz) = (cell.x + x, cell.y + z);
+        let (seed, at, admitted) = site_roll(cfg, ix, iz);
+        (admitted && ((ix == 0 && iz == 0) || hash2(ix, iz, seed.wrapping_add(3)) > 0.18))
+            .then_some(at)
+    })).collect()
+}
+
+fn site(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Site> {
+    let cached = SITES.with(|s| {
+        let mut c = s.borrow_mut();
+        if c.0 != Some(*cfg) {
+            *c = (Some(*cfg), FastMap::default());
+        }
+        c.1.get(&(rx, rz)).copied()
+    });
+    if let Some(s) = cached {
+        return s;
+    }
+    let starter = rx == 0 && rz == 0;
+    let curated = cfg.generator_version >= engine_voxel::CURATED_SURFACE_GENERATOR;
+    let (seed, Vec2 { x, y: z }, admitted) = site_roll(cfg, rx, rz);
+    let ground = if admitted {
+        sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z)).height as f32
+            * cfg.voxel_meters()
+    } else {
+        f32::NEG_INFINITY
+    };
+    let result = if admitted && (starter
+        || (ground > 17.0 && ground < if cfg.generator_version>=91 {460.0}else{105.0} && hash2(rx, rz, seed.wrapping_add(3)) > 0.18))
         && !super::undercrown::reserved(cfg, Vec3::new(x, ground, z))
+        && !super::ruins::reserves(cfg, x, z, 70.0)
     {
-        Some(Site {
+        let kind = if starter {
+            Some(0)
+        } else {
+            let biome = || super::landscape::sample(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z)).biome;
+            if curated {
+                kind::pick_curated(biome(), hash2(rx, rz, seed.wrapping_add(5)))
+            } else {
+                Some(kind::pick(cfg, rx, rz, seed, biome))
+            }
+        };
+        kind.map(|kind| Site {
             x,
             z,
             ground,
@@ -159,12 +198,7 @@ fn site(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Site> {
             } else {
                 (hash2(rx, rz, seed.wrapping_add(4)) * 4.0) as u32 % 4
             },
-            kind: if starter {
-                0
-            } else {
-                let kinds = if cfg.generator_version >= 4 { 6 } else { 3 };
-                (hash2(rx, rz, seed.wrapping_add(5)) * kinds as f32) as u32 % kinds
-            },
+            kind,
             seed,
             starter,
         })
@@ -173,6 +207,11 @@ fn site(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Site> {
     };
     let result = if cfg.generator_version >= 37 {
         result.and_then(|mut s| {
+            if cfg.generator_version >= 92 && !s.starter && matches!(s.kind, 1 | 3 | 5) {
+                let (hx,hz) = super::households::district_center(s.x,s.z);
+                // Ruined boss campuses belong outside the inhabited district.
+                if (s.x-hx).hypot(s.z-hz) < 160.0 { return None; }
+            }
             let building = super::architecture::site_building_version(s.kind, s.seed, s.starter, cfg.generator_version);
             let mut bounds = building.as_ref().map_or((-14.0, -14.0, 14.0, 14.0), |b| b.extent());
             if cfg.generator_version >= 39 && matches!(s.kind, 1 | 3 | 5) {
@@ -218,6 +257,10 @@ fn fit_ground(
     cfg: &WorldSampleConfig, x: f32, z: f32, turn: u32,
     (x0, z0, x1, z1): (f32, f32, f32, f32), max_relief: f32,
 ) -> Option<f32> {
+    let margin = x0.abs().max(x1.abs()).hypot(z0.abs().max(z1.abs()));
+    if super::planetary::reserves_volcanic_summit(cfg, x, z, margin) {
+        return None;
+    }
     if cfg.generator_version >= 39 {
         // Sample at a fixed spatial interval: nine points per axis missed
         // narrow ravines in large castle plots. This runs only when planning.
@@ -308,14 +351,29 @@ fn home_layout(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<(u32, f32, f
         .seed
         .wrapping_add((ix as u32).wrapping_mul(0x9E37_79B1))
         .wrapping_add((iz as u32).wrapping_mul(0x85EB_CA6B));
-    if hash2(ix, iz, seed.wrapping_add(900)) < 0.68 {
+    let (hx,hz) = super::households::district_center(ix as f32*HOME_CELL,iz as f32*HOME_CELL);
+    let threshold = if cfg.generator_version >= 92 {
+        // Concentrated village buildings, with occasional isolated farmsteads.
+        if (ix as f32*HOME_CELL-hx).hypot(iz as f32*HOME_CELL-hz)<120.0 {
+            0.20
+        } else if cfg.generator_version >= engine_voxel::CURATED_SURFACE_GENERATOR {
+            return None;
+        } else {
+            0.96
+        }
+    } else { 0.68 };
+    if hash2(ix, iz, seed.wrapping_add(900)) < threshold {
         return None;
     }
     // Leave the entire graded apron inside the owning 80 m cell.
     let jitter = if cfg.generator_version >= 39 { 6.0 } else { 24.0 };
     let x = ix as f32 * HOME_CELL + (hash2(ix, iz, seed.wrapping_add(901)) - 0.5) * jitter;
     let z = iz as f32 * HOME_CELL + (hash2(ix, iz, seed.wrapping_add(902)) - 0.5) * jitter;
-    let mut building = super::architecture::homestead_building(seed);
+    let variety = cfg.generator_version >= super::architecture::CONNECTED_ROOF_VERSION;
+    let mut building = super::architecture::homestead_building_versioned(seed, variety);
+    if variety {
+        building = building.connected();
+    }
     if cfg.generator_version >= 39 {
         let (x0, z0, x1, z1) = building.extent();
         building = super::architecture::Building::new(building.wings, building.curtains,
@@ -331,7 +389,8 @@ fn home_reach(building: &super::architecture::Building) -> f32 {
 
 fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
     let (seed, x, z, building) = home_layout(cfg, ix, iz)?;
-    if x.hypot(z) < 90.0 || super::valley::reserves(cfg, x, z) || super::amberroot::reserves(cfg, x, z) {
+    if x.hypot(z) < 90.0 || super::valley::reserves(cfg, x, z) || super::amberroot::reserves(cfg, x, z)
+        || super::ruins::reserves(cfg, x, z, 30.0) {
         return None;
     }
     // Leave room around the big ruins.
@@ -362,13 +421,26 @@ fn plan_homestead(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> HomeSlot {
         ground = ground.max(g);
         low = low.min(g);
     }
-    if !(14.5..110.0).contains(&ground) || ground - low > 4.5 {
+    let ceiling = if cfg.generator_version >= 92 { 300.0 } else { 110.0 };
+    if !(14.5..ceiling).contains(&ground) || ground - low > 4.5 {
         return None;
     }
     if super::undercrown::reserved(cfg, Vec3::new(x, ground, z)) {
         return None;
     }
-    let turn = (hash2(ix, iz, seed.wrapping_add(903)) * 4.0) as u32 % 4;
+    let mut turn = (hash2(ix, iz, seed.wrapping_add(903)) * 4.0) as u32 % 4;
+    if cfg.generator_version >= 92 && let Some(door) = building.entrance() {
+        let (hx,hz) = super::households::district_center(x,z);
+        let mut best = f32::MIN;
+        for candidate in 0..4 {
+            let (dx,dz) = match candidate {
+                1 => (door.z,-door.x), 2 => (-door.x,-door.z),
+                3 => (-door.z,door.x), _ => (door.x,door.z),
+            };
+            let score = dx*(hx-x)+dz*(hz-z);
+            if score>best { best=score; turn=candidate; }
+        }
+    }
     if cfg.generator_version >= 37 {
         ground = fit_ground(cfg, x, z, turn, building.extent(), 6.0)?;
         if let Some(door) = building.entrance() {
@@ -458,6 +530,59 @@ fn site_point(s: Site, p: Vec3) -> Vec3 {
     Vec3::new(s.x + x, s.ground + p.y, s.z + z)
 }
 
+/// Visits settled architecture once per placement cell, without sampling its voxels.
+pub fn visit_skylines(
+    cfg: &WorldSampleConfig,
+    center: glam::Vec2,
+    radius: f32,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut emit: impl FnMut([Vec3; 9], f32, B, B),
+) {
+    if cfg.generator_version < 39
+        || !matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged)
+    {
+        return;
+    }
+    let cells = |span: f32| {
+        let lo = ((center - radius) / span).round().as_ivec2();
+        let hi = ((center + radius) / span).round().as_ivec2();
+        (lo.x..=hi.x, lo.y..=hi.y)
+    };
+    let nearby = |x, z| center.distance_squared(glam::Vec2::new(x, z)) <= radius * radius;
+    let mut building = |s: Site, plan: &super::architecture::Building| {
+        for wing in &plan.wings {
+            let (roof, wall, cap) = wing.skyline();
+            emit(roof.map(|p| site_point(s, p)), s.ground, wall, cap);
+        }
+    };
+    let (xs, zs) = cells(region_span(cfg));
+    for z in zs {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) { return; }
+        for x in xs.clone() {
+            if let Some(s) = site(cfg, x, z)
+                && nearby(s.x, s.z)
+                && (s.starter || !super::valley::reserves(cfg, s.x, s.z))
+                && let Some(plan) = super::architecture::site_building_version(
+                    s.kind, s.seed, s.starter, cfg.generator_version,
+                )
+            {
+                building(s, &plan);
+            }
+        }
+    }
+    let (xs, zs) = cells(HOME_CELL);
+    for z in zs {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) { return; }
+        for x in xs.clone() {
+            if let Some(h) = homestead(cfg, x, z) && nearby(h.x, h.z) {
+                let s = Site { x: h.x, z: h.z, ground: h.ground, turn: h.turn,
+                    kind: 0, seed: 0, starter: false };
+                building(s, &h.building);
+            }
+        }
+    }
+}
+
 /// These fixtures share the ruin's orientation and metre scale across voxel sizes.
 pub fn foundry_stations(cfg: &WorldSampleConfig, id: IVec3) -> Vec<Vec3> {
     let Some(s) = site(cfg, id.x, id.y) else {
@@ -512,12 +637,60 @@ pub(super) fn surface_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool 
     super::amberroot::reserves(cfg, x, z) || super::dungeon::reserved(cfg, Vec3::new(x, 0.0, z))
 }
 
+/// Approach side of the starter decline, before the floor starts sloping.
+pub fn workshop_mine_entrance(cfg: &WorldSampleConfig) -> Option<Vec3> {
+    let starter = site(cfg, 0, 0)?;
+    Some(Vec3::new(starter.x, starter.ground + cfg.voxel_meters(), starter.z + 0.5))
+}
+
+/// The supply gallery owns one crate at each voxel scale.
+pub fn workshop_supply_cache(cfg: &WorldSampleConfig, p: IVec3) -> bool {
+    if !workshop_supplies::enabled(cfg) {
+        return false;
+    }
+    let v = cfg.voxel_meters();
+    let centre = (p.as_vec3() + Vec3::splat(0.5)) * v;
+    if !(11.0..12.0).contains(&centre.x) || !(-54.0..-53.0).contains(&centre.z) {
+        return false;
+    }
+    site(cfg, 0, 0).is_some_and(|s| workshop_supplies::sample(local(s, centre), v) == Some(B::SurveyCache))
+}
+
 pub fn workshop_heart(cfg: &WorldSampleConfig) -> Option<Vec3> {
     if cfg.world_type == WorldType::Superflat {
         return None;
     }
     let starter = site(cfg, 0, 0)?;
     Some(Vec3::new(11.0, starter.ground - 18.0, -90.0))
+}
+
+/// Edge of one surface-site region in metres; `site_seat` takes region indices on this grid.
+pub fn site_region_span(cfg: &WorldSampleConfig) -> f32 {
+    region_span(cfg)
+}
+
+/// A clear spot beside the surface site of region `(rx, rz)` for an app-side overlay
+/// (mana hedrons): `(x, z)` in metres, 16-28 m from the site centre, with the overlay and a
+/// 4 m cross around it off the site building and homesteads. Reads only; places no blocks.
+pub fn site_seat(cfg: &WorldSampleConfig, rx: i32, rz: i32, salt: u32) -> Option<(f32, f32)> {
+    if cfg.generator_version < 3 || cfg.world_type == WorldType::Superflat {
+        return None;
+    }
+    let s = site(cfg, rx, rz)?;
+    let turn = hash2(rx, rz, s.seed.wrapping_add(salt));
+    for step in 0..8 {
+        let angle = (turn + step as f32 / 8.0) * std::f32::consts::TAU;
+        for ring in [16.0, 22.0, 28.0] {
+            let (x, z) = (s.x + ring * angle.cos(), s.z + ring * angle.sin());
+            let clear = [(0.0, 0.0), (4.0, 0.0), (-4.0, 0.0), (0.0, 4.0), (0.0, -4.0)]
+                .iter()
+                .all(|&(dx, dz)| !trail_obstructed(cfg, x + dx, z + dz));
+            if clear {
+                return Some((x, z));
+            }
+        }
+    }
+    None
 }
 
 /// Returns `(world_pos_meters, kind, turn, size_variation)` for surface sites within `max_dist` metres.
@@ -573,6 +746,61 @@ pub(super) fn trail_entrances(cfg: &WorldSampleConfig, reach: f32) -> Vec<Vec3> 
     out
 }
 
+/// The ruin door in region (rx, rz) as a road endpoint, if the region has a ruin.
+pub(crate) fn region_door(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<Vec3> {
+    let s = site(cfg, rx, rz)?;
+    if super::valley::reserves(cfg, s.x, s.z) {
+        return None;
+    }
+    let door = super::architecture::site_building_version(s.kind, s.seed, s.starter, cfg.generator_version)
+        .and_then(|b| b.entrance())
+        .unwrap_or(Vec3::new(0.0, 0.0, 12.0));
+    let mut p = site_point(s, door);
+    p.y += cfg.voxel_meters();
+    Some(p)
+}
+
+/// The boss court behind a ruin (kinds 1, 3, 5). Regional roads go around it.
+pub(crate) fn campus_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool {
+    let span = region_span(cfg);
+    let (rx, rz) = ((x / span).round() as i32, (z / span).round() as i32);
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let Some(s) = site(cfg, rx + dx, rz + dz) else { continue };
+            if !matches!(s.kind, 1 | 3 | 5) {
+                continue;
+            }
+            let q = local(s, Vec3::new(x, s.ground, z));
+            if q.x.abs() < 30.0 && (10.0..69.0).contains(&q.z) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Homestead doors whose home cell centre lies in the box, as road endpoints.
+pub(crate) fn homestead_doors(cfg: &WorldSampleConfig, x0: f32, z0: f32, x1: f32, z1: f32) -> Vec<Vec3> {
+    let mut out = Vec::new();
+    let (ix0, ix1) = ((x0 / HOME_CELL).ceil() as i32, (x1 / HOME_CELL).floor() as i32);
+    let (iz0, iz1) = ((z0 / HOME_CELL).ceil() as i32, (z1 / HOME_CELL).floor() as i32);
+    for iz in iz0..=iz1 {
+        for ix in ix0..=ix1 {
+            if (ix as f32 * HOME_CELL) >= x1 || (iz as f32 * HOME_CELL) >= z1 {
+                continue;
+            }
+            let Some(home) = homestead(cfg, ix, iz) else { continue };
+            let Some(door) = home.building.entrance() else { continue };
+            let (dx, dz) = match home.turn {
+                1 => (door.z, -door.x), 2 => (-door.x, -door.z),
+                3 => (-door.z, door.x), _ => (door.x, door.z),
+            };
+            out.push(Vec3::new(home.x + dx, home.ground + cfg.voxel_meters(), home.z + dz));
+        }
+    }
+    out
+}
+
 /// Only the occupied footprint, not the surrounding plot. Roads may reach a
 /// door across its courtyard but must not take a shortcut through the house.
 pub(super) fn trail_obstructed(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool {
@@ -593,7 +821,13 @@ pub(super) fn trail_obstructed(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool 
     false
 }
 
-/// A bounded, on-interaction survey; never run this during voxel sampling or every frame.
+type RelicSurveyKey = (WorldSampleConfig, u32, bool, i32, i32, i32, i32);
+thread_local! {
+    static RELIC_SURVEY: RefCell<Option<(RelicSurveyKey, Vec<(u32, Vec3)>)>> = const { RefCell::new(None) };
+}
+
+/// Cache the terrain survey, not the chosen target: movement still selects
+/// the exact nearest candidate and updates bearing/distance every frame.
 pub fn next_relic(cfg: &WorldSampleConfig, origin: Vec3, collected: u32) -> Option<(u32, Vec3)> {
     if cfg.generator_version < 4 || cfg.world_type == WorldType::Superflat {
         return None;
@@ -605,25 +839,34 @@ pub fn next_relic(cfg: &WorldSampleConfig, origin: Vec3, collected: u32) -> Opti
     } else {
         8
     };
-    let mut best: Option<(u32, Vec3)> = None;
-    let mut consider = |kind: u32, p: Vec3| {
-        if best.is_none_or(|(_, q)| (p - origin).length_squared() < (q - origin).length_squared()) {
-            best = Some((kind, p));
-        }
-    };
     let rx = (origin.x / region_span(cfg)).round() as i32;
     let rz = (origin.z / region_span(cfg)).round() as i32;
+    let caverns = target == 8 && collected & 4 == 0;
+    let gx = if caverns { (origin.x / 72.0).round() as i32 } else { 0 };
+    let gz = if caverns { (origin.z / 72.0).round() as i32 } else { 0 };
+    let key = (*cfg, target, caverns, rx, rz, gx, gz);
+    RELIC_SURVEY.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.as_ref().is_none_or(|(old, _)| *old != key) {
+            *cache = Some((key, relic_candidates(cfg, target, caverns, rx, rz, gx, gz)));
+        }
+        cache.as_ref()?.1.iter().copied().min_by(|(_, a), (_, b)|
+            a.distance_squared(origin).total_cmp(&b.distance_squared(origin)))
+    })
+}
+
+fn relic_candidates(cfg: &WorldSampleConfig, target: u32, caverns: bool,
+    rx: i32, rz: i32, gx: i32, gz: i32) -> Vec<(u32, Vec3)> {
+    let mut candidates = Vec::new();
     for x in rx - 5..=rx + 5 {
         for z in rz - 5..=rz + 5 {
             if let Some(s) = site(cfg, x, z)
                 && s.kind == target {
-                    consider(s.kind, site_point(s, Vec3::Y));
+                    candidates.push((s.kind, site_point(s, Vec3::Y)));
                 }
         }
     }
-    if target == 8 && collected & 4 == 0 {
-        let gx = (origin.x / 72.0).round() as i32;
-        let gz = (origin.z / 72.0).round() as i32;
+    if caverns {
         for x in gx - 8..=gx + 8 {
             for z in gz - 8..=gz + 8 {
                 if (x as f32 * 72.0).hypot(z as f32 * 72.0) < 100.0
@@ -632,12 +875,12 @@ pub fn next_relic(cfg: &WorldSampleConfig, origin: Vec3, collected: u32) -> Opti
                     continue;
                 }
                 if let Some(floor) = cavern_floor(cfg, x, z) {
-                    consider(8, Vec3::new(x as f32 * 72.0, floor + 1.0, z as f32 * 72.0));
+                    candidates.push((8, Vec3::new(x as f32 * 72.0, floor + 1.0, z as f32 * 72.0)));
                 }
             }
         }
     }
-    best
+    candidates
 }
 
 /// Three stacked rooms under a ruin, joined by one stair shaft at the back wall.
@@ -698,10 +941,12 @@ fn ruin_descent(s: Site, cfg: &WorldSampleConfig, q: Vec3) -> Option<B> {
 fn sample_site(s: Site, cfg: &WorldSampleConfig, p: Vec3, terrain_top: f32) -> Option<B> {
     let q = local(s, p);
     let v = cfg.voxel_meters();
+    if s.starter && workshop_supplies::enabled(cfg)
+        && let Some(b) = workshop_supplies::sample(q, v) { return Some(b); }
     if s.starter && cfg.generator_version >= 48
         && let Some(b) = workshop_route::sample(q, v) { return Some(b); }
     if s.kind == 1 && cfg.generator_version >= 26 {
-        return super::toll_crossing::block(q,v);
+        return super::toll_crossing::block_versioned(q,v,cfg.generator_version >= super::toll_crossing::CONNECTED_STAIRS_GENERATOR);
     }
     if let Some(b) = ruin_descent(s, cfg, q) {
         return Some(b);
@@ -722,6 +967,13 @@ fn sample_site(s: Site, cfg: &WorldSampleConfig, p: Vec3, terrain_top: f32) -> O
                 return Some(B::Log);
             }
             return Some(B::Air);
+        }
+        // Overlap the lining across the stepped roof so loose overburden
+        // cannot settle into the starter haulage lane.
+        if s.starter && depth >= 7.0 && workshop_supplies::enabled(cfg)
+            && (floor + 4.4..floor + 4.4 + 2.0 * v).contains(&q.y)
+        {
+            return Some(B::Limestone);
         }
         if q.y >= floor - v && q.y < floor {
             return Some(B::Limestone);
@@ -759,7 +1011,12 @@ fn sample_site(s: Site, cfg: &WorldSampleConfig, p: Vec3, terrain_top: f32) -> O
         let building = super::architecture::site_building_version(s.kind, s.seed, s.starter, cfg.generator_version)?;
         return match building.sample_sited(q, v, terrain_top - s.ground, cfg.generator_version) {
             None => None,
-            Some(B::Air) => fixtures(s, cfg, q, v).or(Some(B::Air)),
+            Some(B::Air) => fixtures(s, cfg, q, v)
+                .or_else(|| (cfg.generator_version >= super::ruins::TERRACE_VERSION)
+                    .then(|| plant_frames(s.kind, q, v)).flatten())
+                .or_else(|| (cfg.generator_version >= super::ruins::REBUILT_VERSION)
+                    .then(|| ruin_plant(s.kind, q, v)).flatten())
+                .or(Some(B::Air)),
             solid => solid,
         };
     }
@@ -848,6 +1105,56 @@ fn sample_site(s: Site, cfg: &WorldSampleConfig, p: Vec3, terrain_top: f32) -> O
     fixtures(s, cfg, q, v).or(Some(B::Air))
 }
 
+/// Overhead equipment leaves the ground routes, caches and valves clear.
+fn plant_frames(kind: u32, q: Vec3, v: f32) -> Option<B> {
+    let rail = v.max(0.85) * 0.65;
+    let x = q.x.abs();
+    let z = q.z.abs();
+    match kind {
+        // Metering frames stand above the pump pipes on either side of the sluice.
+        2 if (z - 3.4).abs() < rail && x < 5.8 && (5.1..6.1).contains(&q.y) => {
+            Some(if x < 1.3 { B::GlazedTiles } else { B::SteelPlate })
+        }
+        2 if (z - 3.4).abs() < rail && (x - 5.0).abs() < rail && (3.5..5.7).contains(&q.y) => {
+            Some(B::RustedSteel)
+        }
+        // Flues turn from the furnace mouths toward the gantry over the court.
+        3 if (x - 8.8).abs() < rail && (-5.4..0.5).contains(&q.z) && (7.0..8.0).contains(&q.y) => {
+            Some(if (q.z + 2.0).abs() < rail { B::HazardPaint } else { B::RustedSteel })
+        }
+        3 if (x - 8.8).abs() < rail && z < rail && (5.0..7.5).contains(&q.y) => Some(B::SteelPlate),
+        // Surviving greenhouse feeder ribs tie the old colonnade to the irrigation lines.
+        4 if (z - 7.0).abs() < rail && (4.4..7.3).contains(&x) && (6.0..7.0).contains(&q.y) => {
+            Some(if x < 5.4 { B::GlazedTiles } else { B::RustedSteel })
+        }
+        4 if (z - 7.0).abs() < rail && (x - 6.8).abs() < rail && (4.4..6.5).contains(&q.y) => Some(B::BronzeBlock),
+        _ => None,
+    }
+}
+
+fn ruin_plant(kind: u32, q: Vec3, v: f32) -> Option<B> {
+    let pipe = v.max(0.85) * 0.65;
+    match kind {
+        2 if q.x.abs() < 7.7 && (q.z.abs() - 3.4).abs() < pipe && (q.y - 3.7).abs() < pipe => {
+            Some(if (q.x.abs() - 5.0).abs() < v.max(0.55) { B::SteelPlate } else { B::RustedSteel })
+        }
+        2 if (q.x.abs() - 6.7).abs() < pipe && (q.z.abs() - 3.4).abs() < pipe
+            && (1.0..3.7).contains(&q.y) => Some(B::RustedSteel),
+        3 if q.x.abs() < 9.7 && q.z.abs() < pipe && (q.y - 5.3).abs() < pipe => {
+            Some(if q.x.rem_euclid(4.0) < v.max(0.45) { B::HazardPaint } else { B::RustedSteel })
+        }
+        3 if (q.x.abs() - 8.8).abs() < pipe && (-5.0..0.4).contains(&q.z) && (q.y - 5.3).abs() < pipe => {
+            Some(B::RustedSteel)
+        }
+        4 if (q.x.abs() - 6.8).abs() < pipe && q.z.abs() < 8.2 && (q.y - 4.5).abs() < pipe => {
+            Some(if q.z.abs().rem_euclid(4.0) < v { B::GlazedTiles } else { B::RustedSteel })
+        }
+        4 if (q.x.abs() - 6.8).abs() < pipe && (q.z.abs() - 4.5).abs() < pipe
+            && (3.0..4.5).contains(&q.y) => Some(B::BronzeBlock),
+        _ => None,
+    }
+}
+
 fn site_variation(s: Site) -> f32 {
     if s.starter {
         0.0
@@ -905,7 +1212,7 @@ fn fixtures(s: Site, cfg: &WorldSampleConfig, q: Vec3, v: f32) -> Option<B> {
                 let hollow = (q.x.abs() - 9.0).abs() < 0.65 && (q.z + 5.0).abs() < 0.65;
                 return Some(if hollow { B::Air } else { B::Basalt });
             }
-            if q.y > 6.0
+            if cfg.generator_version < 54 && q.y > 6.0
                 && q.y < 7.0
                 && q.z.abs() < 1.0
                 && q.x < width - 2.0
@@ -1244,7 +1551,14 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
     if let Some(block) = crate::habitats_region::sample(cfg, m) {
         return Some(block);
     }
+    if crate::geo::integrated(cfg)
+        && let Some(block) = crate::cistern::sample(cfg, m) {
+        return Some(block);
+    }
     let terrain_top = (height + 1) as f32 * cfg.voxel_meters();
+    if let Some(built) = super::ruins::block(cfg, p, m, terrain_top) {
+        return Some(built);
+    }
     if let Some(carved) = noita_descent(cfg, m) {
         return Some(carved);
     }
@@ -1314,7 +1628,9 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
 /// Surface structures have placement priority over random dungeon collars.
 /// Deliberately does not query dungeons: placement dependencies stay acyclic.
 pub(crate) fn building_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool {
+    if super::basin::solved_face(cfg) { return false; }
     if super::valley::reserves(cfg, x, z) || super::amberroot::reserves(cfg, x, z) { return true; }
+    if super::ruins::reserves(cfg, x, z, 10.0) { return true; }
     let span = region_span(cfg);
     let (rx, rz) = ((x / span).round() as i32, (z / span).round() as i32);
     for dz in -1..=1 {
@@ -1346,6 +1662,15 @@ pub(crate) fn building_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool
         }
     }
     false
+}
+
+/// Keep complete tree roots/crowns off occupied campuses, without clearing
+/// every riverbank just because the valley owns its terrain grading.
+pub(crate) fn tree_reserved(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool {
+    if super::valley::reserves(cfg,x,z) && !super::valley::built_up(cfg,x,z) {
+        return false;
+    }
+    building_reserved(cfg,x,z)
 }
 
 /// Generator 17 chamber dressing. Variant 2 (the broken road) is left alone.
@@ -1511,6 +1836,7 @@ pub fn cavern(cfg: &WorldSampleConfig, p: IVec3, height: i32) -> Option<B> {
     {
         return Some(b);
     }
+    if let Some(block) = super::karst::block(cfg, p, height) { return Some(block); }
     let depth = height as f32 * cfg.voxel_meters() - m.y;
     if !(9.0..=70.0).contains(&depth) {
         return None;
@@ -1712,6 +2038,9 @@ pub fn location(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
     if let Some(name) = super::undercrown::location(cfg, m) {
         return Some(name);
     }
+    if let Some(name) = super::ruins::location(cfg, m) {
+        return Some(name);
+    }
     if let Some(name) = super::surface::location(cfg, m) {
         return Some(name);
     }
@@ -1808,7 +2137,47 @@ pub fn location(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
 
 /// Encounter anchors share the terrain's deterministic site layout. Coordinates
 /// are metres; the third key component separates ruins from fungal chambers.
+fn encounter_anchor(cfg: &WorldSampleConfig, s: Site, x: i32, z: i32) -> Vec3 {
+    if s.starter {
+        Vec3::new(11.0, s.ground - 18.0, -90.0)
+    } else if let Some(shrine) = boss_access::site_shrine(cfg, x, z) {
+        shrine.relic_point()
+    } else {
+        Vec3::new(s.x, s.ground + 1.0, s.z + 3.0)
+    }
+}
+
+/// Bounded survey invoked from the spell library. Save state decides which
+/// encounters have already paid their one-time spell reward.
+pub fn next_spell_site(cfg: &WorldSampleConfig, origin: Vec3, cleared: impl Fn(IVec3) -> bool) -> Option<Vec3> {
+    if cfg.generator_version < 3 || cfg.world_type == WorldType::Superflat { return None; }
+    let rx = (origin.x / region_span(cfg)).round() as i32;
+    let rz = (origin.z / region_span(cfg)).round() as i32;
+    let mut best: Option<Vec3> = None;
+    for x in rx - 3..=rx + 3 {
+        for z in rz - 3..=rz + 3 {
+            if cleared(IVec3::new(x, z, 0)) { continue; }
+            if let Some(s) = site(cfg, x, z) {
+                let p = encounter_anchor(cfg, s, x, z);
+                if best.is_none_or(|q| p.distance_squared(origin) < q.distance_squared(origin)) {
+                    best = Some(p);
+                }
+            }
+        }
+    }
+    best
+}
+
 pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u32)> {
+    if cfg.world_type == WorldType::Hall { return crate::hall::encounters(player); }
+    // Pocket realms have no surface sites; their column top is a roof, not ground.
+    if cfg.world_type.realm().is_some() { return Vec::new(); }
+    if cfg.world_type == WorldType::Nether && cfg.generator_version >= crate::SEEDED_REALMS {
+        return crate::nether::encounters(cfg, player);
+    }
+    if cfg.world_type == WorldType::Manyfold && cfg.generator_version >= crate::SEEDED_REALMS {
+        return crate::manyfold::encounters(cfg, player);
+    }
     let mut out = Vec::new();
     if cfg.generator_version < 3 || cfg.world_type == WorldType::Superflat {
         return out;
@@ -1818,13 +2187,7 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
     for x in rx - 1..=rx + 1 {
         for z in rz - 1..=rz + 1 {
             if let Some(s) = site(cfg, x, z) {
-                let point = if s.starter {
-                    Vec3::new(11.0, s.ground - 18.0, -90.0)
-                } else if let Some(shrine) = boss_access::site_shrine(cfg, x, z) {
-                    shrine.relic_point()
-                } else {
-                    Vec3::new(s.x, s.ground + 1.0, s.z + 3.0)
-                };
+                let point = encounter_anchor(cfg, s, x, z);
                 if (point - player).length() < 68.0 {
                     // Site identity picks the lead guardian so each ruin reads as a different fight.
                     let lead = if s.starter {
@@ -1880,15 +2243,22 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
             }
         }
     }
+    for (id, point, kind) in super::ruins::sentries(cfg, player, 68.0) {
+        out.push((id, point, kind));
+    }
     let gx = (player.x / 72.0).round() as i32;
     let gz = (player.z / 72.0).round() as i32;
     for x in gx - 1..=gx + 1 {
         for z in gz - 1..=gz + 1 {
-            if (x as f32 * 72.0).hypot(z as f32 * 72.0) < 100.0 {
+            let (mx, mz) = (x as f32 * 72.0, z as f32 * 72.0);
+            // Horizontal distance is a lower bound on distance to any floor.
+            if mx.hypot(mz) < 100.0
+                || glam::Vec2::new(mx - player.x, mz - player.z).length_squared() >= 46.0 * 46.0
+            {
                 continue;
             }
             if let Some(floor) = cavern_floor(cfg, x, z) {
-                let point = Vec3::new(x as f32 * 72.0, floor + 1.0, z as f32 * 72.0);
+                let point = Vec3::new(mx, floor + 1.0, mz);
                 if (point - player).length() < 46.0 {
                     let lead = (hash2(x, z, cfg.seed.wrapping_add(1187)) * 6.0) as u32 % 6;
                     out.push((IVec3::new(x, z, 1), point, lead | (2 << 8)));
@@ -1946,7 +2316,13 @@ pub fn encounters(cfg: &WorldSampleConfig, player: Vec3) -> Vec<(IVec3, Vec3, u3
 }
 
 /// Reward identity follows the actual generated structure, not the enemy mix.
+pub fn district_post(id: IVec3) -> bool { id.z == 5 && id.y >= super::ruins::POST_ID_Y - 1_000_000 }
+
 pub fn reward_kind(cfg: &WorldSampleConfig, id: IVec3) -> u32 {
+    if district_post(id) { return 11; }
+    if id == crate::undercrown::v2::observatory::ENCOUNTER_ID {
+        return 3;
+    }
     if id.z == 0 {
         site(cfg, id.x, id.y).map_or(0, |s| if s.kind==1 && cfg.generator_version>=26 {10} else {s.kind})
     } else if id.z == 2 || id.z == 3 {
@@ -1993,6 +2369,8 @@ pub fn review_causeway_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
     None
 }
 
+#[cfg(test)]
+mod floating_tests;
 #[cfg(test)]
 mod holy_mountain {
     use super::*;

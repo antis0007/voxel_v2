@@ -9,7 +9,7 @@
 //! generated with none, and `edits` diffs two states over a mechanism's box,
 //! so the app writes exactly the cells a ring, repair or gate changes.
 use super::plan::Style;
-use crate::{BlockId as B, WorldSampleConfig, hash3};
+use crate::{BlockId as B, WorldSampleConfig};
 use dress::Owner;
 use shape::At;
 use glam::{IVec3, Vec3};
@@ -30,6 +30,10 @@ mod layout_dress;
 mod settle;
 mod shape;
 mod site;
+pub mod wilds;
+pub mod observatory;
+pub mod props;
+pub mod life;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -41,12 +45,16 @@ mod tests_reach;
 #[cfg(test)]
 mod tests_pin;
 #[cfg(test)]
+mod tests_props;
+#[cfg(test)]
+mod tests_life;
+#[cfg(test)]
 mod tests_clip;
 
 pub use layout::author;
 
 /// First generator with this geometry.
-pub const VERSION: u32 = 32;
+pub const VERSION: u32 = crate::gates::DUNGEON_V2_GENERATOR;
 
 /// Mechanism states, one bit each. The world generates with none set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,6 +100,10 @@ pub enum Shape {
     /// `landings` are full floors (with a hole where the stair arrives) at
     /// the heights where passages leave the shaft.
     Shaft { x: f32, z: f32, r: f32, y0: f32, y1: f32, gap: Option<(f32, f32, Mech)>, landings: [Option<f32>; 2] },
+    /// Ravine along the line from `a` to `b`, whose height is its channel
+    /// bed: walls that wander with distance and height and close in toward
+    /// `top`, a bank two metres over the bed down each side.
+    Rift { a: Vec3, b: Vec3, half: f32, top: f32 },
 }
 
 #[derive(Clone, Debug)]
@@ -147,24 +159,36 @@ pub fn palette(style: Style) -> [B; 4] {
         Style::Foundry => [B::Basalt, B::BlastBrick, B::CokeOvenBrick, B::Basalt],
         Style::Archive => [B::StoneBricks, B::Limestone, B::SilverBlock, B::StoneBricks],
         Style::Ice => [B::Ice, B::Limestone, B::Limestone, B::Ice],
-        Style::Sea => [B::Limestone, B::Sand, B::StoneBricks, B::Sand],
+        // No shipped layout uses this style; sand would not hang as a stalactite.
+        Style::Sea => [B::Limestone, B::Sandstone, B::StoneBricks, B::Sand],
     }
 }
 
 fn stone(style: Style, m: Vec3, v: f32) -> B {
-    let p = (m / v).floor().as_ivec3();
-    let [wall, alt, ..] = palette(style);
-    let course = ((m.y / 2.0).floor() as i32).rem_euclid(2) == 1;
-    if course ^ (hash3(p.x, p.y, p.z, 41) > 0.85) { alt } else { wall }
+    let [wall, _, trim, ..] = palette(style);
+    // Continuous masonry courses, independent of per-voxel random material.
+    // Keep the contrasting band narrow so walls read as a single surface.
+    if m.y.rem_euclid(4.0) < v.max(0.25) { trim } else { wall }
 }
 
 impl Layout {
+    pub fn observatory_view(&self) -> (Vec3, Vec3) {
+        observatory::Gallery::new(self.anchor).review_view()
+    }
+
+    pub fn flooded_observatory(&self) -> Option<observatory::Gallery> {
+        (self.version >= observatory::VERSION).then(|| observatory::Gallery::new(self.anchor))
+    }
+
     pub fn contains(&self, m: Vec3) -> bool {
         m.cmpge(self.min).all() && m.cmple(self.max).all()
     }
 
     /// Block at a point for a mechanism state, or `None` for natural terrain.
     pub fn sample(&self, cfg: &WorldSampleConfig, m: Vec3, mech: Mech) -> Option<B> {
+        if let Some(block) = self.flooded_observatory().and_then(|gallery| gallery.sample(m)) {
+            return Some(block);
+        }
         if !self.contains(m) {
             return None;
         }
@@ -204,7 +228,7 @@ impl Layout {
                     shell = Some(shell.map_or((s.style, s.sealed, Owner::Space(si as usize)), |(st, sealed, o)| (st, sealed || s.sealed, o)));
                 }
                 At::Void => {
-                    if matches!(s.shape, Shape::Cave { .. })
+                    if matches!(s.shape, Shape::Cave { .. } | Shape::Rift { .. })
                         && let Some(t) = ramp()
                     {
                         return Some(palette(t.style)[3]);
@@ -295,7 +319,7 @@ impl Layout {
                     let lamp = if self.version >= glow::VERSION { self.cave_lamp(s, m, v, mech) } else { None };
                     lamp.or_else(|| self.cave_dress(si, cell, m, v))
                 }
-                Shape::Shaft { .. } => None,
+                Shape::Shaft { .. } | Shape::Rift { .. } => None,
             };
             if let Some(b) = dressed {
                 return b;

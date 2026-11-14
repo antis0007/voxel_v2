@@ -245,6 +245,10 @@ pub(super) fn run(
                     let mut cue_send = 0.0f32;
                     gain += (target - gain) * 0.002;
                     for voice in &mut voices {
+                        if voice.play.wait > 0.0 {
+                            voice.play.wait -= 1.0;
+                            continue;
+                        }
                         let cue = voice.play.cue as usize;
                         let sample = &bank[cue][voice.play.variant];
                         let i = voice.cursor as usize;
@@ -256,13 +260,10 @@ pub(super) fn run(
                             // Equal-cue voices share one bus so repeated
                             // Sparks do not grow linearly in loudness.
                             let norm = equal_cue_gain(cue_counts[cue]);
-                            stereo[0] += value * voice.play.left * norm;
-                            stereo[1] += value * voice.play.right * norm;
-                            cue_send += value
-                                * (voice.play.left + voice.play.right)
-                                * 0.5
-                                * norm
-                                * voice.play.reverb;
+                            let ears = voice.play.ears.process(value * voice.play.gain * norm);
+                            stereo[0] += ears[0];
+                            stereo[1] += ears[1];
+                            cue_send += value * voice.play.gain * norm * voice.play.reverb;
                             voice.cursor += voice.play.rate;
                         } else {
                             voice.cursor = sample.len() as f32;

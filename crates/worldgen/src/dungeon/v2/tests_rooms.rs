@@ -59,7 +59,7 @@ fn the_core_shell_is_tombstone_all_round() {
 #[test]
 #[ignore = "timing"]
 fn time_sampling() {
-    let c = cfg(424242, VoxelScalePreset::OneMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter);
     let found = complexes(&c, 12);
     let mut best = f64::MAX;
     let mut cells = 0usize;
@@ -360,7 +360,7 @@ fn fine_scales_keep_every_room_open_door_to_door() {
 #[test]
 fn fine_detail_resolves_only_where_voxels_are_small() {
     let count = |scale| {
-        let c = cfg(424242, scale);
+        let c = cfg(crate::test_world::seed(), scale);
         let (_, d) = complexes(&c, 1).remove(0);
         let height = c.blocks_for_height(1000.0);
         let v = c.voxel_meters();

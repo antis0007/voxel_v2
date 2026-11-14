@@ -1,5 +1,5 @@
 //! Reading a resident world back: only on request, never inside a tick.
-use super::{ALLOC_HEADER, GpuWorld};
+use super::{ALLOC_HEADER, GpuWorld, Window};
 use crate::{GpuStepError, unpack_cell};
 use engine_core::fast_hash::FastMap;
 use engine_sim::{BRICK_CELLS, BrickCoord, Cell, NO_SLOT, Scale, split_voxel};
@@ -19,6 +19,43 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    pub fn contains_brick(&self, chunk: IVec3, brick: u8) -> bool {
+        self.bricks.contains_key(&(chunk, brick))
+    }
+    pub(super) fn decode(all: &[u32], window: Window, bricks: u32, words: u32) -> Result<Self, GpuStepError> {
+        let directory_end = bricks as usize;
+        let dirty_end = directory_end + words as usize;
+        let header_end = dirty_end + ALLOC_HEADER as usize;
+        if all.len() != header_end + window.capacity as usize * BRICK_CELLS * 2 {
+            return Err(GpuStepError::InvalidReadback);
+        }
+        let directory = &all[..directory_end];
+        let dirty = &all[directory_end..dirty_end];
+        let header = &all[dirty_end..header_end];
+        let pool = &all[header_end..];
+        let mut seen = vec![false; window.capacity as usize];
+        let mut snapshot = Snapshot { overflow: header[2], changed_blocks: header[3], ..Default::default() };
+        let s = window.size;
+        for (wb, &slot) in directory.iter().enumerate().filter(|(_, slot)| **slot != NO_SLOT) {
+            let index = slot as usize;
+            if index >= seen.len() || seen[index] { return Err(GpuStepError::InvalidReadback); }
+            seen[index] = true;
+            let ci = wb as u32 / 64;
+            let chunk = window.origin + IVec3::new((ci % s.x) as i32,
+                (ci / (s.x * s.z)) as i32, ((ci / s.x) % s.z) as i32);
+            let brick = (wb % 64) as u8;
+            let cells = pool[index * BRICK_CELLS * 2..][..BRICK_CELLS * 2]
+                .chunks_exact(2).map(|w| unpack_cell([w[0], w[1]])).collect::<Vec<_>>();
+            if cells.iter().any(|c| c.volume > 64) { return Err(GpuStepError::InvalidReadback); }
+            snapshot.bricks.insert((chunk, brick), cells);
+            if dirty[wb / 32] >> (wb % 32) & 1 != 0 {
+                snapshot.dirty.push(BrickCoord { chunk, brick, scale: Scale::FINEST });
+            }
+        }
+        snapshot.dirty.sort_by_key(|b| (b.chunk.z, b.chunk.y, b.chunk.x, b.brick));
+        Ok(snapshot)
+    }
+
     pub fn get(&self, voxel: IVec3) -> Cell {
         let (chunk, local) = split_voxel(voxel);
         let (b, c) = (local / 8, local % 8);
@@ -55,29 +92,10 @@ impl GpuWorld {
         });
         self.device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None }).map_err(GpuStepError::Poll)?;
         rx.recv().map_err(|_| GpuStepError::Lost)?.map_err(GpuStepError::Map)?;
-        let mapped = readback.slice(..).get_mapped_range();
-        let all: &[u32] = bytemuck::cast_slice(&mapped);
-        let (directory, rest) = all.split_at(self.bricks as usize);
-        let (dirty, rest) = rest.split_at(self.words as usize);
-        let (header, pool) = rest.split_at(ALLOC_HEADER as usize);
-        let (o, s) = (self.window.origin, self.window.size);
-        let coord = |wb: u32| {
-            let (ci, brick) = (wb / 64, (wb % 64) as u8);
-            let c = IVec3::new((ci % s.x) as i32, (ci / (s.x * s.z)) as i32, ((ci / s.x) % s.z) as i32);
-            BrickCoord { chunk: o + c, brick, scale: Scale::FINEST }
-        };
-        let mut snapshot = Snapshot { overflow: header[2], changed_blocks: header[3], ..Default::default() };
-        for (wb, &slot) in directory.iter().enumerate().filter(|(_, s)| **s != NO_SLOT) {
-            let b = coord(wb as u32);
-            let words = &pool[slot as usize * BRICK_CELLS * 2..][..BRICK_CELLS * 2];
-            snapshot.bricks.insert((b.chunk, b.brick), words.chunks_exact(2).map(|w| unpack_cell([w[0], w[1]])).collect());
-            if dirty[wb / 32] >> (wb % 32) & 1 != 0 {
-                snapshot.dirty.push(b);
-            }
-        }
-        snapshot.dirty.sort_by_key(|b| (b.chunk.z, b.chunk.y, b.chunk.x, b.brick));
+        let mapped = readback.slice(..).get_mapped_range().map_err(GpuStepError::MapRange)?;
+        let snapshot = Snapshot::decode(bytemuck::cast_slice(&mapped), self.window, self.bricks, self.words);
         drop(mapped);
         readback.unmap();
-        Ok(snapshot)
+        snapshot
     }
 }

@@ -11,6 +11,43 @@ use super::noise::{smoothstep, unit};
 const CELL_M: f64 = 14.0;
 const WEDGE_DEPTH_M: f64 = 4.0;
 
+/// Static retrogressive thaw scars on wet, seasonally thawing permafrost.
+/// Their long axis follows the local downhill gradient; cuts never add peaks.
+pub fn slump(p: &super::Planet, seed: u32, x: f64, z: f64) -> f64 {
+    const SPACING: f64 = 192.0;
+    let (cx, cz) = ((x / SPACING).floor() as i64, (z / SPACING).floor() as i64);
+    let mut cut: f64 = 0.0;
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let (a, b) = (cx + dx, cz + dz);
+            if unit(a, b, seed ^ 0x51a0) < 0.72 { continue; }
+            let sx = (a as f64 + unit(a, b, seed ^ 0x51a1)) * SPACING;
+            let sz = (b as f64 + unit(a, b, seed ^ 0x51a2)) * SPACING;
+            if (x - sx).abs() > 80.0 || (z - sz).abs() > 80.0 { continue; }
+            let g = &p.grid;
+            let maat = g.bilinear(&p.maat, sx, sz);
+            let summer = maat + g.bilinear(&p.season, sx, sz);
+            let wet = g.bilinear(&p.wet, sx, sz);
+            if maat >= super::PERMAFROST_C || summer <= 1.0 || wet < 0.35 { continue; }
+            let d = g.cell_m;
+            let gx = (g.bilinear(&p.height, sx + d, sz) - g.bilinear(&p.height, sx - d, sz)) / (2.0 * d);
+            let gz = (g.bilinear(&p.height, sx, sz + d) - g.bilinear(&p.height, sx, sz - d)) / (2.0 * d);
+            let slope = (gx * gx + gz * gz).sqrt();
+            if !(0.04..0.55).contains(&slope) { continue; }
+            let along = -((x - sx) * gx + (z - sz) * gz) / slope;
+            let across = ((x - sx) * gz - (z - sz) * gx) / slope;
+            let u = (along + 20.0) / 90.0;
+            if !(0.0..1.0).contains(&u) { continue; }
+            let width = 12.0 + 20.0 * (1.0 - u);
+            let cross = 1.0 - smoothstep(0.55, 1.0, across.abs() / width);
+            let head = smoothstep(0.0, 0.08, u);
+            let toe = 1.0 - smoothstep(0.3, 1.0, u);
+            cut = cut.min(-(2.0 + 5.0 * wet) * cross * head * toe);
+        }
+    }
+    cut
+}
+
 pub struct Polygon {
     /// Ground offset from the smooth surface.
     pub ground: f64,

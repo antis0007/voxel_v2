@@ -18,8 +18,10 @@
 //! metres, times are seconds, and angles in code are radians (degrees in data).
 mod data;
 mod design;
+pub mod express;
 #[cfg(test)]
 mod fixtures;
+mod influence;
 mod kepler;
 mod path;
 mod spin;

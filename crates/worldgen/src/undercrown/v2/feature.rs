@@ -6,12 +6,14 @@
 use super::furnish::{Fit, Here};
 use super::grove::{Grove, Lamp, Pipe};
 use super::{Mech, palette};
-use crate::undercrown::plan::Style;
-use crate::{BlockId as B, hash2, hash3};
+use crate::undercrown::plan::{PropKind, Style};
+use crate::{BlockId as B, hash2, value_noise3};
 use glam::Vec3;
 
 #[derive(Clone, Debug)]
 pub enum Kind {
+    /// Surface apron and paired lamps, leaving the stair mouth open.
+    Wellhead { floor: f32 },
     /// Solid under a plane rising from `y0` at the low end to `y1` at the
     /// high end of the box, along x or z. With `needs`, only once restored.
     Ramp { along_x: bool, y0: f32, y1: f32, style: Style, needs: Option<Mech> },
@@ -40,8 +42,17 @@ pub enum Kind {
     IcePipes { floor: f32, top: f32, seed: u32 },
     /// A stone pedestal under a prop.
     Pedestal { style: Style },
+    /// Generator 292 prop model standing on `floor`; see `props`.
+    Prop { kind: PropKind, style: Style, floor: Vec3 },
     /// A reliquary: dais, cache, offerings.
     Reliquary { floor: f32 },
+    /// A rounded rock mass: an isle or a stack. Its footprint narrows from
+    /// the box at the base to `flat` of it at `top`, which is level.
+    Crag { top: f32, flat: f32, style: Style },
+    /// Standing crystal on a loose grid.
+    Shards { floor: f32, seed: u32 },
+    /// An open plank hull along the box, its bottom at `y`, with a mast stump.
+    Wreck { y: f32 },
     /// Furniture, fixtures and houses; see `furnish`.
     Fit(Fit),
     /// Generator 52 mushrooms, lanterns and ice pipes, each fitted to the
@@ -88,8 +99,20 @@ impl Feature {
             return None;
         }
         let (l, size) = (m - self.lo, self.hi - self.lo);
-        let p = (m / v).floor().as_ivec3();
         match self.kind {
+            Kind::Wellhead { floor } => {
+                let dx = m.x - (self.lo.x + self.hi.x) * 0.5;
+                let dz = m.z - (self.lo.z + self.hi.z) * 0.5;
+                let r = dx.hypot(dz);
+                if r > 6.5 { return None; }
+                let post = (dx.abs() - 5.0).abs() < v.max(0.5) && dz.abs() < v.max(0.5);
+                if post && m.y >= floor && m.y < floor + 4.0 {
+                    return Some(if m.y >= floor + 3.0 { B::Crystal } else { B::StoneBricks });
+                }
+                if m.y >= floor { return Some(B::Air); }
+                if r >= 3.5 { return Some(B::StoneBricks); }
+                None
+            }
             Kind::Ramp { along_x, y0, y1, style, needs } => {
                 if needs.is_some_and(|n| !mech.has(n)) {
                     return None;
@@ -99,7 +122,7 @@ impl Feature {
                 (m.y < ((top - y0.min(y1)) / v).ceil() * v + y0.min(y1)).then(|| palette(style)[2])
             }
             Kind::Pillar { top, style } => (m.y < top).then(|| {
-                if m.y >= top - 1.0 { palette(style)[3] } else if hash3(p.x, p.y, p.z, 5) > 0.8 { palette(style)[1] } else { palette(style)[0] }
+                if m.y >= top - 1.0 { palette(style)[3] } else { super::stone(style, m, v) }
             }),
             Kind::Bridge { y, needs } => {
                 if needs.is_some_and(|n| !mech.has(n)) {
@@ -220,6 +243,7 @@ impl Feature {
                 (d < 0.7 && (stand || hang)).then_some(B::Ice)
             }
             Kind::Pedestal { style } => Some(palette(style)[2]),
+            Kind::Prop { kind, style, floor } => super::props::sample(kind, style, floor, m, v),
             Kind::Reliquary { floor } => {
                 let c = (self.lo + self.hi) * 0.5;
                 let d = (m.x - c.x).hypot(m.z - c.z);
@@ -232,6 +256,46 @@ impl Feature {
                 }
                 let ring = (d - 2.2).abs() < 0.5 && (m.z - c.z).atan2(m.x - c.x).rem_euclid(std::f32::consts::FRAC_PI_2) < 0.4;
                 (ring && fy < 0.5 + 2.0 * v).then_some(if fy < 0.5 + v { B::StarGlass } else { B::GoldBlock })
+            }
+            Kind::Crag { top, flat, style } => {
+                if m.y >= top {
+                    return None;
+                }
+                let r = (l.x / size.x * 2.0 - 1.0).hypot(l.z / size.z * 2.0 - 1.0);
+                let fy = ((m.y - self.lo.y) / (top - self.lo.y)).clamp(0.0, 1.0);
+                let n = (value_noise3(m.x * 0.21, m.y * 0.13, m.z * 0.21, 7321) - 0.5) * 0.3;
+                (r + n < (flat + (1.0 - flat) * (1.0 - fy)) * 0.85).then(|| if m.y >= top - 1.0 { palette(style)[3] } else { super::wilds::rock(style, m) })
+            }
+            Kind::Shards { floor, seed } => {
+                let (gx, gz) = ((l.x / 4.0).floor() as i32, (l.z / 4.0).floor() as i32);
+                let x = hash2(gx, gz, seed);
+                if x < 0.45 {
+                    return None;
+                }
+                let cx = gx as f32 * 4.0 + 1.2 + hash2(gx, gz, seed ^ 0x55) * 1.6;
+                let cz = gz as f32 * 4.0 + 1.2 + hash2(gz, gx, seed ^ 0xaa) * 1.6;
+                let tall = 1.5 + (x - 0.45) * 9.0;
+                let fy = m.y - floor;
+                let d = (l.x - cx).hypot(l.z - cz);
+                (fy >= 0.0 && fy < tall && d < (0.9 * (1.0 - fy / tall)).max(v * 0.71)).then_some(B::Crystal)
+            }
+            Kind::Wreck { y } => {
+                let long_x = size.x >= size.z;
+                let (along, across, len, beam) = if long_x { (l.x, l.z - size.z * 0.5, size.x, size.z * 0.5) } else { (l.z, l.x - size.x * 0.5, size.z, size.x * 0.5) };
+                let w = beam * (1.0 - (2.0 * along / len - 1.0).powi(2)).max(0.0).sqrt();
+                let fy = m.y - y;
+                if (along - len * 0.45).abs() < v.max(0.5) * 0.5 && across.abs() < v.max(0.5) * 0.5 && (0.0..5.0).contains(&fy) {
+                    return Some(B::Log);
+                }
+                if across.abs() >= w || fy < 0.0 || fy >= 2.0 {
+                    return None;
+                }
+                if fy < v {
+                    return Some(B::Planks);
+                }
+                // The sides, with stretches stove in.
+                let side = across.abs() >= w - v.max(0.6);
+                (side && hash2((along / 2.0).floor() as i32, 3, 7331) > 0.25).then_some(if fy >= 2.0 - v { B::Log } else { B::Planks })
             }
             Kind::Fit(ref fit) => fit.sample(&Here { lo: self.lo, hi: self.hi, m, v }, mech),
             Kind::Grove(ref grove) => grove.sample(m, v),

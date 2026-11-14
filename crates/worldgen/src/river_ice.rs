@@ -42,7 +42,7 @@ mod tests {
     use glam::IVec3;
 
     fn cfg(version: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-        WorldSampleConfig { generator_version: version, seed: 2738958700, world_type: WorldType::Hills, voxel_scale }
+        WorldSampleConfig { planet: None, generator_version: version, seed: crate::test_world::seed(), world_type: WorldType::Hills, voxel_scale }
     }
 
     /// Inland river columns with their water surface, in a fixed search window.

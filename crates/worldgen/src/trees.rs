@@ -6,29 +6,76 @@ mod forms;
 pub(crate) mod foliage;
 pub(crate) mod giant;
 mod skeleton;
+pub(crate) mod structure;
 mod woodland;
+mod conifer;
+mod relict;
+mod stands;
+pub(crate) mod rainforest;
+mod old_growth;
+mod habitats;
+pub use habitats::WOODLAND_HABITAT_PREVIEW;
+use stands::age as stand_age;
 #[cfg(test)]
 mod species_tests;
 pub(crate) use forms::TreeForm;
 
 pub(super) fn profile(cfg: &WorldSampleConfig, tree: &mut TreeProfile) {
-    let climate = landscape::sample(cfg, tree.anchor_x, tree.anchor_z);
-    profile_from_landscape(cfg, tree, climate);
+    if !habitats::active(cfg) {
+        let climate = landscape::sample(cfg, tree.anchor_x, tree.anchor_z);
+        profile_at_site(cfg, tree, climate);
+        return;
+    }
+    // Resolve dimensions at the finest supported scale before rounding them
+    // to the destination lattice. Anchoring and placement use the real column.
+    let design = WorldSampleConfig { voxel_scale: engine_core::VoxelScalePreset::QuarterMeter, ..*cfg };
+    let climate = habitats::site(cfg, tree);
+    let mut shape = *tree;
+    (shape.anchor_x, shape.anchor_z) = crate::tree_anchor(&design, tree.cell_x, tree.cell_z);
+    shape.ground_y = design.blocks_for_height(climate.height);
+    profile_at_site(&design, &mut shape, climate);
+    tree.form = shape.form;
+    tree.conifer = shape.conifer;
+    tree.trunk_h = cfg.blocks_for_span(design.world_y(shape.trunk_h));
+    tree.canopy_radius = cfg.blocks_for_span(design.world_x(shape.canopy_radius));
+    tree.canopy_height = cfg.blocks_for_span(design.world_y(shape.canopy_height));
+    tree.branch_count = shape.branch_count;
+    tree.branch_len = cfg.blocks_for_span(design.world_x(shape.branch_len));
+    tree.branch_start_y = tree.ground_y + cfg.blocks_for_span(design.world_y(shape.branch_start_y - shape.ground_y));
 }
 
 pub(super) fn profile_lod(cfg: &WorldSampleConfig, tree: &mut TreeProfile, footprint: f32) {
-    let climate = landscape::preview_landscape_lod(cfg, tree.anchor_x, tree.anchor_z, footprint);
-    profile_from_landscape(cfg, tree, climate);
+    if habitats::active(cfg) {
+        profile(cfg, tree);
+    } else {
+        let climate = landscape::preview_landscape_lod(cfg, tree.anchor_x, tree.anchor_z, footprint);
+        profile_at_site(cfg, tree, climate);
+    }
 }
 
-fn profile_from_landscape(cfg: &WorldSampleConfig, tree: &mut TreeProfile, climate: landscape::Landscape) {
-    let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));
+pub(super) fn profile_from_landscape(cfg: &WorldSampleConfig, tree: &mut TreeProfile, climate: landscape::Landscape) {
+    if habitats::active(cfg) {
+        profile(cfg, tree);
+    } else {
+        profile_at_site(cfg, tree, climate);
+    }
+}
+
+fn profile_at_site(cfg: &WorldSampleConfig, tree: &mut TreeProfile, climate: landscape::Landscape) {
+    let age = stand_age(cfg, tree);
     let species = hash2(
         tree.cell_x.div_euclid(3),
         tree.cell_z.div_euclid(3),
         cfg.seed.wrapping_add(12037),
     );
     let individual_form = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12073));
+    if rainforest::active(cfg) && climate.biome == landscape::Biome::Rainforest {
+        rainforest::profile(cfg, tree, &climate, age, individual_form);
+        return;
+    }
+    if relict::profile(cfg, tree, &climate, age, individual_form) { return; }
+    if habitats::profile(cfg, tree, &climate, age, individual_form) { return; }
+    if old_growth::profile(cfg, tree, &climate, age, individual_form) { return; }
     tree.conifer = climate.temperature < 0.32 || (climate.moisture > 0.55 && species < 0.28);
     if cfg.generator_version >= 7 {
         if tree.conifer {
@@ -122,6 +169,7 @@ fn profile_from_landscape(cfg: &WorldSampleConfig, tree: &mut TreeProfile, clima
             forms::choose(cfg, tree, &climate, age, species, individual_form);
         }
         if cfg.generator_version >= 45 { woodland::profile(cfg, tree, age); }
+        if conifer::applies(cfg, tree) { conifer::profile(cfg, tree, age); }
         return;
     }
     if tree.conifer {
@@ -169,6 +217,13 @@ fn distance_to_segment(p: glam::Vec3, a: glam::Vec3, b: glam::Vec3) -> (f32, f32
 pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> BlockId {
     use glam::Vec3;
     if tree.form == TreeForm::Giant { return giant::block(cfg, &tree, p); }
+    if structure::applies(cfg, &tree) {
+        return structure::block(cfg, &tree, p);
+    }
+    if conifer::applies(cfg, &tree) { return conifer::block(cfg, &tree, p); }
+    if matches!(tree.form, TreeForm::Cycad | TreeForm::Fungal | TreeForm::Redwood) {
+        return relict::block(cfg, &tree, p);
+    }
     let scale = cfg.voxel_meters();
     let q = (p - IVec3::new(tree.anchor_x, tree.ground_y, tree.anchor_z)).as_vec3() * scale;
     let height = tree.trunk_h as f32 * scale;
@@ -211,7 +266,10 @@ pub(super) fn block(cfg: &WorldSampleConfig, tree: TreeProfile, p: IVec3) -> Blo
     match tree.form {
         TreeForm::Umbrella => return forms::umbrella(cfg, &tree, p, &frame()),
         TreeForm::Weeping => return forms::weeping(cfg, &tree, p, &frame()),
-        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant => {}
+        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant
+        | TreeForm::Cycad | TreeForm::Fungal | TreeForm::Redwood
+        | TreeForm::Rainforest | TreeForm::RainforestPalm | TreeForm::RainforestFig | TreeForm::OldOak
+        | TreeForm::CloudCrown | TreeForm::PlateauCrown | TreeForm::Aspen | TreeForm::Cypress | TreeForm::Acacia => {}
     }
     if whorled {
         let base = (tree.branch_start_y - tree.ground_y) as f32 * scale;
@@ -350,6 +408,10 @@ pub(super) fn crown_bounds(cfg: &WorldSampleConfig, tree: &TreeProfile) -> (f32,
     woodland::bounds(cfg, tree).unwrap_or_else(|| (crown_reach(cfg, tree), crown_top(cfg, tree)))
 }
 
+pub(super) fn is_tall_redwood(cfg: &WorldSampleConfig, tree: &TreeProfile) -> bool {
+    conifer::tall_redwood(cfg, tree)
+}
+
 /// Horizontal distance (metres) from the anchor to the outermost leaf this tree
 /// can place. Mirrors `block()` limb by limb with the same hashes, so the LOD
 /// proxy can cover exactly the footprint the voxel crown occupies.
@@ -364,6 +426,7 @@ fn smooth_reach(cfg: &WorldSampleConfig, tree: &TreeProfile) -> f32 {
     use glam::Vec2;
     let scale = cfg.voxel_meters();
     let radius = tree.canopy_radius as f32 * scale;
+    if conifer::applies(cfg, tree) { return radius * 1.15 + scale; }
     if woodland::applies(cfg, tree) { return radius * 1.35 + scale; }
     // `block()` offsets the crown by the lean in metres, not voxels.
     let age = hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(12011));

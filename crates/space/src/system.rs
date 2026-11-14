@@ -125,6 +125,21 @@ impl System {
         self.spin[b.0 as usize]
     }
 
+    /// Every body, parents before children.
+    pub fn bodies(&self) -> impl Iterator<Item = BodyId> + use<> {
+        (0..self.len() as u16).map(BodyId)
+    }
+
+    /// Parent-relative orbit for maps and readouts; `None` for the root.
+    pub fn orbit(&self, b: BodyId) -> Option<Elements> {
+        self.elements[b.0 as usize]
+    }
+
+    /// Ticks per orbit; 0 for the root.
+    pub fn period_ticks(&self, b: BodyId) -> u64 {
+        self.period_ticks[b.0 as usize]
+    }
+
     /// Parent-relative orbit; `None` for the root.
     pub(crate) fn elements(&self, b: BodyId) -> Option<&Elements> {
         self.elements[b.0 as usize].as_ref()

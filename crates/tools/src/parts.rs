@@ -63,6 +63,8 @@ pub struct ToolSchema {
     /// Required parts in assembly order; a kind may repeat.
     pub parts: Vec<SchemaPart>,
     pub modifier_slots: u8,
+    #[serde(default)]
+    pub capabilities: crate::capabilities::Capabilities,
 }
 
 /// XP curve and repair rate shared by every schema.
@@ -94,7 +96,7 @@ impl PartsFile {
     }
 }
 
-/// Table errors: duplicate ids, unknown kinds, schemas without a head, bad weights.
+/// Table errors: duplicate ids, unknown kinds, schemas without a working part, bad weights.
 pub fn validate(file: &PartsFile) -> Vec<String> {
     let mut errors = Vec::new();
     for (i, kind) in file.part_kinds.iter().enumerate() {
@@ -112,11 +114,14 @@ pub fn validate(file: &PartsFile) -> Vec<String> {
         if schema.parts.is_empty() {
             errors.push(format!("schema {:?} has no parts", schema.id));
         }
+        for error in schema.capabilities.validate() {
+            errors.push(format!("schema {:?} capabilities: {error}", schema.id));
+        }
         let mut heads = 0;
         for part in &schema.parts {
             match file.part_kind(&part.kind.0) {
                 None => errors.push(format!("schema {:?} uses unknown part kind {:?}", schema.id, part.kind.0)),
-                Some(def) if def.role == PartRole::Head => heads += 1,
+                Some(def) if def.role == PartRole::Head || part.weights.mining_level => heads += 1,
                 Some(_) => {}
             }
             let w = part.weights;
@@ -125,7 +130,7 @@ pub fn validate(file: &PartsFile) -> Vec<String> {
             }
         }
         if heads == 0 {
-            errors.push(format!("schema {:?} has no head part", schema.id));
+            errors.push(format!("schema {:?} has no working part (head role or mining_level weight)", schema.id));
         }
     }
     let p = file.progression;

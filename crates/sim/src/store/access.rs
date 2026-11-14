@@ -25,18 +25,30 @@ impl BrickStore {
         self.brick(slot)
     }
 
+    pub(crate) fn brick_cells_mut(&mut self, slot: u32) -> &mut [Cell] {
+        let start = slot as usize * BRICK_CELLS;
+        &mut self.pool[start..start + BRICK_CELLS]
+    }
+
     pub(crate) fn set_cell_in_slot(&mut self, slot: u32, cell: usize, value: Cell) {
         self.pool[slot as usize * BRICK_CELLS + cell] = value;
     }
 
     /// Mark the bricks in `mask` dirty; bits of absent bricks are ignored.
     pub(crate) fn or_dirty(&mut self, chunk: IVec3, mask: u64) {
-        if mask != 0
-            && let Some(e) = self.chunks.get(&chunk)
-            && mask & !e.dirty != 0
-        {
-            let present = (0..BRICKS_PER_CHUNK).filter(|&b| e.slots[b] != NO_SLOT).fold(0u64, |m, b| m | 1 << b);
-            self.set_dirty(chunk, e.dirty | (mask & present));
+        if mask == 0 { return; }
+        let Some(entry) = self.chunks.get(&chunk) else { return };
+        let mut candidates = mask & !entry.dirty;
+        let mut dirty = entry.dirty;
+        while candidates != 0 {
+            let brick = candidates.trailing_zeros() as usize;
+            candidates &= candidates - 1;
+            if entry.slots[brick] != NO_SLOT {
+                dirty |= 1 << brick;
+            }
+        }
+        if dirty != entry.dirty {
+            self.set_dirty(chunk, dirty);
         }
     }
 

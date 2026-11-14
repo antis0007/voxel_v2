@@ -42,7 +42,7 @@ fn every_test_seed_places_one_stable_grove() {
         let (b, _) = anchor(&cfg(seed, S::HalfMeter)).expect("half-metre grove");
         assert!((a - b).length() < 1.0, "seed {seed}: {a} vs {b}");
     }
-    let mut old = cfg(7, S::OneMeter);
+    let mut old = cfg(crate::test_world::seed(), S::OneMeter);
     old.generator_version = VERSION - 1;
     assert!(anchor(&old).is_none(), "older generators must not grow a grove");
 }
@@ -134,7 +134,7 @@ fn pools_are_contained() {
 
 #[test]
 fn amber_gills_reach_the_light_index() {
-    let c = cfg(7, S::OneMeter);
+    let c = cfg(crate::test_world::seed(), S::OneMeter);
     let (a, _) = anchor(&c).expect("grove");
     let centre = cell(&c, a.x, a.y, a.z).div_euclid(IVec3::splat(crate::CHUNK_SIZE));
     let mut lights = 0;
@@ -156,7 +156,7 @@ fn amber_gills_reach_the_light_index() {
 fn amberroot_cost() {
     let never = std::sync::atomic::AtomicBool::new(false);
     let time = |version: u32, coords: &[IVec3]| {
-        let mut c = cfg(424_242, S::OneMeter);
+        let mut c = cfg(crate::test_world::seed(), S::OneMeter);
         c.generator_version = version;
         let t = std::time::Instant::now();
         for &k in coords {
@@ -164,8 +164,8 @@ fn amberroot_cost() {
         }
         t.elapsed().as_secs_f64() * 1e3
     };
-    let (a, _) = anchor(&cfg(424_242, S::OneMeter)).unwrap();
-    let centre = cell(&cfg(424_242, S::OneMeter), a.x, a.y, a.z).div_euclid(IVec3::splat(32));
+    let (a, _) = anchor(&cfg(crate::test_world::seed(), S::OneMeter)).unwrap();
+    let centre = cell(&cfg(crate::test_world::seed(), S::OneMeter), a.x, a.y, a.z).div_euclid(IVec3::splat(32));
     for (name, base) in [("away", IVec3::new(6, -1, -1)), ("grove", centre - IVec3::new(1, 1, 1))] {
         let coords: Vec<IVec3> = (0..27).map(|i| base + IVec3::new(i % 3, (i / 3) % 3, i / 9)).collect();
         let (mut best34, mut best35) = (f64::MAX, f64::MAX);
@@ -225,7 +225,7 @@ fn every_scale_valley_stays_out_of_the_grove() {
 
 #[test]
 fn chunk_order_and_entry_point_do_not_change_the_grove() {
-    let c = cfg(7, S::OneMeter);
+    let c = cfg(crate::test_world::seed(), S::OneMeter);
     let (a, _) = anchor(&c).expect("grove");
     let centre = cell(&c, a.x, a.y, a.z).div_euclid(IVec3::splat(crate::CHUNK_SIZE));
     let coords: Vec<IVec3> = (0..8).map(|i| centre + IVec3::new(i % 2, i / 4, (i / 2) % 2)).collect();
@@ -248,7 +248,7 @@ fn chunk_order_and_entry_point_do_not_change_the_grove() {
 
 #[test]
 fn generator_43_palette_adds_teal_crowns_and_moss_only_from_43() {
-    let new = cfg(2_738_958_700, S::OneMeter);
+    let new = cfg(crate::test_world::seed(), S::OneMeter);
     let mut old = new;
     old.generator_version = PALETTE_VERSION - 1;
     assert!(!grove(&old).palette && grove(&new).palette);

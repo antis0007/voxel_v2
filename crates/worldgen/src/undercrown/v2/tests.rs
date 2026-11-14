@@ -6,7 +6,7 @@ use engine_core::VoxelScalePreset;
 use std::collections::HashSet;
 
 fn cfg(seed: u32) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
+    WorldSampleConfig { planet: None, generator_version: super::tests_grid::generator(), seed, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
 }
 
 fn plan(seed: u32) -> (WorldSampleConfig, Plan) {
@@ -114,7 +114,7 @@ fn mechanism_edits_are_bounded_and_idempotent() {
 
 #[test]
 fn ids_match_the_generator_19_plan_and_the_archive_is_new() {
-    let c = cfg(424242);
+    let c = cfg(crate::test_world::seed());
     let old = Plan::for_config(&WorldSampleConfig { generator_version: 31, ..c });
     let new = Plan::for_config(&c);
     let ids = |p: &Plan| p.rooms.iter().map(|r| (r.id.raw(), r.name)).collect::<HashSet<_>>();

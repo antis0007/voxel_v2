@@ -66,6 +66,7 @@ fn ranges_feed_large_catchments_with_few_isolated_summits() {
     };
     let new = summits(&p.height, &|i| p.land[i]);
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: 65,
         seed: 11,
         world_type: WorldType::Ridged,

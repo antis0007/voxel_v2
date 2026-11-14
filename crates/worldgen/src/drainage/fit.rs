@@ -53,7 +53,7 @@ pub(super) fn flow(cfg: &WorldSampleConfig, x: i32, z: i32) -> u32 {
         }
         n
     }
-    cached(&FLOWS, (cfg.seed, cfg.world_type as u8, cfg.generator_version, x, z), || upstream(cfg, x, z, FLOW_DEPTH))
+    cached(&FLOWS, (cfg.seed, cfg.world_type.code(), cfg.generator_version, cfg.planet_fingerprint(), x, z), || upstream(cfg, x, z, FLOW_DEPTH))
 }
 
 /// Channel half-width scale before the along-reach widening and pulse.
@@ -118,7 +118,7 @@ fn ground(cfg: &WorldSampleConfig, p: Vec2) -> f32 {
 
 /// Node head from the lowest pre-carve ground on and around its centre.
 pub(super) fn head(cfg: &WorldSampleConfig, (x, z): (i32, i32), center: Vec2) -> Node {
-    shared(&SHARED_HEADS, (cfg.seed, cfg.world_type as u8, cfg.generator_version, x, z), || head_uncached(cfg, center))
+    shared(&SHARED_HEADS, (cfg.seed, cfg.world_type.code(), cfg.generator_version, cfg.planet_fingerprint(), x, z), || head_uncached(cfg, center))
 }
 
 fn head_uncached(cfg: &WorldSampleConfig, center: Vec2) -> Node {
@@ -134,7 +134,7 @@ fn head_uncached(cfg: &WorldSampleConfig, center: Vec2) -> Node {
 
 /// Ground minus freeboard at evenly spaced points on the reach's centreline.
 fn stations(cfg: &WorldSampleConfig, from: (i32, i32), to: (i32, i32)) -> [f32; STATIONS] {
-    let key = (cfg.seed, cfg.world_type as u8, cfg.generator_version, from.0, from.1);
+    let key = (cfg.seed, cfg.world_type.code(), cfg.generator_version, cfg.planet_fingerprint(), from.0, from.1);
     cached(&REACHES, key, || shared(&SHARED_REACHES, key, || {
         let (source, target) = (node(cfg, from.0, from.1), node(cfg, to.0, to.1));
         let delta = target.center_m - source.center_m;
@@ -158,7 +158,7 @@ fn stations(cfg: &WorldSampleConfig, from: (i32, i32), to: (i32, i32)) -> [f32; 
 /// outflowing surfaces start from one level. Only immediate inflows count, so
 /// the query stays bounded.
 fn level(cfg: &WorldSampleConfig, x: i32, z: i32) -> f32 {
-    cached(&LEVELS, (cfg.seed, cfg.world_type as u8, cfg.generator_version, x, z), || {
+    cached(&LEVELS, (cfg.seed, cfg.world_type.code(), cfg.generator_version, cfg.planet_fingerprint(), x, z), || {
         let mut l = node(cfg, x, z).head_m;
         if let Outlet::Downhill(c, d) = outlet(cfg, x, z) {
             l = l.min(stations(cfg, (x, z), (c, d))[0]);
@@ -240,7 +240,13 @@ pub(super) fn sample(
                 surface - LIP_M + side * edge + 0.5 * (edge - 6.0).max(0.0).powi(2)
             };
             ceiling = ceiling.min(profile);
-            if wet && nearest.is_none_or(|(e, _, _)| edge < e) {
+            if cfg.generator_version >= 62 && wet && edge <= CREST_WIDTH_M {
+                let floor = profile.min(surface + CREST_M);
+                nearest = Some(match nearest {
+                    Some((e, s, f)) if e <= CREST_WIDTH_M => (edge.min(e), surface.min(s), floor.min(f)),
+                    _ => (edge, surface, floor),
+                });
+            } else if wet && nearest.is_none_or(|(e, _, _)| edge < e) {
                 let floor = profile.min(surface + CREST_M - 0.8 * (edge - CREST_WIDTH_M).max(0.0));
                 nearest = Some((edge, surface, floor));
             }

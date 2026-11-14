@@ -6,8 +6,12 @@ use super::{TreeProfile, WorldSampleConfig, hash2};
 use crate::value_noise3;
 use glam::Vec3;
 
-/// Dormant gate; `docs/worldgen/GENERATOR_GATES.md` row 130.
+/// Original authoring gate; also released in tree-only generator 127.
 pub const VERSION: u32 = 130;
+
+pub(super) fn enabled(cfg: &WorldSampleConfig) -> bool {
+    cfg.generator_version == engine_voxel::TREE_DETAIL_GENERATOR || cfg.generator_version >= VERSION
+}
 
 /// Continuous noise for the broad threshold band: hashed metre cubes left flat
 /// axis-aligned facets on fine grids.
@@ -66,13 +70,13 @@ pub(super) fn reach(scale: f32) -> f32 {
 /// Bound padding for crowns sampled through `Relief`: zero before generator 130
 /// and on grids too coarse for any band.
 pub(super) fn pad(cfg: &WorldSampleConfig) -> f32 {
-    if cfg.generator_version >= VERSION { reach(cfg.voxel_meters()) } else { 0.0 }
+    if enabled(cfg) { reach(cfg.voxel_meters()) } else { 0.0 }
 }
 
 impl Relief {
     /// This tree's relief from generator 130 on.
     pub fn of(cfg: &WorldSampleConfig, tree: &TreeProfile) -> Option<Self> {
-        if cfg.generator_version < VERSION {
+        if !enabled(cfg) {
             return None;
         }
         let cell = (hash2(tree.cell_x, tree.cell_z, cfg.seed.wrapping_add(130_011)) * 65535.0) as u32;

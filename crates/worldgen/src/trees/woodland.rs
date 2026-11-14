@@ -32,10 +32,12 @@ pub(super) fn profile(cfg: &WorldSampleConfig, t: &mut TreeProfile, age: f32) {
 
 /// Exact leaf reach and top (metres) where the crown is a skeleton.
 pub(super) fn bounds(cfg: &WorldSampleConfig, t: &TreeProfile) -> Option<(f32, f32)> {
+    if super::structure::applies(cfg, t) { return Some(super::structure::bounds(cfg, t)); }
     (cfg.generator_version >= 52 && applies(cfg, t)).then(|| v52::bounds(cfg, t))
 }
 
 pub(super) fn block(cfg: &WorldSampleConfig, t: &TreeProfile, p: IVec3) -> B {
+    if super::structure::applies(cfg, t) { return super::structure::block(cfg, t, p); }
     if cfg.generator_version >= 52 { return v52::block(cfg, t, p); }
     if cfg.generator_version >= 47 { return v47::block(cfg, t, p); }
     let v = cfg.voxel_meters();

@@ -104,6 +104,7 @@ fn worker_count() -> usize {
         }
         n => n,
     };
+    if limit == 1 { return 1; }
     std::thread::available_parallelism().map_or(1, |n| n.get()).min(limit)
 }
 
@@ -112,42 +113,57 @@ fn worker_count() -> usize {
 fn run_groups(store: &mut BrickStore, rules: &SimRules, seed: u32, phase_counter: u32, groups: &[BrickGroup], stats: &mut StepStats) {
     let total: usize = groups.iter().map(|g| g.blocks.len()).sum();
     stats.blocks += total as u32;
-    let slots: Vec<u32> = groups.iter().map(|g| store.chunk_slots(g.chunk).map_or(NO_SLOT, |s| s[g.brick as usize])).collect();
-    let mut results = vec![(0u32, false); groups.len()];
-    {
-        let mut bricks: Vec<Option<&mut [Cell]>> = store.slot_cells_mut().map(|b| Some(&mut b[..])).collect();
-        // Each listed brick appears once (the phase's brick list is deduplicated), so every slot is taken once.
-        let mut jobs: Vec<(usize, &mut [Cell])> = Vec::with_capacity(groups.len());
-        for (g, &slot) in slots.iter().enumerate() {
-            if slot != NO_SLOT
-                && let Some(cells) = bricks.get_mut(slot as usize).and_then(Option::take)
-            {
-                jobs.push((g, cells));
+    let workers = if total < PARALLEL_MIN_BLOCKS { 1 } else { worker_count() };
+    if workers == 1 {
+        // The common serial path only visits the scheduled bricks. Building a
+        // borrow table for the entire pool scales with world capacity.
+        for group in groups {
+            let slot = store.chunk_slots(group.chunk).map_or(NO_SLOT, |slots| slots[group.brick as usize]);
+            if slot == NO_SLOT { continue; }
+            let (changed, awake) = run_group(store.brick_cells_mut(slot), rules, seed, phase_counter, &group.blocks);
+            stats.changed_blocks += changed;
+            if awake {
+                store.wake(group.chunk, group.brick);
             }
         }
-        let workers = worker_count();
-        if total < PARALLEL_MIN_BLOCKS || workers < 2 {
-            for (g, cells) in jobs {
-                results[g] = run_group(cells, rules, seed, phase_counter, &groups[g].blocks);
-            }
-        } else {
-            let per = jobs.len().div_ceil(workers).max(1);
-            let parts: Vec<Vec<(usize, (u32, bool))>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = jobs
-                    .chunks_mut(per)
-                    .map(|part| {
-                        scope.spawn(move || {
-                            part.iter_mut()
-                                .map(|(g, cells)| (*g, run_group(cells, rules, seed, phase_counter, &groups[*g].blocks)))
-                                .collect::<Vec<_>>()
-                        })
+        return;
+    }
+    let mut scheduled = Vec::with_capacity(groups.len());
+    for (index, group) in groups.iter().enumerate() {
+        let slot = store.chunk_slots(group.chunk).map_or(NO_SLOT, |slots| slots[group.brick as usize]);
+        if slot != NO_SLOT {
+            scheduled.push((slot as usize, index));
+        }
+    }
+    scheduled.sort_unstable_by_key(|&(slot, _)| slot);
+    // A phase schedules each brick at most once. In slot order, the slice iterator
+    // can jump directly to each disjoint borrow without visiting unused slots.
+    let mut results = vec![(0u32, false); groups.len()];
+    {
+        let mut bricks = store.slot_cells_mut();
+        let mut next_slot = 0;
+        let mut jobs = Vec::with_capacity(scheduled.len());
+        for (slot, index) in scheduled {
+            let cells = bricks.nth(slot - next_slot).expect("scheduled brick slot must exist");
+            jobs.push((index, &mut cells[..]));
+            next_slot = slot + 1;
+        }
+        let per = jobs.len().div_ceil(workers).max(1);
+        let parts: Vec<Vec<(usize, (u32, bool))>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = jobs
+                .chunks_mut(per)
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter_mut()
+                            .map(|(g, cells)| (*g, run_group(cells, rules, seed, phase_counter, &groups[*g].blocks)))
+                            .collect::<Vec<_>>()
                     })
-                    .collect();
-                handles.into_iter().map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
-            });
-            for (g, result) in parts.into_iter().flatten() {
-                results[g] = result;
-            }
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+        });
+        for (g, result) in parts.into_iter().flatten() {
+            results[g] = result;
         }
     }
     for (group, (changed, awake)) in groups.iter().zip(results) {
@@ -251,18 +267,20 @@ fn run_straddling(
     if written {
         // Give every brick a changed cell lands in a slot first, so a full pool never leaves half a move.
         // The absent ones are counted against the free slots before any is taken, so a stall allocates nothing.
-        let mut needed: Vec<(IVec3, u8)> = Vec::new();
+        let mut needed = [(IVec3::ZERO, 0); 8];
+        let mut count = 0;
         for i in (0..8).filter(|&i| after[i] != before[i]) {
             let (chunk, brick, _) = spots[i];
-            if slots[i] == NO_SLOT && !needed.contains(&(chunk, brick)) {
-                needed.push((chunk, brick));
+            if slots[i] == NO_SLOT && !needed[..count].contains(&(chunk, brick)) {
+                needed[count] = (chunk, brick);
+                count += 1;
             }
         }
-        if needed.len() > store.free_bricks() {
+        if count > store.free_bricks() {
             written = false;
             stats.stalled_blocks += 1;
-        } else if !needed.is_empty() {
-            for (chunk, brick) in needed {
+        } else if count != 0 {
+            for &(chunk, brick) in &needed[..count] {
                 // Counted above, so this cannot fail.
                 let _ = store.reserve(chunk, brick);
                 let e = cache.entry(store, chunk);

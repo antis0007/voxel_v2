@@ -85,24 +85,19 @@ pub(super) fn fine_anchors(blocks: &[IVec3], offset: IVec3) -> Vec<IVec3> {
 impl MatterStore {
     /// The eight cells of a block, resolving each distinct block once: the even phase reads one
     /// block, the odd phase up to eight.
-    fn read_cells(&self, spots: &[(IVec3, IVec3); 8]) -> [Cell; 8] {
-        let mut views: [Option<(IVec3, BlockView<'_>)>; 8] = [None; 8];
-        let mut cells = [Cell::EMPTY; 8];
-        for (i, &(block, local)) in spots.iter().enumerate() {
-            let view = match views.iter().flatten().find(|(b, _)| *b == block) {
-                Some((_, view)) => *view,
-                None => {
-                    let view = self.block(block);
-                    views[i] = Some((block, view));
-                    view
-                }
-            };
-            cells[i] = match view {
+    fn read_cells(&self, spots: &[(IVec3, IVec3); 8], crossed: usize) -> [Cell; 8] {
+        let mut views = [BlockView::Uniform(Cell::EMPTY); 8];
+        std::array::from_fn(|i| {
+            let (block, local) = spots[i];
+            let first = i & crossed;
+            if i == first {
+                views[first] = self.block(block);
+            }
+            match views[first] {
                 BlockView::Uniform(cell) => cell,
                 BlockView::Fine(fine) => fine[fine_index(local)],
-            };
-        }
-        cells
+            }
+        })
     }
 
     /// Step the fine block at `anchor`. Uniform blocks are read as 64 identical cells and promoted
@@ -117,22 +112,34 @@ impl MatterStore {
         anchor: IVec3,
         woken: &mut Vec<IVec3>,
     ) -> FineOutcome {
-        let spots: [(IVec3, IVec3); 8] = std::array::from_fn(|i| split_fine(cell_pos(anchor, i)));
-        let before = self.read_cells(&spots);
+        let (block, local) = split_fine(anchor);
+        // Cell indices encode x, z, y in their low three bits. Only axes that
+        // cross a block boundary distinguish the owning blocks, so i & crossed
+        // identifies both the owner and its first cell in this stencil.
+        let crossed = usize::from(local.x == FINE_SIZE - 1)
+            | (usize::from(local.z == FINE_SIZE - 1) << 1)
+            | (usize::from(local.y == FINE_SIZE - 1) << 2);
+        let spots = std::array::from_fn(|i| {
+            let neighbor = cell_pos(IVec3::ZERO, i & crossed);
+            (block + neighbor, cell_pos(local, i) - neighbor * FINE_SIZE)
+        });
+        let before = self.read_cells(&spots, crossed);
         let mut after = before;
         let outcome = block_rule(rules, &mut after, seed ^ FINE_SEED_SALT, phase_counter, anchor);
         let mut result = FineOutcome { pending: outcome.pending, ..FineOutcome::default() };
         if outcome.changed {
             // Every uniform block a changed cell lands in needs a pool slot first, so a full pool
             // never leaves half a move.
-            let mut needed: Vec<IVec3> = Vec::new();
+            let mut checked = 0u8;
+            let mut needed = 0;
             for i in (0..8).filter(|&i| after[i] != before[i]) {
-                let block = spots[i].0;
-                if !self.is_fine(block) && !needed.contains(&block) {
-                    needed.push(block);
+                let bit = 1 << (i & crossed);
+                if checked & bit == 0 {
+                    checked |= bit;
+                    needed += usize::from(!self.is_fine(spots[i].0));
                 }
             }
-            if needed.len() > self.fine.free_slots() {
+            if needed > self.fine.free_slots() {
                 result.stalled = true;
             } else {
                 for i in (0..8).filter(|&i| after[i] != before[i]) {
@@ -142,17 +149,15 @@ impl MatterStore {
                     }
                 }
                 result.changed = true;
-                result.promoted = needed.len() as u32;
+                result.promoted = needed as u32;
             }
         }
         if result.changed || result.pending || result.stalled {
-            let mut touched: Vec<IVec3> = Vec::with_capacity(8);
-            for (block, _) in spots {
-                if self.is_fine(block) && !touched.contains(&block) {
-                    touched.push(block);
+            for (i, (block, _)) in spots.into_iter().enumerate() {
+                if i == i & crossed && self.is_fine(block) {
+                    woken.push(block);
                 }
             }
-            woken.extend(touched);
         }
         result
     }

@@ -7,9 +7,13 @@ use glam::Vec3;
 
 pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Complex {
     let r = |k: u32| hash2(k as i32, 77, seed);
-    let job = Job::roll(r(1));
+    let job = Job::roll_versioned(r(1), r(8), version);
     let top_floor = (ground - job.depth(r(2))).round();
-    let (cells, entry) = fit(r(3), r(4), r(5), cx, cz);
+    let (cells, entry) = if version >= 90 {
+        super::footprint::districts(r(3), r(4), r(5), cx, cz)
+    } else if version >= super::sprawl::VERSION {
+        super::footprint::sprawling(r(3), r(4), r(5), cx, cz)
+    } else { fit(r(3), r(4), r(5), cx, cz) };
     let n = cells.len();
     let adjacent = |a: usize, b: usize| {
         let (p, q) = (cells[a], cells[b]);
@@ -74,6 +78,9 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
     });
 
     // Rooms: kind, size, height, position.
+    let archive = (0..n)
+        .filter(|&i| i != entry && i != reveal && Some(i) != objective && Some(i) != ante)
+        .max_by_key(|&i| (neighbours(i, &tree).len() == 1, hops[i], i));
     let kinds = job.kinds();
     let mut rooms: Vec<Room> = Vec::with_capacity(n);
     for (i, &(ci, cj)) in cells.iter().enumerate() {
@@ -86,6 +93,12 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
             Kind::Core
         } else if Some(i) == ante {
             job.guard_puzzle(h(1))
+        } else if version >= super::sprawl::VERSION {
+            if Some(i) == archive { Kind::Scriptorium }
+            else if version >= 90 {
+                let programme = super::inhabited::programme(job);
+                programme[(hops[i] as usize + i) % programme.len()]
+            } else { super::sprawl::purpose(job, neighbours(i, &tree).len() == 1, hops[i] as usize, i) }
         } else if version >= 46 {
             // Rotate a job-specific programme rather than independently
             // rolling the same room repeatedly. Special graph nodes above
@@ -124,11 +137,34 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
             Kind::Cells => (12.0 + h(3) * 8.0, 9.0 + h(4) * 4.0),
             _ => (11.0 + h(3) * 9.0, 11.0 + h(4) * 9.0),
         };
+        if version >= 54 {
+            // Room purpose changes its proportions, not just its furnishings.
+            match kind {
+                Kind::Library | Kind::Scriptorium => { w = 21.0; d = 14.0; }
+                Kind::Refectory | Kind::Armory => { w = 23.0; d = 12.0; }
+                Kind::Shrine => { w = 14.0; d = 23.0; }
+                Kind::Crypt | Kind::Store => { w = 12.0; d = 11.0; }
+                _ => {}
+            }
+        }
+        if version >= 90 {
+            match kind {
+                Kind::Cistern | Kind::Garden | Kind::Infirmary => { w = 24.0; d = 18.0; }
+                Kind::Foundry | Kind::Barracks => { w = 24.0; d = 16.0; }
+                _ => {}
+            }
+        }
+        if version >= 55 && kind == Kind::Forge { w = 22.0; d = 16.0; }
+        if version >= super::maze::TECH_VERSION && kind == Kind::Labyrinth {
+            // A longer maze: more dead ends to hold caches, more false walls.
+            w = 21.0 + h(3) * 6.0;
+            d = 21.0 + h(4) * 6.0;
+        }
         if h(6) > 0.5 && !matches!(kind, Kind::Entry | Kind::Reveal) {
             std::mem::swap(&mut w, &mut d);
         }
         let (w, d) = (w.round(), d.round());
-        let height = match kind {
+        let mut height = match kind {
             Kind::Entry => 5.5,
             Kind::Reveal => LEVEL * 2.0 + 2.0,
             Kind::Labyrinth => 4.6 + h(7) * 0.6,
@@ -139,6 +175,9 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
             Kind::Core => 6.5,
             _ => 4.6 + h(7) * 2.0,
         };
+        if version >= 54 && matches!(kind, Kind::Library | Kind::Scriptorium | Kind::Shrine | Kind::Refectory) {
+            height = 8.0;
+        }
         let slack = |s: f32| ((SLOT - s) * 0.5 - 6.0).max(0.0);
         let (jx, jz) = if i == entry { (0.0, 0.0) } else { ((h(8) - 0.5) * 2.0 * slack(w), (h(9) - 0.5) * 2.0 * slack(d)) };
         let (ox, oz) = (cx + (ci - cells[entry].0) as f32 * SLOT + jx, cz + (cj - cells[entry].1) as f32 * SLOT + jz);
@@ -219,9 +258,21 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
     }
 
     // States: the hazard is the job gone wrong.
+    if version >= super::sprawl::VERSION {
+        let mut loops: Vec<_> = edges.iter().copied().filter(|&(_, a, b)| {
+            let touches = |i: Option<usize>| i.is_some_and(|i| a == i || b == i);
+            !tree.contains(&(a, b)) && !touches(objective) && !(sealed_ante && touches(ante))
+                && (port(&rooms[a], rooms[b].level) - port(&rooms[b], rooms[a].level)).abs()
+                    <= (gap(&rooms[a], &rooms[b]) - 4.0) * 0.75
+        }).collect();
+        // Prefer shortcuts that eliminate the longest retracing of the tree.
+        loops.sort_by_key(|&(_, a, b)| (std::cmp::Reverse(bfs(n, &tree, a)[b]), a, b));
+        extra = loops.into_iter().take(if version >= 90 { 4 } else { 3 }).map(|(_, a, b)| (a, b)).collect();
+    }
     let odds = job.odds();
     let deepest = *level.iter().max().unwrap_or(&0);
     for (i, room) in rooms.iter_mut().enumerate() {
+        if version >= super::sprawl::VERSION && room.kind == Kind::Scriptorium { continue; }
         if matches!(room.kind, Kind::Entry | Kind::Reveal | Kind::Core | Kind::Orrery | Kind::Chasm) || room.kind.is_puzzle() || Some(i) == ante {
             continue;
         }
@@ -241,24 +292,48 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
         };
     }
 
+    // Generator 294: locks on the critical path, keys in caches before them.
+    let quest = if version >= super::quest::VERSION {
+        let eligible: Vec<bool> = rooms.iter().enumerate().map(|(i, room)| {
+            let special = matches!(room.kind, Kind::Entry | Kind::Reveal | Kind::Core | Kind::Chasm | Kind::Orrery
+                | Kind::Cells | Kind::Cistern | Kind::Sluice | Kind::Scriptorium) || room.kind.is_puzzle();
+            !special && Some(i) != ante && matches!(room.damage, Damage::Intact | Damage::Overgrown)
+        }).collect();
+        super::quest::assign(&tree, &hops, entry, objective, &eligible, hash2(n as i32, 41, seed))
+    } else {
+        super::quest::Quest::default()
+    };
+    // A loop between two lock regions would walk around a door: seal it.
+    let lock_region = (!quest.doors.is_empty()).then(|| {
+        let cut: Vec<(usize, usize)> = quest.doors.iter().map(|(e, _)| *e).collect();
+        super::quest::regions(n, &tree, &cut, entry)
+    });
     let mut corrs = Vec::new();
     for &(a, b) in &tree {
-        link(&rooms, a, b, seed, None, &mut corrs);
+        link(&rooms, a, b, seed, quest.door_on(a, b), &mut corrs);
     }
     for (k, &(a, b)) in extra.iter().enumerate() {
         let x = hash2(a as i32, b as i32, seed.wrapping_add(61));
-        let plug = match job {
+        let plug = if version >= 90 && k < 2 || version >= super::sprawl::VERSION && k == 0 { None } else { match job {
             Job::Quarantine => Some(B::Planks),
             _ if x < 0.3 => Some(B::Gravel),
             _ => None,
-        };
+        } };
+        let plug = if lock_region.as_ref().is_some_and(|l| l[a] != l[b]) { Some(B::TombStone) } else { plug };
         link(&rooms, a, b, seed.wrapping_add(k as u32 + 1), plug, &mut corrs);
     }
-    // Dead ends (one way in, counting loops) hold a cache.
+    // Dead ends hold a cache. Some intact side rooms off loop routes also
+    // reward taking the long way around in newer worlds.
     for (i, room) in rooms.iter_mut().enumerate() {
         let ways = tree.iter().chain(&extra).filter(|&&(a, b)| a == i || b == i).count();
         let special = matches!(room.kind, Kind::Entry | Kind::Reveal | Kind::Core | Kind::Chasm | Kind::Orrery | Kind::Cells | Kind::Cistern | Kind::Sluice) || room.kind.is_puzzle();
-        room.cache = ways == 1 && !special && Some(i) != ante;
+        let side_cache = version >= super::TREASURE_VERSION && ways == 2
+            && room.damage == Damage::Intact && hash2(i as i32, 27, seed) < 0.45;
+        room.cache = (ways == 1 || side_cache) && !special && Some(i) != ante
+            && !(version >= super::sprawl::VERSION && room.kind == Kind::Scriptorium);
+    }
+    for &(room, _) in &quest.keys {
+        rooms[room].cache = true;
     }
     for room in rooms.iter_mut().filter(|r| r.kind == Kind::Chasm) {
         room.rift = super::chasm::depth(&corrs, room);
@@ -311,6 +386,7 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
         reveal,
         objective,
         anchors,
+        quest,
         min,
         max,
         index,

@@ -14,7 +14,7 @@ use crate::{BlockId as B, hash2, hash3};
 use glam::Vec3;
 
 /// First generator that fits set dressing to the room.
-pub const VERSION: u32 = 52;
+pub const VERSION: u32 = crate::gates::GIANTS_AND_RUINS_GENERATOR;
 /// Scale the room is probed at: the finest, where mouldings and lights
 /// stand out furthest.
 const PV: f32 = 0.25;

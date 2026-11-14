@@ -2,6 +2,7 @@ use super::*;
 #[test]
 fn environment_drainage_shared_connections_descend_across_negative_regions() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: ENVIRONMENT_GENERATOR,
         seed: 173,
         world_type: WorldType::Hills,
@@ -21,6 +22,7 @@ fn environment_drainage_shared_connections_descend_across_negative_regions() {
 #[test]
 fn environment_drainage_is_disabled_for_historical_terrain() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: ENVIRONMENT_GENERATOR - 1,
         seed: 173,
         world_type: WorldType::Hills,
@@ -32,6 +34,7 @@ fn environment_drainage_is_disabled_for_historical_terrain() {
 #[test]
 fn environment_drainage_places_water_in_ordinary_generated_channels() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: ENVIRONMENT_GENERATOR,
         seed: 2738958700,
         world_type: WorldType::Hills,
@@ -67,6 +70,7 @@ fn environment_drainage_places_water_in_ordinary_generated_channels() {
 
 fn meander_cfg(seed: u32) -> WorldSampleConfig {
     WorldSampleConfig {
+        planet: None,
         generator_version: MEANDER_GENERATOR,
         seed,
         world_type: WorldType::Hills,
@@ -76,7 +80,7 @@ fn meander_cfg(seed: u32) -> WorldSampleConfig {
 
 #[test]
 fn meander_drainage_descends_flows_diagonally_and_ignores_voxel_size() {
-    let cfg = meander_cfg(2738958700);
+    let cfg = meander_cfg(crate::test_world::seed());
     let fine = WorldSampleConfig { voxel_scale: VoxelScalePreset::QuarterMeter, ..cfg };
     let (mut axis, mut diagonal) = (0, 0);
     for z in -8..=8 {
@@ -96,7 +100,7 @@ fn meander_drainage_descends_flows_diagonally_and_ignores_voxel_size() {
 fn meander_channels_stay_inside_the_sample_window() {
     // A wider node search must find nothing the 4x4 window misses,
     // including across negative coordinates.
-    let cfg = meander_cfg(173);
+    let cfg = meander_cfg(crate::test_world::seed());
     for z in (-900..900).step_by(7) {
         for x in (-900..900).step_by(11) {
             let (x, z) = (x as f32 + 0.5, z as f32 + 0.5);
@@ -111,7 +115,7 @@ fn meander_channels_stay_inside_the_sample_window() {
 fn meander_banks_have_no_seams() {
     // Bank falls off over 8 m, so a 0.25 m step changes it by at most
     // ~0.05; a seam at a reach end, cap or the early-out shows as a jump.
-    let cfg = meander_cfg(2738958700);
+    let cfg = meander_cfg(crate::test_world::seed());
     for row in -40..40 {
         let z = row as f32 * 23.0 + 0.37;
         let mut last = sample(&cfg, -1000.0, z).bank;
@@ -126,7 +130,7 @@ fn meander_banks_have_no_seams() {
 
 #[test]
 fn meander_channels_bend_and_reach_their_outlet() {
-    let cfg = meander_cfg(2738958700);
+    let cfg = meander_cfg(crate::test_world::seed());
     let (mut bent, mut edges) = (0, 0);
     for z in -6..=6 {
         for x in -6..=6 {
@@ -150,7 +154,7 @@ fn meander_channels_bend_and_reach_their_outlet() {
 
 #[test]
 fn meander_drainage_places_water_and_leaves_v49_untouched() {
-    let cfg = meander_cfg(2738958700);
+    let cfg = meander_cfg(crate::test_world::seed());
     let wet = (-1500..1500)
         .step_by(6)
         .flat_map(|z| (-1500..1500).step_by(6).map(move |x| (x as f32, z as f32)))

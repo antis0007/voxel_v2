@@ -7,7 +7,7 @@ use crate::undercrown::plan::Plan;
 use engine_core::VoxelScalePreset;
 
 pub(super) fn cfg_at(seed: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: super::tests_grid::generator(), seed, world_type: WorldType::Hills, voxel_scale }
 }
 
 fn layout(seed: u32) -> (WorldSampleConfig, Layout) {

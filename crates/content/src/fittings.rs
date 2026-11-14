@@ -92,7 +92,7 @@ pub fn boxes(b: B, p: IVec3, scale: f32) -> Vec<(Vec3, Vec3)> {
             lo.y = 0.8125;
             hi.y = 1.0;
         }
-        if s.upper || !s.door {
+        if (s.door && s.upper) || !s.door {
             // Four real openings, shared by the oak window and hatch lattice.
             let u = if axis == 0 { 2 } else { 0 };
             let v = if axis == 1 { 2 } else { 1 };

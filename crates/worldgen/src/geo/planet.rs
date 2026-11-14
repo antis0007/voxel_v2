@@ -40,7 +40,11 @@ pub struct Preview {
 pub struct Progress {
     stage: AtomicU8,
     step: AtomicU32,
+    /// Current stage's finished passes (high half) and total (low half).
+    phase: std::sync::atomic::AtomicU64,
     preview: Mutex<Option<Arc<Preview>>>,
+    solve_atlas: Mutex<Option<Arc<crate::planetary::SolveAtlas>>>,
+    drift: Mutex<Vec<Arc<crate::planetary::DriftFrame>>>,
 }
 
 impl Progress {
@@ -64,8 +68,36 @@ impl Progress {
         self.preview.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    fn set_stage(&self, s: Stage) {
+    pub fn drift_frames(&self) -> Vec<Arc<crate::planetary::DriftFrame>> {
+        self.drift.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn solve_atlas(&self) -> Option<Arc<crate::planetary::SolveAtlas>> {
+        self.solve_atlas.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub(crate) fn publish_atlas(&self, atlas: crate::planetary::SolveAtlas) {
+        *self.solve_atlas.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(atlas));
+    }
+
+    pub(crate) fn publish_drift(&self, frame: crate::planetary::DriftFrame) {
+        self.drift.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::new(frame));
+    }
+
+    pub(crate) fn set_stage(&self, s: Stage) {
+        self.phase.store(0, Ordering::Relaxed);
         self.stage.store(s as u8, Ordering::Relaxed);
+    }
+
+    /// Finished passes of the current stage out of its total; `(0, 0)` when
+    /// the stage reports none. Display only; never read by the solve.
+    pub fn phase(&self) -> (u32, u32) {
+        let packed = self.phase.load(Ordering::Relaxed);
+        ((packed >> 32) as u32, packed as u32)
+    }
+
+    pub(crate) fn set_phase(&self, done: u32, total: u32) {
+        self.phase.store(u64::from(done.min(total)) << 32 | u64::from(total), Ordering::Relaxed);
     }
 
     fn publish(&self, p: Preview) {
@@ -88,6 +120,9 @@ pub struct Planet {
     pub season: Vec<f32>,
     /// River node per cell: the cell centre moved by a hashed offset, so channels never follow the grid.
     pub node: Vec<[f32; 2]>,
+    /// Former ice cover 0..1; zero unless the solve built glacial landforms.
+    pub ice: Vec<f32>,
+    pub(crate) history: Option<super::mountain::HistoryRecord>,
     pub checksum: u64,
 }
 
@@ -110,6 +145,7 @@ fn to_metres(h: &[f64], fixed: &[bool], relief_m: f64) -> Vec<f64> {
 }
 
 pub fn build(seed: u32, p: &PlanetParams, progress: &Progress) -> Planet {
+    let started = std::time::Instant::now();
     let n = p.cells;
     let half = p.face_edge_m * 0.5;
     let grid = Grid { n, cell_m: p.face_edge_m / n as f64, min_m: [-half, -half] };
@@ -127,7 +163,7 @@ pub fn build(seed: u32, p: &PlanetParams, progress: &Progress) -> Planet {
 
     // Diffusion scales with cell area so the landscape keeps its shape at any resolution.
     let kappa_dt = 100.0 * (grid.cell_m / 128.0) * (grid.cell_m / 128.0);
-    let params = |steps| Params { k_dt: 0.05, dt: 25.0, kappa_dt, steps };
+    let params = |steps| Params { k_dt: 0.05 * p.erosion, dt: 25.0, kappa_dt, steps };
     let mut done = 0;
     let mut tick = |h: &[f64]| {
         done += 1;
@@ -142,7 +178,7 @@ pub fn build(seed: u32, p: &PlanetParams, progress: &Progress) -> Planet {
 
     progress.set_stage(Stage::Climate);
     let first = climate::solve(&grid, &to_metres(&h, &fixed, p.relief_m), &tect.land, p);
-    let weight: Vec<f64> = first.wet.iter().map(|&w| 0.3 + 1.4 * w as f64).collect();
+    let weight: Vec<f64> = first.wet.iter().map(|&w| 0.3 * p.rainfall.min(1.0) + 1.4 * w as f64).collect();
 
     progress.set_stage(Stage::Carving);
     erosion::evolve(&grid, &mut h, &fixed, &tect.uplift, &weight, params(CARVING_STEPS), |_, h| tick(h));
@@ -157,17 +193,44 @@ pub fn build(seed: u32, p: &PlanetParams, progress: &Progress) -> Planet {
             hm[i] += 22.0 * smoothstep(0.0, 24.0, coast[i] as f64);
         }
     }
-    erosion::relax_talus(&grid, &mut hm, &fixed, 0.85, 4);
+    let history = if p.mountain_erosion {
+        let damage = p.fractured_ravines.then(|| {
+            let started = std::time::Instant::now();
+            let damage = (0..grid.len()).map(|i| {
+                if fixed[i] { return 0.0; }
+                let [x,z] = grid.at(i);
+                // Reuse the faults that displace the world's mined strata.
+                // Damage changes erodibility; it never directly subtracts height.
+                let tect = crate::landscape::sample_tectonics(x as f32, z as f32, seed, super::RAVINE_GENERATOR);
+                f64::from((0.75 * tect.fault_plane + 0.25 * tect.rift_graben).clamp(0.0, 1.0))
+            }).collect::<Vec<_>>();
+            eprintln!("[worldgen] mountain_fracture_setup ms={:.1}", started.elapsed().as_secs_f64() * 1000.0);
+            damage
+        });
+        super::mountain::weather(&grid, &mut hm, &fixed, &weight, p.erosion, damage.as_deref())
+    } else {
+        erosion::relax_talus(&grid, &mut hm, &fixed, 0.85, 4);
+        None
+    };
     sink_ocean(&grid, &mut hm, &fixed);
+    let mut ice = vec![0.0f32; grid.len()];
+    if p.glacial_erosion {
+        let ice_climate = climate::solve(&grid, &hm, &tect.land, p);
+        if p.glacial_landforms {
+            ice = super::glacial::carve(&grid, &mut hm, &fixed, &ice_climate, seed);
+        } else {
+            super::glacial::trough(&grid, &mut hm, &fixed, &ice_climate);
+        }
+    }
     let flow = erosion::route(&grid, &hm, &fixed, &weight);
     // Hollows too shallow to hold a lake fill to their spill level; rift lakes
     // keep sinking during the solve, so their depth is capped.
     for i in 0..grid.len() {
         let depth = flow.spill[i] - hm[i];
-        hm[i] = if depth <= 0.5 { hm[i].max(flow.spill[i]) } else { hm[i].max(flow.spill[i] - 30.0) };
+        hm[i] = if depth <= 0.5 { hm[i].max(flow.spill[i]) } else { hm[i].max(flow.spill[i] - p.lake_depth_m) };
     }
     let lake: Vec<f32> = (0..grid.len())
-        .map(|i| if !fixed[i] && flow.spill[i] > hm[i] + 0.5 { flow.spill[i] as f32 } else { f32::MIN })
+        .map(|i| if p.rainfall > 0.0 && !fixed[i] && flow.spill[i] > hm[i] + 0.5 { flow.spill[i] as f32 } else { f32::MIN })
         .collect();
     let climate = climate::solve(&grid, &hm, &tect.land, p);
     let node = (0..grid.len())
@@ -190,6 +253,8 @@ pub fn build(seed: u32, p: &PlanetParams, progress: &Progress) -> Planet {
         wet: climate.wet,
         season: climate.season,
         node,
+        ice,
+        history,
         checksum: 0,
     };
     planet.checksum = checksum(&planet);
@@ -198,6 +263,7 @@ pub fn build(seed: u32, p: &PlanetParams, progress: &Progress) -> Planet {
     last.discharge_km2 = Some(planet.discharge.iter().map(|a| a / 1.0e6).collect());
     progress.publish(last);
     progress.set_stage(Stage::Done);
+    eprintln!("[worldgen] planet seed={seed} cells={n} glacial={} solve_ms={:.1}", p.glacial_erosion, started.elapsed().as_secs_f64() * 1000.0);
     planet
 }
 
@@ -239,7 +305,7 @@ fn sink_ocean(grid: &Grid, hm: &mut [f64], fixed: &[bool]) {
 
 fn checksum(p: &Planet) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let fields = [&p.height, &p.lake, &p.discharge, &p.maat, &p.wet];
+    let fields = [&p.height, &p.lake, &p.discharge, &p.maat, &p.wet, &p.season];
     for f in fields {
         for v in f.iter() {
             for b in v.to_bits().to_le_bytes() {
@@ -247,7 +313,15 @@ fn checksum(p: &Planet) -> u64 {
             }
         }
     }
-    h
+    for v in &p.receiver {
+        for b in v.to_le_bytes() { h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3); }
+    }
+    for node in &p.node {
+        for v in node {
+            for b in v.to_bits().to_le_bytes() { h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3); }
+        }
+    }
+    p.history.as_ref().map_or(h, |record| super::history::checksum(record, h))
 }
 
 /// One planet's cache slot: its solve progress and, once finished, the planet.
@@ -259,6 +333,15 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub(crate) fn install(&self, planet: Arc<Planet>) {
+        let _ = self.planet.set(planet);
+        self.progress.set_stage(Stage::Done);
+    }
+
+    pub(crate) fn installed(&self) -> Option<Arc<Planet>> {
+        self.planet.get().map(Arc::clone)
+    }
+
     pub fn ready(&self) -> bool {
         self.planet.get().is_some()
     }
@@ -266,6 +349,10 @@ impl Entry {
     /// True for the first caller only.
     pub fn claim_prewarm(&self) -> bool {
         !self.prewarmed.swap(true, Ordering::Relaxed)
+    }
+
+    pub fn release_prewarm(&self) {
+        self.prewarmed.store(false, Ordering::Relaxed);
     }
 }
 

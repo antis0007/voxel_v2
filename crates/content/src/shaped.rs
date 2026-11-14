@@ -14,8 +14,8 @@ const FAMILIES: [[B; 4]; 5] = [
 ];
 const SLABS: [B; 3] = [B::PlankSlab, B::BrickSlab, B::CobbleSlab];
 const FENCES: [B; 3] = [B::PlankFence, B::BrickFence, B::CobbleFence];
-/// Work stations whose use opens a page: anvil, brewing stand, stonecutter, grindstone.
-pub const STATIONS: [B; 4] = [B::Anvil, B::BrewingStand, B::Stonecutter, B::Grindstone];
+/// Work stations whose use opens a page.
+pub const STATIONS: [B; 5] = [B::Anvil, B::BrewingStand, B::Stonecutter, B::Grindstone, B::EnchantingTable];
 
 fn family(b: B) -> Option<(usize, usize)> {
     FAMILIES
@@ -25,7 +25,8 @@ fn family(b: B) -> Option<(usize, usize)> {
 }
 
 pub fn is_shaped(b: B) -> bool {
-    family(b).is_some() || SLABS.contains(&b) || FENCES.contains(&b) || matches!(b, B::Chest | B::Lectern) || STATIONS.contains(&b)
+    family(b).is_some() || SLABS.contains(&b) || FENCES.contains(&b) || b == B::ClaimStake
+        || (b.chest_tier().is_some() || b == B::Lectern) || STATIONS.contains(&b)
 }
 
 pub fn is_sign(b: B) -> bool {
@@ -58,7 +59,7 @@ pub fn base(b: B) -> Option<B> {
     if !is_shaped(b) {
         return None;
     }
-    if matches!(b, B::Anvil | B::Stonecutter | B::Grindstone) {
+    if matches!(b, B::Anvil | B::Stonecutter | B::Grindstone | B::EnchantingTable) {
         return Some(B::Stone);
     }
     let material = match family(b) {
@@ -125,7 +126,11 @@ pub fn boxes(b: B, p: IVec3, links: u8) -> Vec<(Vec3, Vec3)> {
         Some((1, _)) => vec![(v(0.0625, 0.25, 0.875), v(0.9375, 0.75, 1.0))],
         Some(_) => vec![(Vec3::ZERO, v(1.0, 0.5, 1.0)), (v(0.0, 0.5, 0.5), Vec3::ONE)],
         None if SLABS.contains(&b) => vec![(Vec3::ZERO, v(1.0, 0.5, 1.0))],
-        None if b == B::Chest => vec![(v(0.0625, 0.0, 0.0625), v(0.9375, 0.875, 0.9375))],
+        None if b == B::ClaimStake => vec![
+            (v(0.4375, 0.0, 0.4375), v(0.5625, 0.875, 0.5625)),
+            (v(0.3125, 0.625, 0.3125), v(0.6875, 0.8125, 0.6875)),
+        ],
+        None if b.chest_tier().is_some() => vec![(v(0.0625, 0.0, 0.0625), v(0.9375, 0.875, 0.9375))],
         None if b == B::Lectern => vec![
             (v(0.25, 0.0, 0.25), v(0.75, 0.125, 0.75)),
             (v(0.375, 0.125, 0.375), v(0.625, 0.75, 0.625)),
@@ -145,6 +150,12 @@ pub fn boxes(b: B, p: IVec3, links: u8) -> Vec<(Vec3, Vec3)> {
             (v(0.0, 0.0, 0.375), v(0.1875, 0.75, 0.625)),
             (v(0.8125, 0.0, 0.375), v(1.0, 0.75, 0.625)),
             (v(0.25, 0.125, 0.125), v(0.75, 1.0, 0.875)),
+        ],
+        None if b == B::EnchantingTable => vec![
+            (v(0.125, 0.0, 0.125), v(0.875, 0.125, 0.875)),
+            (v(0.25, 0.125, 0.25), v(0.75, 0.625, 0.75)),
+            (v(0.0625, 0.625, 0.0625), v(0.9375, 0.8125, 0.9375)),
+            (v(0.25, 0.8125, 0.3125), v(0.75, 0.875, 0.6875)),
         ],
         None if is_fence(b) => vec![(v(0.375, 0.0, 0.375), v(0.625, 1.0, 0.625))],
         None => return Vec::new(),

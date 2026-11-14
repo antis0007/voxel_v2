@@ -36,6 +36,7 @@ fn gen_golden() {
         for (seed, world_type) in [(424242u32, WorldType::Hills), (7, WorldType::Hills)] {
             for scale in [S::OneMeter, S::HalfMeter] {
                 let cfg = WorldSampleConfig {
+                    planet: None,
                     generator_version: version,
                     seed,
                     world_type,

@@ -39,7 +39,7 @@ fn check_chunk(cfg: &WorldSampleConfig, coord: IVec3) {
 fn halo_sampling_and_chunk_generation_agree_along_the_route() {
     for version in [33u32, CURRENT_GENERATOR_VERSION] {
         for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter] {
-            let cfg = WorldSampleConfig { generator_version: version, seed: 424242, world_type: WorldType::Hills, voxel_scale: scale };
+            let cfg = WorldSampleConfig { planet: None, generator_version: version, seed: 424242, world_type: WorldType::Hills, voxel_scale: scale };
             for &(cx, cz) in &ROUTE {
                 for cy in LEVELS {
                     check_chunk(&cfg, IVec3::new(cx, cy, cz));
@@ -54,6 +54,7 @@ fn halo_sampling_and_chunk_generation_agree_along_the_route() {
 #[test]
 fn neighbouring_chunks_share_their_overlap_cells() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: CURRENT_GENERATOR_VERSION,
         seed: 7,
         world_type: WorldType::Hills,

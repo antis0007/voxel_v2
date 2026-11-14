@@ -1,4 +1,4 @@
-﻿//! Versioned metre-space climate, overlapped erosion regions and biome strata.
+//! Versioned metre-space climate, overlapped erosion regions and biome strata.
 //! Region borders blend the same four deterministic tiles on both sides. Results
 //! never depend on chunk size, worker order, or voxel resolution.
 use super::{
@@ -6,6 +6,9 @@ use super::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
+mod biomes;
+mod woodland;
+pub use woodland::VERSION as WOODLAND_GENERATOR;
 
 const SPACING: f32 = 8.0;
 const REGION: f32 = 128.0;
@@ -44,8 +47,44 @@ pub enum Biome {
     Rainforest,
     Heathland,
     Fen,
+    LostPlateau,
+    CycadMarsh,
+    CloudForest,
+    RedwoodGrove,
+    OvergrownGardens,
+    FungalGrove,
+    LastShore,
+    VolcanicField,
+    KarstUpland,
 }
 impl Biome {
+    /// Every biome, in declaration order; content files name them by variant.
+    pub const ALL: [Biome; 23] = [
+        Self::Ocean, Self::Coast, Self::Marsh, Self::Meadow, Self::Forest, Self::Taiga,
+        Self::Desert, Self::Badlands, Self::Tundra, Self::Alpine, Self::Savanna, Self::Rainforest,
+        Self::Heathland, Self::Fen, Self::LostPlateau, Self::CycadMarsh, Self::CloudForest,
+        Self::RedwoodGrove, Self::OvergrownGardens, Self::FungalGrove, Self::LastShore,
+        Self::VolcanicField, Self::KarstUpland,
+    ];
+
+    /// The variant whose `Debug` name is `name`.
+    pub fn from_name(name: &str) -> Option<Biome> {
+        Self::ALL.into_iter().find(|b| format!("{b:?}") == name)
+    }
+
+    /// Position in `ALL`. The exhaustive match fails to compile when a variant
+    /// is added without extending `ALL`; `all_is_complete` pins the order.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Ocean => 0, Self::Coast => 1, Self::Marsh => 2, Self::Meadow => 3, Self::Forest => 4,
+            Self::Taiga => 5, Self::Desert => 6, Self::Badlands => 7, Self::Tundra => 8, Self::Alpine => 9,
+            Self::Savanna => 10, Self::Rainforest => 11, Self::Heathland => 12, Self::Fen => 13,
+            Self::LostPlateau => 14, Self::CycadMarsh => 15, Self::CloudForest => 16, Self::RedwoodGrove => 17,
+            Self::OvergrownGardens => 18, Self::FungalGrove => 19, Self::LastShore => 20,
+            Self::VolcanicField => 21, Self::KarstUpland => 22,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Ocean => "Ocean",
@@ -62,6 +101,15 @@ impl Biome {
             Self::Rainforest => "Rainforest",
             Self::Heathland => "Highland heath",
             Self::Fen => "Lowland fen",
+            Self::LostPlateau => "Lost plateau",
+            Self::CycadMarsh => "Cycad marsh",
+            Self::CloudForest => "Cloud forest",
+            Self::RedwoodGrove => "Redwood grove",
+            Self::OvergrownGardens => "Overgrown gardens",
+            Self::FungalGrove => "Fungal grove",
+            Self::LastShore => "Last shore",
+            Self::VolcanicField => "Volcanic field",
+            Self::KarstUpland => "Karst upland",
         }
     }
 }
@@ -74,6 +122,12 @@ pub struct Landscape {
     pub temperature: f32,
     pub sediment: f32,
     pub biome: Biome,
+    /// Transition strength is independent of the categorical map label.
+    pub background_biome: Biome,
+    pub variant_biome: Biome,
+    pub ecotone: f32,
+    /// Gate 136 riparian strength from the planet face solve; zero elsewhere.
+    pub riparian: f32,
 }
 
 struct Tile {
@@ -90,7 +144,7 @@ static TILES: OnceLock<Mutex<TileCache>> = OnceLock::new();
 
 /// Generator 53 stretches the climate fields about threefold so a biome
 /// region spans kilometres instead of a 700 m patchwork.
-pub const CLIMATE_SCALE_GENERATOR: u32 = 53;
+pub const CLIMATE_SCALE_GENERATOR: u32 = crate::gates::LAKES_AND_CLIMATE_GENERATOR;
 
 /// Raw temperature and rainfall fields, each 0..1 (about 0.14..0.86 in
 /// practice), before the contrast, ecotone and regional stages in
@@ -122,8 +176,38 @@ fn climate_regional(x: f32, z: f32, seed: u32) -> (f32, f32) {
     (spread(temp), spread(rain))
 }
 
+/// Regional ecology over the solved physical climate. Broad rotated fields
+/// create traversable districts; smaller warps soften their boundaries.
+/// Shared by exact ground, horizon ground and distant tree admission.
+pub(crate) fn regional_ecology(cfg: &WorldSampleConfig, x: f32, z: f32, heat: f32, wet: f32) -> (f32, f32) {
+    if cfg.generator_version < 93 { return (heat, wet); }
+    let u = x * 0.82 - z * 0.57;
+    let v = x * 0.57 + z * 0.82;
+    let warp = (value_noise2(u/180.0,v/180.0,cfg.seed.wrapping_add(19301))-0.5)*100.0;
+    let thermal = value_noise2((u+warp)/480.0,(v-warp)/480.0,cfg.seed.wrapping_add(19303));
+    let rainfall = value_noise2((v+warp)/360.0,(u-warp)/360.0,cfg.seed.wrapping_add(19309));
+    (((heat-0.5)*1.45+0.5+(thermal-0.5)*0.32).clamp(0.0,1.0),
+     ((wet-0.5)*1.65+0.5+(rainfall-0.5)*0.42).clamp(0.0,1.0))
+}
+
 /// Heat and wetness (0..1) below the 30 m lapse start.
 pub fn lowland_climate(cfg: &WorldSampleConfig, x: f32, z: f32) -> (f32, f32) {
+    if crate::planetary::active(cfg) {
+        let d = crate::planetary::direction(cfg, f64::from(x), f64::from(z));
+        let c = crate::planetary::climate_at(cfg, d);
+        return (c.heat01() as f32, c.wet as f32);
+    }
+    if super::geo::integrated(cfg) {
+        let p = super::geo::planet_for(cfg);
+        let (x, z) = (x as f64, z as f64);
+        let height = p.grid.bilinear(&p.height, x, z);
+        let sea_c = p.grid.bilinear(&p.maat, x, z)
+            + super::geo::HOME.lapse_c_per_m * (height - super::geo::SEA_M).max(0.0);
+        if cfg.generator_version >= 93 {
+            return regional_ecology(cfg,x as f32,z as f32,((sea_c+15.0)/45.0) as f32,p.grid.bilinear(&p.wet,x,z) as f32);
+        }
+        return (((sea_c + 15.0) / 50.0) as f32, p.grid.bilinear(&p.wet, x, z) as f32);
+    }
     let (mut heat, mut wet) = climate(x, z, cfg.seed, cfg.generator_version);
     if cfg.generator_version >= 5 {
         heat = ((heat - 0.5) * 1.55 + 0.5).clamp(0.0, 1.0);
@@ -141,6 +225,13 @@ pub fn lowland_climate(cfg: &WorldSampleConfig, x: f32, z: f32) -> (f32, f32) {
 
 /// `lowland_climate` heat at `height` metres.
 pub fn lapse_heat(cfg: &WorldSampleConfig, heat: f32, height: f32) -> f32 {
+    if crate::planetary::active(cfg) {
+        return (heat - (height - crate::WATER_LEVEL_METERS).max(0.0) * crate::planet_climate::LAPSE_C_PER_M as f32 / 52.0).clamp(0.0, 1.0);
+    }
+    if super::geo::integrated(cfg) {
+        let range = if cfg.generator_version >= 93 { 45.0 } else { 50.0 };
+        return (heat - (height - crate::WATER_LEVEL_METERS).max(0.0) * super::geo::HOME.lapse_c_per_m as f32 / range).clamp(0.0, 1.0);
+    }
     let per_metre = if cfg.generator_version >= 7 { 0.0018 } else { 0.0035 };
     (heat - (height - 30.0).max(0.0) * per_metre).clamp(0.0, 1.0)
 }
@@ -155,6 +246,10 @@ pub fn visual_ecology(
 ) -> (f32, f32, f32) {
     let (heat, wet) = lowland_climate(cfg, x, z);
     let heat = lapse_heat(cfg, heat, height);
+    if crate::planetary::active(cfg) {
+        let d = crate::planetary::direction(cfg, f64::from(x), f64::from(z));
+        return (heat, wet, crate::planet::noise_at(d * 110.0, cfg.seed.wrapping_add(3127)) as f32);
+    }
     let grove = value_noise2(x / 270.0, z / 270.0, cfg.seed.wrapping_add(3127)) * 0.72
         + value_noise2(x / 87.0, z / 87.0, cfg.seed.wrapping_add(3157)) * 0.28;
     (heat, wet, grove)
@@ -226,7 +321,7 @@ thread_local! {
 /// Generator 53: continents dominate. Oceanic plates are rarer, and the plates
 /// beside the origin are no longer forced oceanic, so spawn sits inland and the
 /// sea is a coast some way off rather than a basin next door.
-pub const LAND_GENERATOR: u32 = 53;
+pub const LAND_GENERATOR: u32 = crate::gates::LAKES_AND_CLIMATE_GENERATOR;
 
 /// Plate sample at a generator version's zoom and continental bias.
 pub fn sample_tectonics(wx: f32, wz: f32, seed: u32, version: u32) -> TectonicSample {
@@ -447,7 +542,7 @@ fn sample_tectonics_uncached(wx: f32, wz: f32, seed: u32, zoom: f32, landward: b
 
 /// Rotated, domain-warped Musgrave Ridged Multifractal for authentic alpine massifs.
 /// Returns `(primary_spine, lateral_spur_chutes)`:
-/// - `primary_spine`: sharp pyramidal horns and knife-edge arÃªtes where each finer octave
+/// - `primary_spine`: sharp pyramidal horns and knife-edge arêtes where each finer octave
 ///   is weighted by the previous octave's crest, keeping valley floors broad and passable.
 /// - `lateral_spur_chutes`: branching dendritic spurs separated by incised couloir chutes.
 fn mountain_ridged_multifractal(
@@ -548,7 +643,7 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32
     // Asymmetric cuesta/thrust profile: steeper scarp toward the plate suture, longer dip slope behind.
     let fold_asymmetry =
         0.52 + 0.48 * (tect.fold_wave + 0.28 * (tect.fold_wave * 2.0).sin()).clamp(-1.0, 1.0);
-    let arÃªte_profile = primary_spine.powf(1.28) * (0.68 + 0.32 * spur_ridge);
+    let arête_profile = primary_spine.powf(1.28) * (0.68 + 0.32 * spur_ridge);
     let pyramidal_horn = smoothstep(0.55, 0.92, primary_spine) * smoothstep(0.45, 0.88, spur_ridge);
     let massif_drive = (tect.orogeny * 1.25 + mountain_mask * craton_t * 0.88).clamp(0.0, 1.65);
 
@@ -564,11 +659,11 @@ fn compact_bedrock(x: f32, z: f32, seed: u32, ridged: bool, version: u32) -> f32
     let mut orogenic_uplift = piedmont_apron
         + massif_drive
             * (0.58 + 0.42 * fold_asymmetry)
-            * (arÃªte_profile * cordillera_scale
+            * (arête_profile * cordillera_scale
                 + pyramidal_horn * if version >= 15 { 48.0 } else { 34.0 });
 
     // Glacial cirque & U-shaped valley scouring: scoops concave amphitheaters out of
-    // mid-to-upper flanks while leaving knife-edge arÃªtes and horns standing tall above them.
+    // mid-to-upper flanks while leaving knife-edge arêtes and horns standing tall above them.
     let flank_zone =
         smoothstep(32.0, 78.0, orogenic_uplift) * (1.0 - smoothstep(0.76, 0.95, primary_spine));
     let glacial_scour = cirque_bowl * flank_zone * 22.0;
@@ -619,9 +714,9 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32, footprint: f
         (wx, wz)
     };
     let mut h = if version >= 9 {
-        compact_bedrock(wx, wz, seed, kind == WorldType::Ridged as u8, version)
+        compact_bedrock(wx, wz, seed, kind == WorldType::Ridged.code(), version)
     } else {
-        bedrock(sx, sz, seed, kind == WorldType::Ridged as u8)
+        bedrock(sx, sz, seed, kind == WorldType::Ridged.code())
     };
     if version >= 3 {
         let mountain = smoothstep(42.0, 108.0, h);
@@ -629,8 +724,18 @@ fn base_height(wx: f32, wz: f32, seed: u32, kind: u8, version: u32, footprint: f
         h += mountain * fold.powf(1.65) * if version >= 9 { 16.0 } else { 28.0 };
         let (heat, wet) = climate(wx, wz, seed, version);
         let mesa = smoothstep(0.52, 0.75, heat) * (1.0 - smoothstep(0.32, 0.5, wet));
-        let terrace = (h / 9.0).floor() * 9.0 + smoothstep(0.25, 0.85, (h / 9.0).fract()) * 9.0;
-        h += (terrace - h) * mesa * 0.85;
+        if version >= super::terrain_variety::MESA_SOFT_GENERATOR {
+            // Benches with wandering edges: a full S-curve riser, warped so the
+            // steps do not run in straight contour bands, and blended half-way.
+            let strata = (value_noise2(wx / 61.0, wz / 61.0, seed.wrapping_add(9761)) - 0.5) * 3.5
+                + (value_noise2(wx / 23.0, wz / 23.0, seed.wrapping_add(9763)) - 0.5) * 1.0;
+            let t = (h + strata) / 9.0;
+            let terrace = (t.floor() + smoothstep(0.0, 1.0, t.fract())) * 9.0;
+            h += (terrace - h) * mesa * 0.5;
+        } else {
+            let terrace = (h / 9.0).floor() * 9.0 + smoothstep(0.25, 0.85, (h / 9.0).fract()) * 9.0;
+            h += (terrace - h) * mesa * 0.85;
+        }
     }
     if version >= 15 {
         h += super::terrain_variety::relief(wx, wz, seed, h, footprint, version);
@@ -652,6 +757,12 @@ pub fn preview_height_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f3
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
         return super::distant_surface(cfg, x, z).0 * cfg.voxel_meters();
     }
+    if let Some(c) = solved_far_column(cfg, x, z, footprint) {
+        return (c.height + 1) as f32 * cfg.voxel_meters();
+    }
+    if let Some((blocks, _)) = dimension_surface(cfg, x, z) {
+        return blocks * cfg.voxel_meters();
+    }
     preview_landscape_lod(cfg, x, z, footprint).height + cfg.voxel_meters()
 }
 
@@ -666,6 +777,12 @@ pub fn preview_surface_lod(
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
         return super::distant_surface(cfg, x, z);
     }
+    if let Some(c) = solved_far_column(cfg, x, z, footprint) {
+        return (c.height as f32 + 1.0, c.surface);
+    }
+    if let Some(surface) = dimension_surface(cfg, x, z) {
+        return surface;
+    }
     let column = preview_column_lod(cfg, x, z, footprint);
     (column.height as f32 + 1.0, column.surface)
 }
@@ -678,19 +795,48 @@ pub fn preview_surface_canonical(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f3
     if cfg.generator_version < 38 || cfg.world_type == WorldType::Superflat {
         return preview_surface_lod(cfg, x, z, 8.0);
     }
+    if let Some(surface) = dimension_surface(cfg, x, z) {
+        return surface;
+    }
     let s = preview_landscape_with_footprints(cfg, x, z, 8.0, 64.0);
     let column = column_from_landscape(cfg, x, z, s);
     (column.height as f32 + 1.0, column.surface)
 }
 
 pub(super) fn preview_column_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> ColumnSample {
-    if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 {
-        return super::sample_column(cfg, x, z);
-    }
-    column_from_landscape(cfg, x, z, preview_landscape_lod(cfg, x, z, footprint))
+    preview_column_and_landscape(cfg, x, z, footprint).0
 }
 
-pub(super) fn preview_landscape_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> Landscape {
+pub(super) fn preview_column_and_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> (ColumnSample, Option<Landscape>) {
+    if cfg.world_type == WorldType::Superflat || cfg.generator_version < 2 || own_column(cfg) {
+        return (super::sample_column(cfg, x, z), None);
+    }
+    let sample = preview_landscape_lod(cfg, x, z, footprint);
+    (column_from_landscape(cfg, x, z, sample), Some(sample))
+}
+
+/// Far samples on a solved planet face skip the exact column, which builds a
+/// detail tile per sample; footprints of 32 m and less keep it.
+fn solved_far_column(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> Option<ColumnSample> {
+    if footprint <= 32.0 { return None; }
+    // Far samples carry one material; a closed stand reads as its crowns.
+    super::basin::cover_column(cfg, x, z, footprint).map(|mut c| {
+        if c.surface == BlockId::Grass && c.vegetation_density > 0.45 { c.surface = BlockId::Leaves; }
+        c
+    })
+}
+
+/// These worlds are not hills columns. A hills preview streams a different
+/// vertical band than the ground the player is standing on.
+fn own_column(cfg: &WorldSampleConfig) -> bool {
+    matches!(cfg.world_type, WorldType::Planet | WorldType::Nether | WorldType::Manyfold | WorldType::Hall | WorldType::Realm(_))
+}
+
+fn dimension_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<(f32, BlockId)> {
+    own_column(cfg).then(|| super::distant_surface(cfg, x, z))
+}
+
+pub fn preview_landscape_lod(cfg: &WorldSampleConfig, x: i32, z: i32, footprint: f32) -> Landscape {
     preview_landscape_with_footprints(cfg, x, z, footprint, footprint)
 }
 
@@ -699,8 +845,17 @@ fn preview_landscape_with_footprints(
 ) -> Landscape {
     let wx = cfg.world_x(x);
     let wz = cfg.world_z(z);
-    let (h, slope, temperature, moisture) = preview_shaped(cfg, wx, wz, footprint, detail_footprint);
-    classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, 0.25)
+    if super::geo::corridor::lod_active(cfg) {
+        let g = super::geo::ground(cfg, wx, wz, footprint.max(detail_footprint));
+        // The far classifier used a constant sediment value, losing the
+        // deposition and wet-ground relationships present in the exact column.
+        return Landscape { riparian: g.riparian, ..classify_landscape(
+            cfg, wx, wz, g.top_m - cfg.voxel_meters(), g.slope,
+            g.temperature, g.moisture, g.sediment,
+        ) };
+    }
+    let (h, slope, temperature, moisture, riparian) = preview_shaped(cfg, wx, wz, footprint, detail_footprint);
+    Landscape { riparian, ..classify_landscape(cfg, wx, wz, h, slope, temperature, moisture, 0.25) }
 }
 
 /// Far-field ground top before drainage carving. It builds no erosion tiles,
@@ -711,10 +866,10 @@ pub(super) fn pre_drainage_preview_top(cfg: &WorldSampleConfig, wx: f32, wz: f32
 
 fn preview_shaped(
     cfg: &WorldSampleConfig, wx: f32, wz: f32, footprint: f32, detail_footprint: f32,
-) -> (f32, f32, f32, f32) {
+) -> (f32, f32, f32, f32, f32) {
     if super::geo::active(cfg) {
         let g = super::geo::ground(cfg, wx, wz, footprint.max(detail_footprint));
-        return (g.top_m - cfg.voxel_meters(), g.slope, g.temperature, g.moisture);
+        return (g.top_m - cfg.voxel_meters(), g.slope, g.temperature, g.moisture, g.riparian);
     }
     let probe = footprint.clamp(8.0, 96.0);
     let height_at = |px: f32, pz: f32| {
@@ -722,7 +877,7 @@ fn preview_shaped(
             px,
             pz,
             cfg.seed,
-            cfg.world_type as u8,
+            cfg.world_type.code(),
             cfg.generator_version,
             footprint,
         )
@@ -731,7 +886,8 @@ fn preview_shaped(
     let hx = height_at(wx + probe, wz);
     let hz = height_at(wx, wz + probe);
     let slope0 = (((hx - h0) / probe).powi(2) + ((hz - h0) / probe).powi(2)).sqrt();
-    apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25, detail_footprint)
+    let (h, slope, temperature, moisture) = apply_macro_shaping(cfg, wx, wz, h0, slope0, 0.25, detail_footprint);
+    (h, slope, temperature, moisture, 0.0)
 }
 
 fn build_tile(key: TileKey) -> Tile {
@@ -896,7 +1052,8 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
     let wz = cfg.world_z(z);
     if super::geo::active(cfg) {
         let g = super::geo::ground(cfg, wx, wz, cfg.voxel_meters());
-        return classify_landscape(cfg, wx, wz, g.top_m - cfg.voxel_meters(), g.slope, g.temperature, g.moisture, g.sediment);
+        let l = classify_landscape(cfg, wx, wz, g.top_m - cfg.voxel_meters(), g.slope, g.temperature, g.moisture, g.sediment);
+        return Landscape { riparian: g.riparian, ..l };
     }
     let tx = (wx / REGION).floor() as i32;
     let tz = (wz / REGION).floor() as i32;
@@ -909,7 +1066,7 @@ pub fn sample(cfg: &WorldSampleConfig, x: i32, z: i32) -> Landscape {
         for dx in 0..=1 {
             let t = tile((
                 cfg.seed,
-                cfg.world_type as u8,
+                cfg.world_type.code(),
                 tx + dx,
                 tz + dz,
                 cfg.generator_version,
@@ -952,9 +1109,14 @@ fn classify_landscape(
     } else {
         h + (drainage.bed_m.min(h) - h) * drainage.bank
     };
+    let h = super::valley::settlement_grade(cfg, wx, wz, h);
     let moisture = (moisture + drainage.bank * 0.24).min(1.0);
     let sediment = (sediment + drainage.bank * 0.35).min(1.0);
-    let alpine = if cfg.generator_version >= 9 {
+    let alpine = if cfg.generator_version >= 93 {
+        // Warm uplands retain vegetation; only summits and cold high ridges
+        // cross the treeline. Steep lower slopes expose rock independently.
+        h > 205.0 || (h > 170.0 && temperature < 0.32)
+    } else if cfg.generator_version >= 9 {
         h > 124.0 || (h > 98.0 && temperature < 0.24) || (h > 84.0 && slope > 0.78)
     } else if cfg.generator_version >= 7 {
         h > 190.0 || (h > 158.0 && temperature < 0.20)
@@ -999,6 +1161,17 @@ fn classify_landscape(
     }) {
         // Mesas and canyons read as red-rock country whatever the climate says.
         Biome::Badlands
+    } else if cfg.generator_version >= super::biome::BIOME_WEIGHTS_GENERATOR {
+        let drainage = super::drainage::sample(cfg, wx, wz);
+        let lake = super::lakes::sample(cfg, wx, wz);
+        let fields = super::biome::Fields {
+            temperature, moisture, height: h, slope,
+            wetness: drainage.bank.max(1.0 - ((lake.edge_m - 2.5) / 20.0).clamp(0.0, 1.0)),
+            volcanic: 0.0, carbonate: 0.0,
+            anomaly: weird.map_or(0.0, |a| a.strength * (a.weights[1] + a.weights[3])),
+        };
+        let w = super::biome::weights_at(cfg, wx, wz, fields);
+        if hash2(wx.floor() as i32, wz.floor() as i32, cfg.seed ^ 0x6563_6f74) < w.second_weight { w.second } else { w.first }
     } else if alpine {
         // Keep alpine rock and snow on the high summits. Slope is handled as
         // exposed rock below; using it as a biome override erased forests from
@@ -1017,8 +1190,11 @@ fn classify_landscape(
             Biome::Desert
         }
     } else if cfg.generator_version >= 10
-        && moisture > 0.78
-        && (16.5..24.0).contains(&h)
+        && moisture > if cfg.generator_version >= 93 { 0.74 } else { 0.78 }
+        && (if cfg.generator_version >= 93 {
+            (16.5..90.0).contains(&h)
+                && value_noise2(wx/150.0,wz/150.0,cfg.seed.wrapping_add(19321))>0.45
+        } else { (16.5..24.0).contains(&h) })
         && slope < 0.14
     {
         Biome::Fen
@@ -1033,6 +1209,9 @@ fn classify_landscape(
     } else {
         Biome::Meadow
     };
+    let background_biome = biome;
+    let (variant_biome, ecotone) = biomes::blend(cfg, wx, wz, h, slope, temperature, moisture, biome);
+    let biome = if ecotone >= 0.5 { variant_biome } else { background_biome };
     Landscape {
         height: h,
         slope,
@@ -1040,6 +1219,10 @@ fn classify_landscape(
         moisture,
         sediment,
         biome,
+        background_biome,
+        variant_biome,
+        ecotone,
+        riparian: 0.0,
     }
 }
 
@@ -1190,7 +1373,7 @@ fn apply_macro_shaping(
         let c_eff = 0.5 + (c - 0.5) * shore_detail;
         let exposed = smoothstep(0.12, 0.75, slope).max(smoothstep(48.0, 105.0, h));
         let rib = (1.0 - (a * 2.0 - 1.0).abs()).powi(3);
-        // Rotated secondary arÃªte rib & incised couloir chute detail for high mountains:
+        // Rotated secondary arête rib & incised couloir chute detail for high mountains:
         let rx = wx * 0.80 - wz * 0.60;
         let rz = wx * 0.60 + wz * 0.80;
         let a_rot = value_noise2(rx / 18.0, rz / 18.0, cfg.seed.wrapping_add(9233));
@@ -1320,9 +1503,15 @@ fn apply_macro_shaping(
 /// Generator 30: how far the true seabed lies above (+) or below (-) the
 /// whole-voxel column height, in voxels. Water depth adds it back so a gentle
 /// shelf grades smoothly instead of stepping one colour ring per voxel.
-pub(super) fn bed_fraction(cfg: &WorldSampleConfig, x: i32, z: i32) -> f32 {
+pub(super) fn bed_fraction(cfg: &WorldSampleConfig, x: i32, z: i32, bed: i32) -> f32 {
     if cfg.world_type == WorldType::Superflat || cfg.generator_version < 30 {
         return 0.0;
+    }
+    if crate::planetary::active(cfg) {
+        let ground = crate::planetary::ground(cfg, cfg.world_x(x), cfg.world_z(z), cfg.voxel_meters());
+        // Planet columns floor their solved height. Sampling the rounded
+        // Hills landscape here puts the wrong fraction on every shelf step.
+        return (ground.top_m * cfg.inv_voxel_meters() - bed as f32).clamp(0.0, 1.0);
     }
     let voxels = sample(cfg, x, z).height * cfg.inv_voxel_meters();
     (voxels - voxels.round()).clamp(-0.5, 0.5)
@@ -1330,7 +1519,7 @@ pub(super) fn bed_fraction(cfg: &WorldSampleConfig, x: i32, z: i32) -> f32 {
 
 pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
     if cfg.world_type == WorldType::Superflat {
-        return ColumnSample {
+        return ColumnSample { deposit_m: 0.0, deposit_bed_surface: crate::BlockId::Stone,
             height: cfg.blocks_for_height(16.0),
             surface: BlockId::Grass,
             filler: BlockId::Dirt,
@@ -1341,10 +1530,24 @@ pub(super) fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
     column_from_landscape(cfg, x, z, sample(cfg, x, z))
 }
 
+fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) -> ColumnSample {
+    column_policy(cfg, x, z, s, false)
+}
+
+/// Column for a far cover sample: the same material policy without the outcrop
+/// ring, the stratigraphic bed and caves, which cost milliseconds per sample.
+pub(crate) fn far_column(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) -> ColumnSample {
+    column_policy(cfg, x, z, s, true)
+}
+
 /// One material/ecology policy for resident columns and filtered horizon samples.
 /// The evaluator may filter relief, but never invent a second biome palette.
-fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) -> ColumnSample {
-    let (mut surface, mut filler, mut vegetation) = match s.biome {
+fn column_policy(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape, far: bool) -> ColumnSample {
+    // Generator 81 shoulder knob; dropped if a later pass repaints the column.
+    let mut outcrop: Option<BlockId> = None;
+    let palette = |biome| match biome {
+        Biome::VolcanicField => (BlockId::Basalt, BlockId::Basalt, 0.05),
+        Biome::KarstUpland => (BlockId::Grass, BlockId::Limestone, 0.35),
         Biome::Ocean | Biome::Coast => (BlockId::Sand, BlockId::Sandstone, 0.0),
         Biome::Marsh => (BlockId::Mud, BlockId::Clay, 0.25),
         Biome::Desert if cfg.generator_version >= 15 => {
@@ -1391,8 +1594,26 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         Biome::Rainforest => (BlockId::Grass, BlockId::Dirt, 1.12),
         Biome::Heathland => (BlockId::Grass, BlockId::Gravel, 0.055),
         Biome::Fen => (BlockId::Grass, BlockId::Clay, 0.28),
+        Biome::LostPlateau => (BlockId::Grass, BlockId::Limestone, 0.88),
+        Biome::CycadMarsh => (BlockId::Mud, BlockId::Clay, 0.60),
+        Biome::CloudForest => (BlockId::GroveMoss, BlockId::Dirt, 0.95),
+        Biome::RedwoodGrove => (BlockId::Dirt, BlockId::Dirt, 0.86),
+        Biome::OvergrownGardens => (BlockId::Grass, BlockId::Dirt, 0.38),
+        Biome::FungalGrove => (BlockId::FungalSoil, BlockId::Dirt, 0.66),
+        Biome::LastShore => (BlockId::Clay, BlockId::Sandstone, 0.0),
     };
-    let exposed_slope = if cfg.generator_version >= 7 {
+    let (mut surface, mut filler, mut vegetation) = palette(s.biome);
+    if cfg.generator_version >= 95 {
+        let background = palette(s.background_biome);
+        let variant = palette(s.variant_biome);
+        vegetation = background.2 + (variant.2-background.2)*s.ecotone;
+        let t = value_noise2(cfg.world_x(x)/7.0,cfg.world_z(z)/7.0,cfg.seed.wrapping_add(19541));
+        (surface,filler) = if t<s.ecotone { (variant.0,variant.1) } else { (background.0,background.1) };
+    }
+    let rainforest = super::trees::rainforest::active(cfg) && s.biome == Biome::Rainforest;
+    let exposed_slope = if rainforest {
+        1.05
+    } else if cfg.generator_version >= 7 {
         0.86
     } else {
         0.65
@@ -1480,7 +1701,30 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         }
         if matches!(s.biome, Biome::Forest | Biome::Meadow) {
             vegetation *= 0.25 + smoothstep(0.25, 0.7, grove) * 0.95;
-            if s.slope > 0.35 && patch > 0.69 {
+            if cfg.generator_version >= super::ground_exposure::OUTCROP_GENERATOR {
+                if !far && wx.hypot(wz) > 110.0 && !matches!(surface, BlockId::SnowGrass | BlockId::Ice) {
+                    use super::ground_exposure::{CONVEXITY_RADIUS_M, Ground, classify};
+                    let convexity = || {
+                        let r = cfg.blocks_for_span(CONVEXITY_RADIUS_M).max(1);
+                        let ring = [(r, 0), (-r, 0), (0, r), (0, -r)]
+                            .map(|(dx, dz)| sample(cfg, x + dx, z + dz).height);
+                        s.height - ring.iter().sum::<f32>() / 4.0
+                    };
+                    match classify(cfg, wx, wz, s.height, s.slope, convexity) {
+                        Ground::Outcrop { bed, knob } => {
+                            (surface, filler, vegetation) = (bed, bed, 0.0);
+                            outcrop = knob.then_some(bed);
+                        }
+                        Ground::Soil(cover) => {
+                            // The slope rule's bare stone is soil where the bed holds it.
+                            if s.slope > 0.54 && matches!(surface, BlockId::Stone | BlockId::Gravel) {
+                                (surface, filler) = (BlockId::Grass, BlockId::Dirt);
+                            }
+                            vegetation *= cover;
+                        }
+                    }
+                }
+            } else if s.slope > 0.35 && patch > 0.69 {
                 surface = BlockId::Gravel;
             }
             // Coastal transition: gentle slopes near sea level blend sand and
@@ -1525,7 +1769,15 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
                 }
                 Biome::Rainforest => {
                     vegetation *= 0.65 + grove * 0.45;
-                    if patch > 0.72 && s.slope < 0.25 {
+                    if super::trees::rainforest::forest_floor(cfg)
+                        && s.height > crate::WATER_LEVEL_METERS + 2.2
+                        && matches!(surface, BlockId::Grass | BlockId::Dirt | BlockId::Mud)
+                    {
+                        let (swale, mound) = super::trees::rainforest::hills_floor(cfg, wx, wz);
+                        if let Some(cover) = super::trees::rainforest::floor_cover(swale, mound, s.slope) {
+                            (surface, filler) = cover;
+                        }
+                    } else if patch > 0.72 && s.slope < 0.25 {
                         surface = BlockId::Mud;
                     }
                 }
@@ -1580,18 +1832,16 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
                 }
                 filler = BlockId::Basalt;
                 vegetation *= 0.12;
-            } else if (s.slope > 0.68 || (tect.fault_plane > 0.62 && s.slope > 0.40))
+            } else if (s.slope > if rainforest { 0.95 } else { 0.68 }
+                || (tect.fault_plane > 0.62 && s.slope > 0.40))
                 && s.height > 15.0
             {
                 // Steep cliff faces & fault scarps expose the tilted 3D stratigraphic bed.
-                let bed = sample_stratigraphic_bed(
-                    wx,
-                    s.height,
-                    wz,
-                    cfg.seed,
-                    &tect,
-                    cfg.generator_version,
-                );
+                let bed = if far {
+                    BlockId::Stone
+                } else {
+                    sample_stratigraphic_bed(wx, s.height, wz, cfg.seed, &tect, cfg.generator_version)
+                };
                 surface = if tect.fault_plane > 0.72 && patch > 0.55 {
                     BlockId::Gravel
                 } else {
@@ -1599,8 +1849,11 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
                 };
                 filler = bed;
             }
-            // Subalpine timberline tapers tree density between 86m and 122m elevation.
-            let timberline = 1.0 - smoothstep(86.0, 122.0, s.height);
+            // Planet elevation spans kilometres. Temperature already includes
+            // lapse: the legacy 122 m ceiling stripped warm uplands bare.
+            let timberline = if woodland::active(cfg) {
+                smoothstep(0.12, 0.28, s.temperature)
+            } else { 1.0 - smoothstep(86.0, 122.0, s.height) };
             vegetation *= timberline;
             if matches!(
                 surface,
@@ -1659,6 +1912,7 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
             filler = BlockId::Ice;
         }
     }
+    biomes::surface(cfg, x, z, &s, &mut surface, &mut filler);
     if cfg.generator_version >= 14 {
         let wx = cfg.world_x(x);
         let wz = cfg.world_z(z);
@@ -1688,15 +1942,20 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
         let yard = ((cfg.world_x(x) + 38.0) / 24.0).hypot((cfg.world_z(z) - 18.0) / 19.0);
         vegetation *= smoothstep(1.0, 1.7, yard);
     }
-    if cfg.generator_version >= engine_core::environment::ENVIRONMENT_GENERATOR {
+    // A solved planet face takes rivers and lakes from its own solve.
+    let solved = super::basin::solved_face(cfg);
+    if cfg.generator_version >= engine_core::environment::ENVIRONMENT_GENERATOR && !solved {
         let drainage = super::drainage::sample(cfg, cfg.world_x(x), cfg.world_z(z));
-        if drainage.bank > 0.5 {
+        // A dry swale carries runoff only in storms: it keeps its turf. Bare
+        // mud there drew straight tan ribbons across meadows (133+).
+        let dry_swale = cfg.generator_version >= crate::surface::MEADOW_GROUND_VERSION && drainage.levee_m.is_none();
+        if drainage.bank > 0.5 && !dry_swale {
             surface = if s.slope > 0.2 { BlockId::Gravel } else { BlockId::Mud };
             filler = if s.sediment > 0.65 { BlockId::Clay } else { BlockId::Dirt };
             vegetation *= if drainage.water_m.is_some() { 0.0 } else { 0.6 };
         }
     }
-    if cfg.generator_version >= super::lakes::LAKES_GENERATOR {
+    if cfg.generator_version >= super::lakes::LAKES_GENERATOR && !solved {
         let lake = super::lakes::sample(cfg, cfg.world_x(x), cfg.world_z(z));
         match lake.kind {
             Some(kind) if lake.edge_m < 3.0 => {
@@ -1711,15 +1970,61 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
             _ => {}
         }
     }
-    if cfg.generator_version >= 47 {
+    if super::geo::corridor::active(cfg) {
+        // Gate 136: woods gather into regional masses instead of one stand
+        // noise everywhere. Wet ground and riparian bands pull a mass in, the
+        // 83 m stand noise breaks its edge, and hashed glades open its core.
+        // Open land between masses keeps only lone trees.
+        let wx = cfg.world_x(x);
+        let wz = cfg.world_z(z);
+        let woodland = |b| if matches!(b, Biome::Forest | Biome::Taiga | Biome::Rainforest
+            | Biome::LostPlateau | Biome::CloudForest | Biome::RedwoodGrove | Biome::FungalGrove) {1.0} else {0.0};
+        let woodland = woodland(s.background_biome) + (woodland(s.variant_biome) - woodland(s.background_biome)) * s.ecotone;
+        let regional = value_noise2(wx / 560.0, wz / 560.0, cfg.seed.wrapping_add(136_011)) * 0.62
+            + value_noise2(wx / 190.0, wz / 190.0, cfg.seed.wrapping_add(136_023)) * 0.38;
+        let edge = value_noise2(wx / 83.0, wz / 83.0, cfg.seed.wrapping_add(45131)) - 0.5;
+        let shelter = if self::woodland::active(cfg) {
+            self::woodland::shelter(cfg, wx, wz)
+        } else { 0.0 };
+        let mass = regional + edge * 0.22 + (s.moisture - 0.5) * 0.9 + woodland * 0.16 - s.slope.min(1.0) * 0.18 + shelter;
+        let core = smoothstep(0.50, 0.68, mass);
+        let glade = smoothstep(0.74, 0.80, value_noise2(wx / 41.0, wz / 41.0, cfg.seed.wrapping_add(136_037)));
+        let jungle = if s.biome == Biome::Rainforest { 1.25 } else { 1.0 };
+        let stand = (0.05 + 1.45 * core * jungle) * (1.0 - glade * 0.85);
+        // Open biomes hold forest blocks too, past a higher mass threshold,
+        // so meadow and savanna read as land between woods, not a lawn.
+        let open_cap = match s.biome {
+            Biome::Meadow => 1.05,
+            Biome::Savanna => 0.6,
+            Biome::Heathland => 0.35,
+            _ => 0.0,
+        };
+        let block_mass = regional + edge * 0.22 + (s.moisture - 0.5) * 0.35 - s.slope.min(1.0) * 0.18 + shelter;
+        let block = smoothstep(0.52, 0.64, block_mass) * (1.0 - glade * 0.85) * open_cap;
+        let base = vegetation;
+        vegetation *= stand.max(1.35 * s.riparian);
+        if base > 0.0 && (!self::woodland::active(cfg) || matches!(surface, BlockId::Grass | BlockId::Dirt | BlockId::GroveMoss)) {
+            vegetation = vegetation.max(block);
+        }
+        if woodland > 0.5 && surface == BlockId::Grass && core > 0.9 && glade < 0.1
+            && value_noise2(wx / 23.0, wz / 23.0, cfg.seed.wrapping_add(47131)) > 0.58 {
+            surface = BlockId::Dirt;
+        }
+    } else if cfg.generator_version >= 47 {
         // Wider occupied stands alternate with open glades. Keep all upstream
         // water, route, yard and site exclusions: zero density stays zero.
         let wx = cfg.world_x(x);
         let wz = cfg.world_z(z);
         let stand = value_noise2(wx / 83.0, wz / 83.0, cfg.seed.wrapping_add(45131));
-        let wooded = matches!(s.biome, Biome::Forest | Biome::Taiga | Biome::Rainforest);
+        let wooded = matches!(s.biome, Biome::Forest | Biome::Taiga | Biome::Rainforest
+            | Biome::LostPlateau | Biome::CloudForest | Biome::RedwoodGrove | Biome::FungalGrove);
         let envelope = smoothstep(0.28, 0.64, stand);
-        vegetation *= if wooded { 0.10 + 1.48 * envelope } else { 0.10 + 0.90 * envelope };
+        let woodland = if cfg.generator_version >= 95 {
+            let strength=|b| if matches!(b,Biome::Forest | Biome::Taiga | Biome::Rainforest
+                | Biome::LostPlateau | Biome::CloudForest | Biome::RedwoodGrove | Biome::FungalGrove) {1.0} else {0.0};
+            strength(s.background_biome)+(strength(s.variant_biome)-strength(s.background_biome))*s.ecotone
+        } else if wooded {1.0} else {0.0};
+        vegetation *= 0.10 + (0.90+0.58*woodland)*envelope;
         // Coherent exposed forest soil under closed stands, rather than a
         // uniform lawn. It is actual editable surface material, not a decal.
         if wooded && surface == BlockId::Grass && vegetation > 0.60 && stand > 0.60
@@ -1733,13 +2038,17 @@ fn column_from_landscape(cfg: &WorldSampleConfig, x: i32, z: i32, s: Landscape) 
             cfg.seed.wrapping_add(45131));
         vegetation *= 0.18 + 0.82 * smoothstep(0.25, 0.62, stand);
     }
-    let height = cfg.clamp_height(cfg.blocks_for_height(s.height));
-    ColumnSample {
+    let ledge = match outcrop {
+        Some(bed) if surface == bed && filler == bed => super::ground_exposure::ledge_blocks(cfg),
+        _ => 0,
+    };
+    let height = cfg.clamp_height(cfg.blocks_for_height(s.height) + ledge);
+    ColumnSample { deposit_m: 0.0, deposit_bed_surface: crate::BlockId::Stone,
         height,
         surface,
         filler,
-        vegetation_density: vegetation,
-        cave: super::cave_column(cfg, x, z, height),
+        vegetation_density: (vegetation * cfg.planet_settings().map_or(1.0, |s| (s.unit(7) * 2.0) as f32)).min(1.0),
+        cave: if far { Default::default() } else { super::cave_column(cfg, x, z, height) },
     }
 }
 
@@ -1842,7 +2151,7 @@ fn bedrock_v15(wx: f32, wy: f32, wz: f32, seed: u32, tect: &TectonicSample, vers
     }
 }
 
-fn sample_stratigraphic_bed(
+pub(crate) fn sample_stratigraphic_bed(
     wx: f32,
     wy: f32,
     wz: f32,
@@ -1952,7 +2261,18 @@ pub(super) fn geological_stratum(
     } else {
         rock
     };
-    super::ore_geology::deposit(cfg.seed, &tect, meters, below, host).unwrap_or(host)
+    let mineral_species = cfg.generator_version >= engine_voxel::ORE_MINERAL_GENERATOR;
+    let deposit = |seed| super::ore_geology::deposit(seed, &tect, meters, below, host, mineral_species);
+    if let Some(s) = cfg.planet_settings() {
+        let richness = s.unit(9) as f32 * 2.0;
+        // Coherent ore bodies, including at fractional richness; no per-voxel salt-and-pepper.
+        let cell = (meters / 32.0).floor().as_ivec3();
+        if super::hash3(cell.x, cell.y, cell.z, cfg.seed ^ 0x0136_0041) >= richness.min(1.0) { return host; }
+        let first = deposit(cfg.seed);
+        return first.or_else(|| (richness > 1.0 && super::hash3(cell.x, cell.y, cell.z, cfg.seed ^ 0x0136_0043) < richness - 1.0)
+            .then(|| deposit(cfg.seed ^ 0x0136_0047)).flatten()).unwrap_or(host);
+    }
+    deposit(cfg.seed).unwrap_or(host)
 }
 
 /// `tect` lets generator 34 share the tectonic sample it already took; `None`

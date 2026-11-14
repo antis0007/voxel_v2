@@ -13,7 +13,7 @@ mod plan;
 #[cfg(test)]
 mod tests;
 
-pub const LAKES_GENERATOR: u32 = 53;
+pub const LAKES_GENERATOR: u32 = crate::gates::LAKES_AND_CLIMATE_GENERATOR;
 /// Lattice for lakes, tarns, craters, oases and cenotes.
 const BIG_CELL: f32 = 288.0;
 /// Lattice for ponds and marsh pools.
@@ -88,7 +88,7 @@ pub struct LakeSample {
 pub const NONE: LakeSample =
     LakeSample { ceiling_m: f32::MAX, floor_m: None, floor_cap_m: 0.0, water_m: None, kind: None, edge_m: f32::MAX };
 
-type Key = (u32, u8, u32, bool, i32, i32);
+type Key = (u32, u8, u32, u64, bool, i32, i32);
 thread_local! {
     static LOCAL: RefCell<FastMap<Key, Option<Lake>>> = RefCell::new(FastMap::default());
 }
@@ -100,7 +100,7 @@ fn active(cfg: &WorldSampleConfig) -> bool {
 
 /// The lake a lattice cell owns, memoised per thread and across threads.
 fn lake(cfg: &WorldSampleConfig, small: bool, ix: i32, iz: i32) -> Option<Lake> {
-    let key = (cfg.seed, cfg.world_type as u8, cfg.generator_version, small, ix, iz);
+    let key = (cfg.seed, cfg.world_type.code(), cfg.generator_version, cfg.planet_fingerprint(), small, ix, iz);
     if let Some(v) = LOCAL.with(|m| m.borrow().get(&key).copied()) {
         return v;
     }

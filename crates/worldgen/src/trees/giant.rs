@@ -14,7 +14,7 @@ use glam::{Vec3, Vec3Swizzles};
 #[cfg(test)]
 mod tests;
 
-pub(crate) const VERSION: u32 = 52;
+pub(crate) const VERSION: u32 = crate::gates::GIANTS_AND_RUINS_GENERATOR;
 /// Tree cells per side of one giant lottery block (120 m).
 const BLOCK: i32 = 10;
 const CHANCE: f32 = 0.16;
@@ -104,6 +104,10 @@ fn evaluate(cfg: &WorldSampleConfig, (cell_x, cell_z): (i32, i32), (anchor_x, an
     }
     let climate = landscape::sample(cfg, anchor_x, anchor_z);
     use landscape::Biome;
+    if cfg.generator_version >= 94 && matches!(climate.biome,
+        Biome::CycadMarsh | Biome::FungalGrove | Biome::RedwoodGrove | Biome::LastShore) {
+        return None;
+    }
     if climate.temperature < 0.26
         || matches!(climate.biome, Biome::Desert | Biome::Badlands | Biome::Tundra | Biome::Alpine | Biome::Taiga
             | Biome::Ocean | Biome::Coast | Biome::Marsh | Biome::Fen)
@@ -134,7 +138,9 @@ fn evaluate(cfg: &WorldSampleConfig, (cell_x, cell_z): (i32, i32), (anchor_x, an
         Habit::Ancient => (30.0 + age * 9.0, 0.56, 0.28),
     };
     let reach = (top * reach).min(REACH_LIMIT);
-    if reserved(cfg, m, ground_y as f32 * scale, reach) {
+    if crate::ruins::tree_conflicts(cfg, m.x, m.z, reach * 1.6 + scale)
+        || reserved(cfg, m, ground_y as f32 * scale, reach)
+    {
         return None;
     }
     let fork_y = cfg.blocks_for_span(top * fork);
@@ -215,7 +221,7 @@ fn build(cfg: &WorldSampleConfig, tree: &TreeProfile) -> Skeleton {
     let d = design(cfg, tree);
     // Leaf relief may pass the fitted reach, and giants already fill the
     // 24 m tree search, so the fit gives it room inside the old bound.
-    let room = if cfg.generator_version >= foliage::VERSION { foliage::OUTSET } else { 0.0 };
+    let room = if foliage::enabled(cfg) { foliage::OUTSET } else { 0.0 };
     skeleton::build(cfg, tree, &d, tree.canopy_radius as f32 * scale - room, d.top)
 }
 

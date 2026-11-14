@@ -2,6 +2,8 @@ use glam::IVec3;
 
 /// Cells per chunk edge.
 pub const CHUNK_SIZE: i32 = 32;
+const CHUNK_SHIFT: u32 = CHUNK_SIZE.trailing_zeros();
+const _: () = assert!(CHUNK_SIZE > 0 && CHUNK_SIZE == 1 << CHUNK_SHIFT);
 /// Chunk plus a one-voxel halo on every side, as meshing reads it.
 pub const PADDED_CHUNK_SIZE: i32 = CHUNK_SIZE + 2;
 
@@ -15,8 +17,19 @@ pub fn floor_div(a: i32, b: i32) -> i32 {
     q
 }
 
+/// Signed right shift gives floor division even west or below the origin.
+#[inline]
+pub fn chunk_axis_from_world_block(block: i32) -> i32 {
+    block >> CHUNK_SHIFT
+}
+
+#[inline]
 pub fn chunk_coord_from_world_block(p: IVec3) -> IVec3 {
-    IVec3::new(floor_div(p.x, CHUNK_SIZE), floor_div(p.y, CHUNK_SIZE), floor_div(p.z, CHUNK_SIZE))
+    IVec3::new(
+        chunk_axis_from_world_block(p.x),
+        chunk_axis_from_world_block(p.y),
+        chunk_axis_from_world_block(p.z),
+    )
 }
 
 #[cfg(test)]

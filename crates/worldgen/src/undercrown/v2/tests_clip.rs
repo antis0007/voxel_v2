@@ -94,7 +94,7 @@ fn dressing_stands_clear_of_rock_and_every_other_feature() {
 
 #[test]
 fn generator_51_keeps_its_grid_dressing() {
-    let c = WorldSampleConfig { generator_version: super::settle::VERSION - 1, ..cfg_at(424242, Scale::HalfMeter) };
+    let c = WorldSampleConfig { generator_version: super::settle::VERSION - 1, ..cfg_at(crate::test_world::seed(), Scale::HalfMeter) };
     let plan = Plan::for_config(&c);
     let l = plan.v2.as_deref().unwrap_or_else(|| unreachable!("v2 layout"));
     assert!(l.features.iter().any(|f| matches!(f.kind, Kind::Mushrooms { .. })));
@@ -105,7 +105,7 @@ fn generator_51_keeps_its_grid_dressing() {
 #[ignore = "timing"]
 fn time_settle() {
     for version in [51u32, 52] {
-        let c = WorldSampleConfig { generator_version: version, ..cfg_at(424242, Scale::HalfMeter) };
+        let c = WorldSampleConfig { generator_version: version, ..cfg_at(crate::test_world::seed(), Scale::HalfMeter) };
         let t = std::time::Instant::now();
         for _ in 0..3 {
             let _ = super::layout::author(&c);

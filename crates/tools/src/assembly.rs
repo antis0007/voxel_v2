@@ -47,7 +47,7 @@ impl fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolAssembly {
     pub schema: String,
     pub parts: Vec<(PartKind, MaterialId)>,
@@ -76,6 +76,18 @@ impl ToolAssembly {
 
     pub fn schema_def(&self) -> Result<&'static ToolSchema, ToolError> {
         PARTS.schema(&self.schema).ok_or_else(|| ToolError::UnknownSchema(self.schema.clone()))
+    }
+
+    /// Shared authored behavior for every consumer. The schema ID is identity only.
+    pub fn capabilities(&self) -> Result<crate::capabilities::Capabilities, ToolError> {
+        Ok(self.schema_def()?.capabilities)
+    }
+
+    /// Preserve absolute remaining uses after authored stat rebalancing. A lower
+    /// maximum clamps an older save; a higher maximum never repairs the tool.
+    pub fn reconcile_durability(&mut self) -> Result<(), ToolError> {
+        self.durability_left = self.durability_left.min(self.stats()?.durability);
+        Ok(())
     }
 
     /// Parts with their rows; errors when a part disagrees with the schema.
@@ -121,10 +133,10 @@ impl ToolAssembly {
             }
         }
         Ok(ToolStats {
-            durability: (durability * handle).round().max(1.0) as u32,
-            mining_level,
-            mining_speed: speed,
-            attack,
+            durability: crate::modifiers::stat(self, "durability", durability * handle).round().max(1.0) as u32,
+            mining_level: crate::modifiers::stat(self, "mining_level", mining_level as f32).min(255.0) as u8,
+            mining_speed: crate::modifiers::stat(self, "mining_speed", speed),
+            attack: crate::modifiers::stat(self, "attack", attack),
             mass,
         })
     }
@@ -136,12 +148,15 @@ impl ToolAssembly {
         Ok(crate::traits::assemble_traits(&TRAITS, &roles))
     }
 
-    /// Material of the first head-role part; validation guarantees one exists.
+    /// Material of the first head-role part, else of the first part that sets mining level.
+    /// Validation guarantees one of the two exists; a shield's plate is its working part.
     pub fn head_material(&self) -> Result<&'static ToolMaterial, ToolError> {
-        self.resolved()?
-            .into_iter()
+        let schema = self.schema_def()?;
+        let parts = self.resolved()?;
+        parts.iter()
             .find(|(kind, _)| kind.role == PartRole::Head)
-            .map(|(_, material)| material)
+            .or_else(|| schema.parts.iter().zip(&parts).find(|(p, _)| p.weights.mining_level).map(|(_, part)| part))
+            .map(|(_, material)| *material)
             .ok_or_else(|| ToolError::UnknownSchema(self.schema.clone()))
     }
 
@@ -167,6 +182,23 @@ impl ToolAssembly {
 
     pub fn is_broken(&self) -> bool {
         self.durability_left == 0
+    }
+
+    /// A replacement preserves earned progress and absolute wear, never repairs for free.
+    pub fn replace_part(&mut self, index: usize, material: &MaterialId) -> Result<(), ToolError> {
+        self.resolved()?;
+        if index >= self.parts.len() {
+            return Err(ToolError::PartCount { expected: self.parts.len(), found: index + 1 });
+        }
+        let missing = self.stats()?.durability.saturating_sub(self.durability_left);
+        let broken = self.is_broken();
+        let mut next = self.clone();
+        next.parts[index].1 = material.clone();
+        let full = next.stats()?.durability;
+        next.traits()?;
+        next.durability_left = if broken { 0 } else { full.saturating_sub(missing) };
+        *self = next;
+        Ok(())
     }
 }
 

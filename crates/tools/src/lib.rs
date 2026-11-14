@@ -4,10 +4,13 @@
 //! waits for a future `SAVE_VERSION` bump (docs/adr/0022-part-based-tools.md).
 
 pub mod assembly;
+pub mod capabilities;
+pub mod modifiers;
 pub mod codec;
 pub mod materials;
 pub mod parts;
 pub mod progression;
+pub mod sprite;
 pub mod traits;
 
 #[cfg(test)]
@@ -32,9 +35,26 @@ fn load<T: serde::de::DeserializeOwned>(text: &str, file: &str, validate: impl F
     value
 }
 
-pub static PARTS: LazyLock<PartsFile> = LazyLock::new(|| load(PARTS_RON, "parts.ron", parts::validate));
-pub static MATERIALS: LazyLock<Vec<ToolMaterial>> =
-    LazyLock::new(|| load(MATERIALS_RON, "materials.ron", |rows: &Vec<ToolMaterial>| materials::validate(rows)));
+/// The same schema and semantic checks for the runtime, Forge and AI drafts.
+pub fn parse_parts(text: &str) -> Result<PartsFile, Vec<String>> {
+    let value: PartsFile = ron::from_str(text).map_err(|error| vec![error.to_string()])?;
+    let errors = parts::validate(&value);
+    if errors.is_empty() { Ok(value) } else { Err(errors) }
+}
+
+/// Parse tool-material drafts with the same schema and semantic checks as the runtime.
+pub fn parse_materials(text: &str) -> Result<Vec<ToolMaterial>, Vec<String>> {
+    let rows: Vec<ToolMaterial> = ron::from_str(text).map_err(|error| vec![error.to_string()])?;
+    let errors = materials::validate(&rows);
+    if errors.is_empty() { Ok(rows) } else { Err(errors) }
+}
+
+pub static PARTS: LazyLock<PartsFile> = LazyLock::new(|| {
+    parse_parts(PARTS_RON).unwrap_or_else(|errors| panic!("assets/tools/parts.ron: {}", errors.join("\n")))
+});
+pub static MATERIALS: LazyLock<Vec<ToolMaterial>> = LazyLock::new(|| {
+    parse_materials(MATERIALS_RON).unwrap_or_else(|errors| panic!("assets/tools/materials.ron: {}", errors.join("\n")))
+});
 pub static TRAITS: LazyLock<Vec<TraitRule>> =
     LazyLock::new(|| load(TRAITS_RON, "traits.ron", |rows: &Vec<TraitRule>| traits::validate(rows)));
 
@@ -54,3 +74,9 @@ pub fn content_fingerprint() -> u32 {
         .flat_map(|text| text.replace('\r', "").into_bytes())
         .fold(0x9e37_79b9u32, |acc, byte| engine_core::hash::hash_u32(acc ^ u32::from(byte)))
 }
+
+#[cfg(test)]
+mod capability_tests;
+
+#[cfg(test)]
+mod material_tests;

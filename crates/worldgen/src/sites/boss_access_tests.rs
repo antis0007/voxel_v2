@@ -8,7 +8,7 @@ const SCALES: [VoxelScalePreset; 3] =
     [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter, VoxelScalePreset::QuarterMeter];
 
 fn cfg(version: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: version, seed: 424242, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: version, seed: crate::test_world::seed(), world_type: WorldType::Hills, voxel_scale }
 }
 
 fn shrines(cfg: &WorldSampleConfig) -> Vec<(IVec3, Shrine)> {

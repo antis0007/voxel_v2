@@ -238,7 +238,9 @@ impl Wing {
             if stone && p.y >= self.top() - band && p.y < self.top() {
                 return Some(self.pal.frame);
             }
-            if matches!(self.windows, Windows::Panes | Windows::Slits) {
+            // Projecting sills and lintels land in front of the opening at fine
+            // scales and float; connected wings keep the frame inside the wall.
+            if !self.connected && matches!(self.windows, Windows::Panes | Windows::Slits) {
                 let centre = (bay - self.cell * 0.5).abs();
                 let rel = fy - v.max(0.4);
                 let top = if self.windows == Windows::Slits {

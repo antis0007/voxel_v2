@@ -36,7 +36,7 @@ fn ruin_dressing_keeps_every_door_reachable_at_each_scale() {
 
 /// Counts of ruin blocks inside the rooms of a few planned complexes.
 fn census(scale: VoxelScalePreset) -> [usize; 3] {
-    let c = cfg(4242, scale);
+    let c = cfg(crate::test_world::seed(), scale);
     let height = c.blocks_for_height(1000.0);
     let v = c.voxel_meters();
     let mut n = [0usize; 3];
@@ -73,7 +73,7 @@ fn ruin_shows_at_fine_scales_and_coarse_worlds_keep_their_shapes() {
 
 #[test]
 fn generator_51_rooms_have_no_ruin_layer() {
-    let c = WorldSampleConfig { generator_version: 51, ..cfg(4242, VoxelScalePreset::QuarterMeter) };
+    let c = WorldSampleConfig { generator_version: 51, ..cfg(crate::test_world::seed(), VoxelScalePreset::QuarterMeter) };
     let height = c.blocks_for_height(1000.0);
     for (_, d) in planned(&c, 2) {
         for r in &d.rooms {
@@ -91,7 +91,7 @@ fn generator_51_rooms_have_no_ruin_layer() {
 
 #[test]
 fn quarter_metre_sampling_is_deterministic() {
-    let c = cfg(91, VoxelScalePreset::QuarterMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::QuarterMeter);
     let (_, d) = planned(&c, 1).remove(0);
     let (_, e) = planned(&c, 1).remove(0);
     let height = c.blocks_for_height(1000.0);

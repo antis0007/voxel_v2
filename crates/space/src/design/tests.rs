@@ -8,6 +8,24 @@ fn home() -> System {
 }
 
 #[test]
+fn authored_home_system_is_coherent() {
+    let s = home();
+    let issues: Vec<_> = audit(&s).into_iter().map(|(b, i)| (s.name(b).to_owned(), i)).collect();
+    assert!(issues.is_empty(), "{issues:?}");
+}
+
+#[test]
+fn default_moon_matches_the_authored_moon() {
+    let s = home();
+    let (home, moon) = (s.id("home").unwrap(), s.id("moon").unwrap());
+    let m = design_moon(&s, home, &MoonDesign::default()).unwrap();
+    println!("{m:?}");
+    assert!((m.mass_kg / s.mass(moon) - 1.0).abs() < 1e-3);
+    assert!((s.radius(moon) - MoonDesign::default().radius_m).abs() < 1e-9);
+    assert!((s.elements(moon).unwrap().a / m.a_m - 1.0).abs() < 1e-3);
+}
+
+#[test]
 fn rocky_density_moon_is_torn_apart() {
     let s = home();
     let home = s.id("home").unwrap();

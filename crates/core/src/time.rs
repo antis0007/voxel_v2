@@ -39,7 +39,7 @@ impl Budget {
     /// A sub-budget of `d` from now, or unbounded when `self` is.
     pub fn child(self, d: std::time::Duration) -> Budget {
         match self.deadline {
-            Some(_) => Budget::wall(d),
+            Some(_) => Budget::wall(d).min(self),
             None => Budget::UNBOUNDED,
         }
     }

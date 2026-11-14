@@ -12,11 +12,13 @@ use crate::{BlockId as B, WorldSampleConfig};
 use glam::Vec3;
 
 mod carve;
+mod arcades;
 mod chasm;
 mod collapse;
 mod dress;
 mod escape;
 mod inhabited;
+mod industry;
 mod fine;
 mod footprint;
 mod gallery;
@@ -28,8 +30,10 @@ mod maze;
 mod outline;
 mod passage;
 mod plan;
+pub mod quest;
 mod ruin;
 mod siting;
+pub mod sprawl;
 mod starry;
 mod treasure;
 #[cfg(test)]
@@ -47,7 +51,7 @@ pub(crate) fn fit_terrain(cfg: &WorldSampleConfig, c: Complex) -> Option<Complex
 }
 
 /// First generator with job-driven complexes.
-pub const VERSION: u32 = 32;
+pub const VERSION: u32 = crate::gates::DUNGEON_V2_GENERATOR;
 /// First generator with arched corridors, wall niches, pillared galleries
 /// and upper galleries in tall rooms.
 pub const RICH: u32 = 36;
@@ -229,6 +233,22 @@ impl Corr {
     }
 }
 
+/// Stone within two metres of a quest door is sealed, so a door cannot be dug around.
+fn door_guard(k: &Corr, m: Vec3) -> bool {
+    matches!(k.plug, Some(B::LockedDoor | B::BossDoor)) && {
+        let along = if k.along_x { m.x } else { m.z };
+        (along - (k.a0 + k.a1) * 0.5).abs() < 2.0
+    }
+}
+
+/// The entry room's reading lectern: one floor voxel near the room's first corner.
+fn quest_lectern(r: &Room, m: Vec3, v: f32) -> bool {
+    let snap = |a: f32| (a / v).floor() * v;
+    let (x, z) = (snap(r.x0 + 1.5), snap(r.z0 + 1.5));
+    let fy = m.y - r.floor;
+    (x..x + v).contains(&m.x) && (z..z + v).contains(&m.z) && (0.0..v).contains(&fy)
+}
+
 pub struct Complex {
     /// Generator version the complex was planned for.
     pub version: u32,
@@ -246,6 +266,8 @@ pub struct Complex {
     pub objective: Option<usize>,
     /// Two clear floor points for fights: near the core, and in the reveal hall.
     pub anchors: [Vec3; 2],
+    /// Locks, keys and the lectern (generator 294); empty before.
+    pub quest: quest::Quest,
     pub min: Vec3,
     pub max: Vec3,
     pub index: Index,
@@ -281,6 +303,9 @@ impl Complex {
         for &id in ids.iter().filter(|id| *id & CORR_BIT == 0) {
             let r = &self.rooms[id as usize];
             if r.inside(m) {
+                if self.quest.lectern == Some(id as usize) && quest_lectern(r, m, v) {
+                    return Some(B::Lectern);
+                }
                 return Some(kit::room(self, r, m, v));
             }
         }
@@ -290,7 +315,7 @@ impl Complex {
                 let b = kit::corridor(self, c, m, v);
                 // A corridor's roof and floor never open a seam in a seal.
                 let sealed = || ids.iter().any(|&id| id & CORR_BIT == 0 && self.rooms[id as usize].sealed && self.rooms[id as usize].in_shell(m));
-                return Some(if b.is_solid() && sealed() { B::TombStone } else { b });
+                return Some(if b.is_solid() && !b.is_seal() && (door_guard(c, m) || sealed()) { B::TombStone } else { b });
             }
         }
         for &id in ids.iter().filter(|id| *id & CORR_BIT == 0) {
@@ -302,6 +327,9 @@ impl Complex {
         for &id in ids.iter().filter(|id| *id & CORR_BIT != 0) {
             let k = &self.corrs[(id & !CORR_BIT) as usize];
             if k.in_shell(m) {
+                if door_guard(k, m) {
+                    return Some(B::TombStone);
+                }
                 return Some(if self.version >= RICH { passage::shell(self, k, m, v) } else { kit::stone(self, m, v) });
             }
         }
@@ -349,3 +377,5 @@ impl Complex {
         best
     }
 }
+/// Extra side-room chests change generated blocks and require a new world.
+pub const TREASURE_VERSION: u32 = crate::planetary::JOINTED_CANYON_GENERATOR;

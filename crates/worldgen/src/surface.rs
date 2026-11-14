@@ -13,15 +13,26 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 mod routes;
+mod roads;
+mod planet_roads;
+pub(super) const SPAWN_ROAD_VERSION: u32 = crate::ruins::VERSION;
+/// Trail beds fray into packed earth and dry drainage swales keep their turf.
+pub const MEADOW_GROUND_VERSION: u32 = 133;
+/// Blocked links survey a graded path around the slope, and the road web keeps
+/// only links no third node sits between.
+pub const TRAIL_SURVEY_VERSION: u32 = 186;
 
 /// Native review camera for the first surveyed crossing, in world metres.
 pub fn bridge_review_view(cfg: &WorldSampleConfig) -> Option<(Vec3, Vec3)> {
-    let plan = plan(cfg);
-    let trail = plan.trails.iter().find(|t| !t.bridges.is_empty())?;
+    let trail = if planet_roads::active(cfg) {
+        planet_roads::first_bridge(cfg)
+    } else {
+        plan(cfg).trails.iter().find(|t| !t.bridges.is_empty()).cloned()
+    }?;
     let span = trail.bridges.first()?;
     let t = (span.start + span.end) * 0.5;
     let (x,z) = trail.at(t);
-    let y = routes::height_at(trail,t);
+    let y = routes::height_at(&trail,t);
     let (tx,tz) = trail.tangent(t);
     let target = Vec3::new(x,y,z);
     Some((target + Vec3::new(-tz*24.0-tx*12.0,12.0,tx*24.0-tz*12.0), target))
@@ -51,6 +62,10 @@ struct Trail {
     /// Walkable surface heights, sampled along the curve (generator 37+).
     grade: Vec<f32>,
     bridges: Vec<routes::Span>,
+    /// Surveyed centre line; empty for the quadratic curve through a, c, b.
+    path: Vec<(f32, f32)>,
+    /// Arc length at each `path` point, metres.
+    arc: Vec<f32>,
 }
 
 impl Trail {
@@ -83,10 +98,47 @@ impl Trail {
             max_z,
             grade: Vec::new(),
             bridges: Vec::new(),
+            path: Vec::new(),
+            arc: Vec::new(),
         }
     }
 
+    /// A trail along a surveyed centre line of at least two points.
+    fn polyline(path: Vec<(f32, f32)>, seed: u32, half_width: f32) -> Self {
+        let (a, b) = (path[0], path[path.len() - 1]);
+        let mut trail = Self::new(a.0, a.1, b.0, b.1, seed, half_width);
+        let mut arc = Vec::with_capacity(path.len());
+        let mut total = 0.0;
+        for (i, p) in path.iter().enumerate() {
+            if i > 0 {
+                total += (p.0 - path[i - 1].0).hypot(p.1 - path[i - 1].1);
+            }
+            arc.push(total);
+            trail.min_x = trail.min_x.min(p.0 - half_width - 2.0);
+            trail.max_x = trail.max_x.max(p.0 + half_width + 2.0);
+            trail.min_z = trail.min_z.min(p.1 - half_width - 2.0);
+            trail.max_z = trail.max_z.max(p.1 + half_width + 2.0);
+        }
+        trail.path = path;
+        trail.arc = arc;
+        trail
+    }
+
+    /// Segment index and fraction along it at parameter `t` of a polyline.
+    fn segment(&self, t: f32) -> (usize, f32) {
+        let total = self.arc[self.arc.len() - 1];
+        let s = t.clamp(0.0, 1.0) * total;
+        let i = self.arc.partition_point(|&a| a <= s).clamp(1, self.arc.len() - 1) - 1;
+        let span = (self.arc[i + 1] - self.arc[i]).max(1e-6);
+        (i, ((s - self.arc[i]) / span).clamp(0.0, 1.0))
+    }
+
     fn at(&self, t: f32) -> (f32, f32) {
+        if !self.path.is_empty() {
+            let (i, f) = self.segment(t);
+            let (a, b) = (self.path[i], self.path[i + 1]);
+            return (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+        }
         let u = 1.0 - t;
         (
             u * u * self.ax + 2.0 * u * t * self.cx + t * t * self.bx,
@@ -95,6 +147,13 @@ impl Trail {
     }
 
     fn derivative(&self, t: f32) -> (f32, f32) {
+        if !self.path.is_empty() {
+            let (i, _) = self.segment(t);
+            let (a, b) = (self.path[i], self.path[i + 1]);
+            let total = self.arc[self.arc.len() - 1];
+            let span = (self.arc[i + 1] - self.arc[i]).max(1e-6);
+            return ((b.0 - a.0) / span * total, (b.1 - a.1) / span * total);
+        }
         let u = 1.0 - t;
         (
             2.0 * u * (self.cx - self.ax) + 2.0 * t * (self.bx - self.cx),
@@ -103,6 +162,23 @@ impl Trail {
     }
 
     fn nearest(&self, x: f32, z: f32) -> (f32, f32) {
+        if !self.path.is_empty() {
+            let total = self.arc[self.arc.len() - 1].max(1e-6);
+            let mut best = (f32::MAX, 0.0);
+            for (i, w) in self.path.windows(2).enumerate() {
+                let (ax, az, bx, bz) = (w[0].0, w[0].1, w[1].0, w[1].1);
+                if x < ax.min(bx) - best.0 || x > ax.max(bx) + best.0 || z < az.min(bz) - best.0 || z > az.max(bz) + best.0 {
+                    continue;
+                }
+                let (dx, dz) = (bx - ax, bz - az);
+                let f = (((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz).max(1e-6)).clamp(0.0, 1.0);
+                let d = (x - ax - dx * f).hypot(z - az - dz * f);
+                if d < best.0 {
+                    best = (d, (self.arc[i] + (self.arc[i + 1] - self.arc[i]) * f) / total);
+                }
+            }
+            return best;
+        }
         let dx = self.bx - self.ax;
         let dz = self.bz - self.az;
         let len2 = (dx * dx + dz * dz).max(0.001);
@@ -121,6 +197,9 @@ impl Trail {
     }
 
     fn length(&self) -> f32 {
+        if let Some(&total) = self.arc.last() {
+            return total;
+        }
         (self.bx - self.ax).hypot(self.bz - self.az)
     }
 
@@ -220,6 +299,19 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
             trails.push(Trail::new(0.0, 0.0, x, z, seed, 1.55));
         }
 
+    }
+
+    // A fitted approach makes the district entrance discoverable from the
+    // ordinary surface network. Steep/unbuildable approaches are rejected.
+    if crate::fernwake::active(cfg) {
+        let target = (292.5_f32, 177.0_f32);
+        let start = trails.iter().flat_map(|t| [(t.ax,t.az),(t.bx,t.bz)])
+            .min_by(|a,b| ((a.0-target.0).hypot(a.1-target.1)).total_cmp(&(b.0-target.0).hypot(b.1-target.1)))
+            .unwrap_or((0.0,0.0));
+        let approach = Trail::new(start.0,start.1,target.0,target.1,cfg.seed ^ 0x7fea_0178,1.8);
+        if let Some(approach) = routes::fit(cfg,approach,None,Some(crate::geo::site_floor(cfg,target.0,target.1))) {
+            trails.push(approach);
+        }
     }
 
     // Furnish the route with real places to stop: a cairn, a camp, a shrine,
@@ -361,6 +453,9 @@ pub(super) fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32, terrain_top:
     if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
         return None;
     }
+    if planet_roads::active(cfg) {
+        return planet_roads::block(cfg, p, terrain_top);
+    }
     let v = cfg.voxel_meters();
     let m = (p.as_vec3() + Vec3::splat(0.5)) * v;
     let depth = terrain_top - m.y;
@@ -386,6 +481,15 @@ pub(super) fn block(cfg: &WorldSampleConfig, p: IVec3, height: i32, terrain_top:
             }
     }
 
+    if cfg.generator_version >= roads::VERSION {
+        // Where two roads overlap the nearer centreline paints, so a link
+        // beside a spawn trail is not overwritten by that trail's shoulder.
+        let old = routes::nearest(plan.trails.iter(), m);
+        if let Some(b) = roads::block(cfg, m, terrain_top, old.map(|(d, _, _)| d)) {
+            return Some(b);
+        }
+        return old.and_then(|o| routes::paint(cfg, o, m, terrain_top));
+    }
     if cfg.generator_version >= 37 {
         return routes::block(cfg, &plan.trails, m, terrain_top);
     }
@@ -560,12 +664,18 @@ pub(super) fn trail_clears(cfg: &WorldSampleConfig, m: Vec3) -> bool {
     if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
         return false;
     }
+    if planet_roads::active(cfg) {
+        return crate::planet_freight::clears(cfg, m) || planet_roads::clears(cfg, m);
+    }
     let plan = plan(cfg);
     if plan
         .trails
         .iter()
         .any(|t| t.nearest(m.x, m.z).0 < t.half_width + 1.6)
     {
+        return true;
+    }
+    if roads::clears(cfg, m) {
         return true;
     }
     if plan
@@ -580,11 +690,29 @@ pub(super) fn trail_clears(cfg: &WorldSampleConfig, m: Vec3) -> bool {
         .any(|n| (m.x - n.x).hypot(m.z - n.z) < 6.5)
 }
 
+/// Camera along a planned link. Planet reviews address Anchor district cells.
+pub(crate) fn road_review_view(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<(Vec3, Vec3)> {
+    let trail = if planet_roads::active(cfg) {
+        planet_roads::first_link(cfg, rx, rz)
+    } else {
+        roads::first_link(cfg, rx, rz)
+    }?;
+    let t0 = (20.0 / trail.length()).min(0.4);
+    let t1 = (t0 + 0.4).min(1.0);
+    let (ex, ez) = trail.at(t0);
+    let (tx, tz) = trail.at(t1);
+    // Stand above the road cut as well as the road, so the same pose is valid
+    // at generators with no road: the player is never placed in the hillside.
+    let ground = |x: f32, z: f32| cfg.world_y(sample_column(cfg, cfg.blocks_for_height(x), cfg.blocks_for_height(z)).height + 1);
+    let eye_y = routes::height_at(&trail, t0).max(ground(ex, ez)) + 2.4;
+    Some((Vec3::new(ex, eye_y, ez), Vec3::new(tx, routes::height_at(&trail, t1) + 0.5, tz)))
+}
+
 /// Diegetic name for the biome/location HUD. These labels are intentionally
 /// local and small; they give the surface a human scale without inventing a
 /// second quest layer.
 pub(super) fn location(cfg: &WorldSampleConfig, m: Vec3) -> Option<&'static str> {
-    if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat {
+    if cfg.generator_version < VERSION || cfg.world_type == WorldType::Superflat || planet_roads::active(cfg) {
         return None;
     }
     // Authored places own their labels; a trail may run up to the door without
@@ -627,8 +755,9 @@ mod tests {
 
     fn config() -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version: VERSION,
-            seed: 17,
+            seed: crate::test_world::seed(),
             world_type: WorldType::Hills,
             voxel_scale: VoxelScalePreset::OneMeter,
         }
@@ -732,3 +861,7 @@ mod tests {
         assert_eq!(floor, Some(B::Cobblestone), "nook has no floor");
     }
 }
+
+#[cfg(test)]
+#[path = "surface/survey_tests.rs"]
+mod survey_tests;

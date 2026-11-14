@@ -4,7 +4,7 @@ use engine_core::VoxelScalePreset;
 use glam::IVec3;
 
 fn cfg(seed: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: LAKES_GENERATOR, seed, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: LAKES_GENERATOR, seed, world_type: WorldType::Hills, voxel_scale }
 }
 
 /// Lakes owned by big and small lattice cells within `cells` of the origin.
@@ -30,7 +30,7 @@ fn column(c: &WorldSampleConfig, x: i32, z: i32) -> (f32, Option<f32>) {
 
 #[test]
 fn lake_kinds_vary_and_levels_sit_below_their_rims() {
-    let c = cfg(2_738_958_700, VoxelScalePreset::OneMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter);
     let lakes = lakes_near(&c, 8);
     let mut kinds = std::collections::BTreeSet::new();
     for l in &lakes {
@@ -46,7 +46,7 @@ fn lake_kinds_vary_and_levels_sit_below_their_rims() {
 /// sits next to a dry one whose ground is over a metre below its surface.
 #[test]
 fn lake_water_never_stands_above_dry_ground() {
-    let c = cfg(2_738_958_700, VoxelScalePreset::OneMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter);
     let (mut wet, mut walls, mut worst, mut lakes) = (0, 0, 0.0f32, 0);
     for l in lakes_near(&c, 6).into_iter().filter(|l| l.kind != LakeKind::MarshPool).take(24) {
         lakes += 1;
@@ -76,7 +76,7 @@ fn lake_water_never_stands_above_dry_ground() {
 
 #[test]
 fn lake_water_voxels_fill_from_the_bed() {
-    let c = cfg(2_738_958_700, VoxelScalePreset::OneMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter);
     let l = lakes_near(&c, 6).into_iter().find(|l| l.kind == LakeKind::Lake).expect("a lake near spawn");
     let (x, z) = (l.centre.x as i32, l.centre.y as i32);
     let (top, water) = column(&c, x, z);
@@ -88,7 +88,7 @@ fn lake_water_voxels_fill_from_the_bed() {
 
 #[test]
 fn lake_plan_ignores_voxel_size_and_negative_coordinates() {
-    let (coarse, fine) = (cfg(173, VoxelScalePreset::OneMeter), cfg(173, VoxelScalePreset::QuarterMeter));
+    let (coarse, fine) = (cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter), cfg(crate::test_world::seed(), VoxelScalePreset::QuarterMeter));
     let mut seen = 0;
     for z in (-1500..1500).step_by(41) {
         for x in (-1500..1500).step_by(41) {
@@ -103,7 +103,7 @@ fn lake_plan_ignores_voxel_size_and_negative_coordinates() {
 #[test]
 fn historical_generators_have_no_lakes() {
     // Generator 52 terrain must stay byte-identical, so no lake may appear in it.
-    let c = WorldSampleConfig { generator_version: LAKES_GENERATOR - 1, ..cfg(173, VoxelScalePreset::OneMeter) };
+    let c = WorldSampleConfig { generator_version: LAKES_GENERATOR - 1, ..cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter) };
     for z in (-900..900).step_by(37) {
         for x in (-900..900).step_by(37) {
             assert!(sample(&c, x as f32, z as f32).kind.is_none(), "lake at {x},{z} in a historical world");

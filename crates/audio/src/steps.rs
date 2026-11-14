@@ -1,4 +1,5 @@
 //! Footstep and block contact sounds: a few synthesized renders per surface.
+use crate::binaural::Ears;
 use crate::dsp::{advance, sine, Noise, Svf};
 use recipe::{recipe, shaped};
 
@@ -145,14 +146,27 @@ pub(crate) struct StepPlay {
     pub(crate) contact: Contact,
     pub(crate) surface: Surface,
     pub(crate) variant: usize,
-    pub(crate) left: f32,
-    pub(crate) right: f32,
+    pub(crate) gain: f32,
+    pub(crate) ears: Ears,
+    /// Samples of flight time before the sound arrives.
+    pub(crate) wait: f32,
     pub(crate) rate: f32,
 }
 
+struct Voice {
+    play: StepPlay,
+    cursor: f32,
+    /// Release gain; a stolen voice ramps to zero instead of cutting.
+    fade: f32,
+    dying: bool,
+}
+
+/// A stolen voice fades over about 4 ms.
+const RELEASE: f32 = 1.0 / 192.0;
+
 pub(crate) struct Steps {
     bank: Vec<Vec<f32>>,
-    voices: Vec<(StepPlay, f32)>,
+    voices: Vec<Voice>,
 }
 
 impl Steps {
@@ -160,11 +174,19 @@ impl Steps {
         Self { bank: bank(rate), voices: Vec::with_capacity(MAX_VOICES) }
     }
 
+    /// Starts a voice; with every slot busy the quietest one is released, not cut.
     pub(crate) fn start(&mut self, play: StepPlay) {
-        if self.voices.len() >= MAX_VOICES {
+        let live = self.voices.iter().filter(|v| !v.dying).count();
+        if live >= MAX_VOICES {
+            let quietest = self.voices.iter_mut().filter(|v| !v.dying).min_by(|a, b| a.play.gain.total_cmp(&b.play.gain));
+            if let Some(voice) = quietest {
+                voice.dying = true;
+            }
+        }
+        if self.voices.len() >= MAX_VOICES * 2 {
             self.voices.remove(0);
         }
-        self.voices.push((play, 0.0));
+        self.voices.push(Voice { play, cursor: 0.0, fade: 1.0, dying: false });
     }
 
     pub(crate) fn clear(&mut self) {
@@ -173,19 +195,31 @@ impl Steps {
 
     pub(crate) fn frame(&mut self) -> [f32; 2] {
         let mut out = [0.0f32; 2];
-        for (play, cursor) in &mut self.voices {
+        for voice in &mut self.voices {
+            let Voice { play, cursor, fade, dying } = voice;
+            if play.wait > 0.0 {
+                play.wait -= 1.0;
+                continue;
+            }
             let sample = &self.bank[index(play.contact, play.surface, play.variant)];
             let i = *cursor as usize;
             if i + 1 < sample.len() {
+                if *dying {
+                    *fade = (*fade - RELEASE).max(0.0);
+                }
                 let value = sample[i] + (sample[i + 1] - sample[i]) * cursor.fract();
-                out[0] += value * play.left;
-                out[1] += value * play.right;
+                let ears = play.ears.process(value * play.gain * *fade);
+                out[0] += ears[0];
+                out[1] += ears[1];
                 *cursor += play.rate;
+                if *fade <= 0.0 {
+                    *cursor = f32::MAX;
+                }
             } else {
                 *cursor = f32::MAX;
             }
         }
-        self.voices.retain(|(_, cursor)| *cursor < f32::MAX);
+        self.voices.retain(|v| v.cursor < f32::MAX);
         out
     }
 }
@@ -236,13 +270,48 @@ mod tests {
     }
 
     #[test]
+    fn a_stolen_voice_releases_the_quietest() {
+        let mut steps = Steps::new(48_000);
+        let play = |gain: f32| StepPlay { contact: Contact::Break, surface: Surface::Metal, variant: 1, gain, ears: Ears::default(), wait: 0.0, rate: 1.0 };
+        for i in 0..MAX_VOICES {
+            steps.start(play(0.2 + 0.1 * i as f32));
+        }
+        steps.start(play(1.0));
+        let dying: Vec<f32> = steps.voices.iter().filter(|v| v.dying).map(|v| v.play.gain).collect();
+        assert_eq!(dying, [0.2], "only the quietest is released");
+        for _ in 0..400 {
+            steps.frame();
+        }
+        assert!(steps.voices.iter().all(|v| !v.dying), "the released voice is gone");
+    }
+
+    #[test]
+    fn a_release_ramps_from_the_untouched_waveform_to_silence() {
+        let play = || StepPlay { contact: Contact::Break, surface: Surface::Metal, variant: 1, gain: 0.5, ears: Ears::default(), wait: 0.0, rate: 1.0 };
+        let (mut kept, mut released) = (Steps::new(48_000), Steps::new(48_000));
+        kept.start(play());
+        released.start(play());
+        for _ in 0..200 {
+            kept.frame();
+            released.frame();
+        }
+        released.voices[0].dying = true;
+        let (a, b) = (kept.frame()[0], released.frame()[0]);
+        assert!((a - b).abs() <= 0.02 * a.abs() + 1.0e-4, "first frame of the release {a} vs {b}");
+        for _ in 0..200 {
+            released.frame();
+        }
+        assert!(released.voices.is_empty());
+    }
+
+    #[test]
     fn step_voices_finish_and_are_bounded() {
         let mut steps = Steps::new(48_000);
         for i in 0..10 {
             let contact = Contact::ALL[i % Contact::COUNT];
-            steps.start(StepPlay { contact, surface: Surface::ALL[i % 8], variant: i, left: 0.5, right: 0.5, rate: 1.0 });
+            steps.start(StepPlay { contact, surface: Surface::ALL[i % 8], variant: i, gain: 0.5, ears: Ears::default(), wait: 0.0, rate: 1.0 });
         }
-        assert_eq!(steps.voices.len(), MAX_VOICES);
+        assert_eq!(steps.voices.iter().filter(|v| !v.dying).count(), MAX_VOICES);
         for _ in 0..48_000 {
             steps.frame();
         }

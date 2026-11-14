@@ -75,7 +75,7 @@ fn gpu_64_bit_helpers_match_wide_arithmetic() {
     let submission = queue.submit([encoder.finish()]);
     staging.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map"));
     device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None }).expect("poll");
-    let mapped = staging.slice(..).get_mapped_range().to_vec();
+    let mapped = staging.slice(..).get_mapped_range().expect("GPU readback range").to_vec();
     for (i, case) in cases.iter().enumerate() {
         let word = |n: usize| u32::from_le_bytes(mapped[(4 * i + n) * 4..][..4].try_into().unwrap());
         let (a, b, c) = (u128::from(case[0]), u128::from(case[1]), u128::from(case[2]));

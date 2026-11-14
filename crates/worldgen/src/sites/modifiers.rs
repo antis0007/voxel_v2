@@ -5,10 +5,66 @@
 //! modifier for gameplay effects.
 use super::super::{BlockId as B, WorldSampleConfig};
 use engine_core::hash::hash_u32;
-use glam::IVec3;
+use glam::{IVec3, Vec3, Vec3Swizzles};
+
+/// A fixed influence volume; querying it never generates terrain.
+#[derive(Clone, Copy)]
+pub struct Influence {
+    pub at: Vec3,
+    pub radius_m: f32,
+    pub modifier: SiteModifier,
+}
+
+/// The modifier-bearing subset of `sites::encounters`, with extra reach for
+/// background prefetch. Keep the original per-anchor radii for exact entry/exit.
+pub fn influences(cfg: &WorldSampleConfig, player: Vec3, margin: f32) -> Vec<Influence> {
+    let mut out = Vec::new();
+    if cfg.generator_version < MODIFIER_GENERATOR_VERSION
+        || cfg.world_type == super::WorldType::Superflat
+    { return out; }
+    // These are ground ruins (non-starter sites also reject ground >= 460 m),
+    // not orbital habitats. Even their tallest anchor plus its influence cannot
+    // reach above the build volume with this conservative 128 m allowance.
+    if player.y > cfg.world_y(cfg.max_world_y()) + 128.0 + margin { return out; }
+    let span = super::region_span(cfg);
+    let rx = (player.x / span).round() as i32;
+    let rz = (player.z / span).round() as i32;
+    let mut add = |id: IVec3, at: Vec3, radius_m: f32| {
+        let modifier = site_modifier(cfg, (id.x, id.y));
+        if modifier != SiteModifier::None && at.distance_squared(player) < (radius_m + margin).powi(2) {
+            out.push(Influence { at, radius_m, modifier });
+        }
+    };
+    for x in rx - 1..=rx + 1 {
+        for z in rz - 1..=rz + 1 {
+            let (_, centre, admitted) = super::site_roll(cfg, x, z);
+            // Includes the starter's displaced vault, boss courts and the
+            // 42 m satellite cache, plus the largest encounter radius.
+            if !admitted || centre.distance_squared(player.xz()) > (160.0 + margin).powi(2) { continue; }
+            let Some(s) = super::site(cfg, x, z) else { continue; };
+            add(IVec3::new(x, z, 0), super::encounter_anchor(cfg, s, x, z), 68.0);
+            if s.starter { continue; }
+            if cfg.generator_version >= 16 && !(s.kind == 1 && cfg.generator_version >= 26) {
+                for layer in 1..=3 {
+                    add(IVec3::new(x, z + layer * 1000, 0),
+                        Vec3::new(s.x + 3.0, s.ground - layer as f32 * 22.0 + 1.2, s.z - 6.0), 36.0);
+                }
+            }
+            for (salt, threshold, reach, kind) in [(4401, 0.28, 16.0, 2), (4407, 0.45, 42.0, 3)] {
+                let roll = super::hash2(x, z, s.seed.wrapping_add(salt));
+                if roll > threshold {
+                    let angle = roll * std::f32::consts::TAU;
+                    add(IVec3::new(x, z, kind),
+                        Vec3::new(s.x + angle.cos() * reach, s.ground + 1.0, s.z + angle.sin() * reach), 68.0);
+                }
+            }
+        }
+    }
+    out
+}
 
 /// First generator version that rolls site modifiers.
-pub const MODIFIER_GENERATOR_VERSION: u32 = 32;
+pub const MODIFIER_GENERATOR_VERSION: u32 = crate::gates::DUNGEON_V2_GENERATOR;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SiteModifier {
@@ -161,8 +217,9 @@ mod tests {
 
     fn cfg(v: u32) -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version: v,
-            seed: 1234,
+            seed: crate::test_world::seed(),
             world_type: crate::WorldType::Hills,
             voxel_scale: engine_core::VoxelScalePreset::QuarterMeter,
         }

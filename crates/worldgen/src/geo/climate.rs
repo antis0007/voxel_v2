@@ -76,6 +76,18 @@ pub fn solve(grid: &Grid, height_m: &[f64], land: &[bool], p: &PlanetParams) -> 
     let mut moist: Vec<f32> = land.iter().map(|&l| if l { 0.0 } else { 1.0 }).collect();
     let mut next = moist.clone();
     let mut rain = vec![0.0f64; len];
+    // Wind, terrain and interpolation weights do not change during advection.
+    // Precompute them once instead of repeating grid lookups every sweep.
+    let transport: Vec<(usize, f64, f64, f64)> = (0..len).map(|i| {
+        let [x, z] = grid.at(i);
+        let w = winds[i];
+        let (ux, uz) = (x - w[0] * grid.cell_m, z - w[1] * grid.cell_m);
+        let (cx, cz, tx, tz) = grid.cell(ux, uz);
+        let climb = (h[i] as f64 - grid.bilinear(&h, ux, uz)) / grid.cell_m;
+        let mut rate = 0.018 * bands[i] + 1.5 * climb.max(0.0);
+        if climb < 0.0 { rate *= 0.6; }
+        (cz * grid.n + cx, tx, tz, rate.min(0.6))
+    }).collect();
     // Each pass carries moisture one cell downwind; enough passes cross the face.
     for _ in 0..grid.n + grid.n / 2 {
         for i in 0..len {
@@ -85,16 +97,14 @@ pub fn solve(grid: &Grid, height_m: &[f64], land: &[bool], p: &PlanetParams) -> 
                 rain[i] = base;
                 continue;
             }
-            let [x, z] = grid.at(i);
-            let w = winds[i];
-            let (ux, uz) = (x - w[0] * grid.cell_m, z - w[1] * grid.cell_m);
-            let up = grid.bilinear(&moist, ux, uz);
-            let climb = (h[i] as f64 - grid.bilinear(&h, ux, uz)) / grid.cell_m;
-            let mut rate = base + 1.5 * climb.max(0.0);
-            if climb < 0.0 {
-                rate *= 0.6;
-            }
-            let rate = rate.min(0.6);
+            let (j, tx, tz, rate) = transport[i];
+            let a = moist[j] as f64;
+            let b = moist[j + 1] as f64;
+            let c = moist[j + grid.n] as f64;
+            let d = moist[j + grid.n + 1] as f64;
+            let top = a + (b - a) * tx;
+            let bottom = c + (d - c) * tx;
+            let up = top + (bottom - top) * tz;
             rain[i] = up * rate;
             // Plants and soil return over half the rain to the air, and storms keep
             // a floor of moisture even far inland.
@@ -108,10 +118,10 @@ pub fn solve(grid: &Grid, height_m: &[f64], land: &[bool], p: &PlanetParams) -> 
     for i in 0..len {
         let [x, z] = grid.at(i);
         let s = sin_latitude(p, x, z);
-        let t = sea_level_c(s) - p.lapse_c_per_m * (height_m[i] - SEA_M).max(0.0);
+        let t = sea_level_c(s) + p.temperature_bias - p.lapse_c_per_m * (height_m[i] - SEA_M).max(0.0);
         maat[i] = t as f32;
         let k = rain[i] / 0.01;
-        wet[i] = (k / (1.0 + k)) as f32;
+        wet[i] = ((k / (1.0 + k)) * p.rainfall).clamp(0.0, 1.0) as f32;
         let inland = 1.0 - moist[i] as f64;
         season[i] = (2.0 + 32.0 * s.abs() * (p.tilt_sin / 0.3978) * (0.35 + 0.65 * inland)) as f32;
     }

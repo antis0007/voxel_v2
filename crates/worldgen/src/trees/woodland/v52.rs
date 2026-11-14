@@ -11,7 +11,7 @@ fn design(cfg: &WorldSampleConfig, t: &TreeProfile) -> Design {
     let radius = t.canopy_radius as f32 * scale;
     let crown = t.canopy_height as f32 * scale;
     let h = |salt: u32| hash2(t.cell_x, t.cell_z, cfg.seed.wrapping_add(salt));
-    let age = h(12011);
+    let age = crate::trees::stand_age(cfg, t);
     let slender = height > radius * 3.2;
     let base = Design {
         top: height + crown * 0.55,
@@ -39,7 +39,7 @@ fn build(cfg: &WorldSampleConfig, t: &TreeProfile) -> Skeleton {
     let scale = cfg.voxel_meters();
     let top = (t.trunk_h + t.canopy_height) as f32 * scale;
     let reach = t.canopy_radius as f32 * scale * 1.35;
-    if cfg.generator_version >= foliage::VERSION {
+    if foliage::enabled(cfg) {
         return skeleton::build_clumped(cfg, t, &design(cfg, t), reach, top);
     }
     skeleton::build(cfg, t, &design(cfg, t), reach, top)
@@ -48,7 +48,7 @@ fn build(cfg: &WorldSampleConfig, t: &TreeProfile) -> Skeleton {
 pub(super) fn block(cfg: &WorldSampleConfig, t: &TreeProfile, p: IVec3) -> B {
     let scale = cfg.voxel_meters();
     let q = (p - IVec3::new(t.anchor_x, t.ground_y, t.anchor_z)).as_vec3() * scale;
-    let outset = if cfg.generator_version >= foliage::VERSION { foliage::OUTSET } else { 0.0 };
+    let outset = if foliage::enabled(cfg) { foliage::OUTSET } else { 0.0 };
     let reach = t.canopy_radius as f32 * scale * 1.35 + scale + outset;
     let top = (t.trunk_h + t.canopy_height) as f32 * scale + scale + outset;
     if q.y <= 0.0 || q.y > top || q.xz().length_squared() > reach * reach {

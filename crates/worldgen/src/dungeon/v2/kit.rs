@@ -213,6 +213,7 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     if doorway(c, m) {
         return B::Air;
     }
+    if let Some(b) = super::sprawl::fixture(c, r, m) { return b; }
     if r.kind == Kind::Reveal
         && let Some(b) = balcony(c, r, rx, rz, fy, v)
     {
@@ -228,6 +229,10 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     }
     if gallery::approach(c, r, rx, rz, fy) {
         return B::Air;
+    }
+    if c.version >= 54
+        && let Some(b) = super::arcades::sample(c, r, rx, rz, fy, v) {
+        return b;
     }
     // Piers at every bay, skipping the corners; a sconce on every other one.
     let pd = v.max(0.6);
@@ -269,6 +274,10 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     if gallery::has(c, r)
         && let Some(b) = gallery::sample(c, r, rx, rz, fy, v)
     {
+        return b;
+    }
+    if c.version >= 55
+        && let Some(b) = super::industry::furnish(r, rx, rz, fy, v) {
         return b;
     }
     let placed = dress::furnish(c, r, rx, rz, fy, v, dwall);

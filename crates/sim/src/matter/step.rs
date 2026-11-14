@@ -113,13 +113,13 @@ impl MatterStore {
         if masks.is_empty() {
             return step_skipping(&mut self.blocks, rules, seed, tick, |_| false);
         }
-        // Bricks holding fine blocks and their neighbours: a block anchored anywhere else cannot
-        // reach a fine block, so most anchors cost one lookup.
+        // Each stencil reaches only toward increasing coordinates. Its anchor
+        // can be in the fine block's brick or one brick lower on each axis.
         let mut halo: FastSet<IVec3> = FastSet::default();
         for &brick in masks.keys() {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    for dx in -1..=1 {
+            for dy in -1..=0 {
+                for dz in -1..=0 {
+                    for dx in -1..=0 {
                         halo.insert(brick + IVec3::new(dx, dy, dz));
                     }
                 }
@@ -166,13 +166,16 @@ impl MatterStore {
             next.extend(both.iter().copied());
         }
         // Heat conducts only on heat ticks, so only a heat tick may put a block to sleep.
-        if !is_heat_tick(tick) {
+        let can_sleep = is_heat_tick(tick);
+        if !can_sleep {
             next.extend(first.iter().copied());
         }
         canonical(&mut next);
-        for block in &first {
-            if next.binary_search_by_key(&(block.z, block.y, block.x), |n| (n.z, n.y, n.x)).is_err() {
-                self.dormant.push_back(*block);
+        if can_sleep {
+            for block in first {
+                if next.binary_search_by_key(&(block.z, block.y, block.x), |n| (n.z, n.y, n.x)).is_err() {
+                    self.dormant.push_back(block);
+                }
             }
         }
         self.awake = next;

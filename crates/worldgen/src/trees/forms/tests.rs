@@ -7,8 +7,9 @@ use engine_core::VoxelScalePreset;
 
 fn cfg(version: u32) -> WorldSampleConfig {
     WorldSampleConfig {
+        planet: None,
         generator_version: version,
-        seed: 424242,
+        seed: crate::test_world::seed(),
         world_type: WorldType::Hills,
         voxel_scale: VoxelScalePreset::OneMeter,
     }

@@ -3,7 +3,7 @@
 //! so chunk order cannot move it. Probes sample uncarved relief and must not re-enter.
 
 use super::{BlockId as B, WorldSampleConfig, WorldType, hash2};
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +12,75 @@ const STEPS: usize = 16;
 const STEP_M: f32 = 70.0;
 const STOREY: f32 = 2.9;
 
+#[cfg(test)]
+mod ground_review {
+    use super::*;
+    #[test]
+    fn settlement_street_has_ground_support() {
+        for scale in [engine_core::VoxelScalePreset::OneMeter, engine_core::VoxelScalePreset::QuarterMeter] {
+            let c = WorldSampleConfig {
+    planet: None, seed: 424242, generator_version: 57,
+                world_type: WorldType::Hills, voxel_scale: scale };
+            let p = plan(&c).unwrap();
+            let right = Vec3::new(-p.hamlet_fwd.z,0.0,p.hamlet_fwd.x);
+            for (a,b) in [(15.0,-7.0),(15.0,-2.0),(22.0,0.0),(15.0,0.0)] {
+                let m = p.hamlet + p.hamlet_fwd*a + right*b
+                    + Vec3::Y*(a*p.hamlet_grade-2.0);
+                let cell = (m/c.voxel_meters()).floor().as_ivec3();
+                let col = crate::sample_column(&c,cell.x,cell.z);
+                let actual = crate::sample_block(&c,cell);
+                assert!(actual.is_solid(),"{scale:?} a={a} b={b} cell={cell:?} actual={actual:?} carve={} col={} expected={} under={:?} amber={:?} site={:?}",
+                    carve(&c,c.world_y(cell.x),c.world_y(cell.z),56.0),c.world_y(col.height),m.y,crate::undercrown::block(&c,cell,col.height),crate::amberroot::block(&c,cell,col.height),crate::sites::block(&c,cell,col.height));
+            }
+        }
+    }
+}
+
 mod settlement;
+#[cfg(test)]
+mod roof_tests;
+mod skyline;
+
+/// Opt-in views of the actual surveyed settlement and lookout.
+pub fn place_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec3, Vec3)> {
+    let p = plan(cfg)?;
+    match name {
+        "workshop" | "workshop-side" | "workshop-wide" | "workshop-inside"
+        | "workshop-front" | "workshop-back" | "workshop-left" | "workshop-right"
+        | "workshop-rear-quarter" | "workshop-roof" | "workshop-exit" if p.hamlet_suitable => {
+            let right = Vec3::new(-p.hamlet_fwd.z, 0.0, p.hamlet_fwd.x);
+            let frame = settlement::workshop_frame(&p, cfg);
+            let at = |a: f32, b: f32, y: f32| if cfg.generator_version >= 61 {
+                frame.0 + frame.1 * (a - 22.0) + frame.2 * (b - 10.0) + Vec3::Y * y
+            } else { p.hamlet + p.hamlet_fwd * a + right * b
+                + Vec3::Y * (22.0 * p.hamlet_grade + y) };
+            let (eye, target) = match name {
+                "workshop-front" => (at(22.0,-3.0,3.2),at(22.0,10.0,3.2)),
+                "workshop-back" => (at(22.0,23.0,3.2),at(22.0,10.0,3.2)),
+                "workshop-left" => (at(9.0,10.0,3.2),at(22.0,10.0,3.2)),
+                "workshop-right" => (at(35.0,10.0,3.2),at(22.0,10.0,3.2)),
+                "workshop-rear-quarter" => (at(32.0,20.0,5.5),at(22.0,10.0,3.0)),
+                "workshop-roof" => (at(30.0,2.0,14.0),at(22.0,10.0,3.0)),
+                "workshop-exit" => (at(22.0,12.0,2.6),at(22.0,4.0,2.0)),
+                "workshop-side" => (at(29.0, 4.0, 1.8), at(22.0, 10.0, 2.8)),
+                "workshop-wide" => (at(15.0, -7.0, 1.8), at(22.0, 10.0, 4.0)),
+                "workshop-inside" => (at(22.0, 7.0, 1.8), at(18.0, 11.0, 2.2)),
+                _ => (at(17.0, 0.0, 1.8), at(22.0, 10.0, 2.8)),
+            };
+            Some((eye, target))
+        }
+        "town" if p.hamlet_suitable => {
+            let right = Vec3::new(-p.hamlet_fwd.z,0.0,p.hamlet_fwd.x);
+            Some((p.hamlet + p.hamlet_fwd * 28.0 - right * 30.0 + Vec3::Y * 15.0,
+                p.hamlet + Vec3::Y * 2.0))
+        }
+        "tower" => {
+            let base = Vec3::new(p.tower.x,tower_floor(cfg,&p),p.tower.z);
+            Some((base - p.tower_fwd * 24.0 + Vec3::Y * 8.0,base + Vec3::Y * 9.0))
+        }
+        _ => None,
+    }
+}
 
 thread_local! {
     static PROBING: Cell<bool> = const { Cell::new(false) };
@@ -36,6 +104,7 @@ struct Plan {
     hamlet_fwd: Vec3,
     hamlet_grade: f32,
     hamlet_suitable: bool,
+    settlement: Option<settlement::Prepared>,
     tower: Vec3,
     tower_fwd: Vec3,
 }
@@ -100,6 +169,15 @@ fn village_ground(plan: &Plan, wx: f32, wz: f32, h: f32) -> f32 {
     let blend = 1.0 - super::smoothstep(0.0, 26.0, edge);
     let street = plan.hamlet.y + along * plan.hamlet_grade;
     h + (street - h) * blend
+}
+
+/// Settlement grading must run after fitted drainage, which can otherwise
+/// excavate beneath already-positioned streets. Survey probes stay ungraded.
+pub(super) fn settlement_grade(cfg: &WorldSampleConfig, x: f32, z: f32, h: f32) -> f32 {
+    if cfg.generator_version < 57 || cfg.world_type == WorldType::Superflat || PROBING.get() {
+        return h;
+    }
+    plan(cfg).map_or(h, |p| village_ground(&p, x, z, h))
 }
 
 pub(super) fn in_channel(cfg: &WorldSampleConfig, wx: f32, wz: f32) -> bool {
@@ -216,13 +294,14 @@ fn profile_in(plan: &Plan, wx: f32, wz: f32) -> Option<(f32, f32, bool)> {
 /// Shared, not cloned: this runs for every generated voxel, and cloning the
 /// plan's vectors per call was most of the valley's generation cost.
 fn plan(cfg: &WorldSampleConfig) -> Option<Arc<Plan>> {
-    if cfg.generator_version < 14 || cfg.world_type == WorldType::Superflat || PROBING.get() {
+    // Solved planet faces carry no hills settlements.
+    if cfg.generator_version < 14 || cfg.world_type == WorldType::Superflat || PROBING.get() || super::basin::solved_face(cfg) {
         return None;
     }
     let key = (
         cfg.seed,
         cfg.generator_version,
-        cfg.world_type as u8,
+        cfg.world_type.code(),
         cfg.voxel_scale as u8,
     );
     if let Some(found) = LOCAL_PLAN.with(|c| {
@@ -317,7 +396,14 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
         let mut best = f32::MAX;
         for i in 5..13 {
             for side in [-68.0, 68.0] {
-                let (x, z, fwd) = frame_at(&xs, &zs, i, side);
+                let (x, z, mut fwd) = frame_at(&xs, &zs, i, side);
+                if cfg.generator_version >= 57 {
+                    // Buildings and their reserved circulation share the voxel grid.
+                    // Survey this orientation, rather than rotating after grading.
+                    fwd = if fwd.x.abs() > fwd.z.abs() {
+                        Vec3::new(fwd.x.signum(), 0.0, 0.0)
+                    } else { Vec3::new(0.0, 0.0, fwd.z.signum()) };
+                }
                 let right = Vec3::new(-fwd.z, 0.0, fwd.x);
                 let mut lo = f32::MAX;
                 let mut hi = f32::MIN;
@@ -343,7 +429,7 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
     let max_x = xs.iter().copied().fold(hx.max(tx), f32::max);
     let min_z = zs.iter().copied().fold(hz.min(tz), f32::min);
     let max_z = zs.iter().copied().fold(hz.max(tz), f32::max);
-    Plan {
+    let mut result = Plan {
         x: xs,
         z: zs,
         bed,
@@ -356,9 +442,14 @@ fn build(cfg: &WorldSampleConfig) -> Plan {
         hamlet_fwd: hfwd,
         hamlet_grade,
         hamlet_suitable,
+        settlement: None,
         tower: Vec3::new(tx, relief(cfg, tx, tz), tz),
         tower_fwd: tfwd,
+    };
+    if cfg.generator_version >= settlement::RESIDENCE_GENERATOR && hamlet_suitable {
+        result.settlement = Some(settlement::Prepared::new(&result, cfg));
     }
+    result
 }
 
 fn frame_at(xs: &[f32], zs: &[f32], i: usize, side: f32) -> (f32, f32, Vec3) {
@@ -462,7 +553,7 @@ fn timber(role: u8, lx: f32, ly: f32, lz: f32, w: f32, d: f32, v: f32) -> Option
     if (-6.0..0.0).contains(&ly) {
         return Some(B::StoneBricks);
     }
-    let two = role == 1;
+    let two = role == 1 || role == 4;
     let wall_top = if two { 5.8 } else { 3.2 };
     let roof = wall_top + (hw - lx.abs()).max(0.0) * 0.62;
     let shingle = 0.35f32.max(v * 0.81);
@@ -560,6 +651,10 @@ fn tower(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
     let lz = rel.x * plan.tower_fwd.x + rel.z * plan.tower_fwd.z;
     let floor = tower_floor(cfg, plan);
     let ly = m.y - floor;
+    if cfg.generator_version >= 54
+        && let Some(b) = skyline::crown(lx, ly, lz, cfg.voxel_meters()) {
+        return Some(b);
+    }
     let gallery = gallery(lx, ly, lz);
     if gallery.is_some() {
         return gallery;
@@ -640,7 +735,7 @@ fn tower(plan: &Plan, cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
             return Some(B::Planks);
         }
     if wall && ly < 11.6 && !door && !window {
-        return Some(B::StoneBricks);
+        return Some(if cfg.generator_version >= 54 { B::Limestone } else { B::StoneBricks });
     }
     if r < 3.55 && (11.6..11.6 + 0.4f32.max(vox)).contains(&ly) {
         return Some(B::Planks);
@@ -759,3 +854,4 @@ fn gallery(lx: f32, ly: f32, lz: f32) -> Option<B> {
     }
     Some(B::Air)
 }
+

@@ -5,8 +5,8 @@
 //! any back is the same as the CPU kernel's one-at-a-time loop; scatter keeps the CPU's block order, so
 //! reservations and stalls happen in the same order too.
 use crate::anchors::anchors;
-use crate::cell::{Cell, BrickCoord, brick_and_cell, split_voxel};
-use crate::kernel::StepStats;
+use crate::cell::{BrickCoord, Cell};
+use crate::kernel::{StepStats, block_spots};
 use crate::pinned::PHASE_OFFSETS;
 use crate::rules::Outcome;
 use crate::store::{BrickStore, NO_SLOT};
@@ -34,15 +34,6 @@ impl PhaseBlocks {
     }
 }
 
-fn spots(anchor: IVec3) -> [Spot; 8] {
-    std::array::from_fn(|i| {
-        let p = anchor + IVec3::new((i & 1) as i32, (i >> 2) as i32, ((i >> 1) & 1) as i32);
-        let (chunk, local) = split_voxel(p);
-        let (brick, cell) = brick_and_cell(local);
-        (chunk, brick, cell)
-    })
-}
-
 fn slot(store: &BrickStore, (chunk, brick, _): Spot) -> u32 {
     store.chunk_slots(chunk).map_or(NO_SLOT, |s| s[brick as usize])
 }
@@ -50,9 +41,21 @@ fn slot(store: &BrickStore, (chunk, brick, _): Spot) -> u32 {
 /// The blocks of phase `phase_counter` (`2 * tick + phase`) that touch `bricks`, in the CPU kernel's order.
 pub fn gather(store: &BrickStore, bricks: &[BrickCoord], phase_counter: u32) -> PhaseBlocks {
     let mut out = PhaseBlocks::default();
+    // Gather only reads the store, so a chunk's slot table can be reused across blocks.
+    let mut cached = None;
     for anchor in anchors(bricks, PHASE_OFFSETS[(phase_counter & 1) as usize]) {
-        let at = spots(anchor);
-        let slots = at.map(|s| slot(store, s));
+        let at = block_spots(anchor);
+        let slots = at.map(|(chunk, brick, _)| {
+            let table = match cached {
+                Some((key, table)) if key == chunk => table,
+                _ => {
+                    let table = store.chunk_slots(chunk);
+                    cached = Some((chunk, table));
+                    table
+                }
+            };
+            table.map_or(NO_SLOT, |slots| slots[brick as usize])
+        });
         if slots.iter().all(|&s| s == NO_SLOT) {
             continue;
         }
@@ -71,18 +74,20 @@ pub fn scatter(store: &mut BrickStore, blocks: &PhaseBlocks, after: &[[Cell; 8]]
         stats.blocks += 1;
         let mut written = outcome.changed;
         if written {
-            let mut needed: Vec<(IVec3, u8)> = Vec::new();
+            let mut needed = [(IVec3::ZERO, 0); 8];
+            let mut count = 0;
             for i in (0..8).filter(|&i| after[i] != before[i]) {
                 let (chunk, brick, _) = at[i];
-                if slot(store, at[i]) == NO_SLOT && !needed.contains(&(chunk, brick)) {
-                    needed.push((chunk, brick));
+                if slot(store, at[i]) == NO_SLOT && !needed[..count].contains(&(chunk, brick)) {
+                    needed[count] = (chunk, brick);
+                    count += 1;
                 }
             }
-            if needed.len() > store.free_bricks() {
+            if count > store.free_bricks() {
                 written = false;
                 stats.stalled_blocks += 1;
             } else {
-                for (chunk, brick) in needed {
+                for &(chunk, brick) in &needed[..count] {
                     // Counted above, so this cannot fail.
                     let _ = store.reserve(chunk, brick);
                 }

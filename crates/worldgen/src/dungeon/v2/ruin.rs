@@ -9,7 +9,7 @@ use crate::{BlockId as B, hash2, hash3, value_noise3};
 use glam::Vec3;
 
 /// First generator with the ruin layer.
-pub const VERSION: u32 = 52;
+pub const VERSION: u32 = crate::gates::GIANTS_AND_RUINS_GENERATOR;
 /// Lowest a vine hangs over the floor beside a wall, metres.
 const WALL_VINE: f32 = 2.2;
 /// Lowest a vine hangs over the floor away from the walls, metres.
@@ -22,7 +22,7 @@ pub fn job_wet(job: Job) -> f32 {
     match job {
         Job::Warren => 0.6,
         Job::Undercroft => 0.45,
-        Job::Catacombs | Job::Quarantine => 0.3,
+        Job::Catacombs | Job::Quarantine | Job::Workshop => 0.3,
         Job::Sanctum => 0.2,
         Job::HollowFloor => 0.15,
         Job::ForgeHalls | Job::Orrery => 0.0,

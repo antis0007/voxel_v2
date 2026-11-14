@@ -22,9 +22,9 @@ struct Plate {
 
 const ACROSS: i64 = 5;
 
-fn plates(seed: u32, p: &PlanetParams) -> Vec<Plate> {
-    let cell = p.face_edge_m / ACROSS as f64;
-    let half = p.face_edge_m * 0.5;
+fn plates(seed: u32, _p: &PlanetParams) -> Vec<Plate> {
+    let cell = super::HOME.face_edge_m / ACROSS as f64;
+    let half = super::HOME.face_edge_m * 0.5;
     let mut out = Vec::new();
     for j in -1..=ACROSS {
         for i in -1..=ACROSS {
@@ -62,13 +62,15 @@ fn nearest_two(plates: &[Plate], q: [f64; 2]) -> (usize, usize) {
 
 pub fn build(grid: &Grid, seed: u32, p: &PlanetParams) -> Tectonics {
     let plates = plates(seed, p);
-    let half = p.face_edge_m * 0.5;
+    let half = super::HOME.face_edge_m * 0.5;
+    let compression = super::HOME.face_edge_m / p.face_edge_m;
     let mut uplift = vec![0.0; grid.len()];
     let mut land = vec![false; grid.len()];
     for i in 0..grid.len() {
         let [x, z] = grid.at(i);
+        let (x, z) = (x * compression, z * compression);
         let warp = |salt: u32| (fbm(x / 7000.0, z / 7000.0, seed.wrapping_add(salt), 3) - 0.5) * 6000.0;
-        let q = [x + warp(21), z + warp(22)];
+        let q = [(x + warp(21)) * p.continent_scale, (z + warp(22)) * p.continent_scale];
         let (a, b) = nearest_two(&plates, q);
         let (pa, pb) = (&plates[a], &plates[b]);
         let n = [pb.site[0] - pa.site[0], pb.site[1] - pa.site[1]];
@@ -87,12 +89,22 @@ pub fn build(grid: &Grid, seed: u32, p: &PlanetParams) -> Tectonics {
         crust += (fbm(x / 900.0, z / 900.0, seed.wrapping_add(26), 3) - 0.5) * 0.3;
         let edge = (half - x.abs()).min(half - z.abs());
         crust -= 1.0 - smoothstep(1200.0, 5200.0, edge);
-        land[i] = crust > 0.5;
+        land[i] = crust > 0.5 + p.ocean_bias;
 
         let along = 0.35 + 0.65 * fbm(q[0] / 5600.0, q[1] / 5600.0, seed.wrapping_add(24), 3);
         // Patches of stronger craton uplift become dissected hill country between the ranges.
         let hills = fbm(x / 3800.0, z / 3800.0, seed.wrapping_add(25), 4);
         let mut u = 0.06 + 0.5 * hills * hills * hills;
+        if p.face_edge_m <= super::EXPLORATION_HOME.face_edge_m {
+            // A finite uplift spur within an ordinary walk of the home craton.
+            // Erosion and drainage still carve its passes and tributaries.
+            let angle=unit(0,0,seed.wrapping_add(47))*std::f64::consts::TAU;
+            let (sin,cos)=angle.sin_cos();
+            let (wx,wz)=(x/compression,z/compression);
+            let across=wx*cos+wz*sin;
+            let along=-wx*sin+wz*cos;
+            u += 1.6*bump((across-600.0).abs(),210.0)*bump(along.abs(),850.0);
+        }
         if closing > 0.0 {
             // Ocean crust subducting under land raises the arc on the land side.
             let offset = if pa.continental != pb.continental { 900.0 } else { 0.0 };

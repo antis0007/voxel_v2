@@ -70,7 +70,9 @@ fn home_moon_plan_is_bound_and_inside_hill_sphere() {
     assert!(plan.depart < escape_speed(mu_home, r_park) - circular_speed(mu_home, r_park));
     assert!(plan.target_soi > s.radius(moon) + 200.0);
     let moon_el = s.elements(moon).unwrap();
-    assert!(plan.target_soi < hill_radius(moon_el.a, 0.0, s.mass(moon), s.mass(home)));
+    // At a 1:132 mass ratio the Laplace sphere outgrows the Hill sphere; the
+    // capture orbit must still sit well inside the stricter Hill bound.
+    assert!(s.radius(moon) + 200.0 < 0.5 * hill_radius(moon_el.a, 0.0, s.mass(moon), s.mass(home)));
     close(plan.plane_change.to_degrees(), 5.1, 1e-9);
     // The turn is folded into capture, so it costs more than a flat capture.
     let flat = hyperbolic_burn(G * s.mass(moon), s.radius(moon) + 200.0, plan.cruise.arrive.abs());

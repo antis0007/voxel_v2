@@ -1,14 +1,25 @@
+pub mod fabrication;
+pub mod factory_resources;
+pub mod spells;
+pub mod runes;
+mod spell_validation;
 pub mod fittings;
 pub mod thin;
+pub mod flora;
+pub mod stamp;
+pub mod biomes;
+pub mod climate;
 pub mod shaped;
 mod size_class;
 pub mod descriptions;
 pub mod environment;
-mod reactions;
+pub mod portal_layout;
+pub mod reactions;
+pub mod ore;
 mod sim_traits;
 mod validate;
 pub use size_class::SizeClass;
-pub use sim_traits::{COHESION_STABLE, SIM_RULES, SIM_TABLE, SimTraits, ThermalTraits};
+pub use sim_traits::{COHESION_STABLE, SIM_DIRECT, SIM_RULES, SIM_TABLE, SimTraits, ThermalTraits, sim_row};
 
 use glam::IVec3;
 use std::sync::LazyLock;
@@ -166,6 +177,13 @@ pub struct MaterialTags {
     pub hotbar_order: Option<u8>,
     pub contributes_to_heightmap: bool,
     pub render_in_lod_decor: bool,
+    /// Health per second lost while a body overlaps the block.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub contact_damage: f32,
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -178,6 +196,11 @@ pub struct MaterialDef {
     /// Cellular-simulation properties; omitted rows are a generic inert solid.
     #[serde(default, skip_serializing_if = "SimTraits::is_generic")]
     pub sim: SimTraits,
+    /// Cellular-simulation stand-in for ids at or past `sim_traits::SIM_DIRECT`,
+    /// which have no row of their own in the one-byte sim table. Must be a
+    /// lower id. Omitted: Stone. Ignored below `SIM_DIRECT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_as: Option<BlockId>,
     pub tags: MaterialTags,
 }
 
@@ -185,7 +208,10 @@ pub struct MaterialDef {
 /// properties live in `assets/materials.ron`, one row per id in this order.
 macro_rules! block_ids {
     ( $( $id:ident ),+ $(,)? ) => {
-        #[repr(u8)]
+        // Two bytes: 65,535 ids. Saves, regions and the wire store ids as
+        // u32/varint/u16; the cellular sim keeps a one-byte `MaterialId` (see
+        // `sim_traits::SIM_DIRECT`), so never cast a `BlockId` to `u8`.
+        #[repr(u16)]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
         pub enum BlockId {
             $( $id, )+
@@ -322,8 +348,49 @@ block_ids! {
     SignPost, SignPostSouth, SignPostWest, SignPostEast, WallSign, WallSignSouth, WallSignWest, WallSignEast, Chest, Lectern, Tnt,
     PlankStairs, PlankStairsSouth, PlankStairsWest, PlankStairsEast, BrickStairs, BrickStairsSouth, BrickStairsWest, BrickStairsEast,
     CobbleStairs, CobbleStairsSouth, CobbleStairsWest, CobbleStairsEast, PlankSlab, BrickSlab, CobbleSlab, PlankFence, BrickFence, CobbleFence,
+    SearedBrick, SmelteryController, SmelteryDrain, SmelteryFaucet, CastingTable, CastingBasin, MoltenCopper, MoltenTin, MoltenIron, MoltenBronze, TinBlock, IronBlock, BronzeBlock, MoltenSteel, SteelBlock,
     Anvil, BrewingStand, Stonecutter, Grindstone,
+    WhitePlaster,
+    Paydirt,
+    GoldQuartz,
+    Bamboo, BambooShoot,
+    WheatCrop, CarrotCrop, BeetCrop, CropShoot,
+    ExhaustDuct, Chimney, DustFilter, WetScrubber, GasTank, GasGenerator, IndustrialWaste,
+    Hellstone,
+    Concrete, SteelPlate, RustedSteel, HazardPaint, WindowGlass, ChestCopper, ChestIron, ChestSteel,
+    Sugarcane, SugarcaneShoot,
+    EnchantingTable,
+    KilnScale, KilnLining,
+    Quarry,
+    SulfuricAcid,
+    Kelp, Seagrass, WaterShoot, LilyPad, Cattail, SeaOats, MangrovePropagule, MangroveRoots,
+    BerryBush, SweetBerries, FruitBud, Apple, Cherry, Fig, CocoaPod, TrellisVine, Grapes,
+    Potato, Onion, Cabbage, Tomato, Pumpkin, Melon, GourdVine, RiceCrop,
+    Lavender, Orchid, Cactus, Agave, CaveVine, GlowBerries, Dripleaf, SporeBlossom,
+    ManaFlower, CollectorFlower, IronFern,
+    MoltenGold,
+    Chalcopyrite, Malachite, Hematite, Magnetite, Cassiterite,
+    ClaimStake,
+    CropHarvester,
+    // Dungeon quest seals (generator 294, save 72): opened with dungeon keys.
+    LockedDoor, BossDoor,
+    // The Lightless (save 74): its stone, the foxfire refuges and the gate block.
+    LightlessStone, FoxfireMoss, LightlessShaft,
+    // The Gilded Cave (save 75): its gate, cave rock, hoard and palace blocks.
+    // `gilded_surfaces.wgsl` keys on these ids; keep them contiguous.
+    GildedGate, OchreSandstone, GrottoStone, GoldCoins, JeweledGold,
+    ZigzagTile, LozengeTile, StarTile, LapisBrick, GildedRelief,
+    InlaidMarble, CarvedSandstone, ScaleTile, Sunstone,
 }
+
+// Packed material IDs consumed by the recovered industrial WGSL finishes.
+// Append new block identities; never insert before existing identities.
+const _: () = assert!(BlockId::Concrete as u32 + 1 == 192
+    && BlockId::SteelPlate as u32 + 1 == 193 && BlockId::RustedSteel as u32 + 1 == 194
+    && BlockId::HazardPaint as u32 + 1 == 195 && BlockId::WindowGlass as u32 + 1 == 196
+    && BlockId::SulfuricAcid as u32 + 1 == 206);
+// Packed material IDs of the Gilded Cave blocks, read by `gilded_surfaces.wgsl`.
+const _: () = assert!(BlockId::GildedGate as u32 + 1 == 256 && BlockId::Sunstone as u32 + 1 == 269);
 
 static HOTBAR_DEFAULTS: LazyLock<Vec<BlockId>> = LazyLock::new(|| {
     let mut slots = MATERIAL_TABLE
@@ -345,9 +412,16 @@ pub mod terrain_family {
     pub const AMBER_GILL: u32 = 37;
     /// Loose ash: fine grey powder. Family 0 would paint it as climate turf.
     pub const ASH: u32 = 38;
+    /// Use the authored voxel colour with the generic block finish.
+    pub const GENERIC_BLOCK: u32 = 39;
 }
 
 impl BlockId {
+    pub fn chest_tier(self) -> Option<u8> {
+        match self { Self::Chest => Some(0), Self::ChestCopper => Some(1), Self::ChestIron => Some(2), Self::ChestSteel => Some(3), _ => None }
+    }
+    pub fn chest_slots(self) -> usize { self.chest_tier().map_or(0, |tier| 27 + usize::from(tier) * 9) }
+
     /// Attachment origin in the owning voxel; model dimensions are in metres.
     pub fn torch_anchor(self) -> glam::Vec3 {
         if self == Self::Torch {
@@ -382,6 +456,7 @@ impl BlockId {
                 | Self::Fabricator
                 | Self::Cultivator
                 | Self::MiningDrill
+                | Self::Quarry
                 | Self::WaterPump
                 | Self::FluidPipe
                 | Self::WaterTank
@@ -397,6 +472,8 @@ impl BlockId {
                 | Self::InductionProvider
                 | Self::Transformer
                 | Self::Assembler
+                | Self::ExhaustDuct | Self::Chimney | Self::DustFilter
+                | Self::WetScrubber | Self::GasTank | Self::GasGenerator
         )
     }
     pub const COUNT: usize = ALL_BLOCK_IDS.len();
@@ -438,8 +515,8 @@ impl BlockId {
             Self::Ash => terrain_family::ASH,
             Self::Grass => 1,
             Self::Dirt | Self::Mud | Self::Clay => 2,
-            Self::Stone | Self::Basalt => 3,
-            Self::Gravel => terrain_family::GRAVEL,
+            Self::Stone | Self::Basalt | Self::Hellstone | Self::LightlessStone | Self::LightlessShaft => 3,
+            Self::Gravel | Self::Paydirt => terrain_family::GRAVEL,
             Self::Sand | Self::Sandstone => 4,
             Self::Log => 5,
             Self::Leaves | Self::Bush | Self::PineLeaves => 6,
@@ -448,14 +525,22 @@ impl BlockId {
             Self::SnowGrass => 7,
             Self::Water => 8,
             Self::Ice | Self::SnowLayer => 9,
-            Self::Lava => 10,
+            Self::Lava | Self::SulfuricAcid => 10,
             Self::Planks | Self::Bed | Self::Tnt => 11,
+            Self::RoofTiles => 46,
+            Self::LimePlaster | Self::WhitePlaster => 54,
+            Self::TimberPost => 55,
+            Self::TimberBeamX => 56,
+            Self::TimberBeamZ => 57,
+            Self::DressedStone | Self::TombStone => 58,
             Self::Bookcase => 45,
             Self::CarvedStone | Self::GlazedTiles => 12,
+            Self::Concrete | Self::SteelPlate | Self::RustedSteel | Self::HazardPaint | Self::WindowGlass => 12,
+            Self::ChestCopper | Self::ChestIron | Self::ChestSteel => 11,
             Self::StoneBricks => 12,
             Self::Cobblestone => 13,
             Self::CoalOre => 14,
-            Self::IronOre => 15,
+            Self::IronOre | Self::Hematite | Self::Magnetite | Self::GoldQuartz => 15,
             Self::FungalSoil | Self::GroveMoss => 16,
             Self::MushroomStem => 17,
             Self::GlowCap => 18,
@@ -464,8 +549,8 @@ impl BlockId {
             // Fungal flesh streaks; family 0 would take the climate turf paint.
             Self::UmberCap => 17,
             Self::Limestone => 3,
-            Self::CopperOre => 20,
-            Self::TinOre => 21,
+            Self::CopperOre | Self::Chalcopyrite | Self::Malachite => 20,
+            Self::TinOre | Self::Cassiterite => 21,
             Self::Crystal => 22,
             Self::WeatheredBricks => 12,
             Self::SalvageCrate => 23,
@@ -477,7 +562,7 @@ impl BlockId {
             Self::FeedHopper => 29,
             Self::StorageCrate => 23,
             Self::ItemPipe => 30,
-            Self::CopperBlock => 47,
+            Self::CopperBlock | Self::TinBlock | Self::IronBlock | Self::BronzeBlock | Self::SteelBlock => 47,
             Self::SilverBlock => 48,
             Self::GoldBlock => 49,
             Self::PlatinumBlock => 50,
@@ -490,12 +575,23 @@ impl BlockId {
             Self::Bioreactor => 32,
             Self::SurveyCache => 23,
             Self::CultivatorCache => 23,
-            _ => 0,
+            // Gilded Cave blocks share the masonry family; the shader picks
+            // each surface by block id (see `gilded_surfaces.wgsl`).
+            Self::GildedGate | Self::OchreSandstone | Self::GrottoStone | Self::GoldCoins
+            | Self::JeweledGold | Self::ZigzagTile | Self::LozengeTile | Self::StarTile
+            | Self::LapisBrick | Self::GildedRelief | Self::InlaidMarble | Self::CarvedSandstone
+            | Self::ScaleTile | Self::Sunstone => 12,
+            _ => terrain_family::GENERIC_BLOCK,
         };
         surface
     }
 
     /// Illusion blocks: drawn as stone, but the body passes through them.
+    /// Undiggable: only mechanisms (keys, puzzles, reliquaries) remove it.
+    pub fn is_seal(self) -> bool {
+        matches!(self, Self::TombStone | Self::LockedDoor | Self::BossDoor)
+    }
+
     pub fn is_mirage(self) -> bool {
         matches!(self, Self::MirageBrick | Self::MirageVoid)
     }
@@ -513,6 +609,11 @@ impl BlockId {
 
     pub fn is_empty(self) -> bool {
         matches!(self.material().render.kind, RenderKind::Invisible)
+    }
+
+    /// Health per second a body overlapping this block loses.
+    pub fn contact_damage(self) -> f32 {
+        self.material().tags.contact_damage
     }
 
     pub fn is_liquid(self) -> bool {
@@ -533,7 +634,8 @@ impl BlockId {
 
     /// Blocks kept in `ChunkData::torches`, the index the local light list reads.
     pub fn is_light_source(self) -> bool {
-        self.is_torch() || self == BlockId::AmberCap
+        self.is_torch() || matches!(self, BlockId::AmberCap | BlockId::GlowBerries | BlockId::FoxfireMoss | BlockId::LightlessShaft
+            | BlockId::GildedGate | BlockId::Sunstone)
     }
 
     pub fn is_ray_pickable(self) -> bool {
@@ -563,6 +665,17 @@ impl BlockId {
         }
     }
 
+    /// Floor when the face points along local up, otherwise a wall mount.
+    /// A downward world face is a floor wherever local up is not world up.
+    pub fn torch_for_face(normal: IVec3, up: glam::Vec3) -> Option<Self> {
+        let n = normal.as_vec3();
+        let up = up.normalize_or_zero();
+        if n.length_squared() > 0.0 && n.normalize().dot(up) > 0.55 {
+            return Some(BlockId::Torch);
+        }
+        Self::torch_from_attachment(normal)
+    }
+
     pub fn hotbar_defaults() -> &'static [BlockId] {
         hotbar_defaults()
     }
@@ -584,6 +697,19 @@ pub fn hotbar_block(slot: usize) -> Option<BlockId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::{IVec3, Vec3};
+
+    #[test]
+    fn a_floor_facing_local_up_takes_a_standing_torch() {
+        assert_eq!(BlockId::torch_for_face(IVec3::Y, Vec3::Y), Some(BlockId::Torch));
+        assert_eq!(BlockId::torch_for_face(IVec3::NEG_Y, Vec3::NEG_Y), Some(BlockId::Torch));
+        assert_eq!(BlockId::torch_for_face(IVec3::X, Vec3::X), Some(BlockId::Torch));
+        assert_eq!(
+            BlockId::torch_for_face(IVec3::X, Vec3::Y),
+            Some(BlockId::TorchWallEast)
+        );
+        assert_eq!(BlockId::torch_for_face(IVec3::NEG_Y, Vec3::Y), None);
+    }
 
     #[test]
     fn leafy_occluders_are_solid_so_the_camera_cannot_enter_them() {

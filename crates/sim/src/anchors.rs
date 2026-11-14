@@ -9,6 +9,28 @@ fn brick_origin(b: BrickCoord) -> IVec3 {
     b.chunk * BRICK_SIZE * per + IVec3::new(i % per, i / (per * per), (i / per) % per) * BRICK_SIZE
 }
 
+// Odd-phase anchors can touch the previous brick, just this brick, or the
+// next brick on each axis. Precompute the earlier claimants for each case.
+const fn claim_masks() -> [u32; 27] {
+    let mut masks = [0; 27];
+    let mut reach = 0;
+    while reach < 27 {
+        let (x, y, z) = (reach % 3, reach / 3 % 3, reach / 9);
+        let mut neighbor = 0;
+        while neighbor < 13 {
+            let (nx, ny, nz) = (neighbor % 3, neighbor / 3 % 3, neighbor / 9);
+            if (nx == 1 || nx == x) && (ny == 1 || ny == y) && (nz == 1 || nz == z) {
+                masks[reach] |= 1 << neighbor;
+            }
+            neighbor += 1;
+        }
+        reach += 1;
+    }
+    masks
+}
+
+const CLAIM_MASKS: [u32; 27] = claim_masks();
+
 /// Anchors of this phase's blocks that overlap any brick in `bricks`, each exactly once, in no
 /// particular order (blocks of one phase are disjoint, so order cannot change the result).
 ///
@@ -16,6 +38,21 @@ fn brick_origin(b: BrickCoord) -> IVec3 {
 /// lists it, so no sort or dedup is needed and the cost is a few lookups only for blocks that
 /// cross a brick face.
 pub(crate) fn anchors(bricks: &[BrickCoord], offset: IVec3) -> Vec<IVec3> {
+    if offset == IVec3::ZERO {
+        let mut out = Vec::with_capacity(bricks.len() * 64);
+        for &brick in bricks {
+            let origin = brick_origin(brick);
+            for y in (0..BRICK_SIZE).step_by(2) {
+                for z in (0..BRICK_SIZE).step_by(2) {
+                    for x in (0..BRICK_SIZE).step_by(2) {
+                        out.push(origin + IVec3::new(x, y, z));
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     let mut active: FastMap<IVec3, u64> = FastMap::default();
     for b in bricks {
         *active.entry(b.chunk).or_default() |= 1 << b.brick;
@@ -30,43 +67,25 @@ pub(crate) fn anchors(bricks: &[BrickCoord], offset: IVec3) -> Vec<IVec3> {
         let index = l.x + BRICKS_PER_AXIS * (l.z + BRICKS_PER_AXIS * l.y);
         active.get(&chunk).is_some_and(|mask| mask >> index & 1 != 0)
     };
-    let odd = offset != IVec3::ZERO;
-    let mut out = Vec::with_capacity(bricks.len() * if odd { 90 } else { 64 });
+    let mut out = Vec::with_capacity(bricks.len() * 90);
     for &b in bricks {
         let o = brick_origin(b);
         let global = o / BRICK_SIZE;
-        // Per axis: (anchor, first and last brick offset the block reaches). In an odd phase the block
-        // starting one cell before the brick reaches back into the previous brick, and the block at the
-        // brick's last cell reaches into the next.
-        let axis = |a: usize| -> Vec<(i32, i32, i32)> {
-            let mut v = Vec::with_capacity(5);
-            if odd {
-                v.push((o[a] - 1, -1, 0));
+        let mut active_neighbors = 0;
+        // Encode neighbors in (z, y, x) order. Index 13 is the current brick.
+        for neighbor in 0..13 {
+            let delta = IVec3::new(neighbor % 3 - 1, neighbor / 3 % 3 - 1, neighbor / 9 - 1);
+            if is_active(global + delta) {
+                active_neighbors |= 1 << neighbor;
             }
-            v.extend((0..BRICK_SIZE / 2).map(|k| {
-                let anchor = o[a] + 2 * k + offset[a];
-                (anchor, 0, i32::from(anchor == o[a] + BRICK_SIZE - 1))
-            }));
-            v
-        };
-        let (xs, ys, zs) = (axis(0), axis(1), axis(2));
-        for &(y, y_lo, y_hi) in &ys {
-            for &(z, z_lo, z_hi) in &zs {
-                for &(x, x_lo, x_hi) in &xs {
-                    let mut claimed = true;
-                    'reach: for sz in z_lo..=z_hi {
-                        for sy in y_lo..=y_hi {
-                            for sx in x_lo..=x_hi {
-                                // An active brick that comes first in (z, y, x) order lists this block.
-                                if (sz, sy, sx) < (0, 0, 0) && is_active(global + IVec3::new(sx, sy, sz)) {
-                                    claimed = false;
-                                    break 'reach;
-                                }
-                            }
-                        }
-                    }
-                    if claimed {
-                        out.push(IVec3::new(x, y, z));
+        }
+        let axis = [(-1, 0), (1, 1), (3, 1), (5, 1), (7, 2)];
+        for (y, y_reach) in axis {
+            for (z, z_reach) in axis {
+                for (x, x_reach) in axis {
+                    let reach = x_reach + 3 * y_reach + 9 * z_reach;
+                    if active_neighbors & CLAIM_MASKS[reach] == 0 {
+                        out.push(o + IVec3::new(x, y, z));
                     }
                 }
             }

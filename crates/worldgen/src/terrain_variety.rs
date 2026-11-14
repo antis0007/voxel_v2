@@ -400,12 +400,21 @@ fn mesa(wx: f32, wz: f32, seed: u32, h: f32, version: u32) -> f32 {
         0.60,
         value_noise2(wx / 190.0, wz / 190.0, seed.wrapping_add(9741)),
     ) * 30.0;
+    if version >= MESA_SOFT_GENERATOR {
+        let warp = (value_noise2(wx / 53.0, wz / 53.0, seed.wrapping_add(9765)) - 0.5) * 4.0;
+        let t = (h + rise + warp) / 8.0;
+        return ((t.floor() + smoothstep(0.0, 1.0, t.fract())) * 8.0 - h) * 0.6;
+    }
     let raised = h + rise;
     let t = raised / 8.0;
     let riser = if version >= 23 { (0.0, 1.0) } else { (0.72, 0.95) };
     let stepped = (t.floor() + smoothstep(riser.0, riser.1, t.fract())) * 8.0;
     stepped - h
 }
+
+/// Generator 57: plateau benches get wandering edges and a gentler blend, so
+/// the mesas stop reading as contour stairs.
+pub(super) const MESA_SOFT_GENERATOR: u32 = 57;
 
 /// A bowl with a raised rim around jittered centres on a 480 m grid.
 fn crater(wx: f32, wz: f32, seed: u32) -> f32 {

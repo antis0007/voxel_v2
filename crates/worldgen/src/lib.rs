@@ -7,18 +7,54 @@ use engine_core::{CHUNK_SIZE, PADDED_CHUNK_SIZE, floor_div};
 use engine_core::VoxelScalePreset;
 pub use engine_voxel::{
     CURRENT_GENERATOR_VERSION, ChunkData, WATER_LEVEL_METERS, WORLD_MAX_Y_METERS, WORLD_MIN_Y_METERS,
-    WorldSampleConfig, WorldType,
+    WorldSampleConfig, WorldType, RealmKind,
 };
 use glam::{IVec3, Vec3};
 use std::collections::HashSet;
 pub use engine_core::hash::{hash01, hash_u32};
-/// Clumped woodland crowns with resolution-gated leaf relief; dormant.
+
+/// Ribs, camps, hall hazard shifts and manyfold beacons. Older versions keep their samplers.
+pub const SEEDED_REALMS: u32 = 111;
+/// Original leaf-relief authoring version, also available in tree-only release 127.
 pub const TREE_FOLIAGE_VERSION: u32 = trees::foliage::VERSION;
 
 pub mod amberroot;
+mod column_memo;
+pub mod nether;
+pub mod hell_gate;
+pub mod planet;
+pub mod planet_freight;
+pub mod planetary;
+pub mod plants;
+pub mod flora;
+mod deadwood;
+pub mod wayside;
+pub mod planet_climate;
+pub mod planet_ocean;
+pub mod planet_profile;
+pub mod surveyor;
+pub mod basin;
+pub mod deep;
+pub mod placer;
+pub mod volcano;
+pub mod vistas;
+pub mod manyfold;
+pub mod moon;
+pub mod station;
+pub mod hall;
+pub mod lightless;
+pub mod highfold;
+pub mod gilded;
+pub mod anchor_studio;
 pub mod architecture;
 pub mod bedrock;
+pub mod biome;
 pub mod cistern;
+pub mod fernwake;
+pub mod households;
+pub mod civilization;
+pub mod public_works;
+pub mod karst;
 pub mod dungeon;
 pub mod habitats_region;
 #[cfg(test)]
@@ -30,19 +66,34 @@ mod gen_probe;
 #[cfg(test)]
 mod map_probe;
 #[cfg(test)]
+mod planet_probe;
+#[cfg(test)]
 mod horizon_agreement;
 mod generation_cache;
+pub mod ground_exposure;
 pub mod landscape;
 pub mod ecology;
 pub mod drainage;
+pub mod gates;
 pub mod geo;
 pub mod sphere;
 pub mod lakes;
 pub mod river_ice;
 pub mod lore;
+pub mod meridian_terminal;
 mod ore_geology;
 pub mod prism_sanctum;
+pub mod ruins;
+/// Eye and target along the east road link of region (rx, rz), for review.
+pub fn road_review_view(cfg: &WorldSampleConfig, rx: i32, rz: i32) -> Option<(Vec3, Vec3)> {
+    surface::road_review_view(cfg, rx, rz)
+}
+
+/// Highest generator version a benchmark may request: the newest dormant gate.
+pub const REVIEW_GENERATOR_VERSION: u32 = ruins::VERSION;
 pub mod sites;
+#[cfg(test)]
+mod floating_check;
 pub mod surface;
 pub mod terrain_variety;
 mod terrain_detail;
@@ -59,6 +110,26 @@ pub mod zones;
 #[cfg(test)]
 pub mod test_world {
     use super::*;
+
+    /// World seed for invariant tests: random per process, `VOXEL_TEST_SEED=<n>` replays one.
+    ///
+    /// Fixed seeds let every test pass on the one world it was tuned on; a fresh seed per run
+    /// is what finds the edge cases. Golden and pinned-hash tests keep their literal seeds.
+    pub fn seed() -> u32 {
+        static SEED: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+        let seed = *SEED.get_or_init(|| {
+            std::env::var("VOXEL_TEST_SEED").ok().and_then(|s| s.trim().parse().ok()).unwrap_or_else(|| {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as u64);
+                engine_core::hash::hash_u32((nanos ^ (nanos >> 32)) as u32 ^ std::process::id())
+            })
+        });
+        // Captured per test and printed only when that test fails.
+        eprintln!("worldgen test seed {seed} (replay: VOXEL_TEST_SEED={seed})");
+        seed
+    }
+
     pub struct World {
         pub generator_version: u32,
         pub seed: u32,
@@ -71,6 +142,7 @@ pub mod test_world {
         }
         pub fn sample_config(&self) -> WorldSampleConfig {
             WorldSampleConfig {
+                planet: None,
                 generator_version: self.generator_version,
                 seed: self.seed,
                 world_type: self.world_type,
@@ -117,6 +189,25 @@ pub struct TreeProfile {
     form: trees::TreeForm,
 }
 
+impl TreeProfile {
+    /// Box outside which `tree_block` is always Air: Chebyshev reach from the
+    /// anchor and the y range. `gen_probe_tree_reach_holds` checks it against
+    /// every voxel of every tree over a wide region, versions and scales.
+    fn reach(&self, cfg: &WorldSampleConfig) -> (i32, i32, i32) {
+        let margin = cfg.blocks_for_span(8.0);
+        let across = self.canopy_radius + self.branch_len + self.lean_x.abs() + self.lean_z.abs();
+        let up = self.trunk_h + self.canopy_height + self.branch_len;
+        (across + margin, self.ground_y - margin, self.ground_y + up + margin)
+    }
+
+    fn may_fill(&self, cfg: &WorldSampleConfig, p: IVec3) -> bool {
+        let (across, low, high) = self.reach(cfg);
+        (low..=high).contains(&p.y)
+            && (p.x - self.anchor_x).abs() <= across
+            && (p.z - self.anchor_z).abs() <= across
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct BushProfile {
     anchor_x: i32,
@@ -144,6 +235,10 @@ pub struct CaveColumn {
 
 #[derive(Clone, Copy)]
 pub struct ColumnSample {
+    /// Physical surface-deposit thickness above the eroded bed; derived, never saved.
+    pub deposit_m: f32,
+    /// Surface buried beneath deposit_m; filler retains the buried soil.
+    pub deposit_bed_surface: BlockId,
     pub height: i32,
     pub surface: BlockId,
     pub filler: BlockId,
@@ -471,11 +566,19 @@ pub fn distant_surface(cfg: &WorldSampleConfig, x: i32, z: i32) -> (f32, BlockId
     (column.height as f32 + 1.0, column.surface)
 }
 
+
 pub fn sample_column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
     generation_cache::column(cfg, x, z)
 }
 
 pub fn sample_column_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
+    if cfg.world_type == WorldType::Hall { return hall::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Lightless) { return lightless::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Gilded) { return gilded::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Highfold) { return highfold::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Manyfold { return manyfold::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Planet { return planet::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Nether { return nether::column(cfg,x,z); }
     if cfg.generator_version >= 2 {
         return landscape::column(cfg, x, z);
     }
@@ -518,10 +621,11 @@ pub fn sample_column_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> Column
 
     let world_modifier = match cfg.world_type {
         WorldType::Superflat => 2.0 + detail * 0.5,
-        WorldType::Hills => blended + coast + mountain_boost * 0.65 - valley_cut,
+        WorldType::Hills | WorldType::Planet | WorldType::Manyfold => blended + coast + mountain_boost * 0.65 - valley_cut,
         WorldType::Ridged => {
             blended + coast * 0.45 + ridge_shape * 18.0 + mountain_boost - valley_cut * 0.35
         }
+        WorldType::Nether | WorldType::Hall | WorldType::Realm(_) => unreachable!("dimension columns use their own generator"),
     };
 
     let height = cfg.clamp_height(cfg.blocks_for_height(world_modifier));
@@ -543,7 +647,7 @@ pub fn sample_column_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> Column
         BlockId::Dirt
     };
 
-    ColumnSample {
+    ColumnSample { deposit_m: 0.0, deposit_bed_surface: crate::BlockId::Stone,
         height,
         surface,
         filler,
@@ -554,7 +658,38 @@ pub fn sample_column_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> Column
     }
 }
 
+/// Carved cell: water only in a sparse one-cell pocket on the water table.
+pub(crate) fn aquifer_pocket(cfg: &WorldSampleConfig, p: IVec3, column: &ColumnSample) -> BlockId {
+    let table = water_table(cfg, p.x, p.z);
+    if cfg.world_type == WorldType::Planet && planetary::watershed_erosion(cfg.generator_version) {
+        return if p.y <= table.min(column.height - cfg.blocks_for_span(7.0)) {
+            BlockId::Water
+        } else {
+            BlockId::Air
+        };
+    }
+    // The pocket noise matters only on the table row; skipping it elsewhere
+    // cannot change the result.
+    if p.y == table
+        && fbm2(cfg.world_x(p.x)*0.025, cfg.world_z(p.z)*0.025, cfg.seed.wrapping_add(1871)) > 0.72
+        && p.y > cfg.min_world_y()+1
+        && !cave_carves(cfg, p-IVec3::Y, column) {
+        BlockId::Water
+    } else { BlockId::Air }
+}
+
 pub fn water_table(cfg: &WorldSampleConfig, x: i32, z: i32) -> i32 {
+    thread_local! {
+        static MEMO: column_memo::ColumnMemo<i32> = const { column_memo::ColumnMemo::new() };
+    }
+    MEMO.with(|memo| memo.get(cfg, x, z, || water_table_uncached(cfg, x, z)))
+}
+
+fn water_table_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> i32 {
+    if matches!(cfg.world_type, WorldType::Nether | WorldType::Hall | WorldType::Realm(_)) { return cfg.min_world_y(); }
+    if cfg.world_type == WorldType::Planet && planetary::watershed_erosion(cfg.generator_version) {
+        return planetary::aquifer_head(cfg, x, z);
+    }
     let climate = sample_climate(cfg, x, z);
     let coast = saturate((0.54 - climate.continentalness) / 0.18);
     let aquifer = fbm2(
@@ -574,6 +709,9 @@ pub fn water_table(cfg: &WorldSampleConfig, x: i32, z: i32) -> i32 {
 }
 
 pub fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column: &ColumnSample) -> bool {
+    let caves = cfg.planet_settings().map_or(1.0, |s| s.unit(8) as f32 * 2.0);
+    if caves == 0.0 { return false; }
+    if planetary::active(cfg) { return planetary::cave_carves(cfg, p, column); }
     if matches!(cfg.world_type, WorldType::Superflat) {
         return false;
     }
@@ -609,7 +747,7 @@ pub fn cave_carves(cfg: &WorldSampleConfig, p: IVec3, column: &ColumnSample) -> 
     let ravine = column.cave.ravine;
     let ravine_center = column.cave.ravine_center;
     let ravine_half_h = column.cave.ravine_half_h;
-    let bias = saturate(depth / 24.0) * 0.12;
+    let bias = saturate(depth / 24.0) * 0.12 + (caves - 1.0) * 0.10;
     let surface_guard = saturate((10.0 - depth) / 10.0) * 0.16;
 
     spaghetti > 0.86 + surface_guard - bias
@@ -625,6 +763,9 @@ pub fn tree_profile_for_cell(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) 
 /// Intermediate woodland uses the same cached spawn decision as editable trees.
 /// Dimensions are metres, so quarter-metre worlds do not lose their forest LOD.
 #[derive(Clone,Copy,Debug,PartialEq)]
+pub enum TreeCanopy { Broadleaf, Conifer, Cycad, Fungal, Rainforest, Redwood, Cypress }
+
+#[derive(Clone,Copy,Debug,PartialEq)]
 pub struct TreeVisual {
     pub base: Vec3,
     pub height: f32,
@@ -632,8 +773,16 @@ pub struct TreeVisual {
     pub radius: f32,
     pub crown_height: f32,
     pub conifer: bool,
+    pub canopy: TreeCanopy,
+    pub foliage: BlockId,
     pub seed: u32,
+    /// Branch-group crown masses (generator 137 broadleaf), metres from `base`.
+    pub lobes: [TreeLobe; 8],
+    pub lobe_count: u8,
 }
+
+pub use trees::structure::Lobe as TreeLobe;
+pub use trees::WOODLAND_HABITAT_PREVIEW;
 
 pub fn tree_visual(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeVisual> {
     let tree = tree_profile_for_cell(cfg, cell_x, cell_z)?;
@@ -649,7 +798,16 @@ pub fn tree_visual_lod(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footpr
 
 pub fn tree_visual_from_profile(cfg: &WorldSampleConfig, tree: TreeProfile) -> TreeVisual {
     let scale = cfg.voxel_meters();
-    let (reach, top) = trees::crown_bounds(cfg, &tree);
+    let ((reach, top), lobes, lobe_count) = if trees::structure::applies(cfg, &tree) {
+        let (bounds, mut lobes, count) = trees::structure::visual(cfg, &tree);
+        // Lobes are metres above the ground voxel; the proxy base is one voxel up.
+        for lobe in &mut lobes[..count] {
+            lobe.centre.y -= scale;
+        }
+        (bounds, lobes, count)
+    } else {
+        (trees::crown_bounds(cfg, &tree), [TreeLobe::default(); 8], 0)
+    };
     TreeVisual {
         // The first trunk voxel sits one cell above the surface voxel, so the
         // visible trunk base is the top face of ground_y, not its centre.
@@ -667,13 +825,28 @@ pub fn tree_visual_from_profile(cfg: &WorldSampleConfig, tree: TreeProfile) -> T
         // leaf top, measured from the same base the proxy is drawn from.
         crown_height: (top - tree.trunk_h as f32 * scale).max(scale),
         conifer: tree.conifer,
+        canopy: match tree.form {
+            trees::TreeForm::Cycad => TreeCanopy::Cycad,
+            trees::TreeForm::Fungal => TreeCanopy::Fungal,
+            trees::TreeForm::Cypress => TreeCanopy::Cypress,
+            form if form.is_rainforest() => TreeCanopy::Rainforest,
+            trees::TreeForm::Redwood if trees::is_tall_redwood(cfg, &tree) => TreeCanopy::Redwood,
+            _ if tree.conifer => TreeCanopy::Conifer,
+            _ => TreeCanopy::Broadleaf,
+        },
+        foliage: if tree.form==trees::TreeForm::Fungal {
+            if hash2(tree.cell_x,tree.cell_z,cfg.seed.wrapping_add(19431))>0.5 {BlockId::UmberCap} else {BlockId::AmberCap}
+        } else if tree.conifer {BlockId::PineLeaves} else {BlockId::Leaves},
         seed: (tree.cell_x as u32).wrapping_mul(73856093)
             ^ (tree.cell_z as u32).wrapping_mul(19349663)
             ^ cfg.seed,
+        lobes,
+        lobe_count: lobe_count as u8,
     }
 }
 
 pub fn tree_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
+    if matches!(cfg.world_type, WorldType::Nether | WorldType::Hall | WorldType::Realm(_)) { return None; }
     tree_profile_evaluated(cfg, cell_x, cell_z, None)
 }
 
@@ -686,15 +859,41 @@ pub(crate) fn tree_anchor(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> 
 }
 
 pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32, footprint: Option<f32>) -> Option<TreeProfile> {
+    // Resident blocks in these worlds never grow woodland. A hills-profile
+    // crown would stand in the distance and vanish on approach.
+    // Version 74 planets are a bare shell. Later planets grow the column biome's
+    // woodland in atlas space, so the shell projection places it on the ground.
+    let planet_woods = cfg.world_type == WorldType::Planet && cfg.generator_version >= planet::BIOME_VERSION;
+    if matches!(cfg.world_type, WorldType::Nether | WorldType::Planet | WorldType::Manyfold | WorldType::Hall | WorldType::Realm(_))
+        && !planet_woods
+    {
+        return None;
+    }
     let (anchor_x, anchor_z) = tree_anchor(cfg, cell_x, cell_z);
 
     let column_at = |x, z| footprint.map_or_else(|| sample_column(cfg, x, z), |step| landscape::preview_column_lod(cfg, x, z, step));
-    if trees::giant::candidate(cfg, cell_x, cell_z)
+    if cfg.world_type != WorldType::Planet && trees::giant::candidate(cfg, cell_x, cell_z)
+        && !(cfg.generator_version >= 54 && sites::tree_reserved(cfg,cfg.world_x(anchor_x),cfg.world_z(anchor_z)))
         && let Some(giant) = trees::giant::profile(cfg, (cell_x, cell_z), (anchor_x, anchor_z))
     {
         return Some(giant);
     }
-    let column = column_at(anchor_x, anchor_z);
+    // Column density is capped at one. Reject impossible rolls before
+    // evaluating terrain, while keeping giant placement independent of them.
+    let chance = hash2(cell_x, cell_z, cfg.seed.wrapping_add(433));
+    let density_factor = if cfg.generator_version >= 2 { 0.88 } else { 0.22 };
+    if chance > density_factor {
+        return None;
+    }
+    if ruins::clears_vegetation(cfg, cfg.world_x(anchor_x), cfg.world_z(anchor_z))
+        || civilization::clears_vegetation(cfg, cfg.world_x(anchor_x), cfg.world_z(anchor_z))
+    {
+        return None;
+    }
+    let (column, preview) = footprint.map_or_else(
+        || (sample_column(cfg, anchor_x, anchor_z), None),
+        |step| landscape::preview_column_and_landscape(cfg, anchor_x, anchor_z, step),
+    );
     let ground_y = column.height;
     let woodland_soil = cfg.generator_version >= 11
         && matches!(
@@ -705,33 +904,31 @@ pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32,
     if column.surface != BlockId::Grass
         && !(cfg.generator_version >= 2 && column.surface == BlockId::SnowGrass)
         && !woodland_soil
+        && !(cfg.generator_version >= 94
+            && matches!(column.surface, BlockId::GroveMoss | BlockId::FungalSoil)
+            && column.vegetation_density > 0.20)
     {
         return None;
     }
 
-    let chance = hash2(cell_x, cell_z, cfg.seed.wrapping_add(433));
-    if chance
-        > column.vegetation_density
-            * if cfg.generator_version >= 2 {
-                0.88
-            } else {
-                0.22
-            }
-    {
+    if chance > column.vegetation_density * density_factor {
         return None;
     }
 
-    let h_nx = column_at(anchor_x - 1, anchor_z).height;
-    let h_px = column_at(anchor_x + 1, anchor_z).height;
-    let h_nz = column_at(anchor_x, anchor_z - 1).height;
-    let h_pz = column_at(anchor_x, anchor_z + 1).height;
-    let slope = (h_nx - ground_y)
-        .abs()
-        .max((h_px - ground_y).abs())
-        .max((h_nz - ground_y).abs())
-        .max((h_pz - ground_y).abs());
-    if slope > cfg.blocks_for_span(0.9)
-        || ground_y <= cfg.water_level() + cfg.blocks_for_span(2.2).max(2)
+    if cfg.generator_version >= 54 && sites::tree_reserved(cfg,cfg.world_x(anchor_x),cfg.world_z(anchor_z)) {
+        return None;
+    }
+    // Gate 136 riparian woods crowd the banks; their trunks stay out of the water.
+    if geo::corridor::active(cfg) && footprint.is_none()
+        && geo::ground(cfg, cfg.world_x(anchor_x), cfg.world_z(anchor_z), cfg.voxel_meters()).water_m.is_some()
+    {
+        return None;
+    }
+    let slope_limit = cfg.blocks_for_span(0.9);
+    if ground_y <= cfg.water_level() + cfg.blocks_for_span(2.2).max(2)
+        || [(-1, 0), (1, 0), (0, -1), (0, 1)].into_iter().any(|(dx, dz)| {
+            (column_at(anchor_x + dx, anchor_z + dz).height - ground_y).abs() > slope_limit
+        })
     {
         return None;
     }
@@ -776,13 +973,23 @@ pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32,
         form: trees::TreeForm::Classic,
     };
     if cfg.generator_version >= 6 {
-        if let Some(step) = footprint {
+        if let Some(climate) = preview {
+            trees::profile_from_landscape(cfg, &mut tree, climate);
+        } else if let Some(step) = footprint {
             trees::profile_lod(cfg, &mut tree, step);
         } else {
             trees::profile(cfg, &mut tree);
         }
     } else if cfg.generator_version >= 5 {
         vegetation::shape_profile(cfg, &mut tree);
+    }
+    if ruins::tree_conflicts(
+        cfg,
+        cfg.world_x(anchor_x),
+        cfg.world_z(anchor_z),
+        cfg.world_x(tree.canopy_radius.max(tree.branch_len)) * 1.65 + 2.0,
+    ) {
+        return None;
     }
     if cfg.generator_version >= trees::giant::VERSION
         && trees::giant::crowds(cfg, &tree, |x, z| tree_anchor(cfg, x, z))
@@ -803,6 +1010,7 @@ pub fn bush_profile_for_cell(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) 
 }
 
 pub fn bush_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
+    if matches!(cfg.world_type, WorldType::Nether | WorldType::Hall | WorldType::Realm(_)) { return None; }
     let cell_size = cfg.blocks_for_span(8.0);
     let border = cfg
         .blocks_for_span(1.5)
@@ -819,17 +1027,41 @@ pub fn bush_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) 
     let anchor_x = cell_x * cell_size + offset_x;
     let anchor_z = cell_z * cell_size + offset_z;
 
-    let column = sample_column(cfg, anchor_x, anchor_z);
-    let ground_y = column.height;
-    if column.surface != BlockId::Grass
-        || column.vegetation_density <= 0.24
-        || ground_y <= cfg.water_level() + 1
+    if ruins::clears_vegetation(cfg, cfg.world_x(anchor_x), cfg.world_z(anchor_z))
+        || civilization::clears_vegetation(cfg, cfg.world_x(anchor_x), cfg.world_z(anchor_z))
     {
         return None;
     }
+    let column = sample_column(cfg, anchor_x, anchor_z);
+    let ground_y = column.height;
+    // Gate 136: closed stands carry an understory on their own litter and
+    // moss, about three bushes in four cells where density saturates.
+    let understory = geo::corridor::active(cfg);
+    if column.vegetation_density <= 0.24 || ground_y <= cfg.water_level() + 1 {
+        return None;
+    }
+    let jungle = trees::rainforest::thicket(cfg, anchor_x, anchor_z);
+    let colonies = cfg.generator_version >= engine_voxel::CANOPY_UNDERSTORY_GENERATOR;
+    let mossy_soil = colonies && column.vegetation_density > 0.45
+        && matches!(column.surface, BlockId::GroveMoss | BlockId::Dirt | BlockId::SnowGrass);
+    let floor_soil = matches!(column.surface, BlockId::Dirt | BlockId::Mud | BlockId::GroveMoss)
+        && (jungle > 0.0 || (understory && column.vegetation_density > 0.8));
+    if column.surface != BlockId::Grass && !floor_soil && !mossy_soil {
+        return None;
+    }
 
+    if understory && geo::ground(cfg, cfg.world_x(anchor_x), cfg.world_z(anchor_z), cfg.voxel_meters()).water_m.is_some() {
+        return None;
+    }
     let chance = hash2(cell_x, cell_z, cfg.seed.wrapping_add(461));
-    if chance > column.vegetation_density * 0.26 {
+    let thicket = if understory { smoothstep(0.75, 1.0, column.vegetation_density) * 0.5 } else { 0.0 };
+    let colony = if colonies {
+        let patch = value_noise2(cfg.world_x(anchor_x) / 23.0, cfg.world_z(anchor_z) / 23.0, cfg.seed.wrapping_add(194_033));
+        smoothstep(0.40, 0.74, patch) * column.vegetation_density.min(1.0)
+    } else { 0.0 };
+    let cover = column.vegetation_density * 0.26 + thicket + jungle * 0.44 + colony * 0.20;
+    let swale = jungle > 0.0 && column.surface == BlockId::Mud && trees::rainforest::forest_floor(cfg);
+    if chance > cover * if swale { 0.42 } else { 1.0 } {
         return None;
     }
 
@@ -846,16 +1078,26 @@ pub fn bush_profile_uncached(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) 
         return None;
     }
 
-    let base_radius = if hash2(cell_x, cell_z, cfg.seed.wrapping_add(487)) > 0.58 {
+    let spread = hash2(cell_x, cell_z, cfg.seed.wrapping_add(487));
+    let mut base_radius = if jungle > 0.0 {
+        cfg.blocks_for_span(1.2 + jungle * (0.8 + spread * 1.6))
+    } else if spread > 0.58 {
         cfg.blocks_for_span(1.6)
     } else {
         cfg.blocks_for_span(1.1)
     };
-    let top_dy = if hash2(cell_x, cell_z, cfg.seed.wrapping_add(503)) > 0.74 {
+    let height = hash2(cell_x, cell_z, cfg.seed.wrapping_add(503));
+    let mut top_dy = if jungle > 0.0 {
+        cfg.blocks_for_span(0.9 + jungle * height * 1.6)
+    } else if height > 0.74 {
         cfg.blocks_for_span(1.7)
     } else {
         cfg.blocks_for_span(1.1)
     };
+    if colony > 0.0 && !swale {
+        base_radius = base_radius.max(cfg.blocks_for_span(1.35 + colony * (1.65 + spread * 1.5) + jungle * 0.55));
+        top_dy = top_dy.max(cfg.blocks_for_span(0.8 + colony * (0.55 + height * 1.2) + jungle * 0.45));
+    }
 
     let lean_index = ((hash2(cell_x, cell_z, cfg.seed.wrapping_add(509)) * 5.0) as i32).min(4);
     let (lean_x, lean_z) = match lean_index {
@@ -881,6 +1123,34 @@ pub fn bush_contains(cfg: &WorldSampleConfig, bush: BushProfile, p: IVec3) -> bo
     let dy = p.y - (bush.ground_y + 1);
     if dy < 0 || dy > bush.top_dy {
         return false;
+    }
+    if cfg.generator_version >= engine_voxel::CANOPY_UNDERSTORY_GENERATOR {
+        let (x, z) = (p.x - bush.anchor_x, p.z - bush.anchor_z);
+        let r = bush.base_radius as f32;
+        if x.abs().max(z.abs()) as f32 > r * 1.20 {
+            return false;
+        }
+        let (lx, lz) = if bush.lean_x == 0 && bush.lean_z == 0 { (1, 0) } else { (bush.lean_x, bush.lean_z) };
+        let along = (x * lx + z * lz) as f32 / r;
+        let across = (z * lx - x * lz) as f32 / r;
+        let y = dy as f32 / (bush.top_dy + 1) as f32;
+        // A larger mound with a second offset shoulder, both joined at the base.
+        let main = ((along + 0.14) / 0.79).powi(2) + (across / 0.81).powi(2) + ((y - 0.29) / 0.69).powi(2);
+        let wing = ((along - 0.49) / 0.59).powi(2) + ((across - 0.16) / 0.60).powi(2) + ((y - 0.12) / 0.57).powi(2);
+        let shape = main.min(wing);
+        if shape < 0.87 || shape >= 1.10 {
+            return shape < 0.87;
+        }
+        let seed = cfg.seed.wrapping_add(521);
+        let edge = if cfg.generator_version >= engine_voxel::DISTINCT_FOLIAGE_GENERATOR {
+            // Keep clusters of leaves coherent as the grid gets finer.
+            let frequency = cfg.voxel_meters() / 1.4;
+            value_noise3(x as f32 * frequency, dy as f32 * frequency, z as f32 * frequency,
+                seed)
+        } else {
+            hash3(p.x, p.y, p.z, seed)
+        };
+        return shape < 0.87 + 0.23 * edge;
     }
 
     let (center_x, center_z) = if dy >= 1 {
@@ -916,12 +1186,63 @@ pub fn bush_contains(cfg: &WorldSampleConfig, bush: BushProfile, p: IVec3) -> bo
 /// Single-voxel queries use the per-thread caches; whole chunks use
 /// `RegionProfiles`, which resolves each profile and column once.
 pub trait Profiles {
+    fn hell_ruin(&self, cfg: &WorldSampleConfig, x: i32, z: i32, c: ColumnSample) -> Option<nether::RuinColumn> {
+        nether::ruin_column(cfg, x, z, c)
+    }
     fn tree(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile>;
+    /// Highest y any tree this sampler can return may fill; `None` when unknown.
+    fn tree_ceiling(&self, _cfg: &WorldSampleConfig) -> Option<i32> {
+        None
+    }
     fn bush(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile>;
     fn river_top(&self, cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<f32>;
 }
 
 pub struct CachedProfiles;
+
+/// Generated inland water occupies the surface column above its bed.
+/// Cache both wet and dry columns so simulation and meshing can reuse the plan.
+pub fn steady_water_column(cfg: &WorldSampleConfig, x: i32, z: i32) -> Option<(i32, f32)> {
+    use std::{cell::RefCell, collections::HashMap};
+    type Columns = HashMap<(i32, i32), Option<(i32, f32)>>;
+    thread_local! {
+        static COLUMNS: RefCell<(Option<WorldSampleConfig>, Columns)> = RefCell::default();
+    }
+    if cfg.generator_version < 79
+        || !matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged | WorldType::Planet)
+    {
+        return None;
+    }
+    COLUMNS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let (previous, columns) = &mut *cache;
+        if *previous != Some(*cfg) || columns.len() >= 8192 {
+            columns.clear();
+            *previous = Some(*cfg);
+        }
+        *columns.entry((x, z)).or_insert_with(|| {
+            let head = CachedProfiles.river_top(cfg, x, z)? / cfg.voxel_meters();
+            let bed = terrain_height(cfg, x, z);
+            (head > (bed + 1).max(cfg.water_level() + 1) as f32).then_some((bed, head))
+        })
+    })
+}
+
+/// Fractional starting stock at a natural river's free surface. Call only for
+/// a known water voxel; earlier saves retain their whole-cell inventory.
+pub fn river_water_amount(cfg: &WorldSampleConfig, p: IVec3) -> Option<u64> {
+    if cfg.generator_version < 79 || p.y <= cfg.water_level()
+        || cfg.world_type == WorldType::Superflat { return None; }
+    let head = CachedProfiles.river_top(cfg, p.x, p.z)? / cfg.voxel_meters();
+    fractional_water_stock(cfg, head, p.y)
+}
+
+fn fractional_water_stock(cfg: &WorldSampleConfig, head: f32, y: i32) -> Option<u64> {
+    let fill = f64::from(head - y as f32);
+    if fill <= 0.0 || fill >= 1.0 { return None; }
+    let volume = engine_core::environment::cell_volume(cfg.voxel_scale);
+    Some((fill * volume as f64).round().clamp(1.0, volume as f64) as u64)
+}
 
 impl Profiles for CachedProfiles {
     fn tree(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
@@ -937,9 +1258,13 @@ impl Profiles for CachedProfiles {
         let inherited = valley::river_top(cfg, cfg.world_x(x), cfg.world_z(z));
         let regional = drainage::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
         let lake = lakes::sample(cfg, cfg.world_x(x), cfg.world_z(z)).water_m;
-        [inherited, regional, lake].into_iter().flatten().reduce(f32::max)
+        let surfaces = [inherited, regional, lake].into_iter().flatten();
+        if cfg.generator_version >= 62 { surfaces.reduce(f32::min) }
+        else { surfaces.reduce(f32::max) }
     }
 }
+
+type HellRuinSites = std::collections::HashMap<(i32, i32), Option<(f32, f32, u32)>>;
 
 /// Dense profile grids and river surfaces for a box of columns.
 ///
@@ -949,6 +1274,8 @@ impl Profiles for CachedProfiles {
 /// of the column. Each cell is filled on first use and then reused, so a chunk
 /// pays only for the cells its voxels actually reach.
 pub struct RegionProfiles {
+    hell_sites: std::cell::RefCell<HellRuinSites>,
+    hell_columns: Vec<std::cell::OnceCell<Option<nether::RuinColumn>>>,
     tree_min: (i32, i32),
     tree_w: i32,
     trees: Vec<std::cell::OnceCell<Option<TreeProfile>>>,
@@ -958,6 +1285,7 @@ pub struct RegionProfiles {
     column_min: (i32, i32),
     column_w: i32,
     rivers: Vec<std::cell::OnceCell<Option<f32>>>,
+    tree_ceiling: std::cell::OnceCell<i32>,
 }
 
 impl RegionProfiles {
@@ -974,6 +1302,10 @@ impl RegionProfiles {
         let (bush_min, bush_w, bush_h) = grid(cfg.blocks_for_span(8.0), 1);
         let rivers_on = cfg.generator_version >= 14;
         Self {
+            hell_sites: Default::default(),
+            hell_columns: if cfg.hell_ruins() {
+                (0..size * size).map(|_| std::cell::OnceCell::new()).collect()
+            } else { Vec::new() },
             tree_min,
             tree_w,
             trees: (0..tree_w * tree_h).map(|_| std::cell::OnceCell::new()).collect(),
@@ -985,15 +1317,36 @@ impl RegionProfiles {
             rivers: (0..if rivers_on { size * size } else { 0 })
                 .map(|_| std::cell::OnceCell::new())
                 .collect(),
+            tree_ceiling: std::cell::OnceCell::new(),
         }
     }
 }
 
 impl Profiles for RegionProfiles {
+    fn hell_ruin(&self, cfg: &WorldSampleConfig, x: i32, z: i32, c: ColumnSample) -> Option<nether::RuinColumn> {
+        let index = (z - self.column_min.1) * self.column_w + (x - self.column_min.0);
+        *self.hell_columns[index as usize].get_or_init(|| {
+            nether::ruin_column_with(cfg, x, z, c, |ix, iz| {
+                *self.hell_sites.borrow_mut().entry((ix, iz))
+                    .or_insert_with(|| nether::ruin_site(cfg, ix, iz))
+            })
+        })
+    }
     fn tree(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<TreeProfile> {
         let (x, z) = (cell_x - self.tree_min.0, cell_z - self.tree_min.1);
         *self.trees[(z * self.tree_w + x) as usize]
             .get_or_init(|| tree_profile_for_cell(cfg, cell_x, cell_z))
+    }
+    // The grid holds every cell `structure_block` asks about for this region.
+    fn tree_ceiling(&self, cfg: &WorldSampleConfig) -> Option<i32> {
+        Some(*self.tree_ceiling.get_or_init(|| {
+            let rows = self.trees.len() as i32 / self.tree_w.max(1);
+            (0..rows).flat_map(|z| (0..self.tree_w).map(move |x| (x, z)))
+                .filter_map(|(x, z)| self.tree(cfg, x + self.tree_min.0, z + self.tree_min.1))
+                .map(|tree| tree.reach(cfg).2)
+                .max()
+                .unwrap_or(i32::MIN)
+        }))
     }
     fn bush(&self, cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32) -> Option<BushProfile> {
         let (x, z) = (cell_x - self.bush_min.0, cell_z - self.bush_min.1);
@@ -1016,16 +1369,30 @@ pub fn structure_block(
     if p.y <= column.height || cfg.world_type == WorldType::Superflat {
         return BlockId::Air;
     }
+    if column.surface == BlockId::Gravel && p.y - column.height <= cfg.blocks_for_span(2.2)
+        && planetary::trail_reserves(cfg, cfg.world_x(p.x), cfg.world_z(p.z), 1.8)
+    {
+        return BlockId::Air;
+    }
 
     let cell_size = cfg.blocks_for_span(12.0);
     let base_cell_x = floor_div(p.x, cell_size);
     let base_cell_z = floor_div(p.z, cell_size);
 
+    let mut overlapping_foliage = BlockId::Air;
+    // A tree outside its reach box returns Air, which this loop ignores.
+    let above_trees = profiles.tree_ceiling(cfg).is_some_and(|top| p.y > top);
     for cell_z in (base_cell_z - 2)..=(base_cell_z + 2) {
+        if above_trees {
+            break;
+        }
         for cell_x in (base_cell_x - 2)..=(base_cell_x + 2) {
             let Some(tree) = profiles.tree(cfg, cell_x, cell_z) else {
                 continue;
             };
+            if !tree.may_fill(cfg, p) {
+                continue;
+            }
             let block = tree_block(cfg, tree, p);
             // Giants keep their crowns over trails; only head height is cleared.
             let cleared = |p: IVec3| {
@@ -1033,9 +1400,33 @@ pub fn structure_block(
                     && surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters())
             };
             if block != BlockId::Air && !cleared(p) {
+                // Wide crowns can cross several placement cells. Prefer a
+                // neighboring bole to foliage when both occupy this voxel.
+                let wide_crown = tree.form.is_rainforest()
+                    || matches!(tree.form, trees::TreeForm::OldOak | trees::TreeForm::CloudCrown | trees::TreeForm::PlateauCrown)
+                    || trees::is_tall_redwood(cfg, &tree);
+                if wide_crown && block != BlockId::Log {
+                    if overlapping_foliage == BlockId::Air || matches!(block, BlockId::Leaves | BlockId::PineLeaves) {
+                        overlapping_foliage = block;
+                    }
+                    continue;
+                }
                 return block;
             }
         }
+    }
+    if overlapping_foliage != BlockId::Air {
+        return overlapping_foliage;
+    }
+
+    let fallen = deadwood::block(cfg, p, column);
+    if fallen != BlockId::Air {
+        return fallen;
+    }
+
+    let find = wayside::block(cfg, p, column);
+    if find != BlockId::Air {
+        return find;
     }
 
     let bush_cell_size = cfg.blocks_for_span(8.0);
@@ -1049,6 +1440,20 @@ pub fn structure_block(
                 {
                     return BlockId::Bush;
                 }
+        }
+    }
+
+    if plants::active(cfg) {
+        let plant = plants::block_in_column(cfg, p, column);
+        if plant != BlockId::Air && !surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters()) {
+            return plant;
+        }
+    }
+
+    if flora::active(cfg) {
+        let plant = flora::block(cfg, p, column);
+        if plant != BlockId::Air && !surface::trail_clears(cfg, p.as_vec3() * cfg.voxel_meters()) {
+            return plant;
         }
     }
 
@@ -1075,6 +1480,8 @@ pub struct PaddedTerrain {
     pub bed_height: Vec<i32>,
     /// Fraction of the bed cell under water per padded column; empty when no column holds water.
     pub bed_frac: Vec<f32>,
+    /// Initial volume of partial natural surface cells, including the halo.
+    pub partial_water: Vec<(IVec3, u64)>,
     /// Highest sky-occluding cell per padded column (terrain height when it lies above the chunk).
     pub sky_ceiling: Vec<i32>,
 }
@@ -1085,11 +1492,23 @@ impl PaddedTerrain {
     }
 
     /// World y of the highest occluder in padded column (x, z), or one below the chunk when none.
+    /// Like `local_roof`, ignoring occluders at or above world `limit_y`.
+    fn roof_below(&self, x: i32, z: i32, limit_y: i32) -> i32 {
+        let end = limit_y.saturating_sub(self.origin.y).clamp(0, PADDED_CHUNK_SIZE);
+        self.roof_in_column(x, z, end)
+    }
+
     pub fn local_roof(&self, x: i32, z: i32) -> i32 {
+        self.roof_in_column(x, z, PADDED_CHUNK_SIZE)
+    }
+
+    fn roof_in_column(&self, x: i32, z: i32, end: i32) -> i32 {
         let size = PADDED_CHUNK_SIZE;
-        (0..size)
+        let base = (z * size + x) as usize;
+        let plane = (size * size) as usize;
+        (0..end)
             .rev()
-            .find(|&y| Self::sky_occluder(self.blocks[((y * size + z) * size + x) as usize]))
+            .find(|&y| Self::sky_occluder(self.blocks[base + y as usize * plane]))
             .map_or(self.origin.y - 1, |y| self.origin.y + y)
     }
 }
@@ -1101,49 +1520,123 @@ pub fn generate_padded(
 ) -> Option<PaddedTerrain> {
     let size = PADDED_CHUNK_SIZE;
     let origin = coord * CHUNK_SIZE - IVec3::ONE;
+    let columns = generation_cache::footprint(cfg, origin.x, origin.z, size, cancelled)?;
     let mut blocks = vec![BlockId::Air; (size * size * size) as usize];
     let mut bed_height = vec![0; (size * size) as usize];
     let profiles = RegionProfiles::new(cfg, origin.x, origin.z, size);
-    let columns = generation_cache::footprint(cfg, origin.x, origin.z, size, cancelled)?;
+    let min_y = cfg.min_world_y().saturating_sub(origin.y).clamp(0, size);
+    let end_y = cfg.max_world_y().saturating_sub(origin.y).clamp(0, size);
+    let plane = (size * size) as usize;
+    let mut wet_columns = [false; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize];
+    let mut occupied_columns = [false; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize];
     for z in 0..size {
         for x in 0..size {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
-            let column = columns[(z * size + x) as usize];
-            bed_height[(z * size + x) as usize] = column.height;
-            for y in 0..size {
-                blocks[((y * size + z) * size + x) as usize] =
-                    sample_block_with(cfg, origin + IVec3::new(x, y, z), column, &profiles);
+            let column_index = (z * size + x) as usize;
+            let column = columns[column_index];
+            bed_height[column_index] = column.height;
+            let world_x = origin.x + x;
+            let world_z = origin.z + z;
+            let basin = basin::covers(cfg, world_x, world_z);
+            let mut wet = false;
+            let mut occupied = false;
+            let slots = blocks[column_index..].iter_mut().step_by(plane);
+            for (y, slot) in (min_y..end_y).zip(slots.skip(min_y as usize)) {
+                // The loop bounds already exclude voxels outside the world.
+                let block = sample_block_in_world(
+                    cfg, IVec3::new(world_x, origin.y + y, world_z), column, &profiles, Some(basin),
+                );
+                *slot = block;
+                wet |= block == BlockId::Water;
+                occupied |= block != BlockId::Air;
             }
+            wet_columns[column_index] = wet;
+            occupied_columns[column_index] = occupied;
         }
     }
     let mut bed_frac = Vec::new();
-    if cfg.generator_version >= 30 && blocks.contains(&BlockId::Water) {
+    let mut partial_water = Vec::new();
+    if cfg.generator_version >= 30 && wet_columns.contains(&true) {
+        let water_level = cfg.water_level();
+        let check_river = cfg.generator_version >= 79
+            && cfg.world_type != WorldType::Superflat
+            && origin.y + size - 1 > water_level;
+        let voxel_meters = cfg.voxel_meters();
         // Only columns that hold water need the fraction; it costs one extra
         // landscape sample each and is identical on both sides of a chunk border.
         bed_frac = vec![0.0f32; (size * size) as usize];
         for z in 0..size {
             for x in 0..size {
-                let wet = (0..size).any(|y| blocks[((y * size + z) * size + x) as usize] == BlockId::Water);
-                if wet {
-                    bed_frac[(z * size + x) as usize] = landscape::bed_fraction(cfg, origin.x + x, origin.z + z);
+                let i = (z * size + x) as usize;
+                if wet_columns[i] {
+                    bed_frac[i] = landscape::bed_fraction(cfg, origin.x + x, origin.z + z, bed_height[i]);
+                    if check_river
+                        && let Some(level) = profiles.river_top(cfg, origin.x + x, origin.z + z)
+                    {
+                        let head = level / voxel_meters;
+                        let y = head.floor() as i32;
+                        let local_y = y - origin.y;
+                        if y > water_level && (0..size).contains(&local_y)
+                            && blocks[((local_y * size + z) * size + x) as usize] == BlockId::Water
+                            && let Some(amount) = fractional_water_stock(cfg, head, y)
+                        {
+                            partial_water.push((IVec3::new(origin.x + x, y, origin.z + z), amount));
+                        }
+                    }
                 }
             }
         }
     }
-    let mut terrain = PaddedTerrain { coord, origin, blocks, bed_height, bed_frac, sky_ceiling: Vec::new() };
+    let mut terrain = PaddedTerrain { coord, origin, blocks, bed_height, bed_frac, partial_water, sky_ceiling: Vec::new() };
     let mut sky_ceiling = terrain.bed_height.clone();
+    let voxel_meters = cfg.voxel_meters();
+    let top = origin.y + size;
+    let no_local_roof = origin.y - 1;
+    let local_roof = |x, z, i: usize| {
+        if occupied_columns[i] { terrain.local_roof(x, z) } else { no_local_roof }
+    };
     for z in 0..size {
         for x in 0..size {
             let i = (z * size + x) as usize;
-            if sky_ceiling[i] < origin.y + size {
-                sky_ceiling[i] = terrain.local_roof(x, z);
+            let span = vistas::span_soffit(cfg,
+                ((origin.x + x) as f32 + 0.5) * voxel_meters, ((origin.z + z) as f32 + 0.5) * voxel_meters);
+            if let Some(soffit) = span {
+                sky_ceiling[i] = if occupied_columns[i] {
+                    terrain.roof_below(x, z, (soffit / voxel_meters).floor() as i32)
+                } else {
+                    no_local_roof
+                };
+            } else if sky_ceiling[i] < top {
+                sky_ceiling[i] = local_roof(x, z, i);
+            } else if karst::skylight(cfg, origin.x+x, origin.z+z) {
+                // Daylight through a real shaft must not depend on upper-chunk residency.
+                let column = columns[i];
+                let clear = (top..=column.height).rev().all(|y| {
+                    !PaddedTerrain::sky_occluder(sample_block_with(cfg,
+                        IVec3::new(origin.x+x,y,origin.z+z),column,&profiles))
+                });
+                if clear { sky_ceiling[i] = local_roof(x, z, i); }
             }
         }
     }
     terrain.sky_ceiling = sky_ceiling;
     Some(terrain)
+}
+
+/// Hand-placed sites in hills order; `cavern` adds the underground site pass.
+pub(crate) fn authored_block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample, cavern: bool) -> Option<BlockId> {
+    let m = (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
+    vistas::priority_block(cfg,p,column)
+        .or_else(|| fernwake::sample(cfg, m))
+        .or_else(|| households::sample(cfg, m))
+        .or_else(|| meridian_terminal::block(cfg, p, column.height))
+        .or_else(|| undercrown::block(cfg, p, column.height))
+        .or_else(|| amberroot::block(cfg, p, column.height))
+        .or_else(|| sites::block(cfg, p, column.height))
+        .or_else(|| if cavern { sites::cavern(cfg, p, column.height) } else { None })
+        .or_else(|| vistas::block(cfg,p,column))
 }
 
 pub fn sample_block_with(
@@ -1155,6 +1648,68 @@ pub fn sample_block_with(
     if p.y < cfg.min_world_y() || p.y >= cfg.max_world_y() {
         return BlockId::Air;
     }
+    sample_block_in_world(cfg, p, column, profiles, None)
+}
+
+fn sample_block_in_world(
+    cfg: &WorldSampleConfig,
+    p: IVec3,
+    column: ColumnSample,
+    profiles: &impl Profiles,
+    basin: Option<bool>,
+) -> BlockId {
+    if let Some(block) = planetary::reference_relief::block(cfg, p, column) { return block; }
+    if cfg.world_type == WorldType::Hall { return hall::block(cfg, p); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Lightless) { return lightless::block(cfg, p); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Gilded) { return gilded::block(cfg, p); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Highfold) { return highfold::block(cfg, p); }
+    if let Some(block) = hell_gate::block(cfg, p, column) { return block; }
+    if cfg.world_type == WorldType::Nether { return nether::block_with(cfg, p, column, profiles); }
+    if cfg.world_type == WorldType::Manyfold { return manyfold::block(cfg,p); }
+    // The solved face shares the hills block path but none of its authored sites.
+    let basin = basin.unwrap_or_else(|| basin::covers(cfg, p.x, p.z));
+    // The elevator exists on every planet generator, including the planetary
+    // solver that bypasses the legacy basin. Its editable shaft must own this
+    // footprint before ruins/terrain, just as its fittings and boarding do.
+    if (basin || cfg.world_type == WorldType::Planet)
+        && let Some(block) = meridian_terminal::block(cfg, p, column.height)
+    {
+        return block;
+    }
+    // Planet caverns reach the solved face too; the hills site chain below is skipped there.
+    if basin && cfg.generator_version >= planet::UNDERGROUND_VERSION
+        && let Some(block) = sites::cavern(cfg, p, column.height)
+    {
+        return block;
+    }
+    let planetary = cfg.world_type == WorldType::Planet;
+    let crater_lake = planetary && planet::is_crater_lake(cfg, &column);
+    if planetary && (!basin || crater_lake) {
+        if !crater_lake
+            && let Some(block) = planet_freight::block(cfg, p, column)
+        {
+            return block;
+        }
+        if let Some(block) = surveyor::block(cfg, p, column) {
+            return block;
+        }
+        if cfg.generator_version >= ruins::REBUILT_VERSION
+            && let Some(block) = ruins::block(cfg, p, (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters(), cfg.world_y(column.height + 1))
+        {
+            return block;
+        }
+        if let Some(block) = civilization::block(cfg, p, column) {
+            return block;
+        }
+        let block = planet::block_with(cfg, p, column, profiles);
+        if block == BlockId::Air && p.y > column.height && cfg.generator_version >= planet::BIOME_VERSION {
+            let structure = structure_block(cfg, p, column, profiles);
+            if structure != BlockId::Air {
+                return structure;
+            }
+        }
+        return block;
+    }
 
     if cfg.generator_version >= bedrock::VERSION
         && p.y <= bedrock::ceiling(cfg)
@@ -1163,10 +1718,15 @@ pub fn sample_block_with(
         return BlockId::Bedrock;
     }
 
-    if cfg.generator_version >= 3 {
+    if cfg.generator_version >= 3 && !basin {
         // This patch belongs to generation, so rendering and collision agree.
         let m = p.as_vec3() * cfg.voxel_meters();
         if cfg.world_type != WorldType::Superflat && m.x.abs() < 10.0 && m.z.abs() < 10.0 {
+            if cfg.generator_version >= surface::SPAWN_ROAD_VERSION
+                && let Some(road) = surface::block(cfg, p, column.height, cfg.world_y(column.height + 1))
+            {
+                return road;
+            }
             if p.y > column.height {
                 return BlockId::Air;
             }
@@ -1178,11 +1738,7 @@ pub fn sample_block_with(
                 };
             }
         }
-        if let Some(block) = undercrown::block(cfg, p, column.height)
-            .or_else(|| amberroot::block(cfg, p, column.height))
-            .or_else(|| sites::block(cfg, p, column.height))
-            .or_else(|| sites::cavern(cfg, p, column.height))
-        {
+        if let Some(block) = authored_block(cfg, p, column, true) {
             return block;
         }
     }
@@ -1208,6 +1764,21 @@ pub fn sample_block_with(
     }
 
     if cave_carves(cfg, p, &column) {
+        // Small aquifer pockets replace continuous wet gallery floors.
+        // Previous worlds retain their generated cells and drainage behavior.
+        if cfg.generator_version >= 73 {
+            let pocket = aquifer_pocket(cfg, p, &column);
+            if pocket == BlockId::Air && basin && cfg.generator_version >= deep::VERSION {
+                return deep::cave_air(cfg, p, &column);
+            }
+            if pocket == BlockId::Air && flora::active(cfg) {
+                let plant = flora::cave(cfg, p, |q| flora::rock_at(cfg, q));
+                if plant != BlockId::Air {
+                    return plant;
+                }
+            }
+            return pocket;
+        }
         // Generator 17 leaves a wet floor instead of filling the gallery.
         // Older worlds still drown every carve that dips under the aquifer.
         if cfg.generator_version >= 17 {
@@ -1231,6 +1802,19 @@ pub fn sample_block_with(
         && let Some(block) = geo::subsurface(cfg, cfg.world_x(p.x), cfg.world_z(p.z), depth as f32 * cfg.voxel_meters())
     {
         return block;
+    }
+    if basin && depth <= cfg.blocks_for_span(1.5)
+        && placer::grade(cfg, cfg.world_x(p.x), cfg.world_z(p.z)).is_some_and(|g| g > placer::PAYDIRT_GRADE)
+        && profiles.river_top(cfg, p.x, p.z).is_some_and(|w| w > cfg.world_y(column.height))
+    {
+        return BlockId::Paydirt;
+    }
+    // Lode veins show in rock and on bare slopes, never through turf.
+    if basin && (depth >= cfg.blocks_for_span(2.0)
+            || matches!(column.surface, BlockId::Stone | BlockId::Gravel | BlockId::Limestone | BlockId::Basalt | BlockId::Sandstone))
+        && placer::vein(cfg, (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters())
+    {
+        return BlockId::GoldQuartz;
     }
     // Generator 15 lets rocky, shingle and mud shores keep their own surface.
     let sandy_shore = cfg.generator_version < 15
@@ -1271,6 +1855,9 @@ pub fn sample_block_with(
     }
 
     if depth == 0 {
+        if basin && cfg.generator_version >= deep::VERSION {
+            return deep::surface_tell(cfg, p.x, p.z, &column).unwrap_or(column.surface);
+        }
         column.surface
     } else if depth
         <= if cfg.generator_version >= 2 {
@@ -1289,6 +1876,8 @@ pub fn sample_block_with(
         && hash3(p.x, p.y, p.z, cfg.seed.wrapping_add(563)) > 0.76
     {
         BlockId::Gravel
+    } else if basin && cfg.generator_version >= deep::VERSION {
+        deep::rock(cfg, p, &column, landscape::geological_stratum(cfg, p, column.height, depth))
     } else if cfg.generator_version >= 2 {
         landscape::geological_stratum(cfg, p, column.height, depth)
     } else {
@@ -1598,6 +2187,7 @@ mod v16_stage_split {
     fn v16_stage_split() {
         for version in [15u32, 16] {
             let cfg = WorldSampleConfig {
+                planet: None,
                 generator_version: version,
                 seed: 424242,
                 world_type: WorldType::Hills,

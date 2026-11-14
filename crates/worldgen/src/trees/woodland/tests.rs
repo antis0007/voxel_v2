@@ -6,7 +6,8 @@ use std::collections::{HashSet, VecDeque};
 #[test]
 fn painterly_wood_is_grounded_and_crowns_fit_proxy_bounds() {
     for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter] {
-        let cfg = WorldSampleConfig { seed: 2738958700, generator_version: 45,
+        let cfg = WorldSampleConfig {
+    planet: None, seed: 2738958700, generator_version: 45,
             world_type: WorldType::Hills, voxel_scale: scale };
         let v = cfg.voxel_meters();
         for cell in [-7, 0, 11] {
@@ -113,7 +114,8 @@ fn floating(wood: &HashSet<IVec3>, leaves: &HashSet<IVec3>) -> f32 {
 fn clumped_crown_sample_cost() {
     for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::QuarterMeter] {
         for generator_version in [129, crate::trees::foliage::VERSION, 129, crate::trees::foliage::VERSION] {
-            let cfg = WorldSampleConfig { seed: 2738958700, generator_version,
+            let cfg = WorldSampleConfig {
+    planet: None, seed: 2738958700, generator_version,
                 world_type: WorldType::Hills, voxel_scale: scale };
             let started = std::time::Instant::now();
             let leaves: usize = (-12..12).map(|cell| grow(&cfg, cell).1.len()).sum();
@@ -128,7 +130,8 @@ fn clumped_crowns_are_bounded_grounded_and_rougher_only_where_resolvable() {
         let mut gain = Vec::new();
         for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter, VoxelScalePreset::QuarterMeter] {
             let [plain, clumped] = [129, crate::trees::foliage::VERSION].map(|generator_version| {
-                let cfg = WorldSampleConfig { seed: 2738958700, generator_version,
+                let cfg = WorldSampleConfig {
+    planet: None, seed: 2738958700, generator_version,
                     world_type: WorldType::Hills, voxel_scale: scale };
                 grow(&cfg, cell)
             });

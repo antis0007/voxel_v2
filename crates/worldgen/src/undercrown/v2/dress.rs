@@ -86,6 +86,12 @@ impl Layout {
                 }
             }
         }
+        if self.version >= super::wilds::VERSION
+            && let Owner::Space(si) = owner
+            && let Some(b) = super::wilds::natural(&self.spaces[si], m)
+        {
+            return b;
+        }
         if let Owner::Space(si) = owner
             && let Shape::Hall { x0, x1, z0, z1, floor, h, .. } = self.spaces[si].shape
             && let Some((_, along, len, _)) = face(x0, x1, z0, z1, m)
@@ -188,7 +194,8 @@ impl Layout {
         let d = (m.x - cx).hypot(m.z - cz);
         let fy = m.y - floor;
         let [wall, alt, ..] = palette(s.style);
-        let glow = matches!(s.style, Style::Ice | Style::Fungal) && hash2(gx, gz, 4809) > 0.8;
+        let lit = matches!(s.style, Style::Ice | Style::Fungal) || (self.version >= super::wilds::VERSION && s.style == Style::Sea);
+        let glow = lit && hash2(gx, gz, 4809) > 0.8;
         let body = |n: f32| match s.style {
             Style::Ice => B::Ice,
             _ if n > 0.7 => alt,

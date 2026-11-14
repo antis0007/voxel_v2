@@ -7,7 +7,8 @@ use std::f32::consts::{FRAC_PI_2, PI};
 fn main() {
     let version = std::env::args().nth(1).and_then(|v| v.parse().ok()).unwrap_or(49);
     let seed = std::env::args().nth(2).and_then(|v| v.parse().ok()).unwrap_or(2738958700);
-    let cfg = WorldSampleConfig { seed, generator_version: version,
+    let cfg = WorldSampleConfig {
+    planet: None, seed, generator_version: version,
         world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter };
     let mut castles = engine_worldgen::sites::horizon_landmarks(&cfg, (0,0), 4200.0);
     castles.retain(|(_,kind,_,_)| *kind == 3);

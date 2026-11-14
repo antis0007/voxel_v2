@@ -40,6 +40,7 @@ pub enum Flag {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaterialProps {
     /// Uses before a head of this material breaks.
     pub durability: f32,
@@ -101,6 +102,7 @@ impl MaterialProps {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolMaterial {
     pub id: MaterialId,
     pub display_name: String,
@@ -115,7 +117,7 @@ pub fn block_exists(name: &str) -> bool {
     engine_content::ALL_BLOCK_IDS.iter().any(|id| format!("{id:?}") == name)
 }
 
-/// Table errors: duplicate ids, unknown block names, non-finite or non-positive values.
+/// Table errors: duplicate ids, unknown blocks, and invalid names or numeric properties.
 pub fn validate(rows: &[ToolMaterial]) -> Vec<String> {
     let mut errors = Vec::new();
     for (i, row) in rows.iter().enumerate() {
@@ -124,6 +126,9 @@ pub fn validate(rows: &[ToolMaterial]) -> Vec<String> {
         }
         if row.id.0.is_empty() || row.id.0.contains(char::is_whitespace) {
             errors.push(format!("material id {:?} must be a single token", row.id.0));
+        }
+        if row.display_name.trim().is_empty() {
+            errors.push(format!("material {:?} needs a display_name", row.id.0));
         }
         if let Some(block) = &row.block
             && !block_exists(block)
@@ -141,6 +146,20 @@ pub fn validate(rows: &[ToolMaterial]) -> Vec<String> {
         }
         if row.props.density <= 0.0 {
             errors.push(format!("material {:?} density must be positive", row.id.0));
+        }
+        for (name, value) in [
+            ("mining_speed", row.props.mining_speed),
+            ("attack", row.props.attack),
+            ("hardness", row.props.hardness),
+        ] {
+            if value < 0.0 {
+                errors.push(format!("material {:?} {name} must be nonnegative", row.id.0));
+            }
+        }
+        for (name, value) in [("conductivity", row.props.conductivity), ("flammability", row.props.flammability)] {
+            if !(0.0..=1.0).contains(&value) {
+                errors.push(format!("material {:?} {name} must be in [0, 1]", row.id.0));
+            }
         }
     }
     errors

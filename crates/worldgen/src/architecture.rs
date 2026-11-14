@@ -14,13 +14,16 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 mod fine;
+mod composition;
 mod refinement;
 mod workshop;
+pub mod plan;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Roof {
     Gable,
     Hip,
+    SteepHip,
     Flat,
     Lean,
     Glass,
@@ -88,6 +91,9 @@ pub struct Door {
     pub hw: f32,
     pub height: f32,
 }
+
+/// Generator 72: roof shells thick enough to share faces between steps.
+pub const CONNECTED_ROOF_VERSION: u32 = crate::gates::CONNECTED_ROOFS_GENERATOR;
 
 pub struct WingSpec {
     pub x0: f32,
@@ -162,6 +168,11 @@ pub struct Wing {
     stair: Option<Stair>,
     /// Facade detail that resolves at fine voxel scales (generator 51+).
     fine: bool,
+    /// Roof shells one cell thicker than the slope needs, so stepped rows share
+    /// a face at every voxel scale (generator 72+).
+    connected: bool,
+    /// Explicit plans reserve circulation and do not use random cell furniture.
+    planned: bool,
 }
 
 /// Recursive binary partition of a cell grid; leaves become rooms.
@@ -390,6 +401,8 @@ impl Wing {
             door_z,
             stair,
             fine: false,
+            connected: false,
+            planned: false,
         }
     }
 
@@ -405,6 +418,37 @@ impl Wing {
         self.storeys as f32 * self.h
     }
 
+    /// Eaves and roof heights at the corners, side midpoints and centre.
+    pub(crate) fn skyline(&self) -> ([Vec3; 9], B, B) {
+        let w = self.width();
+        let d = self.depth();
+        let slope = self.roof_slope(w, d);
+        let points = [(0., 0.), (0.5, 0.), (1., 0.), (1., 0.5), (1., 1.),
+            (0.5, 1.), (0., 1.), (0., 0.5), (0.5, 0.5)];
+        let roof = points.map(|(u, v): (f32, f32)| {
+            let dx = u.min(1. - u) * w;
+            let dz = v.min(1. - v) * d;
+            let run = match self.roof {
+                Roof::Flat => 0.,
+                Roof::Hip | Roof::SteepHip => dx.min(dz),
+                Roof::Lean => (1. - v) * d,
+                _ => if w >= d { dz } else { dx },
+            };
+            Vec3::new(self.x0 + u * w, self.top() + 0.4 + run * slope, self.z0 + v * d)
+        });
+        (roof, self.pal.wall, self.pal.roof)
+    }
+
+    fn roof_slope(&self, w: f32, d: f32) -> f32 {
+        let half_span = (w.min(d) * 0.5).max(1.0);
+        match self.roof {
+            Roof::Gable | Roof::Glass => 0.8f32.min(4.5 / half_span),
+            Roof::Hip => 0.7f32.min(4.5 / half_span),
+            Roof::SteepHip => 1.6f32.min(6.5 / half_span),
+            _ => 0.3,
+        }
+    }
+
     fn kept(&self, p: Vec3) -> bool {
         self.keep
             .iter()
@@ -413,6 +457,11 @@ impl Wing {
 
     fn erosion(&self, p: Vec3, fy: f32, s: usize) -> bool {
         if self.age <= 0.0 || s + 1 != self.storeys {
+            return false;
+        }
+        // A connected wing keeps its wall plate: the roof never hangs over a
+        // crumbled wall, the ruin shows as gaps below the plate instead.
+        if self.connected && fy >= self.h - 0.6 {
             return false;
         }
         let n = value_noise2(p.x * 0.4 + 3.1, p.z * 0.4 + 7.7, self.seed);
@@ -459,7 +508,7 @@ impl Wing {
     pub fn sample(&self, p: Vec3, v: f32, th: f32) -> Option<B> {
         let (w, d) = (self.width(), self.depth());
         let eave = match self.roof {
-            Roof::Gable | Roof::Hip | Roof::Glass => v.max(0.6),
+            Roof::Gable | Roof::Hip | Roof::SteepHip | Roof::Glass => v.max(0.6),
             _ => 0.0,
         };
         if p.x < -eave || p.x > w + eave || p.z < -eave || p.z > d + eave {
@@ -489,8 +538,11 @@ impl Wing {
             if t >= self.storeys - 1 || t == usize::MAX {
                 continue;
             }
+            // Connected wings run each tread one rise deeper, so the flight
+            // climbs by shared faces instead of touching only at the corners.
+            let depth = if self.connected { tread + v } else { tread };
             if let Some((top_y, _)) = self.flight(t, p, slab)
-                && p.y <= top_y && p.y > top_y - tread {
+                && p.y <= top_y && p.y > top_y - depth {
                     return Some(B::Planks);
                 }
         }
@@ -622,6 +674,9 @@ impl Wing {
     }
 
     fn furnish(&self, s: usize, cx: usize, cz: usize, p: Vec3, rel: f32, v: f32) -> Option<B> {
+        if self.planned {
+            return None;
+        }
         if self.in_stair_zone(cx, cz) {
             return None;
         }
@@ -705,15 +760,10 @@ impl Wing {
             return None;
         }
         // Steep over narrow spans, but never more than ~4.5 m of ridge on a wide hall.
-        let half_span = if w >= d { d } else { w } * 0.5;
-        let slope = match self.roof {
-            Roof::Gable | Roof::Glass => 0.8f32.min(4.5 / half_span.max(1.0)),
-            Roof::Hip => 0.7f32.min(4.5 / half_span.max(1.0)),
-            _ => 0.3,
-        };
+        let slope = self.roof_slope(w, d);
         let base = 0.4;
         let (rs, along, len, ac) = match self.roof {
-            Roof::Hip => {
+            Roof::Hip | Roof::SteepHip => {
                 let dx = (p.x + eave).min(w + eave - p.x);
                 let dz = (p.z + eave).min(d + eave - p.z);
                 (base + dx.min(dz) * slope, 0.0, 0.0, 0.0)
@@ -732,7 +782,13 @@ impl Wing {
         if ry > rs {
             return None;
         }
-        let thick = (v * (1.0 + slope)).max(0.55);
+        // Connected shells reach below the wall plate at the wall line, so the
+        // roof rests on the wall at every voxel scale instead of floating above it.
+        let thick = (v * (1.0 + slope)).max(0.55).max(if self.connected {
+            base + eave * slope + v
+        } else {
+            0.0
+        });
         if ry >= rs - thick {
             if self.age > 0.0 && inside {
                 let n = value_noise2(p.x * 0.5 + 11.0, p.z * 0.5 - 4.0, self.seed ^ 0xA5);
@@ -848,6 +904,14 @@ impl Building {
     pub fn refined(mut self) -> Self {
         for w in &mut self.wings {
             w.fine = true;
+        }
+        self
+    }
+
+    /// Face-connected roof steps for every wing (generator 72+).
+    pub fn connected(mut self) -> Self {
+        for w in &mut self.wings {
+            w.connected = true;
         }
         self
     }
@@ -1063,8 +1127,11 @@ pub fn site_building_version(kind: u32, seed: u32, starter: bool, version: u32) 
                 let b = if version >= 39 { refinement::silhouette(b, kind, seed) } else { b };
                 let b = if version >= 41 { refinement::courtyard(b, kind, seed) } else { b };
                 let b = if version >= 49 { refinement::open_court(b, kind) } else { b };
+                let b = if version >= 54 { composition::castle(b, kind) } else { b };
+                let b = if version >= crate::ruins::REBUILT_VERSION { composition::industrial(b, kind, seed) } else { b };
                 let b = if version >= 47 && kind == 0 { workshop::dress(b) } else { b };
-                if version >= fine::VERSION { b.refined() } else { b }
+                let b = if version >= fine::VERSION { b.refined() } else { b };
+                if version >= CONNECTED_ROOF_VERSION { b.connected() } else { b }
             }).map(Rc::new);
             SITE_BUILDINGS.with(|c| {
                 let mut c = c.borrow_mut();
@@ -1305,12 +1372,86 @@ fn build_site(kind: u32, seed: u32, starter: bool) -> Option<Building> {
 
 /// Small roofed outposts scattered between the large sites.
 pub fn homestead_building(seed: u32) -> Building {
-    let pick = (hash2(0, 0, seed.wrapping_add(900)) * 5.0) as u32 % 5;
+    homestead_building_versioned(seed, false)
+}
+
+/// `variety` (generator 72+) rolls stone, roof and window choices per
+/// template and adds a mill tower and a walled longhouse.
+pub fn homestead_building_versioned(seed: u32, variety: bool) -> Building {
+    let templates = if variety { 7.0 } else { 5.0 };
+    let pick = (hash2(0, 0, seed.wrapping_add(900)) * templates) as u32 % templates as u32;
     let age = 0.05 + hash2(1, 0, seed.wrapping_add(901)) * 0.3;
+    let pal = if !variety {
+        Palette::TIMBER
+    } else {
+        match (hash2(2, 0, seed.wrapping_add(902)) * 3.0) as u32 {
+            0 => Palette::STONE,
+            1 => Palette::LIMESTONE,
+            _ => Palette::TIMBER,
+        }
+    };
+    let roof = if !variety {
+        Roof::Gable
+    } else {
+        match (hash2(3, 0, seed.wrapping_add(903)) * 3.0) as u32 {
+            0 => Roof::Hip,
+            1 => Roof::SteepHip,
+            _ => Roof::Gable,
+        }
+    };
+    let windows = if variety && hash2(4, 0, seed.wrapping_add(904)) > 0.7 { Windows::Slits } else { Windows::Panes };
+    let dressed = |s: &mut WingSpec| {
+        s.pal = pal;
+        s.roof = roof;
+        s.windows = windows;
+    };
     match pick {
+        5 => {
+            // Mill tower: a tall hipped stone tower with a lean-to store.
+            let tower = spec(-3.0, -3.0, 2, 2, seed, |s| {
+                s.cell = 3.0;
+                s.storeys = 3;
+                s.roof = Roof::SteepHip;
+                s.pal = Palette::STONE;
+                s.windows = windows;
+                s.age = age * 0.7;
+                s.chimney = true;
+                s.doors = vec![door(1, 3.0, 0.8, 2.4)];
+            });
+            let store = spec(3.0, -3.0, 2, 1, seed.wrapping_add(5), |s| {
+                s.roof = Roof::Lean;
+                s.pal = pal;
+                s.age = age;
+                s.open = true;
+                s.doors = vec![door(1, 3.6, 0.9, 2.3)];
+            });
+            Building::new(vec![tower, store], vec![], None)
+        }
+        6 => {
+            // Walled longhouse: a long hall inside a low yard wall with a gate.
+            let hall = spec(-7.2, -3.6, 4, 2, seed, |s| {
+                dressed(s);
+                s.age = age;
+                s.chimney = true;
+                s.min_room = 4;
+                s.doors = vec![door(1, 7.2, 1.0, 2.5)];
+            });
+            let yard = Curtain {
+                x0: -10.5,
+                x1: 10.5,
+                z0: -7.0,
+                z1: 8.0,
+                t: 0.6,
+                h: 1.8,
+                mat: pal.plinth,
+                gate: Some((1, 10.5, 1.4, 1.8)),
+            };
+            Building::new(vec![hall], vec![yard], None)
+        }
         0 => {
             // Cottage with a lean-to shed.
             let house = spec(-3.6, -3.6, 2, 2, seed, |s| {
+                dressed(s);
                 s.age = age;
                 s.chimney = true;
                 s.min_room = 3;
@@ -1327,6 +1468,7 @@ pub fn homestead_building(seed: u32) -> Building {
         1 => {
             // Farmstead: two-storey house and an open barn.
             let house = spec(-7.2, -3.6, 3, 2, seed, |s| {
+                dressed(s);
                 s.storeys = 2;
                 s.age = age;
                 s.chimney = true;
@@ -1374,6 +1516,7 @@ pub fn homestead_building(seed: u32) -> Building {
         _ => {
             // Roadside inn: long hall with a loft.
             let inn = spec(-9.0, -3.6, 5, 2, seed, |s| {
+                dressed(s);
                 s.storeys = 2;
                 s.age = age;
                 s.chimney = true;

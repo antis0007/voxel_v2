@@ -9,6 +9,15 @@ pub const SOURCES: [Vec3; 3] = [
     Vec3::new(372.5, 0.0, 48.5),
 ];
 
+pub fn floor(cfg: &WorldSampleConfig) -> f32 {
+    // Match the stair's daylight end; the connected rooms share one datum.
+    if !crate::geo::integrated(cfg) { return 0.0; }
+    (crate::geo::site_floor(cfg, 292.5, 177.0) - 57.0).max(crate::WORLD_MIN_Y_METERS + 3.0)
+}
+
+pub fn lantern(cfg: &WorldSampleConfig) -> Vec3 { LANTERN + Vec3::Y * floor(cfg) }
+pub fn sources(cfg: &WorldSampleConfig) -> [Vec3; 3] { SOURCES.map(|p| p + Vec3::Y * floor(cfg)) }
+
 pub fn sample(cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
     if cfg.generator_version < 27
         || cfg.world_type == WorldType::Superflat
@@ -17,9 +26,13 @@ pub fn sample(cfg: &WorldSampleConfig, m: Vec3) -> Option<B> {
     {
         return None;
     }
+    let m = m - Vec3::Y * floor(cfg);
     // Broad stair to daylight. The one-metre steps remain the same at fine voxel scales.
     if (289.0..296.0).contains(&m.x) && (62.0..178.0).contains(&m.z) {
-        let floor = ((m.z - 62.0) * 0.5).floor();
+        let rise = if crate::geo::integrated(cfg) {
+            (crate::geo::site_floor(cfg, 292.5, 177.0) - floor(cfg)) / 115.0
+        } else { 0.5 };
+        let floor = ((m.z - 62.0) * rise).floor();
         if m.y >= floor - 1.0 && m.y < floor {
             return Some(B::Limestone);
         }

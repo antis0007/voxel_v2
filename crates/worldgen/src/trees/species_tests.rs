@@ -7,13 +7,15 @@ use std::collections::HashSet;
 const SIDES: [IVec3; 6] = [IVec3::X, IVec3::NEG_X, IVec3::Y, IVec3::NEG_Y, IVec3::Z, IVec3::NEG_Z];
 
 /// (form, conifer, trunk, crown radius, crown height in metres, needles or fronds only).
-const SPECIES: [(TreeForm, bool, f32, f32, f32, bool); 6] = [
+const SPECIES: [(TreeForm, bool, f32, f32, f32, bool); 8] = [
     (TreeForm::Classic, false, 3.0, 2.6, 3.0, false),
     (TreeForm::HighCrown, true, 12.0, 3.0, 3.0, false),
     (TreeForm::Umbrella, false, 5.0, 5.0, 3.0, false),
     (TreeForm::Weeping, false, 6.0, 4.0, 4.0, false),
     (TreeForm::Classic, true, 3.5, 2.2, 1.0, true),
     (TreeForm::Classic, true, 14.0, 4.5, 1.0, true),
+    (TreeForm::Cycad, false, 3.5, 3.5, 1.2, true),
+    (TreeForm::Redwood, true, 25.0, 4.5, 1.0, true),
 ];
 
 fn tree(cfg: &WorldSampleConfig, (form, conifer, trunk, radius, crown, _): (TreeForm, bool, f32, f32, f32, bool)) -> TreeProfile {
@@ -85,7 +87,8 @@ fn every_crown_is_bounded_and_rougher_only_where_resolvable() {
         let (mut gain, mut shift) = (Vec::new(), Vec::new());
         for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter, VoxelScalePreset::QuarterMeter] {
             let [plain, relief] = [129, foliage::VERSION].map(|generator_version| {
-                let cfg = WorldSampleConfig { seed: 2738958700, generator_version,
+                let cfg = WorldSampleConfig {
+    planet: None, seed: 2738958700, generator_version,
                     world_type: WorldType::Hills, voxel_scale: scale };
                 grow(&cfg, tree(&cfg, species))
             });

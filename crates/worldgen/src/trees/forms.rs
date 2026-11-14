@@ -24,6 +24,24 @@ pub(crate) enum TreeForm {
     HighCrown,
     /// Generator 52 landmark broadleaf (see `giant.rs`).
     Giant,
+    Rainforest,
+    RainforestPalm,
+    RainforestFig,
+    OldOak,
+    CloudCrown,
+    PlateauCrown,
+    Aspen,
+    Cypress,
+    Acacia,
+    Cycad,
+    Fungal,
+    Redwood,
+}
+
+impl TreeForm {
+    pub(crate) fn is_rainforest(self) -> bool {
+        matches!(self, Self::Rainforest | Self::RainforestPalm | Self::RainforestFig)
+    }
 }
 
 /// Same leaf surface as open crowns: `field < 0.83 + edge * 0.24`.
@@ -208,7 +226,10 @@ pub(super) fn weeping(cfg: &WorldSampleConfig, tree: &TreeProfile, p: IVec3, f: 
 pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile, radius: f32, lean_len: f32) -> Option<f32> {
     let scale = cfg.voxel_meters();
     let crown = match tree.form {
-        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant => return None,
+        TreeForm::Cycad | TreeForm::Fungal | TreeForm::Redwood => return Some(radius + scale),
+        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant
+        | TreeForm::Rainforest | TreeForm::RainforestPalm | TreeForm::RainforestFig | TreeForm::OldOak
+        | TreeForm::CloudCrown | TreeForm::PlateauCrown | TreeForm::Aspen | TreeForm::Cypress | TreeForm::Acacia => return None,
         TreeForm::Umbrella => {
             let mut reach = radius * 0.55 * THRESHOLD_REACH;
             for limb in 0..umbrella_limbs(tree) {
@@ -233,7 +254,10 @@ pub(super) fn crown_reach(cfg: &WorldSampleConfig, tree: &TreeProfile, radius: f
 /// Highest leaf in metres above the ground voxel for non-classic crowns.
 pub(super) fn crown_top(cfg: &WorldSampleConfig, tree: &TreeProfile, height: f32, crown_h: f32) -> Option<f32> {
     let top = match tree.form {
-        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant => return None,
+        TreeForm::Cycad | TreeForm::Fungal | TreeForm::Redwood => height + crown_h,
+        TreeForm::Classic | TreeForm::HighCrown | TreeForm::Giant
+        | TreeForm::Rainforest | TreeForm::RainforestPalm | TreeForm::RainforestFig | TreeForm::OldOak
+        | TreeForm::CloudCrown | TreeForm::PlateauCrown | TreeForm::Aspen | TreeForm::Cypress | TreeForm::Acacia => return None,
         TreeForm::Umbrella if cfg.generator_version >= 47 => {
             let mut rise = 0.0f32;
             for limb in 0..umbrella_limbs(tree) {

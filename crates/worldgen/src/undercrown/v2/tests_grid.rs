@@ -6,8 +6,14 @@ use crate::undercrown::plan::{Plan, RoomSpec};
 use engine_core::VoxelScalePreset;
 use std::collections::{HashSet, VecDeque};
 
+/// The generator under test: the current one, or `UC_GEN` to run this
+/// module's tests against a dormant gate.
+pub(super) fn generator() -> u32 {
+    std::env::var("UC_GEN").ok().and_then(|s| s.parse().ok()).unwrap_or(crate::CURRENT_GENERATOR_VERSION)
+}
+
 pub(super) fn cfg_scaled(seed: u32, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: generator(), seed, world_type: WorldType::Hills, voxel_scale }
 }
 
 pub(super) fn plan_scaled(seed: u32, scale: VoxelScalePreset) -> (WorldSampleConfig, Plan) {

@@ -1,6 +1,7 @@
 //! Birdsong and frog chorus: sparse synthesized calls whose voice follows the biome.
 mod families;
 
+use crate::binaural::{Cues, Ears};
 use crate::dsp::{advance, sine, Noise};
 use families::Voice;
 use std::f32::consts::TAU;
@@ -14,10 +15,19 @@ fn bearing(sector: usize) -> f32 {
     dx.atan2(-dz) / TAU
 }
 
-/// Stereo pan of a bearing heard by a listener facing `yaw`, -1 left to 1 right.
-fn pan_of(bearing: f32, yaw: f32) -> f32 {
-    (((bearing - yaw) * TAU).sin()).clamp(-0.9, 0.9)
+/// Where a bearing sits for a listener facing `yaw`, at the given elevation and range.
+fn cues_of(bearing: f32, yaw: f32, elevation: f32, distance_m: f32) -> Cues {
+    Cues::polar(bearing - yaw, elevation, distance_m)
 }
+
+/// Birds call from the crown above the head; frogs sit at the waterline.
+const CROWN_ELEVATION: f32 = 0.35;
+const WATERLINE_ELEVATION: f32 = -0.08;
+const NEAR_BIRD_M: f32 = 6.0;
+const FAR_BIRD_M: f32 = 24.0;
+const FROG_M: f32 = 10.0;
+/// Samples between cue updates for a placed call; the ears glide between them.
+const CUE_EVERY: u32 = 32;
 
 /// Picks a sector by weight; `None` when every weight is zero.
 fn draw_sector(weights: &[f32; 8], roll: f32) -> Option<usize> {
@@ -119,6 +129,9 @@ struct Call {
     gain: f32,
     /// Direction of the bird in turns clockwise from -z.
     bearing: f32,
+    elevation: f32,
+    distance_m: f32,
+    ears: Ears,
 }
 
 /// A croak: a pulsed low tone.
@@ -131,6 +144,7 @@ struct Croak {
     hz: f32,
     gain: f32,
     bearing: f32,
+    ears: Ears,
 }
 
 const CALLS: usize = 4;
@@ -190,9 +204,10 @@ impl Chorus {
         }
     }
 
-    fn mix(out: &mut [f32; 2], s: f32, pan: f32) {
-        out[0] += s * (1.0 - pan) * 0.5;
-        out[1] += s * (1.0 + pan) * 0.5;
+    fn mix(out: &mut [f32; 2], ears: [f32; 2]) {
+        // Half each, as the old pan law gave a centred call.
+        out[0] += ears[0] * 0.5;
+        out[1] += ears[1] * 0.5;
     }
 
     pub(crate) fn frame(&mut self) -> [f32; 2] {
@@ -235,7 +250,11 @@ impl Chorus {
                     sweep: shape.sweep,
                     gain,
                     bearing: bearing(sector) + n.next() * 0.03,
+                    elevation: CROWN_ELEVATION,
+                    distance_m: if near { NEAR_BIRD_M } else { FAR_BIRD_M },
+                    ears: Ears::default(),
                 };
+                slot.ears = Ears::new(cues_of(slot.bearing, self.yaw, slot.elevation, slot.distance_m), self.rate);
             }
         }
         for c in &mut self.calls {
@@ -248,7 +267,10 @@ impl Chorus {
                 let hz = c.hz * (1.0 + c.sweep * (1.0 - t));
                 let env = sine(t * 0.5);
                 let s = c.voice.sample(v.family, hz, t, v.trill, self.rate) * env * env * c.gain * level;
-                Self::mix(out, s, pan_of(c.bearing, self.yaw));
+                if c.age % CUE_EVERY == 0 {
+                    c.ears.set(cues_of(c.bearing, self.yaw, c.elevation, c.distance_m));
+                }
+                Self::mix(out, c.ears.process(s));
             }
             c.age += 1;
             if c.age >= c.len + c.gap {
@@ -275,7 +297,9 @@ impl Chorus {
                     hz: v.frog_hz * (0.85 + n.unit() * 0.3),
                     gain: 0.04 + n.unit() * 0.06,
                     bearing: bearing(sector) + n.next() * 0.04,
+                    ears: Ears::default(),
                 };
+                slot.ears = Ears::new(cues_of(slot.bearing, self.yaw, WATERLINE_ELEVATION, FROG_M), self.rate);
             }
         }
         for c in &mut self.croaks {
@@ -288,7 +312,10 @@ impl Chorus {
             let gate = sine(c.pulse).max(0.0);
             let tone = sine(c.phase) * 0.7 + sine(c.phase * 2.0) * 0.3;
             let s = tone * gate * sine(t * 0.5) * c.gain * level;
-            Self::mix(out, s, pan_of(c.bearing, self.yaw));
+            if c.age % CUE_EVERY == 0 {
+                c.ears.set(cues_of(c.bearing, self.yaw, WATERLINE_ELEVATION, FROG_M));
+            }
+            Self::mix(out, c.ears.process(s));
             c.age += 1;
             if c.age >= c.len {
                 c.len = 0;
@@ -439,7 +466,8 @@ mod tests {
     #[test]
     fn caw_is_noisier_than_whistle() {
         let (caw, whistle) = (crossing_spread(Family::Caw), crossing_spread(Family::Whistle));
-        assert!(caw > whistle * 2.0, "caw {caw} whistle {whistle}");
+        // The ears' air and pinna low-passes round off the caw's roughness; it stays clearly above.
+        assert!(caw > whistle * 1.5, "caw {caw} whistle {whistle}");
     }
 
     #[test]

@@ -22,7 +22,8 @@ pub fn sample(cfg: &WorldSampleConfig, metres: Vec3) -> Option<B> {
     if cfg.generator_version < 20 {
         return None;
     }
-    let origin = Vec3::new(240.0, 0.0, 48.0);
+    if (metres.x - 240.0).abs() > 28.0 || (metres.z - 48.0).abs() > 22.0 { return None; }
+    let origin = Vec3::new(240.0, super::geo::site_floor(cfg, 240.0, 48.0), 48.0);
     let d = metres - origin;
     if d.x.abs() > 28.0 || d.z.abs() > 22.0 || d.y < -4.0 || d.y > 16.0 {
         return None;
@@ -72,8 +73,9 @@ mod tests {
 
     fn cfg(version: u32) -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version: version,
-            seed: 1,
+            seed: crate::test_world::seed(),
             world_type: WorldType::Hills,
             voxel_scale: VoxelScalePreset::OneMeter,
         }

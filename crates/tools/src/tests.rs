@@ -246,3 +246,16 @@ fn content_fingerprint_is_stable_within_a_build() {
     assert_eq!(crate::content_fingerprint(), crate::content_fingerprint());
     assert_ne!(crate::content_fingerprint(), 0);
 }
+
+#[test]
+fn a_schema_without_a_head_uses_its_mining_level_part_as_working_part() {
+    let mut file: crate::PartsFile = ron::from_str(crate::PARTS_RON).unwrap();
+    assert!(crate::parts::validate(&file).is_empty());
+    let plate = file.schemas.iter().position(|s| s.id == "shield").map(|i| file.schemas[i].clone());
+    if let Some(shield) = plate {
+        let tool = ToolAssembly::new(&shield.id, &ids(&["iron", "bone", "wood"])).unwrap();
+        assert_eq!(tool.head_material().unwrap().id.0, "iron");
+    }
+    for part in &mut file.schemas[0].parts { part.weights.mining_level = false; part.kind = crate::PartKind::new("binding"); }
+    assert!(crate::parts::validate(&file).iter().any(|e| e.contains("no working part")));
+}

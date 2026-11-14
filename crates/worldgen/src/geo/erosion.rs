@@ -42,6 +42,16 @@ pub struct Flow {
 
 /// Routes flow from every cell to a fixed cell.
 pub fn route(grid: &Grid, h: &[f64], fixed: &[bool], weight: &[f64]) -> Flow {
+    route_impl(grid, h, fixed, weight, false)
+}
+
+/// Same drainage fields as `route`, without putting fixed cells that cannot
+/// receive land runoff through the heap. Their own discharge stays unchanged.
+pub fn route_compact(grid: &Grid, h: &[f64], fixed: &[bool], weight: &[f64]) -> Flow {
+    route_impl(grid, h, fixed, weight, true)
+}
+
+fn route_impl(grid: &Grid, h: &[f64], fixed: &[bool], weight: &[f64], compact: bool) -> Flow {
     let len = grid.len();
     let mut filled = vec![0.0; len];
     let mut spill = vec![0.0; len];
@@ -53,7 +63,13 @@ pub fn route(grid: &Grid, h: &[f64], fixed: &[bool], weight: &[f64]) -> Flow {
             filled[i] = h[i];
             spill[i] = h[i];
             seen[i] = true;
-            heap.push(Reverse(Key(h[i], i as u32)));
+            if compact && grid.neighbours(i).all(|(j, _)| fixed[j]) {
+                // No donor can reach this outlet. Moving it ahead of the
+                // heap order cannot change any accumulation or spill level.
+                order.push(i as u32);
+            } else {
+                heap.push(Reverse(Key(h[i], i as u32)));
+            }
         }
     }
     while let Some(Reverse(Key(_, i))) = heap.pop() {

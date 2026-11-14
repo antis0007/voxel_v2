@@ -25,7 +25,7 @@ const OUTER_M: f32 = 1536.0;
 const SCAN_VOXELS: i32 = 48;
 
 fn config(world_type: WorldType, voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: CURRENT_GENERATOR_VERSION, seed: 424242, world_type, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: CURRENT_GENERATOR_VERSION, seed: crate::test_world::seed(), world_type, voxel_scale }
 }
 
 /// Columns (voxels) on a `spacing_m` grid in the annulus around the origin,

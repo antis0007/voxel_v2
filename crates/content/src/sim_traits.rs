@@ -7,7 +7,7 @@
 //! game's thermal pass relaxes toward a local climate ambient and holds a
 //! latent store at the point. The science profile (docs/PLAN2.md Phase D)
 //! replaces the remaining game-tuned constants with measured ones.
-use super::{ALL_BLOCK_IDS, BlockId, MATERIAL_TABLE, MaterialDef, MatterState};
+use super::{BlockId, MATERIAL_TABLE, MaterialDef, MatterState};
 use engine_core::material::{MaterialId, MovementClass, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::reaction::SimRules;
 use std::sync::LazyLock;
@@ -20,6 +20,9 @@ pub struct ThermalTraits {
     pub conductivity: f32,
     /// J/(kg·K).
     pub capacity: f32,
+    /// Latent heat of fusion, J/kg, used by the sparse thermal solver.
+    #[serde(skip_serializing_if = "default_fusion")]
+    pub fusion: f32,
     /// Heating above this (K) turns the cell into `melts_into`.
     pub melt: Option<f32>,
     /// Heating above this (K) turns the cell into `boils_into`.
@@ -48,9 +51,11 @@ pub struct SimTraits {
     pub cools_into: Option<BlockId>,
 }
 
+fn default_fusion(value: &f32) -> bool { *value == 334_000.0 }
+
 impl Default for ThermalTraits {
     fn default() -> Self {
-        Self { conductivity: 1.0, capacity: 800.0, melt: None, boil: None, ignite: None, cool: None, fuel: 0.0 }
+        Self { conductivity: 1.0, capacity: 800.0, fusion: 334_000.0, melt: None, boil: None, ignite: None, cool: None, fuel: 0.0 }
     }
 }
 
@@ -79,14 +84,29 @@ impl Default for SimTraits {
 /// Powders at or above this cohesion behave as solids (dirt, clay, mud).
 pub const COHESION_STABLE: f32 = 0.5;
 
-impl From<BlockId> for MaterialId {
-    fn from(block: BlockId) -> Self {
-        // `ALL_BLOCK_IDS.len() < 255` is asserted below, so this never truncates.
-        Self(block as u8)
+/// Block ids below this own sim row `id`, so the cellular table and every
+/// CPU/GPU byte comparison are unchanged by the two-byte `BlockId`. Ids at or
+/// above it run as their `sim_as` stand-in (default Stone). Row 254 stays a
+/// spare and 255 is `MaterialId::NONE`.
+pub const SIM_DIRECT: usize = 254;
+
+/// The sim row a block runs as: itself below `SIM_DIRECT`, else its stand-in.
+pub fn sim_row(block: BlockId) -> BlockId {
+    if (block as usize) < SIM_DIRECT {
+        block
+    } else {
+        block.material().sim_as.filter(|b| (*b as usize) < SIM_DIRECT).unwrap_or(BlockId::Stone)
     }
 }
 
-const _: () = assert!(ALL_BLOCK_IDS.len() < MaterialId::NONE.0 as usize);
+impl From<BlockId> for MaterialId {
+    fn from(block: BlockId) -> Self {
+        // `sim_row` is always below `SIM_DIRECT` (< 255), so this never truncates.
+        Self(u8::try_from(sim_row(block) as u16).unwrap_or(MaterialId::NONE.0))
+    }
+}
+
+const _: () = assert!(SIM_DIRECT < MaterialId::NONE.0 as usize);
 
 fn product(block: Option<BlockId>) -> MaterialId {
     block.map_or(MaterialId::NONE, MaterialId::from)
@@ -159,7 +179,7 @@ pub(crate) fn pack(def: &MaterialDef) -> SimMaterial {
 /// last `BlockId` are `SimMaterial::INERT`.
 pub static SIM_TABLE: LazyLock<[SimMaterial; SIM_MATERIAL_ROWS]> = LazyLock::new(|| {
     let mut table = [SimMaterial::INERT; SIM_MATERIAL_ROWS];
-    for def in MATERIAL_TABLE.iter() {
+    for def in MATERIAL_TABLE.iter().filter(|def| (def.id as usize) < SIM_DIRECT) {
         table[def.id as usize] = pack(def);
     }
     table
@@ -178,7 +198,12 @@ pub static SIM_RULES: LazyLock<SimRules> = LazyLock::new(|| {
 });
 
 impl BlockId {
+    /// The one-byte `Cell::material` this block runs as. Use this, never `as u8`.
+    pub fn sim_byte(self) -> u8 {
+        MaterialId::from(self).0
+    }
+
     pub fn sim(self) -> &'static SimMaterial {
-        &SIM_TABLE[self as usize]
+        &SIM_TABLE[usize::from(MaterialId::from(self).0)]
     }
 }

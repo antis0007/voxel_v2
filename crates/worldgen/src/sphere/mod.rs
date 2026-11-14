@@ -16,6 +16,7 @@ mod class;
 mod flood;
 mod grid;
 mod noise;
+mod weather;
 #[cfg(test)]
 mod tests;
 
@@ -23,3 +24,6 @@ pub use class::{OCEAN_MIN_SHARE, PlanetClass, PlanetParams};
 pub use flood::{Drainage, solve, solve_heights};
 pub use grid::{PROJECTION, SphereGrid};
 pub use noise::{elevation, height_m};
+pub use weather::{CloudCover, DT as WEATHER_DT, Surface, WeatherParams, WeatherSim};
+pub use weather::clouds::CloudSky;
+pub use weather::storms::Kind as StormKind;

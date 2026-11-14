@@ -1587,7 +1587,7 @@ pub(crate) fn gatehouse(seed: u32) -> Building {
 // ---------------------------------------------------------------------------
 // Cell lookup
 
-type CellKey = (u32, u32, u8, i32, i32);
+type CellKey = (u32, u32, u64, u8, i32, i32);
 
 thread_local! {
     static CELLS: RefCell<FastMap<CellKey, Option<Rc<Dungeon>>>> = RefCell::new(FastMap::default());
@@ -1599,6 +1599,7 @@ fn cell_key(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> CellKey {
     (
         cfg.seed,
         cfg.generator_version,
+        cfg.planet_fingerprint(),
         cfg.voxel_scale as u8,
         ix,
         iz,
@@ -1617,7 +1618,8 @@ fn site(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<(u32, f32, f32, f32
         .seed
         .wrapping_add((ix as u32).wrapping_mul(2246822519))
         .wrapping_add((iz as u32).wrapping_mul(3266489917));
-    if hash2(ix, iz, cfg.seed.wrapping_add(2301)) < 0.52 {
+    let empty = if cfg.generator_version >= 90 { 0.34 } else { 0.52 };
+    if hash2(ix, iz, cfg.seed.wrapping_add(2301)) < empty {
         return None;
     }
     let cx = ix as f32 * CELL + (hash2(ix, iz, cfg.seed.wrapping_add(2302)) - 0.5) * 36.0;
@@ -1625,10 +1627,13 @@ fn site(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<(u32, f32, f32, f32
     if cx.hypot(cz) < 170.0 || super::valley::reserves(cfg, cx, cz) {
         return None;
     }
+    if super::planetary::reserves_volcanic_summit(cfg, cx, cz, 40.0) {
+        return None;
+    }
     let v = cfg.voxel_meters();
     let ground =
         sample_column(cfg, cfg.blocks_for_height(cx), cfg.blocks_for_height(cz)).height as f32 * v;
-    if !(30.0..130.0).contains(&ground) {
+    if !(30.0..if cfg.generator_version>=91 {460.0}else{130.0}).contains(&ground) {
         return None;
     }
     if super::undercrown::reserved(cfg, Vec3::new(cx, ground, cz)) {
@@ -1793,6 +1798,58 @@ pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
 }
 
 /// Name and anchor of the complex at a position, for the HUD and encounters.
+pub fn record_near(cfg: &WorldSampleConfig, p: Vec3) -> Option<Vec3> {
+    if cfg.generator_version < v2::sprawl::VERSION || cfg.world_type != WorldType::Hills { return None; }
+    let c = complex_at(cfg, cell_index(p.x), cell_index(p.z))?;
+    c.rooms.iter().filter_map(|r| v2::sprawl::tablet(&c, r))
+        .find(|q| q.distance_squared(p) < 64.0)
+}
+
+/// Curriculum belongs to the ruin's former office, never a random loot roll.
+pub fn record_curriculum(cfg: &WorldSampleConfig, p: Vec3) -> Option<usize> {
+    if cfg.generator_version < 90 || record_near(cfg, p).is_none() { return None; }
+    let c = complex_at(cfg, cell_index(p.x), cell_index(p.z))?;
+    use v2::Job;
+    Some(match c.job {
+        Job::Catacombs => 15, Job::Undercroft => 16, Job::ForgeHalls => 17,
+        Job::Warren => 18, Job::Quarantine => 19, Job::Orrery => 20,
+        Job::HollowFloor => 21, Job::Sanctum => 22, Job::Workshop => 23,
+    })
+}
+
+pub use v2::quest::KeyKind as QuestKey;
+
+/// The generator 294 quest of the complex around `p`: its cell id, small and
+/// great locks, and the key (if any) held by the room containing `p`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestHere {
+    pub id: (i32, i32),
+    pub small_locks: usize,
+    pub great_lock: bool,
+    pub key_here: Option<(usize, QuestKey)>,
+}
+
+pub fn quest_at(cfg: &WorldSampleConfig, p: Vec3) -> Option<QuestHere> {
+    if cfg.generator_version < v2::quest::VERSION || cfg.world_type == WorldType::Superflat {
+        return None;
+    }
+    let id = (cell_index(p.x), cell_index(p.z));
+    let d = complex_at(cfg, id.0, id.1)?;
+    if !d.contains(p) || d.quest.doors.is_empty() && d.quest.keys.is_empty() {
+        return None;
+    }
+    let room = d.rooms.iter().position(|r| {
+        p.x >= r.x0 && p.x < r.x1 && p.z >= r.z0 && p.z < r.z1 && p.y >= r.floor - r.sub() - 1.0 && p.y < r.floor + r.top()
+    });
+    Some(QuestHere {
+        id,
+        small_locks: d.quest.small_locks(),
+        great_lock: d.quest.great_lock(),
+        key_here: room.and_then(|r| d.quest.key_in(r).map(|k| (r, k))),
+    })
+}
+
+/// Name and anchor of the complex at a position, for the HUD and encounters.
 pub fn name_at(cfg: &WorldSampleConfig, p: Vec3) -> Option<&'static str> {
     if cfg.generator_version < 16 || cfg.world_type == WorldType::Superflat {
         return None;
@@ -1854,11 +1911,10 @@ pub fn review_views(cfg: &WorldSampleConfig, around: Vec3) -> Vec<(Vec3, Vec3)> 
     Vec::new()
 }
 
-/// Review camera for the nearest legacy cosmos chamber (generators 21-31):
-/// from one floor corner toward the far upper corner, so the vault and its
-/// starfield fill the frame. None at generator 32+, whose complexes have none.
+/// Review camera for the nearest cosmos chamber or current orrery room.
+/// Camera placement alone does not establish traversal or support below it.
 pub fn cosmos_review_view(cfg: &WorldSampleConfig, around: Vec3) -> Option<(Vec3, Vec3)> {
-    if !(21..v2::VERSION).contains(&cfg.generator_version) || cfg.world_type == WorldType::Superflat {
+    if cfg.generator_version < 21 || cfg.world_type == WorldType::Superflat {
         return None;
     }
     let (ix, iz) = (cell_index(around.x), cell_index(around.z));
@@ -1866,6 +1922,14 @@ pub fn cosmos_review_view(cfg: &WorldSampleConfig, around: Vec3) -> Option<(Vec3
         for z in iz - ring..=iz + ring {
             for x in ix - ring..=ix + ring {
                 if (x - ix).abs().max((z - iz).abs()) != ring {
+                    continue;
+                }
+                if cfg.generator_version >= v2::VERSION {
+                    if let Some(d) = complex_at(cfg, x, z)
+                        && let Some(r) = d.rooms.iter().find(|r| r.kind == v2::Kind::Orrery) {
+                        return Some((Vec3::new(r.x0 + 3.0, r.floor + 2.2, r.z0 + 3.0),
+                            Vec3::new(r.x1 - 3.0, r.floor + r.h * 0.65, r.z1 - 3.0)));
+                    }
                     continue;
                 }
                 let Some(d) = cell_at(cfg, x, z) else { continue };
@@ -1889,6 +1953,7 @@ pub fn inhabited_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec
         "infirmary" => r.kind == K::Infirmary,
         "refectory" => r.kind == K::Refectory,
         "armory" => r.kind == K::Armory,
+        "forge" => r.kind == K::Forge,
         "crypt" => r.kind == K::Crypt,
         "ossuary" => r.kind == K::Ossuary,
         "shrine" => r.kind == K::Shrine,
@@ -1897,6 +1962,8 @@ pub fn inhabited_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec
         "barracks" => r.kind == K::Barracks,
         "store" => r.kind == K::Store,
         "cells" => r.kind == K::Cells,
+        "labyrinth" => r.kind == K::Labyrinth,
+        "pitfall" => r.kind == K::Pitfall,
         "overgrown" => r.damage == D::Overgrown && !r.kind.is_puzzle(),
         "collapsed" => r.damage == D::Collapsed && !r.kind.is_puzzle(),
         "fallen" => r.damage == D::Collapsed && !r.sealed
@@ -1904,13 +1971,24 @@ pub fn inhabited_review_view(cfg: &WorldSampleConfig, name: &str) -> Option<(Vec
         _ => false,
     };
     let (ix, iz) = (cell_index(300.0), cell_index(0.0));
-    for ring in 0..12i32 {
+    for ring in 0..if name == "forge" { 32i32 } else { 12i32 } {
         for z in iz - ring..=iz + ring {
             for x in ix - ring..=ix + ring {
                 if (x - ix).abs().max((z - iz).abs()) != ring { continue; }
                 let Some(c) = complex_at(cfg, x, z) else { continue; };
                 let Some(r) = c.rooms.iter().find(|r| accepts(r)) else { continue; };
                 let (cx, cz) = r.centre();
+                if name == "library" || name == "forge" {
+                    // Look down the nave so both side aisles and their arches
+                    // are visible instead of inspecting a single bookcase.
+                    let (eye_y, target_y) = if name == "forge" { (4.2, 1.5) } else { (2.2, 3.8) };
+                    let (eye, target) = if r.w() >= r.d() {
+                        (Vec3::new(r.x0 + 3.5, r.floor + eye_y, cz), Vec3::new(r.x1 - 3.5, r.floor + target_y, cz))
+                    } else {
+                        (Vec3::new(cx, r.floor + eye_y, r.z0 + 3.5), Vec3::new(cx, r.floor + target_y, r.z1 - 3.5))
+                    };
+                    return Some((eye, target));
+                }
                 if name == "fallen" {
                     // From the far end of the room up into its broken vault.
                     let (qx, qz) = v2::fall_centre(r);
@@ -2201,6 +2279,7 @@ mod tests {
 
     fn cfg(scale: VoxelScalePreset, seed: u32) -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version: 16,
             seed,
             world_type: WorldType::Hills,
@@ -2231,7 +2310,7 @@ mod tests {
 
     #[test]
     fn rooms_are_hollow_and_walled() {
-        let c = cfg(VoxelScalePreset::OneMeter, 5);
+        let c = cfg(VoxelScalePreset::OneMeter, crate::test_world::seed());
         let d = Dungeon::generate(77, 500.0, 500.0, 70.0, 16);
         let hub = &d.rooms[4];
         let (cx, cz) = hub.centre();
@@ -2249,7 +2328,7 @@ mod tests {
 
     #[test]
     fn vault_tiers_are_deterministic_and_have_rooms_under_the_shaft() {
-        let c = cfg(VoxelScalePreset::OneMeter, 17);
+        let c = cfg(VoxelScalePreset::OneMeter, crate::test_world::seed());
         let ground = 30.0;
         for band in 1..=3 {
             let floor = ground - 24.0 * band as f32 - 7.0;
@@ -2281,7 +2360,7 @@ mod tests {
     #[test]
     fn a_planned_complex_has_a_shaft_a_gatehouse_and_a_hollow_hub() {
         for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter] {
-            let c = cfg(scale, 3040332434);
+            let c = cfg(scale, crate::test_world::seed());
             let v = scale.meters();
             let d = find_dungeon(&c);
             let (sx, sz, top) = d.shaft.unwrap();
@@ -2324,7 +2403,7 @@ mod tests {
 
     #[test]
     fn complexes_never_carve_within_two_metres_of_the_surface() {
-        let c = cfg(VoxelScalePreset::OneMeter, 99);
+        let c = cfg(VoxelScalePreset::OneMeter, crate::test_world::seed());
         let d = find_dungeon(&c);
         let hub = &d.rooms[4];
         let (cx, cz) = hub.centre();
@@ -2346,6 +2425,7 @@ mod tests {
             .and_then(|v| v.parse().ok())
             .unwrap_or(crate::CURRENT_GENERATOR_VERSION);
         let c = WorldSampleConfig {
+            planet: None,
             generator_version: version,
             seed: 424242,
             world_type: WorldType::Hills,
@@ -2430,7 +2510,7 @@ mod tests {
     #[test]
     #[ignore]
     fn profile_dungeon_lookup() {
-        let c = cfg(VoxelScalePreset::OneMeter, 424242);
+        let c = cfg(VoxelScalePreset::OneMeter, crate::test_world::seed());
         let mut hits = 0usize;
         let t = std::time::Instant::now();
         for cx in 5 * 32..13 * 32 {
@@ -2455,6 +2535,7 @@ mod tests {
     #[test]
     fn generator_18_pedestal_holds_an_offering() {
         let c = WorldSampleConfig {
+            planet: None,
             generator_version: 18,
             seed: 1,
             world_type: WorldType::Hills,
@@ -2494,6 +2575,7 @@ mod tests {
     #[test]
     fn generator_19_corners_are_worth_a_look_and_the_cross_stays_open() {
         let c = WorldSampleConfig {
+            planet: None,
             generator_version: 19,
             seed: 1,
             world_type: WorldType::Hills,
@@ -2714,6 +2796,7 @@ mod tests {
     #[ignore = "prints review coordinates"]
     fn print_review_rooms() {
         let c = WorldSampleConfig {
+            planet: None,
             generator_version: 21,
             seed: 0xA341_316C,
             world_type: WorldType::Hills,

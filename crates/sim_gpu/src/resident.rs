@@ -27,7 +27,7 @@ pub enum UploadError {
     OutsideWindow(IVec3),
     PoolTooSmall { needed: usize, capacity: u32 },
     /// A buffer would exceed the device's storage-binding limit.
-    TooLargeForDevice { bytes: u64, limit: u32 },
+    TooLargeForDevice { bytes: u64, limit: u64 },
     /// The window or the pool is empty, or the window's brick count overflows `u32`.
     BadWindow,
 }
@@ -61,6 +61,8 @@ pub struct GpuWorld {
     bits: wgpu::Buffer,
     list: wgpu::Buffer,
     alloc: wgpu::Buffer,
+    readback_budget: std::sync::Arc<std::sync::Mutex<(usize, u64)>>,
+    reserved_slots: engine_core::fast_hash::FastMap<(IVec3, u8), u32>,
 }
 
 fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -92,7 +94,7 @@ impl GpuWorld {
         let limit = device.limits().max_storage_buffer_binding_size;
         let alloc_bytes = (ALLOC_HEADER as u64 + 2 * window.capacity as u64) * 4;
         for bytes in [window.capacity as u64 * BRICK_CELLS as u64 * 8, (4 + bricks as u64) * 4, alloc_bytes] {
-            if bytes > limit as u64 {
+            if bytes > limit {
                 return Err(UploadError::TooLargeForDevice { bytes, limit });
             }
         }
@@ -102,6 +104,7 @@ impl GpuWorld {
         let mut directory = vec![NO_SLOT; bricks as usize];
         let cpu_pool: &[Cell] = bytemuck::cast_slice(store.pool_bytes());
         let mut used = 0u32;
+        let mut reserved_slots = engine_core::fast_hash::FastMap::default();
         for chunk in store.chunks() {
             let Some(slots) = store.chunk_slots(chunk).filter(|s| s.iter().any(|&s| s != NO_SLOT)) else { continue };
             let ci = chunk_index(chunk).ok_or(UploadError::OutsideWindow(chunk))?;
@@ -114,6 +117,7 @@ impl GpuWorld {
                     pool[used as usize * cell_words + 2 * i..][..2].copy_from_slice(&pack_cell(c));
                 }
                 directory[(ci * 64) as usize + b] = used;
+                reserved_slots.insert((chunk, b as u8), used);
                 used += 1;
             }
         }
@@ -145,7 +149,7 @@ impl GpuWorld {
             entries: &[uniform, storage(1, true), storage(2, false), storage(3, false), storage(4, false), storage(5, false), storage(6, false)],
         });
         let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("ca resident"), bind_group_layouts: &[&layout], push_constant_ranges: &[] });
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("ca resident"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
         let pipe = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
@@ -182,7 +186,8 @@ impl GpuWorld {
                 wgpu::BindGroupEntry { binding: 6, resource: alloc.as_entire_binding() },
             ],
         });
-        Ok(Self { device, queue, window, bricks, words, bits_pipe, compact_pipe, finalize_pipe, blocks_pipe, bind_group, params, pool, directory, bits, list, alloc })
+        Ok(Self { device, queue, window, bricks, words, bits_pipe, compact_pipe, finalize_pipe, blocks_pipe, bind_group, params, pool, directory, bits, list, alloc,
+            readback_budget: Default::default(), reserved_slots })
     }
 
     fn write_params(&self, slot: u64, seed: u32, phase_counter: u32, phase_or_mode: u32, heat_tick: bool) {
@@ -253,3 +258,11 @@ impl GpuWorld {
 #[path = "resident_readback.rs"]
 mod readback;
 pub use readback::Snapshot;
+
+#[path = "resident_async.rs"]
+mod asynchronous;
+pub use asynchronous::{PendingReadback, ReadbackStartError, ReadbackReservation};
+
+#[path = "resident_edits.rs"]
+mod edits;
+pub use edits::ReservedEditError;

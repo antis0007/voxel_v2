@@ -76,6 +76,7 @@ pub fn furnish(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32, dwall: 
             return Some(B::Air);
         }
     }
+    if let Some(block) = super::sprawl::works(c, r, rx, rz, fy, v) { return Some(block); }
     let prop = if lane && !matches!(r.kind, Kind::Reveal | Kind::Labyrinth | Kind::Orrery | Kind::Core) {
         None
     } else {
@@ -150,7 +151,7 @@ pub fn breach_hole(r: &Room, rx: f32, rz: f32, fy: f32) -> bool {
 fn props(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32, dwall: f32) -> Option<B> {
     if c.version >= 46 && matches!(r.kind, Kind::Library | Kind::Scriptorium
         | Kind::Refectory | Kind::Infirmary | Kind::Armory) {
-        return super::inhabited::furnish(r, rx, rz, fy, v, dwall);
+        return super::inhabited::furnish(r, rx, rz, fy, v, dwall, c.version);
     }
     let (w, d) = (r.w(), r.d());
     let variant = (h(r, 1) * 3.0) as u32;

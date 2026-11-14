@@ -2,7 +2,15 @@
 use super::BlockId as B;
 use glam::Vec3;
 
+/// Generator 72: each stair tread also fills the rise below it, so treads
+/// share a face instead of meeting at an edge.
+pub const CONNECTED_STAIRS_GENERATOR: u32 = crate::gates::CONNECTED_ROOFS_GENERATOR;
+
 pub fn block(p: Vec3, voxel: f32) -> Option<B> {
+    block_versioned(p, voxel, false)
+}
+
+pub fn block_versioned(p: Vec3, voxel: f32, connected: bool) -> Option<B> {
     if p.x.abs() > 18.0 || p.z.abs() > 16.0 || p.y < -6.0 || p.y > 7.0 {
         return None;
     }
@@ -24,7 +32,8 @@ pub fn block(p: Vec3, voxel: f32) -> Option<B> {
     if (6.0..9.0).contains(&p.x) {
         let stair = (((p.z.abs() - 2.0).max(0.0) * 0.5) / voxel.max(0.5)).floor() * voxel.max(0.5);
         let top = (-3.0 + stair).min(0.0);
-        if p.y < top && p.y >= top - 1.0 {
+        let rise = if connected { voxel.max(0.5) } else { 0.0 };
+        if p.y < top && p.y >= top - 1.0 - rise {
             return Some(B::Planks);
         }
     }

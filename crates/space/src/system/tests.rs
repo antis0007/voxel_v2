@@ -81,9 +81,9 @@ fn moon_relative_position_matches_its_elements_same_tick() {
         o.peri_deg.to_radians(),
     );
     let mut snap = Snapshot::default();
-    for tick in [0, 1, 123_457, 172_799, 9_000_000_001] {
+    for tick in [0, 1, 123_457, 233_927, 9_000_000_001] {
         system.evaluate(tick, &mut snap);
-        let m = o.mean_anomaly_deg.to_radians() + phase(tick, 172_800);
+        let m = o.mean_anomaly_deg.to_radians() + phase(tick, 233_928);
         let (pos, vel) = el.state_at(m);
         let (h, b) = (home.0 as usize, moon.0 as usize);
         assert!((snap.position[b] - snap.position[h] - pos).length() < 1e-6);

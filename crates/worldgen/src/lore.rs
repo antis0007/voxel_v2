@@ -152,6 +152,18 @@ fn mix(p: IVec3, seed: u32) -> u32 {
 pub fn record(seed: u32, cell: IVec3, location: Option<&str>, depth_m: f32) -> Option<&'static str> {
     let h = mix(cell, seed);
     if h & 1 == 0 {
+        // Working-gear papers occupy previously empty coffers. Existing records
+        // keep their exact text and selection, including in older worlds.
+        if h & 7 == 0 {
+            return match (Pool::for_place(location, depth_m), (h >> 3) & 1) {
+                (Pool::Ballast, _) => Some("Harness tally: eight arms issued, eight returned. The braid inspector's own hands were empty."),
+                (Pool::Founders, 0) => Some("Fuel chit: braid inspection, twelve breaths of burn. The Founders docked the return flight."),
+                (Pool::Founders, _) => Some("Founders' tally: one scorched braid strand. Replace inspection burners with induction coils."),
+                (Pool::Keepers, 0) => Some("Garden repair slip: slime soles for the Ballast. One pair came back with a ceiling's dust."),
+                (Pool::Keepers, _) => Some("Keepers' tally: gel slings, charged as freight straps. The children signed for all of them."),
+                _ => None,
+            };
+        }
         return None;
     }
     let records = Pool::for_place(location, depth_m).records();

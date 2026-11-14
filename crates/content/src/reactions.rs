@@ -2,6 +2,7 @@
 //! into `engine_core::reaction::ReactionTable`; phase changes and burning come from the material table and
 //! need no row. Errors cite `assets/reactions.ron:LINE`.
 use crate::BlockId;
+use crate::sim_traits::SIM_DIRECT;
 use engine_core::material::{MaterialId, SIM_MATERIAL_ROWS, SimMaterial};
 use engine_core::reaction::{Reaction, ReactionError, ReactionTable};
 use serde::{Deserialize, Serialize};
@@ -31,9 +32,14 @@ pub enum Threshold {
 /// chance `rate`: `a` becomes `a_into` and `b` (its neighbour, if any) becomes `b_into`. A missing product
 /// keeps the material; a missing temperature keeps the cell's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReactionRow {
     /// What the row is for, in a sentence.
     pub why: String,
+    /// Exact cell-volume ratio for a connected-region reaction. These rows are
+    /// applied by the sparse world solver, never flattened to a 1:1 GPU pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_counts: Option<(u8, u8)>,
     pub a: Reactant,
     #[serde(default)]
     pub b: Option<Reactant>,
@@ -65,24 +71,39 @@ fn deci_kelvin(kelvin: f32) -> Option<u16> {
     (k > 0.0 && k <= 6553.5).then(|| (k * 10.0).round() as u16)
 }
 
+/// The one-byte sim row of a block (`crate::sim_traits::sim_row`).
+fn m(block: BlockId) -> u8 {
+    MaterialId::from(block).0
+}
+
 fn id(block: Option<BlockId>) -> MaterialId {
-    block.map_or(MaterialId::NONE, |b| MaterialId(b as u8))
+    block.map_or(MaterialId::NONE, MaterialId::from)
 }
 
 /// The materials a reactant stands for.
 fn expand(reactant: Reactant, table: &[SimMaterial; SIM_MATERIAL_ROWS]) -> Vec<u8> {
     match reactant {
-        Reactant::Block(b) => vec![b as u8],
-        Reactant::Burnable => (0..crate::ALL_BLOCK_IDS.len() as u8)
+        Reactant::Block(b) => vec![m(b)],
+        Reactant::Burnable => (0..crate::ALL_BLOCK_IDS.len().min(SIM_DIRECT) as u8)
             .filter(|&m| table[m as usize].ignite != 0 && table[m as usize].burns_into != MaterialId::NONE)
             .collect(),
     }
+}
+
+/// Parse and validate drafts against the runtime material table. This also compiles
+/// ordinary reactions, so drafts receive the same pair/capacity checks as the game.
+pub fn parse(text: &str) -> Result<Vec<ReactionRow>, Vec<String>> {
+    let rows: Vec<ReactionRow> = ron::from_str(text).map_err(|error| vec![format!("{FILE}:{error}")])?;
+    compile(&rows, text, &crate::SIM_TABLE)?;
+    Ok(rows)
 }
 
 /// Validate and compile every row; all problems are reported, each with its line.
 pub(crate) fn compile(rows: &[ReactionRow], text: &str, table: &[SimMaterial; SIM_MATERIAL_ROWS]) -> Result<ReactionTable, Vec<String>> {
     let mut out = ReactionTable::default();
     let mut errors = Vec::new();
+    let mut batch_pairs = std::collections::HashSet::new();
+    let mut batch_products = std::collections::HashSet::new();
     for (index, r) in rows.iter().enumerate() {
         let line = line_of_row(text, index);
         let mut fail = |message: String| errors.push(format!("{FILE}:{line}: {message}"));
@@ -95,6 +116,12 @@ pub(crate) fn compile(rows: &[ReactionRow], text: &str, table: &[SimMaterial; SI
         if r.b == Some(Reactant::Burnable) {
             fail("Burnable is only allowed as a".into());
         }
+        let shared = |b: BlockId| (b as usize) >= SIM_DIRECT;
+        if [Some(r.a), r.b].into_iter().flatten().any(|x| matches!(x, Reactant::Block(b) if shared(b)))
+            || [r.a_into, r.b_into].into_iter().flatten().any(shared)
+        {
+            fail(format!("reactions name only blocks with their own sim row (ids below {SIM_DIRECT})"));
+        }
         if r.rate > 0.0 && Reaction::rate_from(r.rate) == 0 {
             fail(format!("rate {} rounds to a chance of zero per heat tick", r.rate));
         }
@@ -106,8 +133,38 @@ pub(crate) fn compile(rows: &[ReactionRow], text: &str, table: &[SimMaterial; SI
         {
             fail(format!("a self-pair ({a:?} + {a:?}) has no first cell to hold the condition"));
         }
-        if r.b.is_none() && matches!(r.a, Reactant::Block(a) if table[a as usize].class == engine_core::material::MovementClass::Void) {
+        if r.b.is_none() && matches!(r.a, Reactant::Block(a) if table[usize::from(m(a))].class == engine_core::material::MovementClass::Void) {
             fail("empty space does nothing on its own; give it a partner".into());
+        }
+        if let Some((a_count, b_count)) = r.batch_counts {
+            if a_count == 0 || b_count == 0 || u16::from(a_count) + u16::from(b_count) > 16 {
+                fail("batch counts must be positive and total at most 16 cells".into());
+            }
+            if !matches!((r.a, r.b), (Reactant::Block(_), Some(Reactant::Block(_))))
+                || r.a_into.is_none() || r.a_into != r.b_into || r.rate != 1.0
+                || r.a_temp.is_some() || r.b_temp.is_some()
+                || matches!(r.a_above, Some(Threshold::Ignition))
+                || matches!(r.a_below, Some(Threshold::Ignition)) {
+                fail("batch reactions require two explicit materials, one shared product, rate 1 and numeric bounds".into());
+            }
+            for bound in [r.a_above, r.a_below].into_iter().flatten() {
+                if let Threshold::K(k) = bound { if deci_kelvin(k).is_none() { fail("invalid batch temperature".into()); } }
+            }
+            if let (Some(Threshold::K(lo)), Some(Threshold::K(hi))) = (r.a_above, r.a_below) {
+                if lo > hi { fail("batch lower bound exceeds upper bound".into()); }
+            }
+            if let (Reactant::Block(a), Some(Reactant::Block(b))) = (r.a, r.b) {
+                let pair = (m(a).min(m(b)), m(a).max(m(b)));
+                if !batch_pairs.insert(pair) {
+                    fail(format!("batch pair {a:?} + {b:?} already has a row"));
+                }
+            }
+            if let Some(product) = r.a_into
+                && !batch_products.insert(m(product))
+            {
+                fail(format!("batch product {product:?} already has a row"));
+            }
+            continue;
         }
         let temp = |name: &str, kelvin: Option<f32>, fail: &mut dyn FnMut(String)| match kelvin {
             None => 0,
@@ -160,3 +217,8 @@ pub(crate) fn compile(rows: &[ReactionRow], text: &str, table: &[SimMaterial; SI
 #[cfg(test)]
 #[path = "reactions_tests.rs"]
 mod tests;
+
+/// Authored rows shared by packed pair compilation and sparse region reactions.
+pub static ROWS: std::sync::LazyLock<Vec<ReactionRow>> = std::sync::LazyLock::new(|| {
+    parse(REACTIONS_RON).unwrap_or_else(|errors| panic!("invalid reactions: {}", errors.join("\n")))
+});

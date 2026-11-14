@@ -5,11 +5,11 @@
 //! quarter-metre moulding is one voxel at 0.25 m, rounds to one at 0.5 m and
 //! is absent at 1 m.
 use super::{Layout, Shape, Space, Style, palette};
-use crate::{BlockId as B, hash2};
+use crate::BlockId as B;
 use glam::Vec3;
 
 /// First generator with the fine layer.
-pub const VERSION: u32 = 51;
+pub const VERSION: u32 = crate::gates::FINE_ARCHITECTURE_GENERATOR;
 /// Height the chandelier plate hangs at over the floor, metres.
 const LAMP: f32 = 3.2;
 
@@ -70,22 +70,24 @@ impl Layout {
     }
 }
 
-/// Floor stone: flags a metre by a metre and a half with trim joints, every
-/// other course offset half a flag; `None` keeps the plain floor.
+/// Floor stone: staggered flags with trim joints, enlarged at coarse voxel
+/// scales so each slab retains an interior; `None` keeps the plain floor.
 pub(super) fn flagstone(version: u32, style: Style, m: Vec3, v: f32) -> Option<B> {
-    if version < VERSION || v > 0.5 {
+    if version < VERSION || v > 1.0 {
         return None;
     }
-    let [wall, alt, trim, floor] = palette(style);
-    let course = (m.z / 1.5).floor() as i32;
-    let shift = if course.rem_euclid(2) == 0 { 0.0 } else { 0.5 };
+    let [_, _, trim, floor] = palette(style);
+    // Leave room for a flag's interior even at the one-metre voxel scale.
+    let width = 1.5_f32.max(v * 3.0);
+    let depth = 2.0_f32.max(v * 4.0);
+    let course = (m.z / depth).floor() as i32;
+    let shift = if course.rem_euclid(2) == 0 { 0.0 } else { width * 0.5 };
     let near = |a: f32, period: f32| {
         let d = (a - v * 0.5).rem_euclid(period);
         d.min(period - d) < v * 0.5
     };
-    if near(m.x + shift, 1.0) || near(m.z, 1.5) {
+    if near(m.x + shift, width) || near(m.z, depth) {
         return Some(trim);
     }
-    let flag = hash2((m.x + shift).floor() as i32, course, 5101);
-    Some(if flag > 0.9 { alt } else if flag > 0.8 { wall } else { floor })
+    Some(floor)
 }

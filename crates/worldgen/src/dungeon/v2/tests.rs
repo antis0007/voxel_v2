@@ -5,7 +5,7 @@ use glam::IVec3;
 use std::collections::{HashSet, VecDeque};
 
 fn cfg(seed: u32, scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale: scale }
+    WorldSampleConfig { planet: None, generator_version: crate::CURRENT_GENERATOR_VERSION, seed, world_type: WorldType::Hills, voxel_scale: scale }
 }
 
 /// Complexes owned by cells in rings around the origin, with their cell.
@@ -228,7 +228,7 @@ fn the_core_is_sealed_and_entered_only_through_its_puzzle() {
 
 #[test]
 fn sampling_is_deterministic_and_cache_independent() {
-    let c = cfg(77, VoxelScalePreset::OneMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter);
     let (cell, d) = complexes(&c, 1).remove(0);
     let fresh = {
         let (seed, cx, cz, ground) = super::super::site(&c, cell.0, cell.1).unwrap();
@@ -341,7 +341,7 @@ fn dump_reach() {
 
 #[test]
 fn the_gatehouse_stands_above_ground_in_the_world() {
-    let c = cfg(424242, VoxelScalePreset::OneMeter);
+    let c = cfg(crate::test_world::seed(), VoxelScalePreset::OneMeter);
     let mut seen = 0;
     for (_, d) in complexes(&c, 6) {
         let (sx, sz, _) = d.shaft;
@@ -366,3 +366,23 @@ mod ruin_layer;
 
 #[path = "tests_view.rs"]
 mod view;
+
+/// Generator 72: the engine works rolls, and its maze pays its dead ends.
+#[test]
+fn engine_works_mazes_hold_caches_and_a_relic() {
+    let found = many(VoxelScalePreset::OneMeter, 8, 80);
+    let works: Vec<_> = found.iter().filter(|(_, _, d)| d.job == Job::Workshop).collect();
+    assert!(!works.is_empty(), "no engine works in {} complexes", found.len());
+    let mut checked = 0;
+    for (c, cell, d) in &works {
+        let Some(r) = d.rooms.iter().find(|r| r.kind == Kind::Labyrinth) else { continue };
+        let g = Grid::within(c, d, Vec3::new(r.x0, r.floor - 1.0, r.z0), Vec3::new(r.x1, r.floor + r.h, r.z1));
+        let count = |b: B| g.blocks.iter().filter(|x| **x == b).count();
+        assert!(count(B::SalvageCrate) >= 2, "{cell:?}: {} caches", count(B::SalvageCrate));
+        assert_eq!(count(B::SurveyCache), 1, "{cell:?}: one relic in the farthest dead end");
+        assert!(count(B::PowerCable) + count(B::ItemPipe) > 0, "{cell:?}: cable along the walls");
+        assert!(count(B::MirageBrick) > 0, "{cell:?}: false walls remain");
+        checked += 1;
+    }
+    assert!(checked >= 1, "no engine works with a labyrinth among {}", works.len());
+}

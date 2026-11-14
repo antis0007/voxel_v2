@@ -22,6 +22,9 @@ pub enum Job {
     HollowFloor,
     /// Any stratum. A pilgrims' landing; depth is age.
     Sanctum,
+    /// Stratum II. An engine works: couplings machined under seal, the maze
+    /// its test floor. Generator 72 and later.
+    Workshop,
 }
 
 /// Wall, trim, floor and accent stone for one complex.
@@ -53,10 +56,35 @@ pub const ALL: [Job; 8] = [
     Job::HollowFloor,
     Job::Sanctum,
 ];
+/// Jobs a complex can roll from `WORKSHOP_VERSION` on.
+pub const ALL_V72: [Job; 9] = [
+    Job::Catacombs,
+    Job::Undercroft,
+    Job::ForgeHalls,
+    Job::Warren,
+    Job::Quarantine,
+    Job::Orrery,
+    Job::HollowFloor,
+    Job::Sanctum,
+    Job::Workshop,
+];
+/// First generator that rolls the engine works.
+pub const WORKSHOP_VERSION: u32 = crate::gates::CONNECTED_ROOFS_GENERATOR;
 
 impl Job {
     pub fn roll(r: f32) -> Self {
         ALL[(r * ALL.len() as f32) as usize % ALL.len()]
+    }
+
+    /// Shipped generators keep their eight-job roll bit for bit; from
+    /// `WORKSHOP_VERSION` a separate roll `w` turns one complex in six into
+    /// the engine works and leaves every other job where it was.
+    pub fn roll_versioned(r: f32, w: f32, version: u32) -> Self {
+        if version >= WORKSHOP_VERSION && w < 1.0 / 6.0 {
+            Self::Workshop
+        } else {
+            Self::roll(r)
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -69,6 +97,7 @@ impl Job {
             Self::Orrery => "Hall of Wandering Stars",
             Self::HollowFloor => "Hall of the Hollow Floor",
             Self::Sanctum => "Sanctum landing",
+            Self::Workshop => "Buried engine works",
         }
     }
 
@@ -80,6 +109,7 @@ impl Job {
             Self::Orrery => (28.0, 42.0),
             Self::HollowFloor => (36.0, 48.0),
             Self::Sanctum => (16.0, 44.0),
+            Self::Workshop => (26.0, 40.0),
         };
         lo + (hi - lo) * r
     }
@@ -95,6 +125,7 @@ impl Job {
             Self::Orrery => p(B::VoidStone, B::StoneBricks, B::SilverBlock, B::VoidStone, B::StarGlass),
             Self::HollowFloor => p(B::Basalt, B::Limestone, B::Limestone, B::Basalt, B::Crystal),
             Self::Sanctum => p(B::StoneBricks, B::Limestone, B::Limestone, B::StoneBricks, B::GoldBlock),
+            Self::Workshop => p(B::DressedStone, B::SearedBrick, B::IronBlock, B::Basalt, B::CopperBlock),
         }
     }
 
@@ -110,13 +141,14 @@ impl Job {
             Self::Orrery => &[K::Orrery, K::Library, K::Library, K::Shrine, K::Store],
             Self::HollowFloor => &[K::Pitfall, K::Store, K::Library, K::Shrine, K::Chasm, K::Chasm],
             Self::Sanctum => &[K::Shrine, K::Shrine, K::Crypt, K::Library, K::Store],
+            Self::Workshop => &[K::Forge, K::Foundry, K::Store, K::Store, K::Cells, K::Cistern],
         }
     }
 
     /// Puzzle that guards the sealed core.
     pub fn guard_puzzle(self, r: f32) -> Kind {
         match self {
-            Self::Quarantine => Kind::Labyrinth,
+            Self::Quarantine | Self::Workshop => Kind::Labyrinth,
             Self::HollowFloor => Kind::Pitfall,
             Self::Orrery => Kind::Orrery,
             _ if r < 0.5 => Kind::Labyrinth,
@@ -135,13 +167,14 @@ impl Job {
             Self::Orrery => o(0.15, 0.0, 0.05, 0.10),
             Self::HollowFloor => o(0.25, 0.0, 0.0, 0.25),
             Self::Sanctum => o(0.15, 0.05, 0.10, 0.05),
+            Self::Workshop => o(0.20, 0.05, 0.15, 0.20),
         }
     }
 
     /// Bay width: piers, ribs and sconces repeat at this spacing.
     pub fn bay(self) -> f32 {
         match self {
-            Self::ForgeHalls | Self::HollowFloor => 6.0,
+            Self::ForgeHalls | Self::HollowFloor | Self::Workshop => 6.0,
             Self::Catacombs | Self::Quarantine => 4.0,
             _ => 5.0,
         }

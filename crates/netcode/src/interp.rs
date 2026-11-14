@@ -65,6 +65,12 @@ impl<T: Interpolate> SnapshotBuffer<T> {
         Self { playback, entries: VecDeque::new(), offset: None, jitter: 0.0, render: None, last_now: 0.0 }
     }
 
+    /// Discard poses from before a teleport without relearning the link delay.
+    pub fn clear_samples(&mut self) {
+        self.entries.clear();
+        self.render = None;
+    }
+
     /// Records a snapshot stamped `server_s` that arrived at local time `now_s`.
     /// Late or duplicate snapshots older than playback are ignored.
     pub fn push(&mut self, now_s: f64, server_s: f64, state: T) {

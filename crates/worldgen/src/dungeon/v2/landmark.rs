@@ -80,6 +80,19 @@ pub fn furnish(c: &Complex, r: &Room, rx: f32, rz: f32, fy: f32, v: f32) -> Opti
             (bars && fy < 4.5 || (dist < 2.9 && (4.5..4.5 + v).contains(&fy))).then_some(c.pal.trim)
         }
         Job::Orrery => starry::orrery(c, r, dx, dz, fy, v, 0.5),
+        Job::Workshop => {
+            // The test engine: a banded iron and copper column on a cell bank,
+            // cables leaving its crown along both axes.
+            let top = LEVEL + 1.5;
+            if dist < 1.6 && fy < 0.6 {
+                return Some(B::BatteryBank);
+            }
+            if dist < 1.1 && fy < top {
+                return Some(if fy.rem_euclid(1.5) < 0.5 { B::BronzeBlock } else { c.pal.trim });
+            }
+            let cable = (dx.abs() < v * 0.5 || dz.abs() < v * 0.5) && dist < rad;
+            (cable && (top..top + v).contains(&fy)).then_some(B::PowerCable)
+        }
         Job::HollowFloor => {
             // A crystal spine rising from the pit through the false floor.
             (dist < 0.8 && fy < LEVEL + 3.0).then_some(c.pal.accent)

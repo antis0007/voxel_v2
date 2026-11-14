@@ -71,6 +71,10 @@ pub enum PropKind {
     Plinth,
     BellClapper,
     ObservatoryLens,
+    /// Generator 302 banded strongbox: a one-shot loot claim.
+    Cache,
+    /// Generator 302 reading stand with a lit page: a one-shot spell find.
+    Lectern,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +130,13 @@ pub struct Prop {
 }
 
 impl Prop {
+    /// Metre box of the pedestal generator 32 stamps under the prop: a
+    /// 1.2 m cube whose top sits 0.6 m below the prop point.
+    pub fn model_box(self) -> (Vec3, Vec3) {
+        let lo = self.pos - Vec3::new(0.6, 1.8, 0.6);
+        (lo, lo + Vec3::splat(1.2))
+    }
+
     pub fn action(self, state: u32) -> Action {
         match self.kind {
             PropKind::Marker => Action::Inspect,
@@ -138,7 +149,7 @@ impl Prop {
                     Action::Open
                 }
             }
-            PropKind::Plinth => Action::Claim,
+            PropKind::Plinth | PropKind::Cache | PropKind::Lectern => Action::Claim,
             PropKind::BellClapper => Action::Ring,
             PropKind::ObservatoryLens => Action::Restore,
         }
@@ -173,6 +184,18 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Metre box of the voxels standing for `prop`: its kind's model from
+    /// generator 292, the shared pedestal before. `None` for the box plan,
+    /// which stamps nothing.
+    pub fn model_box(&self, prop: &Prop) -> Option<(Vec3, Vec3)> {
+        let layout = self.v2.as_ref()?;
+        Some(if layout.version >= super::v2::props::VERSION {
+            super::v2::props::model_box(prop.kind, prop.pos)
+        } else {
+            prop.model_box()
+        })
+    }
+
     pub fn empty() -> Self {
         Self {
             anchor: Vec3::ZERO,
@@ -1002,8 +1025,9 @@ mod tests {
 
     fn cfg(version: u32, scale: VoxelScalePreset) -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version: version,
-            seed: 17,
+            seed: crate::test_world::seed(),
             world_type: WorldType::Hills,
             voxel_scale: scale,
         }

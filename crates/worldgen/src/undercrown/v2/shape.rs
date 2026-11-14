@@ -106,6 +106,13 @@ impl Space {
                 }
                 if d < r && m.y >= y0 { At::Void } else if d < r { At::Floor } else { At::Shell }
             }
+            Shape::Rift { a, b, half, top } => {
+                let k = cut(a, b, half, top, m);
+                if k.lat.abs() >= half * REACH + 2.5 || m.y < a.y - 2.0 || m.y >= top + 2.0 {
+                    return At::Out;
+                }
+                if k.lat < k.pos && k.lat > -k.neg && m.y >= k.ground && m.y < k.roof { At::Void } else { At::Shell }
+            }
         }
     }
 
@@ -116,8 +123,54 @@ impl Space {
             Shape::Round { x, z, r, floor, h, dome } => (Vec3::new(x - r, floor, z - r) - 2.0, Vec3::new(x + r, floor + h + dome, z + r) + 2.0),
             Shape::Cave { c, rad, .. } => (c - rad * 1.3 - 1.0, c + rad * 1.3 + 1.0),
             Shape::Shaft { x, z, r, y0, y1, .. } => (Vec3::new(x - r, y0, z - r) - 2.0, Vec3::new(x + r, y1, z + r) + 2.0),
+            Shape::Rift { a, b, half, top } => {
+                let pad = Vec3::new(half * REACH + 2.5, 2.0, half * REACH + 2.5);
+                (a.min(b) - pad, a.max(b).with_y(top) + pad)
+            }
         }
     }
+}
+
+/// Furthest a rift wall stands from its centre line, in half widths.
+pub(super) const REACH: f32 = 1.4;
+
+/// A rift's roof line `t` of the way from `a` to `b`: level over the first
+/// third, then sinking 30 m toward `b`, where the hill above has fallen away.
+pub(super) fn rift_top(top: f32, t: f32) -> f32 {
+    top - 30.0 * ((t - 0.3) / 0.7).clamp(0.0, 1.0)
+}
+
+/// Where a point sits across a rift.
+pub(super) struct Cut {
+    /// Signed distance from the centre line; round the ends, from the end.
+    pub lat: f32,
+    /// Wall distance on the positive and the negative side at this height.
+    pub pos: f32,
+    pub neg: f32,
+    pub roof: f32,
+    /// The bed in the middle, the banks beside it.
+    pub ground: f32,
+}
+
+/// A rift's cross-section at a point. Each wall keeps between 0.75 and
+/// `REACH` half widths below the taper, so the banks (outside 0.4) always
+/// leave a path and authored crossings know where rock begins.
+pub(super) fn cut(a: Vec3, b: Vec3, half: f32, top: f32, m: Vec3) -> Cut {
+    let (pa, p) = (xz(a), xz(m));
+    let ab = xz(b) - pa;
+    let len = ab.length().max(1e-3);
+    let t = ((p - pa).dot(ab) / (len * len)).clamp(0.0, 1.0);
+    let off = p - (pa + ab * t);
+    let lat = if ab.perp_dot(off) >= 0.0 { off.length() } else { -off.length() };
+    let along = t * len;
+    let top = rift_top(top, t);
+    let u = ((m.y - (top - 14.0)) / 14.0).clamp(0.0, 1.0);
+    let taper = 1.0 - 0.4 * u * u * (3.0 - 2.0 * u);
+    let grain = (value_noise3(m.x * 0.3, m.y * 0.3, m.z * 0.3, 7305) - 0.5) * 0.1;
+    let side = |seed: u32| half * (0.8 + 0.55 * value_noise3(along * 0.045, m.y * 0.05, 0.0, seed) + grain) * taper;
+    let roof = top - 5.0 * value_noise3(along * 0.05, 0.0, 0.0, 7307) - 3.0 * (lat / half).powi(2);
+    let ground = a.y + if lat.abs() > 0.4 * half { 2.0 } else { 0.0 };
+    Cut { lat, pos: side(7301), neg: side(7303), roof, ground }
 }
 
 /// Where a point sits along a passage.

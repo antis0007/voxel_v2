@@ -102,10 +102,16 @@ pub fn unpack_cell([w0, w1]: [u32; 2]) -> Cell {
 
 #[derive(Debug)]
 pub enum GpuStepError {
+    /// A resident readback contains invalid directory or payload data.
+    InvalidReadback,
+    /// The readback token was already consumed.
+    ReadbackConsumed,
     /// Waiting for the dispatch failed (device lost or timed out).
     Poll(wgpu::PollError),
     /// Reading the results back failed.
     Map(wgpu::BufferAsyncError),
+    /// The mapped range was invalidated before it could be read.
+    MapRange(wgpu::MapRangeError),
     /// The map callback never ran.
     Lost,
 }
@@ -194,7 +200,7 @@ impl GpuBlockRule {
         });
         d.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None }).map_err(GpuStepError::Poll)?;
         rx.recv().map_err(|_| GpuStepError::Lost)?.map_err(GpuStepError::Map)?;
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback.slice(..).get_mapped_range().map_err(GpuStepError::MapRange)?;
         let words: &[u32] = bytemuck::cast_slice(&mapped);
         let after = (0..n).map(|k| std::array::from_fn(|i| unpack_cell([words[k * 16 + 2 * i], words[k * 16 + 2 * i + 1]]))).collect();
         let flags = &words[n * 16..];

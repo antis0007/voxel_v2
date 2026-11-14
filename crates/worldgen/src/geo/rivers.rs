@@ -17,6 +17,9 @@ pub struct Channel {
     pub half_width: f64,
     pub depth: f64,
     pub water_m: f64,
+    /// Square root of the rainfall-weighted upstream area in km2.
+    pub size: f64,
+    pub downstream: glam::Vec2,
 }
 
 fn level(p: &Planet, i: usize) -> f64 {
@@ -50,6 +53,17 @@ const SAMPLES: usize = 8;
 
 /// The nearest channel whose banks reach `(x, z)`, if any.
 pub fn near(p: &Planet, x: f64, z: f64) -> Option<Channel> {
+    nearest(p, x, z).filter(|c| c.distance < c.half_width * 4.0 + 12.0)
+}
+
+/// The nearest channel within two solve cells, however far its banks reach.
+pub fn nearest(p: &Planet, x: f64, z: f64) -> Option<Channel> {
+    nearest_on(p, None, x, z)
+}
+
+/// `nearest` with water levels per solve node in place of the solved surface.
+pub fn nearest_on(p: &Planet, levels: Option<&[f32]>, x: f64, z: f64) -> Option<Channel> {
+    let level = |p: &Planet, i: usize| levels.map_or_else(|| level(p, i), |l| f64::from(l[i]));
     let g = &p.grid;
     let (cx, cz, _, _) = g.cell(x, z);
     let n = g.n as i64;
@@ -93,11 +107,21 @@ pub fn near(p: &Planet, x: f64, z: f64) -> Option<Channel> {
             };
             let km2 = (area as f64 / 1.0e6).sqrt();
             let half = (1.2 + 0.9 * km2).min(26.0);
+            let vector = |a: [f64; 2], b: [f64; 2]| {
+                glam::Vec2::new((b[0] - a[0]) as f32, (b[1] - a[1]) as f32)
+            };
+            let tangent = if on_curve {
+                vector(start, ctrl).lerp(vector(ctrl, end), t as f32)
+            } else {
+                vector(node(p, i), start)
+            };
             let channel = Channel {
                 distance: d2.sqrt(),
                 half_width: half,
                 depth: (0.6 + 0.25 * km2).min(5.0),
                 water_m: (water - 0.35).max(SEA_M),
+                size: km2,
+                downstream: tangent.normalize_or_zero(),
             };
             let score = channel.distance - half;
             if best.is_none_or(|(s, _)| score < s) {
@@ -105,7 +129,7 @@ pub fn near(p: &Planet, x: f64, z: f64) -> Option<Channel> {
             }
         }
     }
-    best.map(|(_, c)| c).filter(|c| c.distance < c.half_width * 4.0 + 12.0)
+    best.map(|(_, c)| c)
 }
 
 /// Surface of a lake covering `(x, z)`, if any.

@@ -35,9 +35,11 @@ fn survey(cfg: &WorldSampleConfig, o: Vec2) -> Option<Candidate> {
     }
     let lo = inner.iter().copied().fold(f32::MAX, f32::min);
     let hi = inner.iter().copied().fold(f32::MIN, f32::max);
-    if lo < WATER_LEVEL_METERS + 3.0 || hi - lo > 26.0 || hi > 100.0 {
+    let altitude_limit = if crate::geo::integrated(cfg) { 220.0 } else { 100.0 };
+    if lo < WATER_LEVEL_METERS + 3.0 || hi - lo > 26.0 || hi > altitude_limit {
         return None;
     }
+    if crate::geo::integrated(cfg) && crate::geo::ground(cfg, o.x, o.y, 64.0).water_m.is_some() { return None; }
     let biome = landscape::sample(cfg, cfg.blocks_for_height(o.x), cfg.blocks_for_height(o.y));
     use landscape::Biome as Bi;
     if !matches!(biome.biome, Bi::Forest | Bi::Rainforest | Bi::Taiga | Bi::Meadow | Bi::Fen | Bi::Heathland) {

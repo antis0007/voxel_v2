@@ -4,7 +4,7 @@ use crate::{BlockId, WorldType, sample_block, sample_column};
 use glam::IVec3;
 
 fn cfg(voxel_scale: VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: RIVER_FIT_GENERATOR, seed: 2738958700, world_type: WorldType::Hills, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: RIVER_FIT_GENERATOR, seed: crate::test_world::seed(), world_type: WorldType::Hills, voxel_scale }
 }
 
 /// Ground top and the water surface a column actually holds.

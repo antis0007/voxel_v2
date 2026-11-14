@@ -20,15 +20,25 @@ pub(crate) fn deposit(
     m: Vec3,
     below: f32,
     rock: BlockId,
+    mineral_species: bool,
 ) -> Option<BlockId> {
     if rock == BlockId::Lava || below < 1.5 {
         return None;
     }
     // Cheap rejects first: the cell tests below cost a few hashes each.
     geode(seed, m, below, rock)
-        .or_else(|| copper_stock(seed, tect, m, below))
-        .or_else(|| tin_lode(seed, tect, m, below))
-        .or_else(|| iron_bands(seed, tect, m, below))
+        .or_else(|| copper_stock(seed, tect, m, below).map(|ore| match (ore, mineral_species) {
+            (BlockId::CopperOre, true) if below < 10.0 => BlockId::Malachite,
+            (BlockId::CopperOre, true) => BlockId::Chalcopyrite,
+            (BlockId::IronOre, true) => BlockId::Magnetite,
+            _ => ore,
+        }))
+        .or_else(|| tin_lode(seed, tect, m, below).map(|ore| {
+            if mineral_species { BlockId::Cassiterite } else { ore }
+        }))
+        .or_else(|| iron_bands(seed, tect, m, below).map(|ore| {
+            if mineral_species { BlockId::Hematite } else { ore }
+        }))
         .or_else(|| coal_seam(seed, tect, m, below))
 }
 
@@ -167,6 +177,7 @@ mod tests {
 
     fn census(version: u32, seed: u32, span: i32) -> ([u32; 5], u32, u32, u32) {
         let cfg = WorldSampleConfig {
+            planet: None,
             generator_version: version,
             seed,
             world_type: WorldType::Hills,

@@ -1,6 +1,7 @@
 //! Creature size classes shared by generation (cistern gauges) and gameplay.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum SizeClass {
     Small = 0,
     Normal = 1,

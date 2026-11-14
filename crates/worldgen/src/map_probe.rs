@@ -34,6 +34,15 @@ fn biome_rgb(b: Biome) -> [f32; 3] {
         Biome::Rainforest => [0.10, 0.42, 0.18],
         Biome::Heathland => [0.56, 0.52, 0.42],
         Biome::Fen => [0.44, 0.56, 0.40],
+        Biome::LostPlateau => [0.34, 0.56, 0.20],
+        Biome::CycadMarsh => [0.27, 0.46, 0.29],
+        Biome::CloudForest => [0.30, 0.55, 0.48],
+        Biome::RedwoodGrove => [0.25, 0.35, 0.24],
+        Biome::OvergrownGardens => [0.58, 0.72, 0.42],
+        Biome::FungalGrove => [0.48, 0.39, 0.30],
+        Biome::LastShore => [0.65, 0.35, 0.27],
+        Biome::VolcanicField => [0.28, 0.25, 0.24],
+        Biome::KarstUpland => [0.64, 0.68, 0.48],
     }
 }
 
@@ -54,6 +63,7 @@ fn sample(cfg: &WorldSampleConfig, x: i32, z: i32, step: f32) -> Cell {
 #[ignore = "map probe; run explicitly"]
 fn map_probe() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: env("MAP_VERSION", CURRENT_GENERATOR_VERSION),
         seed: env("MAP_SEED", 2_738_958_700u32),
         world_type: WorldType::Hills,
@@ -140,7 +150,7 @@ fn map_probe() {
 }
 
 /// Minimal RGB PNG with stored (uncompressed) deflate blocks.
-fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
+pub(crate) fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
     fn crc32(bytes: &[u8]) -> u32 {
         let mut c = 0xffff_ffffu32;
         for &b in bytes {
@@ -194,6 +204,7 @@ fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
 #[ignore = "variety probe; run explicitly"]
 fn variety_probe() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: env("MAP_VERSION", CURRENT_GENERATOR_VERSION),
         seed: env("MAP_SEED", 2_738_958_700u32),
         world_type: WorldType::Hills,

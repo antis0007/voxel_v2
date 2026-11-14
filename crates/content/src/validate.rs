@@ -36,6 +36,18 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
             errors.push(format!("{FILE}:{}: {:?}: {message}", line_of(text, def.id, field), def.id));
         };
         let (p, s, t) = (&def.physics, &def.sim, &def.sim.thermal);
+        if (def.id as usize) >= crate::SIM_DIRECT {
+            // No sim row of its own: the cellular sim runs it as `sim_as`.
+            match def.sim_as {
+                Some(proxy) if (proxy as usize) >= crate::SIM_DIRECT => {
+                    fail("sim_as", format!("sim_as {proxy:?} must be a block below id {}", crate::SIM_DIRECT));
+                }
+                None if !s.is_generic() || p.matter_state != MatterState::Solid => {
+                    fail("sim", "a non-solid or simulated block past the one-byte sim table needs sim_as".into());
+                }
+                _ => {}
+            }
+        }
         for (field, value) in [
             ("density", p.density),
             ("pressure_response", p.fluid.pressure_response),
@@ -43,8 +55,10 @@ pub(crate) fn validate(rows: &[MaterialDef], text: &str) -> Vec<String> {
             ("cohesion", s.cohesion),
             ("conductivity", t.conductivity),
             ("capacity", t.capacity),
+            ("fusion", t.fusion),
             ("fuel", t.fuel),
             ("electric_conductivity", s.electric_conductivity),
+            ("contact_damage", def.tags.contact_damage),
         ] {
             if !value.is_finite() || value < 0.0 {
                 fail(field, format!("{field} must be a finite number >= 0, got {value}"));
@@ -212,7 +226,7 @@ mod tests {
     #[test]
     fn the_table_has_256_rows_and_unused_ones_are_inert() {
         assert_eq!(SIM_TABLE.len(), SIM_MATERIAL_ROWS);
-        for row in &SIM_TABLE[BlockId::COUNT..] {
+        for row in &SIM_TABLE[BlockId::COUNT.min(crate::SIM_DIRECT)..] {
             assert_eq!(*row, engine_core::material::SimMaterial::INERT);
         }
     }

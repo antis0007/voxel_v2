@@ -25,7 +25,7 @@ fn index_bits(distinct: usize) -> u8 {
 impl PackedBlocks {
     /// Packs `blocks` into the smallest of the three forms.
     pub fn pack(blocks: &[BlockId]) -> Self {
-        let mut slot = [u8::MAX; 256];
+        let mut slot = [u8::MAX; BlockId::COUNT];
         let mut palette = Vec::with_capacity(MAX_PALETTE);
         for &block in blocks {
             let entry = &mut slot[block as usize];
