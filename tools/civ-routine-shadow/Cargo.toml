@@ -1,0 +1,16 @@
+[package]
+name = "axiom_civ_routine_shadow"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+integrated-wheel = []
+
+[workspace]
+
+[dependencies]
+engine_civ = { path = "../../crates/civ" }
+
+[dev-dependencies]
+serde = { version = "1.0.229", features = ["derive"] }

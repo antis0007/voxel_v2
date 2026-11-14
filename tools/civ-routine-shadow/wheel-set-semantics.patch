@@ -1,0 +1,73 @@
+--- a/crates/civ/src/agenda/wheel.rs
++++ b/crates/civ/src/agenda/wheel.rs
+@@ -6,7 +6,10 @@
+ //! from the back. The pop sequence equals [`super::Ordered`]'s for every input.
+ 
+ use super::{Key, Queue};
+-use std::collections::BTreeSet;
++use std::{collections::{BTreeMap, BTreeSet, HashSet}, hash::{BuildHasherDefault, DefaultHasher}};
++
++type Membership = HashSet<u64, BuildHasherDefault<DefaultHasher>>;
++const DENSE_AFTER: usize = 64;
+ 
+ /// Sliding-window bucket queue with the reference total order.
+ #[derive(Clone, Debug)]
+@@ -21,6 +24,8 @@
+     /// Bit `w` set when `occupied[w]` is nonzero.
+     summary: Vec<u64>,
+     in_slots: usize,
++    // Membership only; iteration order never affects queue order.
++    dense: BTreeMap<usize, Membership>,
+     late: BTreeSet<Key>,
+     far: BTreeSet<Key>,
+ }
+@@ -45,6 +50,7 @@
+             occupied: vec![0; words],
+             summary: vec![0; words.div_ceil(64)],
+             in_slots: 0,
++            dense: BTreeMap::new(),
+             late: BTreeSet::new(),
+             far: BTreeSet::new(),
+         }
+@@ -61,6 +67,7 @@
+     }
+ 
+     fn unmark(&mut self, i: usize) {
++        self.dense.remove(&i);
+         self.occupied[i >> 6] &= !(1 << (i & 63));
+         self.sorted[i >> 6] &= !(1 << (i & 63));
+         if self.occupied[i >> 6] == 0 { self.summary[i >> 12] &= !(1 << (i >> 6 & 63)); }
+@@ -96,8 +103,17 @@
+         let slot = &mut self.slots[i];
+         if draining {
+             let at = slot.partition_point(|&other| other > e);
++            if slot.get(at) == Some(&e) { return; }
+             slot.insert(at, e);
+         } else {
++            if let Some(members) = self.dense.get_mut(&i) {
++                if !members.insert(e) { return; }
++            } else if slot.len() >= DENSE_AFTER {
++                let mut members: Membership = slot.iter().copied().collect();
++                let inserted = members.insert(e);
++                self.dense.insert(i, members);
++                if !inserted { return; }
++            } else if slot.contains(&e) { return; }
+             slot.push(e);
+         }
+         self.in_slots += 1;
+@@ -143,6 +159,7 @@
+         } else {
+             let Some(at) = slot.iter().position(|&other| other == e) else { return false; };
+             slot.swap_remove(at);
++            if let Some(members) = self.dense.get_mut(&i) { members.remove(&e); }
+         }
+         self.in_slots -= 1;
+         if self.slots[i].is_empty() { self.unmark(i); }
+@@ -169,6 +186,7 @@
+         if due > now { return None; }
+         if due != self.base { self.rebase(due); }
+         if !Self::bit(&self.sorted, i) {
++            self.dense.remove(&i);
+             self.slots[i].sort_unstable_by(|a, b| b.cmp(a));
+             self.sorted[i >> 6] |= 1 << (i & 63);
+         }

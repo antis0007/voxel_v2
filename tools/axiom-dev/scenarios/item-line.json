@@ -1,0 +1,15 @@
+{ "id": "item-line", "parity": ["B-GT-07", "A10-04"],
+  "note": "Pipes carry machine output to every reachable crate; units are conserved across the split.",
+  "steps": [
+  { "op": "place_machine", "position": [0, 40, 0], "kind": "Crusher" },
+  { "op": "set_machine", "position": [0, 40, 0], "energy": 9000, "input": { "Copper ore": 256 } },
+  { "op": "place_machine", "position": [1, 40, 0], "kind": "Pipe" },
+  { "op": "place_machine", "position": [2, 40, 0], "kind": "Pipe" },
+  { "op": "place_machine", "position": [3, 40, 0], "kind": "Output crate" },
+  { "op": "place_machine", "position": [2, 40, 1], "kind": "Output crate" },
+  { "op": "step_factory", "ticks": 3000, "probe": [[0, 40, 0], [3, 40, 0], [2, 40, 1]],
+    "expect": { "end.in.Copper ore": 0, "end.out.Copper dust": 0,
+      "changes.3 40 0.in.1.Copper dust": { "gt": 0 }, "changes.2 40 1.in.1.Copper dust": { "gt": 0 },
+      "sum:changes.3 40 0.in.1.Copper dust+changes.2 40 1.in.1.Copper dust": 512 } },
+  { "op": "machines", "radius_m": 512, "kind": "Output crate", "expect": { "rows": { "absent": false } } }
+] }

@@ -3,11 +3,13 @@
 # (kinds from 1000), so a new row gets art evidence before anyone plays it.
 #   .\tools\Review-Creatures.ps1 -Executable target\release-fast\minecraft_style_voxel_prototype.exe `
 #       -Label boar-before -Creatures 'Cow,Boar,Deer,Marsh Fowl'
+# -Scene flora stages a ripe field with a crop harvester; -Ripe leaves the harvester out.
 param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$Label,
     [string]$Creatures='',
-    [ValidateSet('fauna','bestiary')][string]$Scene='fauna',
+    [ValidateSet('fauna','bestiary','flora')][string]$Scene='fauna',
+    [switch]$Ripe,
     [ValidateSet('1','0.5','0.25')][string]$Scale='1',
     [ValidateSet('combat','poses','materials')][string]$Mode='poses',
     [double]$PoseTime=-1,
@@ -30,6 +32,7 @@ $vars=@{VOXEL_CAPTURE_DIR=$root;VOXEL_SAVE_DIR=(Join-Path $root 'disposable-save
     VOXEL_REVIEW_ENEMIES=$Mode;VOXEL_ENEMY_REVIEW_SCENE=$Scene;
     VOXEL_ENEMY_REVIEW_KINDS=$(if($Creatures){$Creatures}else{$null});
     VOXEL_ENEMY_REVIEW_POSE_TIME=$(if($PoseTime -ge 0){$PoseTime.ToString([Globalization.CultureInfo]::InvariantCulture)}else{$null});
+    VOXEL_FLORA_REVIEW=$(if($Ripe){'ripe'}else{$null});
     VOXEL_REVIEW_INPUT_ISOLATED='1';VOXEL_REVIEW_SKIP_CLOUDS='1';VOXEL_REVIEW_SKIP_HORIZON='1';
     VOXEL_ENEMY_REVIEW_KIND=$null;VOXEL_REVIEW_DUNGEON=$null;VOXEL_REVIEW_WAND=$null;
     VOXEL_TERRAIN_ROUTE=$null;VOXEL_TERRAIN_EDITS=$null;VOXEL_REVIEW_TERRAIN=$null;

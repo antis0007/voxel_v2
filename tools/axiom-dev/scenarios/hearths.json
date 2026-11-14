@@ -1,0 +1,18 @@
+{ "id": "hearths", "parity": ["L032"],
+  "note": "Brick shells form; coke oven cokes coal with creosote from the process row; blast furnace needs surplus coke for heat, then smelts iron and converts it to steel.",
+  "steps": [
+  { "op": "place_shell", "position": [0, 40, 0], "kind": "CokeOven", "expect": { "bricks": 26 } },
+  { "op": "set_machine", "position": [0, 40, 0], "input": { "Coal": 128 } },
+  { "op": "step_factory", "ticks": 6000, "probe": [[0, 40, 0]],
+    "expect": { "end.formed": true, "end.out.Coal coke": 128, "end.out.Creosote oil": 32, "end.in.Coal": 0 } },
+  { "op": "place_shell", "position": [0, 40, 20], "kind": "BlastFurnace", "expect": { "bricks": 35 } },
+  { "op": "set_machine", "position": [0, 40, 20], "input": { "Iron ore": 128, "Coal coke": 128 } },
+  { "op": "step_factory", "ticks": 7000, "probe": [[0, 40, 20]],
+    "expect": { "end.out.Iron ingots": 192, "end.in.Iron ore": 0, "end.in.Coal coke": { "lt": 96 } } },
+  { "op": "set_machine", "position": [0, 40, 20], "mode": 1, "input": { "Iron ingots": 128, "Coal coke": 128 } },
+  { "op": "step_factory", "ticks": 7000, "probe": [[0, 40, 20]], "expect": { "end.out.Steel ingots": 128 } },
+  { "op": "place_shell", "position": [0, 40, 40], "kind": "BlastFurnace" },
+  { "op": "set_machine", "position": [0, 40, 40], "input": { "Iron ore": 128, "Coal coke": 32 } },
+  { "op": "step_factory", "ticks": 3000, "probe": [[0, 40, 40]],
+    "expect": { "end.status": "Needs coke", "end.in.Iron ore": 128, "end.out.Iron ingots": 0 } }
+] }

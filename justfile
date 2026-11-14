@@ -26,14 +26,16 @@ clippy crate="":
 
 # Compile warnings are collapsed by the filter; test failures print in full.
 # `just test headless` runs the tests whose name contains "headless".
+# Deep-time planets solve a 20 Myr history here (VOXEL_HISTORY_MYR, default 20;
+# set it to 720 for the full history). Windows shell only.
 test name="" crate="":
-    {{filter}} cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet {{name}}
+    if (-not $env:VOXEL_HISTORY_MYR) { $env:VOXEL_HISTORY_MYR = '20' }; {{filter}} cargo nextest run --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet {{name}}
 
 # GPU tests: `gpu_*` tests that `just test` ignores, run one at a time on
 # engine_gpu::test_adapter(); fail (never skip) without an adapter. Backend
 # from WGPU_BACKEND, default vulkan.
 test-gpu name="":
-    {{filter}} cargo nextest run --run-ignored only --test-threads 1 --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet -E 'test(/::gpu_/)' {{name}}
+    if (-not $env:VOXEL_HISTORY_MYR) { $env:VOXEL_HISTORY_MYR = '20' }; {{filter}} cargo nextest run --run-ignored only --test-threads 1 --status-level fail --failure-output immediate --hide-progress-bar --cargo-quiet -E 'test(/::gpu_/)' {{name}}
 
 # Criterion benches (every crate with a benches/ dir), one run, median vs the
 # committed baseline in crates/<crate>/benches/baselines.json.
@@ -62,6 +64,10 @@ clean:
     cargo clean --profile dev
     cargo clean --release
     cargo clean --profile release-fast
+
+# Texture refiner: the real surface shaders on a labelled PNG sheet; --watch re-renders on every shader save.
+art *args:
+    cargo run -q --profile release-fast -p art_refiner -- {{args}}
 
 # Headless, deterministic scenario run; JSON summary on stdout, exit 1 on a failed check.
 run scenario="assets/scenarios/smoke.ron":

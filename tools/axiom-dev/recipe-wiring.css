@@ -1,0 +1,265 @@
+.graph-workbench {
+  height: calc(100dvh - 74px);
+  min-height: 420px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.graph-modes {
+  display: flex; gap: 2px; padding: 4px 9px 0; background: #262823;
+  border-bottom: 1px solid #646354;
+}
+.graph-modes button { padding: 3px 10px; border-bottom: 0; color: var(--muted); }
+.graph-modes button[aria-pressed=true] { background: #494838; color: var(--focus); border-color: #8c7d59; }
+.graph-workbench > .map-workspace { min-height: 0; height: auto; }
+.wiring-workspace { display: grid; grid-template-rows: auto minmax(0,1fr); min-height: 0; min-width: 0; }
+.wire-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 9px; min-height: 44px;
+  background: #34362d; border-top: 1px solid #5b5b50; border-bottom: 1px solid #535447;
+}
+.wire-toolbar h1 { font-size: 23px; }
+.wire-status, .wire-armed { color: var(--muted); font: 11px var(--mono); }
+.wire-armed { color: var(--focus); }
+.wire-tools { display: flex; flex-wrap: wrap; gap: 3px; margin-left: auto; }
+.wire-tools button { padding: 4px 8px; }
+.wire-layout { display: grid; min-width: 0; min-height: 0; grid-template-columns: 182px minmax(0,1fr) 220px; }
+.wire-library, .wire-inspector {
+  background: #262822; min-width: 0; min-height: 0; overflow: auto;
+}
+.wire-library { display: grid; grid-template-rows: minmax(115px,.8fr) minmax(0,1.2fr); border-right: 1px solid #565647; }
+.wire-library-recipes { min-height: 0; display: grid; grid-template-rows: auto auto minmax(0,1fr); }
+.wire-section-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 4px;
+  background: #3b3d33; border-bottom: 1px solid #59594c; padding: 4px 6px;
+}
+.wire-section-head h2 { font: 18px/1.1 var(--display); }
+.wire-section-head button { font-size: 11px; padding: 2px 5px; }
+.wire-library input[type=search] { width: calc(100% - 10px); margin: 4px 5px; padding: 4px 5px; }
+.wire-recipe-list { min-height: 0; overflow: auto; padding: 0 4px 4px; }
+.wire-recipe-row {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+  padding: 3px 4px; border-color: transparent; box-shadow: none; background: none;
+}
+.wire-recipe-row[aria-current=true] { border-color: #8c7451; background: #443a2a; color: var(--focus); }
+.wire-recipe-row :is(canvas,svg), .wire-item-title :is(canvas,svg) {
+  flex: none; width: 19px; height: 19px; image-rendering: pixelated; color: var(--blue);
+}
+.wire-recipe-row span { overflow: hidden; text-overflow: ellipsis; }
+.wire-palette { overflow: auto; min-height: 0; border-top: 1px solid #555546; }
+.wire-palette .workbench-palette { border: 0; padding: 5px; }
+.wire-palette .workbench-palette input { margin: 0; width: 100%; }
+.wire-palette .workbench-slots { grid-template-columns: repeat(auto-fill, 29px); }
+.wire-palette .workbench-slots .item-slot { width: 29px; height: 29px; }
+.wire-palette .item-slot :is(canvas,svg) { width: 21px; height: 21px; }
+.wire-palette .workbench-palette.named { height: 100%; display: grid; grid-template-rows: auto auto minmax(0,1fr) auto; gap: 4px; }
+.wire-palette .named .workbench-slots { grid-template-columns: minmax(0,1fr); align-content: start; overflow: auto; }
+.wire-palette .named .workbench-slots .item-slot { display: flex; justify-content: flex-start; gap: 5px; width: 100%; padding-inline: 4px; text-align: left; }
+.wire-palette .named .item-slot :is(canvas,svg) { flex: none; width: 17px; height: 17px; }
+.wire-palette .named .item-slot span { overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.wire-main { display: grid; grid-template-rows: auto minmax(0,1fr) auto; min-height: 0; min-width: 0; }
+.wire-canvas-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  min-height: 29px; padding: 3px 8px; color: var(--muted); font-size: 11px;
+  border-bottom: 1px solid #47493e; background: #2a2d26;
+}
+.wire-canvas-bar strong { color: var(--text); font: 14px var(--display); }
+.wire-armed { margin-left: auto; }
+.wire-scroll {
+  overflow: auto; min-height: 0; background: #20231f;
+  background-image: radial-gradient(circle, #4f5448 1px, transparent 1.35px);
+  background-size: 20px 20px;
+}
+.wire-surface { position: relative; min-width: 694px; min-height: 100%; }
+.wiring-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.wiring-line, .wiring-hit, .wiring-preview { fill: none; }
+.wiring-line { stroke: #78ada2; stroke-width: 1.75px; }
+.wiring-edge.output .wiring-line { stroke: #caac70; stroke-width: 2px; }
+.wiring-hit { stroke: transparent; stroke-width: 12px; pointer-events: stroke; cursor: grab; }
+.wiring-edge:hover .wiring-line { stroke: #d1e2ba; stroke-width: 2.5px; }
+.wiring-preview { stroke: #e5d69a; stroke-width: 2.5px; stroke-dasharray: 4 4; }
+.wire-node {
+  position: absolute; min-width: 0; background: #282b24; border: 1px solid #6d705b;
+  box-shadow: 2px 3px #11180e99; border-radius: 2px;
+}
+.wire-node-handle {
+  display: flex; align-items: center; gap: 5px; min-height: 26px;
+  padding: 3px 6px; background: #3c4034; border-top: 1px solid #686d5c; border-bottom: 1px solid #1a211a;
+  cursor: grab; touch-action: none; user-select: none;
+}
+.wire-node-handle:active { cursor: grabbing; }
+.wire-material { width: 151px; }
+.wire-material .wire-node-handle { min-height: 35px; padding-right: 9px; }
+.wire-material strong { font-size: 12px; line-height: 1.2; overflow-wrap: anywhere; }
+.wire-node :is(canvas,svg) { width: 21px; height: 21px; flex: none; image-rendering: pixelated; color: var(--blue); }
+.wire-dot, .wire-socket {
+  display: block; width: 11px; height: 11px; padding: 0;
+  border-radius: 50%; border: 1px solid #97c4b7; background: #507f73;
+}
+.wire-dot { position: absolute; right: -6px; top: calc(50% - 5px); touch-action: none; cursor: grab; }
+.wire-dot.product { border-color: #e4c784; background: #977949; }
+.wire-dot.input { left: -6px; right: auto; }
+.wire-adv-library { grid-template-rows: minmax(0, 1fr); }
+.wire-adv-node { width: 158px; }
+.wire-adv-node .wire-node-handle { min-height: 34px; padding-inline: 8px; }
+.wire-adv-name { width: 100%; text-align: left; color: var(--text); font-size: 12px; font-weight: 650;
+  background: transparent; border: 0; padding: 0; box-shadow: none; white-space: normal; cursor: inherit; }
+.wire-recipe { width: 231px; background: #2e3027; border-color: #93876b; }
+.wire-recipe .wire-node-handle { background: #4d4a38; border-top-color: #80775e; }
+.wire-recipe-title {
+  flex: 1; min-width: 0; text-align: left; padding: 1px 0; color: var(--focus); background: transparent;
+  border: 0; box-shadow: none; white-space: normal; cursor: inherit; font: 18px var(--display);
+}
+.wire-node-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; padding: 5px 6px;
+  color: var(--muted); font-size: 11px; border-bottom: 1px solid #484b3d; }
+.wire-inputs { display: grid; gap: 4px; padding: 7px; }
+.wire-inputs.pattern { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.wire-pattern-body { display: grid; grid-template-columns: 28px minmax(0,1fr); align-items: center; }
+.wire-port-rail { display: grid; gap: 1px; padding: 4px 0; border-right: 1px solid #47493d; }
+.wire-rail-port { position: relative; padding: 0 3px; border: 1px solid transparent; box-shadow: none;
+  background: transparent; color: var(--muted); font: 11px/17px var(--mono); }
+.wire-rail-port.connected { color: var(--text); cursor: grab; touch-action: none; }
+.wire-rail-port .wire-socket { position: absolute; left: -5px; top: calc(50% - 4px); width: 8px; height: 8px; }
+.wire-rail-port:not(.connected) .wire-socket { background: #232821; border-color: #777d64; }
+.wire-input {
+  position: relative; min-width: 0; min-height: 33px; display: flex; align-items: center; gap: 4px;
+  padding: 3px 5px 3px 7px; text-align: left; background: #20231e;
+  border-color: #55594b; box-shadow: inset 1px 1px #151a15;
+}
+.wire-inputs.pattern .wire-input { min-height: 44px; padding-left: 11px; justify-content: center; }
+.wire-input.connected, .wire-result-item { cursor: grab; touch-action: none; }
+.wire-input .wire-socket, .wire-result-item .wire-socket { position: absolute; left: -4px; top: calc(50% - 4px); width: 8px; height: 8px; }
+.wire-input:not(.connected) .wire-socket { background: #232821; border-color: #777d64; }
+.wire-inputs.pattern .wire-port-caption { position: absolute; bottom: 1px; right: 3px; font: 9px var(--mono); color: var(--muted); }
+.wire-input small, .wire-result-item small { margin-left: auto; color: var(--focus); font: 11px var(--mono); }
+.wire-empty { color: #a6ac98; font-size: 16px; }
+.wire-input:not(.connected):not(.pattern *) .wire-empty { display: none; }
+.wire-port-caption, .wire-result-item span { min-width: 0; white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
+.wire-result { width: 159px; border-color: #8f7954; }
+.wire-result .wire-node-handle { color: var(--focus); background: #42392b; border-top-color: #756049; }
+.wire-result-item {
+  width: 100%; display: flex; align-items: center; gap: 4px; padding: 6px;
+  min-height: 39px; text-align: left; border: 0; position: relative;
+}
+.wire-result-item .wire-socket { border-color: #dfc27f; background: #977a48; left: -5px; }
+.wire-selected { outline: 1px solid var(--gold); outline-offset: -2px; }
+.wire-ready { outline: 1px solid #7cac98; outline-offset: -1px; }
+.wire-over { outline: 2px solid #d8e8af; outline-offset: -1px; background: #3a4935; }
+.wire-error { padding: 5px 8px; margin: 0; color: #ffb5a4; background: #392822; border-top: 1px solid #8c594c; }
+.wire-inspector { border-left: 1px solid #5a5a49; }
+.wire-section { display: grid; gap: 5px; padding: 8px; border-bottom: 1px solid #535446; }
+.wire-section h3 { font: 17px var(--display); color: var(--focus); }
+.wire-section p { color: var(--muted); font-size: 12px; margin: 0; }
+.wire-section label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+.wire-section :is(input,textarea) { width: 100%; padding: 4px 6px; }
+.wire-section button { justify-self: start; font-size: 12px; padding: 3px 6px; }
+.wire-item-title { display: flex; align-items: center; gap: 5px; }
+.wire-recipe-surface { min-width: 655px; }
+.wire-recipe-surface.compact { min-width: 544px; }
+.wire-recipe-surface.compact .wire-recipe { width: 215px; }
+.wire-recipe-surface.compact .wire-result { width: 123px; }
+.wire-scroll:focus-visible { outline-offset: -3px; }
+.wire-canvas-bar button { padding: 2px 8px; font-weight: 650; color: var(--focus); }
+.wire-material-name {
+  min-width: 0; padding: 2px 0; border: 0; box-shadow: none; background: none;
+  color: var(--text); text-align: left; font-size: 12px; font-weight: 650; white-space: normal; cursor: grab;
+}
+.wire-material .wire-node-handle small { margin-left: auto; font: 10px var(--mono); color: var(--focus); }
+.wire-material.scratch { border-color: #85806a; z-index: 1; }
+.wire-material.scratch:not(.linked) .wire-dot { background: #32392e; border-color: #a1a78f; }
+.wire-recipe, .wire-result { z-index: 2; }
+.wire-scratch-label {
+  position: absolute; left: 0; right: 0; pointer-events: none; display: flex; align-items: center;
+  gap: 8px; min-height: 28px; padding: 3px 12px; border-top: 1px solid #595c4e; background: #2d3028;
+  color: var(--muted); font-size: 11px;
+}
+.wire-scratch-label strong { color: var(--text); font: 15px var(--display); }
+.wire-recipe-surface.drop-ready { box-shadow: inset 0 0 0 1px #799485; }
+.wire-recipe-surface.drop-active { box-shadow: inset 0 0 0 2px #b5c9a2; }
+.wire-picker {
+  position: fixed; inset: auto; margin: 0; padding: 8px; width: min(292px, calc(100vw - 12px));
+  max-height: calc(100dvh - 12px); overflow: auto; color: var(--text); background: #2c3027;
+  border: 1px solid #a49771; box-shadow: 4px 6px #101510bb;
+}
+.wire-picker header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 7px; }
+.wire-picker header strong { color: var(--focus); font: 17px var(--display); }
+.wire-picker header button, .wire-picker > button { font-size: 11px; padding: 3px 6px; }
+.wire-picker input[type=search] { width: 100%; margin-bottom: 4px; }
+.wire-picker-amount { display: flex; align-items: center; justify-content: space-between; gap: 4px; color: var(--muted); font-size: 12px; }
+.wire-picker-amount input { width: 72px; }
+.wire-picker-items { display: grid; gap: 1px; max-height: min(240px, 48dvh); overflow: auto; margin-block: 4px; }
+.wire-picker-item {
+  display: flex; gap: 8px; align-items: center; padding: 4px 6px; text-align: left;
+  background: #232720; border-color: transparent; box-shadow: none;
+}
+.wire-picker-item[aria-current=true] { border-color: #93805a; color: var(--focus); }
+.wire-picker-item :is(canvas,svg) { flex: none; width: 20px; height: 20px; image-rendering: pixelated; }
+.recipe-block-dialog { width: min(680px, 94vw); }
+.recipe-block-palette, .recipe-block-heading { display: flex; flex-wrap: wrap; gap: 6px; }
+.recipe-block-dialog :is(input[type=search],textarea) { width: 100%; margin: 8px 0; }
+.recipe-block-stack {
+  min-height: 48px; max-height: 36vh; overflow: auto; margin: 10px 0;
+  padding: 6px 6px 6px 30px; border: 1px dashed #72745d;
+}
+.recipe-action-block {
+  margin: 4px 0; padding: 8px; background: #252b26; border: 1px solid #72745d;
+  border-left: 4px solid #91bfa2;
+}
+.recipe-block-heading > :first-child { flex: 1; text-align: left; cursor: grab; }
+.recipe-block-field { display: inline-flex; align-items: center; gap: 6px; margin: 5px 8px 0 0; }
+.recipe-block-field input { width: 7em; }
+.recipe-item-chip { border: 1px solid #72745d; padding: 4px 8px; cursor: grab; }
+.recipe-block-result { margin: 8px 0; }
+.recipe-block-preview { padding-left: 24px; }
+.recipe-block-preview.shaped { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 24px; }
+.recipe-block-preview li { padding: 4px; border: 1px solid #72745d; overflow-wrap: anywhere; }
+@media (max-width: 1060px) {
+  .wire-layout { grid-template-columns: 144px minmax(0,1fr) 180px; }
+}
+@media (max-width: 720px) {
+  .graph-workbench { min-height: 600px; }
+  .wire-layout { grid-template-columns: 126px minmax(0,1fr); grid-template-rows: minmax(295px,1fr) auto; }
+  .wire-inspector { grid-column: 1 / -1; max-height: 170px; border-top: 1px solid #5a5a49; }
+  .wire-section { padding: 5px; }
+}
+.finder.craft-web-dialog {
+  width: min(1480px, calc(100vw - 28px)); max-width: none; max-height: 92dvh;
+}
+.craft-web-toolbar { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.craft-web-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(225px, 290px); height: min(66dvh, 760px); }
+.craft-web-scroll { min-width: 0; overflow: auto; border: 1px solid #56655c; }
+.craft-web-surface { position: relative; min-width: 100%; min-height: 100%; }
+.craft-web-inspector { overflow: auto; padding: 10px; background: #191f21; border: 1px solid #56655c; }
+.craft-web-inspector > button { margin: 2px; }
+.craft-web-inspector ul { padding-inline-start: 20px; }
+.craft-web-inspector li { margin-bottom: 5px; }
+.craft-web-audit-row { display: grid; gap: 2px; margin-block: 8px; }
+.craft-web-node {
+  position: absolute; width: 182px; min-height: 62px; padding: 4px 8px 6px;
+  border: 1px solid #718e87; border-radius: 4px; background: #222c2d;
+}
+.craft-web-node.route { border-color: #a38a65; background: #302a23; }
+.craft-web-node.focus { outline: 2px solid #e2c686; }
+.craft-web-node-title { width: 100%; display: flex; gap: 4px; align-items: center; text-align: left; cursor: grab; }
+.craft-web-node-title :is(canvas,svg) { width: 19px; height: 19px; flex: none; image-rendering: pixelated; }
+.craft-web-node-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.craft-web-node small { display: block; margin-top: 3px; color: var(--muted); }
+.craft-web-item-link { position: absolute; right: 6px; bottom: 4px; cursor: grab; padding: 1px 4px; }
+.craft-web-port { position: absolute; top: 29px; width: 8px; height: 8px; border-radius: 50%; background: #a3c4b1; }
+.craft-web-port.input { left: -4px; }
+.craft-web-port.output { right: -4px; }
+@media (max-width: 740px) {
+  .craft-web-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) minmax(140px, .6fr); }
+}
+
+/* Node canvas: pan, zoom, wire focus */
+.craft-web-scroll { cursor: grab; }
+.craft-web-scroll.panning, .craft-web-scroll.panning * { cursor: grabbing; }
+.craft-web-node, .craft-web-node * { cursor: auto; }
+.craft-web-node .craft-web-node-title { cursor: grab; }
+.craft-web-zoom { padding: 3px 0; }
+.craft-web-zoom button { min-width: 30px; }
+.wiring-lines.has-lit .wiring-edge:not(.lit) { opacity: .2; }
+.wiring-edge.lit .wiring-line { stroke: #f0e6a8; stroke-width: 3px; stroke-dasharray: 8 5; animation: wire-flow .8s linear infinite; }
+@keyframes wire-flow { to { stroke-dashoffset: -13; } }
+@media (prefers-reduced-motion: reduce) { .wiring-edge.lit .wiring-line { animation: none; stroke-dasharray: none; } }
+.craft-web-node:focus-within { outline: 2px solid #9fd0c0; }
+.craft-web-scroll { user-select: none; }

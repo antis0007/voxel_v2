@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Axiom Dev Panel</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/graph-style.css">
+  <link rel="stylesheet" href="/catalog-style.css">
+  <link rel="stylesheet" href="/workbench.css">
+  <link rel="stylesheet" href="/recipe-wiring.css">
+  <link rel="stylesheet" href="/portal-style.css">
+  <link rel="stylesheet" href="/devtools-qol.css">
+  <link rel="stylesheet" href="/forge-shell.css">
+  <script type="module" src="/boot.mjs"></script>
+  <script type="module" src="/foundry-link.mjs"></script>
+  <script type="module" src="/wand-lab-link.mjs"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true">A</span><strong>Axiom</strong></div>
+    <nav class="tabs" aria-label="Tools">
+      <button id="catalog-tab" class="active">Catalog</button>
+      <button id="graph-tab">Graph</button>
+      <button id="workspace-tab">Workspace</button>
+      <button id="agent-tab">AI</button>
+      <button id="playtest-tab">Playtest</button>
+    </nav>
+    <span id="connection" class="badge" hidden></span>
+    <button id="drafts-tab" class="drafts-tab" title="Open draft queue">Drafts</button>
+    <button id="item-tray" title="Carry an item between editors">Item Tray</button>
+  </header>
+  <main id="catalog" class="catalog-workspace" aria-label="Project catalog"></main>
+  <main id="graph" class="graph-workbench" aria-label="Development graph" hidden>
+    <nav class="graph-modes" aria-label="Graph view">
+      <button id="wiring-mode" aria-pressed="true">Wiring</button>
+      <button id="advancement-mode" aria-pressed="false">Advancements</button>
+      <button id="portal-mode" aria-pressed="false">Dimensions & portals</button>
+      <button id="reference-mode" aria-pressed="false">Reference Map</button>
+    </nav>
+    <section id="graph-wiring" class="wiring-workspace" aria-label="Recipe Wiring"></section>
+    <section id="graph-advancement" class="wiring-workspace" aria-label="Advancement Wiring" hidden></section>
+    <section id="graph-portals" aria-label="Dimension and portal authoring" hidden></section>
+    <section id="graph-map" class="map-workspace" aria-label="Reference Map" hidden></section>
+  </main>
+  <main id="workspace" class="workspace" hidden>
+    <aside class="library">
+      <div class="section-title"><h2>Project files</h2><div class="library-actions">
+        <button id="quick-open" title="Common and recent files">Quick open</button>
+        <button id="refresh" aria-label="Rescan files" title="Rescan files">↻</button>
+      </div></div>
+      <input id="search" type="search" placeholder="Search all files…  Ctrl+P" aria-label="Search all files">
+      <div id="filters" class="chips" aria-label="File categories"></div>
+      <div id="file-count" class="muted"></div>
+      <nav id="files" class="files" aria-label="Project files"></nav>
+    </aside>
+    <section class="center" aria-label="Editor">
+      <div class="editor-head">
+        <div><div id="file-path" class="eyebrow"></div><h1 id="file-title">Open a file</h1></div>
+        <div id="file-tools" class="toolbar" hidden>
+          <span id="file-status" role="status"></span>
+          <div class="history-actions">
+            <button id="undo" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
+            <button id="redo" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+          </div>
+          <button id="review" title="Review changes before saving (Ctrl+S)" class="primary" disabled>Review &amp; save</button>
+          <button id="assist-file" title="Attach the current record or source line">Ask AI</button>
+        </div>
+      </div>
+      <div id="view-bar" class="view-bar" hidden>
+        <div class="chips" id="views">
+          <button data-view="sprite" hidden>Sprite</button><button data-view="asset" hidden>Asset preview</button>
+          <button data-view="fields">Fields</button><button data-view="graph" title="Related records and fields">Nodes</button>
+          <button data-view="source">Source</button>
+        </div>
+        <button id="file-info" title="Backups, file path and game loaders" disabled>File info</button>
+      </div>
+      <div id="editor" class="editor" tabindex="-1"></div>
+    </section>
+  </main>
+  <main id="playtest" class="playtest" hidden></main>
+  <main id="agent" class="agent-workbench" aria-label="AI workbench" hidden></main>
+  <footer><span id="notice" role="status"></span></footer>
+  <dialog id="file-info-dialog" aria-labelledby="file-info-title">
+    <header class="section-title"><h2 id="file-info-title">File info</h2><button id="close-file-info">Close</button></header>
+    <div id="details" class="file-info-content"></div>
+  </dialog>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <form id="dialog-form">
+      <h2 id="dialog-title"></h2><div id="dialog-content"></div>
+      <div class="dialog-actions"><button type="button" id="dialog-cancel">Cancel</button><button id="dialog-confirm" class="primary">Apply</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
+

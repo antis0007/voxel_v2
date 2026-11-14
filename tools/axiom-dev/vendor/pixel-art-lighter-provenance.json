@@ -1,0 +1,9 @@
+{
+  "url": "https://www.moonfell-rpg.com/Pixel-Art-Lighter-v3.5.22.html",
+  "retrieved": "2026-11-06",
+  "upstream_sha256": "0affcd7843fa0262ab03669b59350c8cffaca8f320823986f286c8f233f16adf",
+  "offline_sha256": "7f4d45703815c912641ffc95c1831608dc97a9540f61710a59eaa18872e2e91e",
+  "license": "MIT",
+  "copyright": "2026 Red Hat Sprite",
+  "changes": "Removed trailing Cloudflare analytics and challenge injection; restored closing body/html tags. Application code unchanged."
+}

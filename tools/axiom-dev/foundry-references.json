@@ -1,0 +1,29 @@
+{
+  "schema": "axiom.foundry.references.v1",
+  "retrieved_utc": "2026-11-06",
+  "classification": "reference implementations, not an exhaustive state-of-the-art ranking",
+  "references": [
+    {
+      "name": "VoxelRT",
+      "repository": "https://github.com/dubiousconst282/VoxelRT",
+      "commit": "e605812840a9f6abbadf84a436f8602e2972ee43",
+      "source_blob": "eb2fb07db796949d4eaeaa1f5d60a18908fe510e",
+      "source": "https://github.com/dubiousconst282/VoxelRT/blob/e605812840a9f6abbadf84a436f8602e2972ee43/README.md",
+      "technique": "Brick grids, sparse 64-trees, octrees and BVH voxel traversal alternatives.",
+      "comparison_contract": "Identical voxel fixture and ray set; report traversal time, build/update cost, memory and hit equivalence separately.",
+      "status": "not-locally-benchmarked",
+      "blockers": ["Published ray throughput and Axiom frame latency measure different workloads.", "Published scenes and hardware differ from Axiom's native laboratory.", "No shared ray/voxel fixture or feature-equivalence proof exists yet."]
+    },
+    {
+      "name": "tree64 0.2.0",
+      "repository": "https://github.com/expenses/tree64",
+      "commit": "dee021cef7085862c9c7e279516117ebdcade68f",
+      "source_blob": "4995263c4c53fb61344b8ea1b37e36d0fd90deb9",
+      "source": "https://github.com/expenses/tree64/blob/dee021cef7085862c9c7e279516117ebdcade68f/Cargo.toml",
+      "technique": "Rust sparse 64-tree implementation with optional caching.",
+      "comparison_contract": "Identical seeded edits and point queries; compare returned materials, serialization, update time and resident memory.",
+      "status": "not-locally-benchmarked",
+      "blockers": ["No equivalent Axiom storage adapter and fixture exists yet.", "Reference was inspected at its pinned commit, not compiled or benchmarked locally."]
+    }
+  ]
+}

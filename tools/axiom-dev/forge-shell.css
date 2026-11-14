@@ -1,0 +1,37 @@
+/* Shared shell: app switcher + live status. Works with or without style.css. */
+:root {
+  --heat-open: #5d6b80; --heat-design: #a993f5; --heat-building: #f0a259;
+  --heat-playable: #63c9d8; --heat-verified: #86d69a; --heat-blocked: #f07f7f; --heat-parked: #3a4556;
+}
+.forge-shell {
+  display: flex; align-items: center; gap: 20px; height: 44px; padding: 0 16px;
+  background: var(--panel, #171f2c); border-bottom: 1px solid var(--line, #303e51);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--text, #f0f3f8);
+  position: sticky; top: 0; z-index: 50;
+}
+.forge-brand { display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; font-weight: 650; }
+.forge-mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; border: 1px solid #547684;
+  background: #213443; color: var(--blue, #85d7e3); font: 700 14px "Cascadia Code", Consolas, monospace; }
+.forge-apps { display: flex; gap: 2px; }
+.forge-apps a { padding: 5px 10px; border-radius: 6px; color: var(--muted, #9cacc1); text-decoration: none; }
+.forge-apps a:hover { color: var(--text, #f0f3f8); background: var(--raised, #263345); }
+.forge-apps a.active { color: var(--text, #f0f3f8); background: var(--raised, #263345); box-shadow: inset 0 -2px 0 var(--blue, #85d7e3); }
+.forge-status { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.forge-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line, #303e51); color: var(--muted, #9cacc1); font-size: 12px; white-space: nowrap; }
+.forge-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--heat-open); }
+.forge-chip[data-state="live"] i { background: var(--heat-verified); box-shadow: 0 0 0 3px #86d69a22; }
+.forge-chip[data-state="busy"] i { background: var(--heat-building); animation: forge-pulse 1.4s ease-in-out infinite; }
+.forge-chip[data-state="down"] i { background: var(--heat-blocked); }
+@keyframes forge-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .forge-chip[data-state="busy"] i { animation: none; } }
+.forge-palette { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; color: var(--muted, #9cacc1); }
+.forge-palette kbd { font: 10px "Cascadia Code", Consolas, monospace; padding: 0 5px; border: 1px solid var(--line, #303e51); border-radius: 4px; }
+/* Inside the main panel header */
+.forge-inline { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+.forge-inline .forge-status { margin-left: 0; }
+.top #connection { margin-left: 0; }
+.forge-apps a { white-space: nowrap; }
+/* The main panel header already carries five tabs; drop the switcher before it wraps (the palette still switches apps). */
+@media (max-width: 1280px) { .forge-inline .forge-apps { display: none; } }
+@media (max-width: 900px) { .forge-chip span { display: none; } .forge-apps a { padding: 5px 7px; } .forge-palette kbd { display: none; } }

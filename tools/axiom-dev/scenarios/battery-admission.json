@@ -1,0 +1,16 @@
+{ "id": "battery-admission", "parity": ["B-GT-06", "A12-02"],
+  "note": "A cell admits charge at its tier rate (4, 16, 64 kW) and holds 4x capacity per tier; a 16 kW generator fills a copper cell at 4 kW and a resonant cell at the full 16 kW.",
+  "steps": [
+  { "op": "place_machine", "position": [0, 40, 0], "kind": "Coal generator" },
+  { "op": "set_machine", "position": [0, 40, 0], "input": { "Coal": 640 } },
+  { "op": "place_machine", "position": [1, 40, 0], "kind": "Cable" },
+  { "op": "place_machine", "position": [2, 40, 0], "kind": "Battery" },
+  { "op": "step_factory", "ticks": 1200, "probe": [[2, 40, 0]],
+    "expect": { "end.flow_kw": 4, "end.pool.1": 14400, "end.pool.2": 4, "end.grid.gen_kw": 16, "end.status": "Charging" } },
+  { "op": "place_machine", "position": [0, 40, 10], "kind": "Coal generator" },
+  { "op": "set_machine", "position": [0, 40, 10], "input": { "Coal": 640 } },
+  { "op": "place_machine", "position": [1, 40, 10], "kind": "Cable" },
+  { "op": "machine_test", "position": [2, 40, 10], "kind": "Battery", "set": { "upgrade": 2 } },
+  { "op": "step_factory", "ticks": 1200, "probe": [[2, 40, 10]],
+    "expect": { "end.flow_kw": 16, "end.pool.1": 230400, "end.pool.2": 64 } }
+] }

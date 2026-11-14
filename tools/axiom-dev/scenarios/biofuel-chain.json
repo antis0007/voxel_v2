@@ -1,0 +1,10 @@
+{ "id": "biofuel-chain", "parity": ["A11-07", "B-IE-09"],
+  "note": "Culture grows biomass from fibre and power, biomass ferments to bio-ethanol, the fuel processor turns ethanol into fuel gas. Burning the gas needs ducts and is not covered here.",
+  "steps": [
+  { "op": "machine_test", "position": [0, 40, 0], "kind": "Cultivator", "set": { "energy": 9000, "mode": 0, "input": { "Fungal biomass": 64, "Lumen fibre": 16 } }, "ticks": 1000,
+    "expect": { "end.out.Fungal biomass": 128, "end.in.Fungal biomass": 64, "end.in.Lumen fibre": 0, "end.energy": 8744 } },
+  { "op": "machine_test", "position": [4, 40, 0], "kind": "Cultivator", "set": { "energy": 9000, "mode": 2, "input": { "Fungal biomass": 128, "Lumen fibre": 16 } }, "ticks": 1300,
+    "expect": { "end.out.Bio-ethanol": 64, "end.in.Fungal biomass": 0, "end.energy": 8760 } },
+  { "op": "machine_test", "position": [8, 40, 0], "kind": "Water processor", "set": { "energy": 9000, "mode": 3, "water": 512, "input": { "Bio-ethanol": 128 } }, "ticks": 600,
+    "expect": { "end.exhaust.3": 4096, "end.in.Bio-ethanol": 0, "end.energy": { "lt": 9000 } } }
+] }

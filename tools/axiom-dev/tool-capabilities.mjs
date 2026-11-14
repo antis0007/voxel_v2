@@ -1,0 +1,89 @@
+// Shared by CLI discovery and graph context export; no browser or server dependencies.
+import { catalogContracts } from "./catalog-contracts.mjs";
+export const capabilities = [
+  { id: "context", label: "Source context", cli: "context-cli.mjs", paths: [],
+    read: '"question" [source paths...] --max-chars 6000', writes: false,
+    docs: "CODING_TOOLS.md", purpose: "Bounded source evidence for cross-file questions" },
+  { id: "improve", label: "Background improvement queue", cli: "improve-cli.mjs", paths: ["crates/"],
+    read: "scan --limit 5", writes: false,
+    flow: "scan; brief <id> to a low-cost model; check <id> <diff>; done <id> outcome. Never applies edits itself.",
+    docs: "IMPROVE_LOOP.md", purpose: "Rule-backed chores as bounded prompts for low-cost models" },
+  { id: "gates", label: "Generator gate audit", cli: "gates-cli.mjs",
+    paths: ["crates/worldgen/", "crates/voxel/src/config.rs", "docs/worldgen/GENERATOR_GATES.md"],
+    read: "check", writes: false,
+    flow: "next before claiming a number; check after adding a gate constant; index --write refreshes the generated registry table",
+    docs: "CODING_TOOLS.md", purpose: "One literal definition per generator gate, and a registry row for every gate constant" },
+  { id: "catalog", label: "Catalog contracts", cli: "catalog-cli.mjs",
+    paths: catalogContracts.flatMap(contract => [contract.path, contract.schema, contract.reader]), read: "list", writes: false,
+    docs: "README.md", purpose: "Native schema, ownership, validation and activation" },
+  { id: "wiring", label: "Recipe and spell wiring", cli: "wiring-cli.mjs",
+    paths: ["assets/recipes.ron", "assets/spells.ron", "assets/progression.ron"], read: "help",
+    writes: true, flow: "preview JSON, inspect diff, apply with returned approval",
+    docs: "README.md", purpose: "Edit recipe, spell and advancement blocks through shared commands" },
+  { id: "workshop", label: "Fabricator workshop", cli: "workshop-cli.mjs",
+    paths: ["assets/fabrication.ron"], read: "help", writes: true,
+    flow: "inspect or plan; design/preview JSON; stage with returned approval. Content snapshots only, no live installation.",
+    docs: "WORKSHOP.md", purpose: "Author Fabricator processes using the native contract" },
+  { id: "portal", label: "Portal graph", cli: "portal-cli.mjs",
+    paths: ["assets/portal_layout.ron", "crates/app/src/world/portal"], read: "help", writes: true,
+    flow: "Use command help for revision-checked preview and publication",
+    docs: "PORTAL_LAYOUT.md", purpose: "Edit typed portal openings and links" },
+  { id: "behavior", label: "Tool behavior", cli: "tool-behavior-cli.mjs",
+    paths: ["assets/tools/", "crates/tools/"], read: "help", writes: true,
+    flow: "preview JSON, inspect diff, apply; revert a published bundle when needed",
+    docs: "README.md", purpose: "Inspect and author tool behavior through shared operations" },
+  { id: "engine", label: "Live engine", cli: "engine-cli.mjs",
+    paths: ["crates/app/", "assets/atmosphere.ron", "assets/environment.ron"], read: "status", writes: true,
+    flow: "Inspect existing session; preview using tune; undo/reset previews; engine-cli test for one-call machine checks. Persisted source edits remain separate.",
+    docs: "ENGINE_WORKBENCH.md", purpose: "Inspect, experiment, sample and capture a running engine" },
+  { id: "alloy", label: "Alloy authoring", cli: "alloy-cli.mjs",
+    paths: ["assets/tools/materials.ron", "assets/reactions.ron"], read: "help", writes: true,
+    flow: "Inspect material; preview JSON before apply", docs: "README.md",
+    purpose: "Coordinate material and reaction edits" },
+  { id: "alchemy", label: "Conversion-cycle audit", cli: "alchemy-cli.mjs",
+    paths: ["assets/processes.ron", "assets/fabrication.ron", "assets/brewing.ron", "assets/resources.ron"], read: "help", writes: false,
+    flow: "cycles: fails when a conversion loop gains items (C-MC1)", docs: "FACTORY_LAB.md",
+    purpose: "Audit conversion loops across processes, fabrication and brewing; authoring commands wait on an approved alchemy design" },
+  { id: "food", label: "Food authoring", cli: "food-workflow-cli.mjs",
+    paths: ["assets/foods.ron", "crates/app/src/world/inventory/food.rs"], read: "help", writes: true,
+    flow: "catalog; preview JSON before apply; inspect published bundle", docs: "README.md",
+    purpose: "Create food and recipe content through shared authoring operations" },
+  { id: "field-study", label: "Field studies", cli: "field-study-cli.mjs",
+    paths: ["assets/field_studies.json"], read: "help", writes: true,
+    flow: "inspect lesson; preview JSON; apply with revision and approval", docs: "README.md",
+    purpose: "Inspect and tune bookcase projects and supply costs" },
+  { id: "parity", label: "Mod parity ledger", cli: "parity-cli.mjs",
+    paths: ["docs/research/MOD_FEATURE_MATRIX.md", "docs/research/mod_parity_status.json", "docs/plans/MOD_PARITY_DELIVERY.md",
+      "assets/machines.ron", "crates/app/src/world/factory/"], read: "help", writes: true,
+    flow: "next --family industrial; describe <ID>; implement; factory-lab-cli test; add scenario; verify <ID>",
+    docs: "PARITY.md", purpose: "Pick, brief, verify and record mod-inspired feature rows (Thermal, Mekanism, IE, Create, ...)" },
+  { id: "factory-lab", label: "Headless factory lab", cli: "factory-lab-cli.mjs",
+    paths: ["assets/processes.ron", "assets/fabrication.ron", "assets/machines.ron", "crates/app/src/world/factory/", "tools/axiom-dev/scenarios/"],
+    read: "help", writes: false,
+    flow: "recipes [Kind]; test x y z Kind ticks (set JSON on stdin); add scenarios/<name>.json; run", docs: "FACTORY_LAB.md",
+    purpose: "Test machines, recipes and power without a window or running game; scenario regression suite" },
+  { id: "planet-lab", label: "Headless planet lab", cli: "planet-lab-cli.mjs",
+    paths: ["crates/worldgen/src/planetary/", "crates/worldgen/examples/planet_lab/", "crates/app/src/shaders/globe_shader.wgsl",
+      "crates/app/src/shaders/globe_shell.wgsl", "crates/app/src/shaders/planet_air_shared.wgsl", "docs/worldgen/GENERATOR_GATES.md"],
+    read: "help", writes: false,
+    flow: "build; review <genA> [genB] --at x,z; read the PNGs and stats JSON; --fast for a 20 Myr planet; orbit look: VOXEL_SHADER_DEV_DIR",
+    docs: "PLANET_LAB.md", purpose: "Render, measure and A/B generated Planet terrain (patch, eye view, globe, solve layers) with no window or game" },
+  { id: "progression", label: "Material progression", cli: "material-progression-cli.mjs",
+    paths: ["assets/tools/"], read: "help", writes: true,
+    flow: "inspect; preview; apply; revert published bundle", docs: "README.md",
+    purpose: "Inspect and author material and mining progression" },
+];
+
+export function toolsForPath(path) {
+  return capabilities.filter(tool => tool.id === "context"
+    || tool.paths.some(prefix => prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix))
+    .map(tool => {
+      const contract = tool.id === "catalog" && catalogContracts.find(contract => contract.path === path);
+      return contract ? { ...tool, read: "describe " + contract.id } : tool;
+    });
+}
+
+export function toolSummary(tool) {
+  return { id: tool.id, purpose: tool.purpose,
+    entry: "node tools/axiom-dev/" + tool.cli + " " + tool.read, writes: tool.writes };
+}

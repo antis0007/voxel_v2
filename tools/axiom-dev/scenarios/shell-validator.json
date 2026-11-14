@@ -1,0 +1,12 @@
+{ "id": "shell-validator", "parity": ["B-GT-05"],
+  "note": "One validator counts bricks found against bricks needed for each controller and reports an incomplete shell.",
+  "steps": [
+  { "op": "place_machine", "position": [0, 40, 0], "kind": "CokeOven" },
+  { "op": "place_machine", "position": [1, 40, 0], "kind": "CokeBrick" },
+  { "op": "step_factory", "ticks": 60, "probe": [[0, 40, 0]],
+    "expect": { "end.shell": [1, 26], "end.status": "Incomplete shell", "end.formed": { "absent": true } } },
+  { "op": "place_shell", "position": [0, 40, 0], "kind": "CokeOven" },
+  { "op": "step_factory", "ticks": 60, "probe": [[0, 40, 0]], "expect": { "end.shell": [26, 26], "end.formed": true } },
+  { "op": "place_machine", "position": [0, 40, 20], "kind": "BlastFurnace" },
+  { "op": "step_factory", "ticks": 60, "probe": [[0, 40, 20]], "expect": { "end.shell.1": 35, "end.status": "Incomplete shell" } }
+] }

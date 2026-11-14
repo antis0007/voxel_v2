@@ -1,0 +1,14 @@
+{ "id": "ore-routes", "parity": ["B-GT-10", "A12-03"],
+  "note": "Each extra stage buys recovery: smelt 1x, crush 2x, wash 3x plus trace gold for water and more power.",
+  "steps": [
+  { "op": "machine_test", "position": [0, 40, 0], "kind": "Furnace", "set": { "energy": 9000, "mode": 1, "input": { "Copper ore": 64 } }, "ticks": 660,
+    "expect": { "end.out.Copper ingots": 64, "end.energy": 8880 } },
+  { "op": "machine_test", "position": [4, 40, 0], "kind": "Crusher", "set": { "energy": 9000, "input": { "Copper ore": 64 } }, "ticks": 540,
+    "expect": { "end.out.Copper dust": 128, "end.out.Gold Concentrate": 0, "end.energy": 8872 } },
+  { "op": "machine_test", "position": [8, 40, 0], "kind": "Washer", "set": { "energy": 9000, "water": 512, "input": { "Copper ore": 64 } }, "ticks": 900,
+    "expect": { "end.out.Copper dust": 192, "end.out.Gold Concentrate": 16, "end.water": 384, "end.energy": 8712 } },
+  { "op": "machine_test", "position": [12, 40, 0], "kind": "Washer", "set": { "energy": 9000, "input": { "Copper ore": 64 } }, "ticks": 900,
+    "expect": { "end.status": "Needs water", "end.in.Copper ore": 64 } },
+  { "op": "machine_test", "position": [16, 40, 0], "kind": "Furnace", "set": { "energy": 9000, "input": { "Copper dust": 64 } }, "ticks": 420,
+    "expect": { "end.out.Copper ingots": 64 } }
+] }

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wand Lab</title><link rel="stylesheet" href="/wand-lab.css"><link rel="stylesheet" href="/devtools-qol.css"><link rel="stylesheet" href="/forge-shell.css"><script type="module" src="/wand-lab-ui.mjs"></script><script type="module" src="/wand-lab-shell.mjs"></script></head>
+<body>
+<header>
+  <span class="mark">WL</span>
+  <div><p>FORGE / MAGIC</p><h1>Wand Lab</h1></div>
+  <div class="history">
+    <button id="undo" title="Undo (Ctrl+Z)" disabled>↶</button>
+    <button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+    <button id="share" title="Copy a build code to the clipboard">Copy code</button>
+    <button id="import" title="Paste a build code">Paste code</button>
+    <button id="help" title="Keyboard shortcuts (?)">?</button>
+  </div>
+  <span id="status" class="status">Connecting</span>
+</header>
+<div id="draft-banner" class="draft-banner" hidden></div>
+<main>
+  <section class="chassis" aria-label="Chassis">
+    <label>Tier <select id="tier"><option value="1">1 · Lumen Twig</option><option value="2">2 · Quarry Conduit</option><option value="3" selected>3 · Sanctum Sovereign</option></select></label>
+    <label>Chassis <select id="mode"></select></label>
+    <label>Rank <input id="rank" type="range" min="0" max="20" value="0"><output id="rank-out">0</output></label>
+    <label>Health <input id="health" type="range" min="1" max="100" value="100"><output id="health-out">100%</output></label>
+    <label class="check"><input id="foe" type="checkbox" checked> Foe in sight</label>
+    <label>Seed <input id="seed" type="number" min="0" value="0" title="Found-wand seed; 0 is the plain crafted wand"></label>
+    <button id="reroll" title="Try a random found-wand seed">🎲</button>
+    <span class="spacer"></span>
+    <button id="pin" title="Keep this result as the comparison baseline (P)">Pin as A</button>
+    <button id="equip" title="Mint this build into the open playtest world's hotbar">Equip in playtest</button>
+  </section>
+
+  <section class="deck-wrap" aria-label="Deck">
+    <div class="deck-head"><h2>Deck</h2><span class="muted">Drag cards in · drag to reorder · ← → move · Delete clears · 🔒 keeps a slot during optimisation · cards cast left to right</span>
+      <button id="fill" class="ghost" title="Fill empty slots with the last card">Fill empties</button>
+      <button id="clear" class="ghost">Clear deck</button></div>
+    <ol id="deck" class="deck"></ol>
+    <div id="cast-strip" class="cast-strip" aria-label="Cast order"></div>
+  </section>
+
+  <div class="columns">
+    <section class="spell-palette" aria-label="Spell palette">
+      <div class="palette-head"><h2>Spells</h2><input id="search" type="search" placeholder="Filter (/)"></div>
+      <nav id="classes" class="chips"></nav>
+      <div class="sort"><label>Sort <select id="sort"><option value="id">Id</option><option value="name">Name</option><option value="cost">Mana</option><option value="damage">Damage</option><option value="dpm">Damage / mana</option></select></label>
+        <label class="check"><input id="castable" type="checkbox" checked> Castable only</label></div>
+      <div id="cards" class="cards"></div>
+    </section>
+
+    <section class="workspace" aria-label="Workspace">
+      <nav class="tabs" role="tablist">
+        <button data-tab="perf" aria-selected="true">Performance</button>
+        <button data-tab="compare" aria-selected="false">Compare</button>
+        <button data-tab="optimize" aria-selected="false">Optimise</button>
+        <button data-tab="balance" aria-selected="false">Balance sheet</button>
+        <button data-tab="spells" aria-selected="false">Spell editor</button>
+      </nav>
+
+      <div data-panel="perf">
+        <div id="tiles" class="tiles"></div>
+        <figure class="chart"><figcaption>Cast timeline · bar height = direct-hit damage · hatched = recharge</figcaption><canvas id="timeline"></canvas></figure>
+        <div class="two">
+          <figure class="chart"><figcaption>Mana pool over 15 s of held fire</figcaption><canvas id="mana"></canvas></figure>
+          <figure class="chart"><figcaption>Bolt flight (side view, illustrative) · <span id="flight-legend"></span></figcaption><canvas id="flight"></canvas></figure>
+        </div>
+        <h3>Time to kill <span class="muted small">(held fire from a full pool, waits for mana when dry)</span></h3>
+        <div class="row"><input id="enemy-filter" type="search" placeholder="Filter enemies"><label>Targets <input id="targets" type="number" min="1" max="12" value="1" title="Foes to kill one after another"></label></div>
+        <div id="kills" class="kills"></div>
+        <h3>Cast blocks</h3>
+        <ol id="blocks" class="blocks"></ol>
+        <p id="scope" class="muted small"></p>
+      </div>
+
+      <div data-panel="compare" hidden>
+        <p class="muted small">Add the current deck or saved builds. Every line is scored natively under the same chassis settings stored with it.</p>
+        <div class="row"><button id="compare-add">Add current deck</button><button id="compare-clear" class="ghost">Clear</button></div>
+        <figure class="chart"><figcaption>Cumulative damage over 30 s of held fire</figcaption><canvas id="compare-chart"></canvas></figure>
+        <div id="compare-table" class="table-wrap"></div>
+      </div>
+
+      <div data-panel="optimize" hidden>
+        <p class="muted small">Native hill-climbing search over slot contents and order. Locked slots (🔒) stay put. The pool is the palette's current filter.</p>
+        <div class="form">
+          <label>Goal <select id="objective">
+            <option value="sustained">Sustained damage (30 s average)</option>
+            <option value="dps">Peak damage per second</option>
+            <option value="burst">Burst from a full pool</option>
+            <option value="efficiency">Damage per mana</option></select></label>
+          <label class="check"><input id="must-sustain" type="checkbox"> Must never run dry</label>
+          <label class="check" title="Blood price decks pay health instead of mana"><input id="allow-health" type="checkbox"> Allow health costs</label>
+          <label class="check" title="Cast blocks that wrap mid-draw never pay recharge in the current evaluator"><input id="allow-norecharge" type="checkbox"> Allow no-recharge decks</label>
+          <label>Effort <select id="iterations"><option value="1500">Quick</option><option value="6000" selected>Normal</option><option value="20000">Deep</option></select></label>
+          <label>Seed <input id="opt-seed" type="number" value="1" min="0"></label>
+          <button id="optimize" class="primary">Search</button>
+        </div>
+        <div id="opt-result"></div>
+      </div>
+
+      <div data-panel="balance" hidden>
+        <p class="muted small">Every castable projectile alone and every modifier in front of the reference bolt, on this chassis. Bars are relative to the column's maximum; colour marks distance from the class median.</p>
+        <div class="form">
+          <label>Reference bolt <select id="reference"></select></label>
+          <button id="survey" class="primary">Run survey</button>
+          <input id="balance-goal" placeholder="AI: e.g. pull expensive projectiles toward the median" maxlength="800">
+          <button id="balance-ai">AI proposals</button>
+        </div>
+        <div id="balance-ai-out"></div>
+        <div id="survey-table" class="table-wrap"></div>
+      </div>
+
+      <div data-panel="spells" hidden>
+        <p class="muted small">Edit numbers, then <b>Score draft</b>. A second lab process loads your draft table, so every view in the lab re-scores without a rebuild. <b>Save to spells.ron</b> writes it with a backup; rebuild to ship it in game.</p>
+        <div class="form"><label>Spell <select id="edit-spell"></select></label><span id="edit-meta" class="muted small"></span></div>
+        <div id="edit-fields" class="edit-fields"></div>
+        <div class="row"><button id="draft-score" class="primary">Score draft</button><button id="draft-revert" class="ghost">Revert this spell</button>
+          <span class="spacer"></span><button id="draft-reset" class="ghost">Discard draft</button><button id="draft-apply">Save to spells.ron</button></div>
+        <h3>Draft changes</h3>
+        <ul id="draft-list" class="draft-list"></ul>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section>
+        <h2>AI designer</h2>
+        <p class="muted small">The model proposes decks; each is scored by the game's evaluator, then refined once against those scores.</p>
+        <textarea id="goal" rows="3" placeholder="e.g. Sustainable fire damage for long cave fights, no blood costs"></textarea>
+        <div class="presets" id="goal-presets"></div>
+        <button id="suggest" class="primary">Design builds</button>
+        <ol id="suggestions" class="suggestions"></ol>
+      </section>
+      <section>
+        <h2>Library</h2>
+        <div class="row"><input id="build-name" placeholder="Build name" maxlength="60"><button id="save">Save</button></div>
+        <input id="library-filter" type="search" placeholder="Filter builds">
+        <ul id="library" class="library"></ul>
+      </section>
+    </aside>
+  </div>
+</main>
+<dialog id="help-dialog">
+  <h2>Shortcuts</h2>
+  <table class="keys">
+    <tr><td>Ctrl+Z / Ctrl+Shift+Z</td><td>Undo / redo deck changes</td></tr>
+    <tr><td>/</td><td>Filter spells</td></tr>
+    <tr><td>Enter on a spell</td><td>Add to the next empty slot</td></tr>
+    <tr><td>← → on a slot</td><td>Move the card</td></tr>
+    <tr><td>Delete on a slot</td><td>Clear it</td></tr>
+    <tr><td>E on a slot</td><td>Open its spell in the editor</td></tr>
+    <tr><td>L on a slot</td><td>Lock / unlock for the optimiser</td></tr>
+    <tr><td>P</td><td>Pin the current result as A</td></tr>
+    <tr><td>1–5</td><td>Switch workspace tabs</td></tr>
+  </table>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
+</body></html>

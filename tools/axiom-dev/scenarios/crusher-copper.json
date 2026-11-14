@@ -1,0 +1,4 @@
+{ "id": "crusher-copper", "steps": [
+  { "op": "machine_test", "position": [0, 40, 0], "kind": "Crusher", "set": { "energy": 5000, "input": { "Copper ore": 64 } }, "ticks": 600,
+    "expect": { "end.out.Copper dust": 128, "end.in.Copper ore": { "absent": true }, "end.energy": { "lt": 5000 } } }
+] }

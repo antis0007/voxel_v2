@@ -1,0 +1,11 @@
+{ "id": "field-foes",
+  "note": "Spawns each field foe and the giant worm, checks they exist with their armour; run in creative on open ground: engine-cli scenario tools/axiom-dev/scenarios-combat/field-foes.json",
+  "steps": [
+  { "op": "clear_enemies" },
+  { "op": "spawn_enemy", "kind": "Blade Rotor", "count": 2, "affixes": ["Fiery"], "expect": { "spawned": 2 } },
+  { "op": "spawn_enemy", "kind": "Stone Colossus", "position_m": null, "expect": { "spawned": 1 } },
+  { "op": "spawn_enemy", "kind": "Ruin Walker", "expect": { "spawned": { "min": 0 } } },
+  { "op": "spawn_enemy", "kind": "Great Rock Worm", "expect": { "spawned": { "min": 0 } } },
+  { "op": "enemies", "radius_m": 48, "expect": { "count": { "min": 3 } } },
+  { "op": "clear_enemies", "expect": { "left": 0 } }
+] }

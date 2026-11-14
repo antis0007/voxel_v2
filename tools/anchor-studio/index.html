@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anchor Studio</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/editor.js"></script>
+</head>
+<body>
+<header class="top">
+    <div class="identity"><span class="mark" aria-hidden="true">◫</span><div><strong>Anchor Studio</strong><small>Building editor</small></div></div>
+    <div class="project"><input id="name" aria-label="Design name" maxlength="40" value="Freight workshop"><small id="file-state">Draft</small></div>
+    <div class="top-actions">
+        <button id="library">Open</button><button id="save">Save</button>
+        <details id="export-menu"><summary>Export <span aria-hidden="true">▾</span></summary>
+            <div class="menu"><button id="export-plan">Editable design · .vxplan</button><button id="export-blueprint">Game blueprint · .vxbp</button></div>
+        </details>
+        <button id="review" class="accent">Review in city</button>
+    </div>
+</header>
+<div class="workspace">
+    <aside class="inspector" aria-label="Building settings">
+        <section>
+            <h2>Design</h2>
+            <label>Building type<select id="role"></select></label>
+            <div class="pair"><button id="template">Load template</button><button id="duplicate">Duplicate</button></div>
+            <div class="pair dimensions">
+                <label>Width in bays<input id="nx" type="number" min="1" max="24" step="1"></label>
+                <label>Depth in bays<input id="nz" type="number" min="1" max="24" step="1"></label>
+                <label>Floors<input id="floors" type="number" min="1" max="24" step="1"></label>
+                <label>Bay size (m)<input id="bay" type="number" min="3.6" max="8" step=".1"></label>
+                <label>Floor height (m)<input id="height" type="number" min="3.6" max="8" step=".1"></label>
+                <label>Block size<select id="scale"><option value="1">1 m</option><option value="0.5">0.5 m</option><option value="0.25">0.25 m</option></select></label>
+            </div>
+        </section>
+        <section>
+            <h2>Appearance</h2>
+            <div class="pair"><label>Roof<select id="roof"></select></label><label>Windows<select id="windows"></select></label></div>
+            <label>Weathering <output id="weather-value"></output><input id="age" type="range" min="0" max=".6" step=".01"></label>
+            <div class="palette" id="palette"></div>
+            <button id="variant" class="wide">Make a variation</button>
+        </section>
+        <section class="selection">
+            <h2>Selected room</h2>
+            <p id="selected-label">Click a room to select it.</p>
+            <label id="selected-field" hidden>Room use<select id="selected-role"></select></label>
+        </section>
+    </aside>
+    <main>
+        <section class="panel preview">
+            <div class="panel-bar">
+                <div><span class="eyebrow">3D preview</span><span class="small" id="model-size">Waiting for generator</span></div>
+                <div class="view-actions"><label class="inline">Cut height<input id="cut" type="range" min="1" max="1" value="1" aria-label="Preview cut height"><output id="cut-value">Full</output></label><button id="edit-3d" aria-pressed="false">Edit in 3D</button><button id="fit">Fit view</button></div>
+            </div>
+            <div class="view">
+                <canvas id="view" aria-label="Interactive 3D building preview"></canvas>
+                <div class="view-help" id="view-help">Drag to orbit · Scroll to zoom · Shift-drag to pan</div>
+                <div class="compile" id="compile" role="status">Generating building…</div>
+            </div>
+        </section>
+        <section class="panel floor">
+            <div class="panel-bar floor-top">
+                <div><span class="eyebrow">Floor plan</span><span class="small">Repeated on each floor</span></div>
+                <div class="history"><button id="undo" title="Ctrl+Z">Undo</button><button id="redo" title="Ctrl+Y">Redo</button></div>
+            </div>
+            <div class="tool-row">
+                <div class="tools" aria-label="Plan tools">
+                    <button data-tool="select" aria-pressed="true">Select</button><button data-tool="room" aria-pressed="false">Room</button>
+                    <button data-tool="door" aria-pressed="false">Door</button><button data-tool="entrance" aria-pressed="false">Entrance</button>
+                    <button data-tool="stairs" aria-pressed="false">Stairs</button><button data-tool="erase" aria-pressed="false">Erase</button>
+                </div>
+                <label class="inline" id="brush-label" hidden>Room use<select id="brush-role"></select></label>
+                <details class="plan-menu"><summary>Layout tools <span aria-hidden="true">▾</span></summary>
+                    <div class="menu"><button id="fill">Fill empty bays</button><button id="auto-doors">Connect rooms</button><button id="auto-stairs">Find stair space</button><button id="mirror">Mirror building</button><button id="blank">Clear floor plan</button></div>
+                </details>
+            </div>
+            <div class="plan-contents"><canvas id="plan" aria-label="Editable floor plan grid"></canvas></div>
+            <p class="hint" id="tool-hint">Select a room to change its use.</p>
+        </section>
+    </main>
+</div>
+<footer><span id="notice" role="status">Start from a template or draw a room on the plan.</span><span id="city-progress" role="status"></span></footer>
+<dialog id="library-dialog">
+    <div class="dialog-head"><div><h2>Design library</h2><p>Open a saved project or import an editable design.</p></div><button id="close-library" aria-label="Close library">×</button></div>
+    <div id="library-items"></div>
+    <label class="import">Import .vxplan<input id="import-plan" type="file" accept=".vxplan,text/plain"></label>
+</dialog>
+<dialog id="city-dialog">
+    <div class="dialog-head"><div><h2>In the city</h2><p>Seed 424242 · 1 m blocks · Drag to orbit and scroll to zoom</p></div><button id="close-city" aria-label="Close city review">×</button></div>
+    <canvas id="city-view" aria-label="Interactive 3D view of the building in its Anchor district"></canvas>
+</dialog>
+</body>
+</html>

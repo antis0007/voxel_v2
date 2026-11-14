@@ -1,0 +1,10 @@
+{ "id": "drive-overclock", "parity": ["B-GT-04"],
+  "note": "Drive level multiplies speed and power draw together: a batch costs the same energy at every level.",
+  "steps": [
+  { "op": "machine_test", "position": [0, 40, 0], "kind": "Crusher", "set": { "energy": 9000, "upgrade": 2, "input": { "Copper ore": 64 } }, "ticks": 200,
+    "expect": { "end.out.Copper dust": 128, "end.energy": 8872 } },
+  { "op": "machine_test", "position": [4, 40, 0], "kind": "Crusher", "set": { "energy": 9000, "input": { "Copper ore": 64 } }, "ticks": 200,
+    "expect": { "end.out.Copper dust": 0, "end.progress": { "gt": 0 } } },
+  { "op": "step_factory", "ticks": 400, "probe": [[4, 40, 0]],
+    "expect": { "end.out.Copper dust": 128, "end.energy": 8872 } }
+] }

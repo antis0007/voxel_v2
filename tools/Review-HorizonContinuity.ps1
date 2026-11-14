@@ -46,7 +46,9 @@ $argsList=@('--benchmark-world=hills','--benchmark-seed=2738958700',"--benchmark
     "--benchmark-terrain-camera=$Camera","--benchmark-warmup=$WarmupSeconds","--benchmark-duration=$Seconds",
     '--benchmark-review-time=0.5','--benchmark-scale=1m','--benchmark-sky-time=12',"--benchmark-cloud-divisor=$CloudDivisor")
 if($Case -in @('still','route','motion','edits','stress','handoff','world-switch')){$argsList+='--benchmark-capture-frames'}
-if($Video){$argsList+='--benchmark-capture-interval='+$CaptureInterval.ToString('0.######',[Globalization.CultureInfo]::InvariantCulture)}
+if($Video -or $PSBoundParameters.ContainsKey('CaptureInterval')){
+    $argsList+='--benchmark-capture-interval='+$CaptureInterval.ToString('0.######',[Globalization.CultureInfo]::InvariantCulture)
+}
 if($DebugView){$argsList+="--benchmark-debug=$DebugView"}
 if($NoShadows){$argsList+='--benchmark-no-shadows'}
 if($NoIndirect){$argsList+='--benchmark-no-indirect'}
