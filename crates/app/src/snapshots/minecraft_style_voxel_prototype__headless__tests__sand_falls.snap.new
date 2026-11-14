@@ -1,0 +1,6 @@
+---
+source: crates/app/src/headless.rs
+assertion_line: 526
+expression: outcome.json()
+---
+{"scenario":"sand_falls","ticks":510,"hash":"5c5e003c00af4e22","failed":0,"failures":[]}

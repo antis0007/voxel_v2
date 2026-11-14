@@ -1,0 +1,11 @@
+config=WorldSampleConfig { generator_version: 145, seed: 2738958700, world_type: Superflat, voxel_scale: OneMeter, planet: None }
+water_surface_m=12.865
+source=generated_columns
+visibility=see_visibility_csv_generated_terrain_only
+cache_check=evaluator_order_only_not_retained_horizon_cache
+current_horizon_sampler=exact_through_64m_ring_step_else_fixed_8m_preview
+current_horizon_cache_policy=exact_0_fixed8_1
+source_proxy_csv=varying_footprint_diagnostic_not_actual_per_region_ring_policy
+source_excludes=edits,overhangs,caves,structures
+candidate_camera=0,-120,100,0.4,-0.2
+footprint_units=metres
